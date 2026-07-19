@@ -125,6 +125,16 @@ impl LogBuffer {
         self.inner.lock().expect("log buffer poisoned").closed
     }
 
+    /// Drop retained history without resetting the sequence or writer state.
+    /// Fork re-identification uses this boundary so the destination's log
+    /// stream cannot replay output captured under the source sandbox identity.
+    pub fn discard_retained(&self) {
+        let mut inner = self.inner.lock().expect("log buffer poisoned");
+        inner.records.clear();
+        inner.total_payload = 0;
+        self.appended.notify_all();
+    }
+
     /// All retained records with `seq >= since`. Evicted records are silently
     /// skipped — the result starts at the oldest retained matching record.
     pub fn snapshot_since(&self, since: u64) -> Vec<LogRecord> {
@@ -223,6 +233,16 @@ mod tests {
             buf.snapshot_since(4).is_empty(),
             "future seq matches nothing"
         );
+    }
+
+    #[test]
+    fn discard_retained_preserves_sequence_and_accepts_future_output() {
+        let buf = LogBuffer::new();
+        buf.append("stdout", b"source");
+        buf.discard_retained();
+        assert!(buf.snapshot_since(1).is_empty());
+        assert_eq!(buf.append("stdout", b"fork"), 2);
+        assert_eq!(buf.snapshot_since(1)[0].data, b"fork");
     }
 
     #[test]

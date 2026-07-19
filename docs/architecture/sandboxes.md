@@ -567,8 +567,8 @@ launched into some other process answering on the deterministic UDS); it
 then sends `sync_clock` and the new `launch` control request — carrying the
 sandbox id, nonce, image config + overrides (the guest resolves them with
 the identical cold-boot merge rules), and 32 bytes of host entropy the
-guest mixes into `/dev/urandom` (best-effort RNG divergence until #427's
-proper reseed) — and verifies the guest now echoes the new identity. The
+guest mixes into `/dev/urandom` as best-effort warm-template divergence —
+and verifies the guest now echoes the new identity. The
 launch payload is reconstructed from the staged config drive, so the flow
 survives agent restarts between create and boot with no extra persisted
 state (identity delivery rides vsock rather than a guest re-read of the
@@ -590,21 +590,62 @@ snapshot recorded, whatever document it carries; documents that exceed it
 are cold-only. Boot logs `bootPath=warm|cold` with `bootMillis`, which is
 the measurement hook for the cold-vs-warm latency comparison on strato-dev.
 
-### Clone safety (deferred to #427)
+### Fork into a new sandbox (issue #427)
 
-Restoring a snapshot **in place, once** does not fork identity: same
-sandbox, same NIC/IP (none yet), same machine-id. Restoring one snapshot
-into *N* sandboxes does; warm start sidesteps most of it by snapshotting
-before any per-sandbox identity is applied and re-identifying via `launch`,
-plus best-effort entropy mixing. The remainder — the `/entropy` virtio-rng
-device (wrapped in SwiftFirecracker but not yet attached — older
-Firecracker binaries reject it), vmgenid-style reseed, and forking
-*checkpoints* (post-workload memory) into new sandboxes — lands with fork
-(#427).
+`POST /api/sandboxes` accepts `restoreFrom: <snapshot UUID>` instead of an
+image. The caller needs `read` on the source `sandbox_snapshot` and
+`create_resources` on the target project. Machine and process overrides are
+rejected: the fork preserves the checkpointed image, vCPU/memory shape, and
+process configuration, while the target supplies its own name, project,
+environment, and TTL. `sandboxes.restored_from_snapshot_id` records lineage;
+the API and web detail page expose it, and the snapshot list offers the fork
+action.
+
+Snapshot artifacts are still agent-local, so scheduling is deliberately
+pinned to the snapshot's `agent_id` (wire protocol **version 12**). The agent
+reflink-copies, or normally copies, `rootfs.ext4`, `memory.snap`,
+`vmstate.snap`, and `config.img` into a new jailed sandbox layout and loads
+the snapshot resumed. It first proves that the resumed guest has the source
+sandbox id + nonce, then sends a one-shot `reidentify` request over the
+restored vsock listener. That request supplies a fresh target nonce,
+hostname, host entropy, and wall clock; PID 1 strictly reseeds `/dev/urandom`,
+rewrites machine-id, sets the hostname and `CLOCK_REALTIME`, and swaps its
+reported sandbox identity last. Retained guest log history is cleared at that
+boundary (sequence numbers and live stdio writers continue), so source output
+is never replayed under the target. A second ping must return the target id +
+nonce before the agent publishes the sandbox as managed. The target config
+drive is then rewritten with the new identity so adoption and future
+snapshots remain self-describing.
+
+The create transaction always allocates a new sandbox row and default NIC,
+MAC, and IPAM reservation. Guest networking is still disabled (#524), so
+current snapshots contain no Firecracker network device to remap; when that
+device is enabled, fork restore must additionally pass Firecracker
+`network_overrides` and reconfigure the guest interface/DHCP lease before
+health succeeds.
+
+### Clone-safety policy
+
+Cold-created sandboxes attach Firecracker's entropy device where the running
+VMM supports it, and snapshot resume receives a new VM generation id from
+Firecracker. Fork additionally requires the explicit guest RNG reseed above.
+These measures diverge future randomness, identity, and time, but cannot make
+all duplicated application memory safe: a checkpoint can contain reusable
+tokens, application-generated identifiers, and TCP state. The API/UI therefore
+states that inherited TCP connections are not portable. Operators must
+checkpoint at an application-safe boundary and reconnect external services in
+the fork.
+
+To avoid multiplying or rewinding the exact same live state unexpectedly, a
+snapshot with live descendants cannot be deleted or restored in place, and
+its source sandbox cannot be deleted. Desired-state reconciliation may need
+the original agent-local archive to recreate a fork after host/process loss,
+so the snapshot remains a conservative lifetime dependency: delete the forks
+first. The target retains the opaque lineage UUID for audit/display.
 
 ## Later phases
 - **Phase 4 (remaining)**: the warm-vs-cold boot-latency measurement on
-  strato-dev; fork into new sandboxes (#427); and snapshot mobility —
+  strato-dev and snapshot mobility —
   off-node export, cross-agent restore, diff snapshots (#428). Cross-agent
   restore is why the CPU-template decision is forced at sandbox create time.
 

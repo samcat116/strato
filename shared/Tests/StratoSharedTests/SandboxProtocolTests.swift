@@ -103,6 +103,27 @@ struct SandboxProtocolTests {
         #expect(decoded.desiredStatus == .stopped)
     }
 
+    @Test("Fork restore reference round-trips in spec and desired state")
+    func restoreReferenceRoundTrip() throws {
+        let restore = SandboxSnapshotRef(
+            snapshotId: Fixtures.uuidA,
+            sourceSandboxId: Fixtures.uuidB)
+        let state = DesiredSandboxState(
+            sandboxId: UUID(),
+            spec: SandboxSpec(
+                image: "ghcr.io/acme/worker:v3",
+                cpus: 2,
+                memoryBytes: 1 << 30,
+                restoreFrom: restore),
+            desiredStatus: .running,
+            generation: 1,
+            restoreFrom: restore)
+
+        let decoded = try roundTrip(state)
+        #expect(decoded.restoreFrom == restore)
+        #expect(decoded.spec.restoreFrom == restore)
+    }
+
     @Test("Sandbox fields actually reach the wire")
     func sandboxKeysEncoded() throws {
         let message = DesiredStateMessage(syncId: "s", vms: [])

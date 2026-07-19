@@ -90,19 +90,25 @@ public struct DesiredSandboxState: Codable, Sendable {
     /// registry, minted fresh at sync assembly (see `RegistryCredential`).
     /// Nil for public images — zero-configuration public pulls must work.
     public let registryCredential: RegistryCredential?
+    /// Duplicated at the desired-entry level as an explicit create-strategy
+    /// discriminator (issue #427). `spec.restoreFrom` carries the same value so
+    /// runtimes that operate only on the spec still have the artifact locator.
+    public let restoreFrom: SandboxSnapshotRef?
 
     public init(
         sandboxId: UUID,
         spec: SandboxSpec,
         desiredStatus: DesiredSandboxStatus,
         generation: Int64,
-        registryCredential: RegistryCredential? = nil
+        registryCredential: RegistryCredential? = nil,
+        restoreFrom: SandboxSnapshotRef? = nil
     ) {
         self.sandboxId = sandboxId
         self.spec = spec
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.registryCredential = registryCredential
+        self.restoreFrom = restoreFrom
     }
 }
 

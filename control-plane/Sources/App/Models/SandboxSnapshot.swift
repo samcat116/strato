@@ -20,11 +20,10 @@ enum SandboxSnapshotStatus: String, Codable, CaseIterable, Sendable {
 /// Firecracker version, host CPU, and device topology they were taken with,
 /// so the row records those compatibility constraints alongside placement.
 ///
-/// v1 scope (the volume-snapshot precedent): artifacts live in agent-owned
-/// storage beside the sandbox, so a snapshot restores only on its own agent
-/// (`agentId`) and only in place — into the sandbox it was taken from.
-/// Restoring into *new* sandboxes (fork) is issue #427; off-node export is
-/// issue #428.
+/// Artifacts live in agent-owned storage beside the sandbox, so restore and
+/// fork placement stay pinned to `agentId`. A snapshot can restore its source
+/// in place or seed a new sandbox identity (issue #427); off-node export and
+/// cross-agent restore remain issue #428.
 final class SandboxSnapshot: Model, @unchecked Sendable {
     static let schema = "sandbox_snapshots"
 

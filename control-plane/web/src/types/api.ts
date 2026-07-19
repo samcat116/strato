@@ -673,6 +673,8 @@ export interface Sandbox {
   /** When the TTL runs out and the sandbox is auto-deleted; null without a TTL. */
   expiresAt?: string | null;
   hypervisorId?: string | null;
+  /** Snapshot lineage for a sandbox created by fork (backend issue #427). */
+  restoredFromSnapshotId?: string | null;
   status: SandboxStatus;
   /** Exit code of a workload that ran to completion (`status === "Exited"`). */
   exitCode?: number | null;
@@ -682,8 +684,10 @@ export interface Sandbox {
 
 export interface CreateSandboxRequest {
   name: string;
-  /** OCI image reference (required). */
-  image: string;
+  /** OCI image reference; required unless restoreFrom is present. */
+  image?: string;
+  /** Ready sandbox snapshot to restore as a new sandbox identity. */
+  restoreFrom?: string;
   projectId?: string;
   environment?: string;
   cpus?: number;
@@ -694,6 +698,27 @@ export interface CreateSandboxRequest {
   env?: Record<string, string>;
   workingDir?: string;
   ttlSeconds?: number;
+}
+
+export type SandboxSnapshotStatus =
+  | "creating"
+  | "ready"
+  | "deleting"
+  | "error";
+
+export interface SandboxSnapshot {
+  id: string;
+  name: string;
+  sandboxId: string;
+  projectId: string;
+  status: SandboxSnapshotStatus;
+  size?: number | null;
+  agentId?: string | null;
+  firecrackerVersion?: string | null;
+  architecture?: string | null;
+  errorMessage?: string | null;
+  createdById?: string | null;
+  createdAt?: string | null;
 }
 
 export interface UpdateSandboxRequest {

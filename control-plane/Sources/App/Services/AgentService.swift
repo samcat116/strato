@@ -1838,14 +1838,38 @@ actor AgentService {
         }
 
         var sandboxEntries: [DesiredSandboxState] = []
+        let restoreSnapshotIDs = Set(sandboxes.compactMap(\.restoredFromSnapshotId))
+        let restoreSnapshots: [UUID: SandboxSnapshot]
+        if restoreSnapshotIDs.isEmpty {
+            restoreSnapshots = [:]
+        } else {
+            let rows = try await SandboxSnapshot.query(on: db)
+                .filter(\.$id ~~ restoreSnapshotIDs)
+                .all()
+            restoreSnapshots = Dictionary(
+                uniqueKeysWithValues: rows.compactMap { snapshot in
+                    snapshot.id.map { ($0, snapshot) }
+                })
+        }
         for sandbox in sandboxes {
             guard let sandboxId = sandbox.id else { continue }
+            let restoreFrom = sandbox.restoredFromSnapshotId.flatMap { snapshotID in
+                restoreSnapshots[snapshotID].map {
+                    SandboxSnapshotRef(snapshotId: snapshotID, sourceSandboxId: $0.$sandbox.id)
+                }
+            }
             // Registry material first: digest pinning mutates the in-memory
-            // model that buildSpec() reads.
-            let registryCredential = await sandboxRegistryMaterial(
-                sandbox,
-                secrets: pullSecretsByProject[sandbox.$project.id] ?? [],
-                on: db)
+            // model that buildSpec() reads. A fork already has its rootfs in
+            // the checkpoint archive and must not depend on registry access.
+            let registryCredential: RegistryCredential?
+            if restoreFrom == nil {
+                registryCredential = await sandboxRegistryMaterial(
+                    sandbox,
+                    secrets: pullSecretsByProject[sandbox.$project.id] ?? [],
+                    on: db)
+            } else {
+                registryCredential = nil
+            }
             // The sandbox's single NIC spec (issue #416), built from its
             // eager-loaded interface + the interface's logical network (for
             // DHCP/DNS config), reusing the networks index gathered above.
@@ -1860,10 +1884,11 @@ actor AgentService {
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
-                    spec: sandbox.buildSpec(network: networkSpec),
+                    spec: sandbox.buildSpec(network: networkSpec, restoreFrom: restoreFrom),
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
-                    registryCredential: registryCredential
+                    registryCredential: registryCredential,
+                    restoreFrom: restoreFrom
                 ))
         }
 
@@ -2673,10 +2698,39 @@ actor AgentService {
     /// capability (`AgentRegisterMessage.sandboxCapable` folded with a v5+
     /// wire protocol into `supportsSandboxWorkloads`, issue #415). There is no
     /// architecture constraint until tag→digest resolution can read the
-    /// image's platform (issue #414). Sandboxes reserve no disk.
+    /// image's platform (issue #414); forks inherit the snapshot's recorded
+    /// architecture and pinned agent. Sandboxes reserve no disk.
     func createSandbox(sandbox: Sandbox, db: Database) async throws {
-        let schedulableAgents = await schedulableAgentsFromDatabase()
+        var schedulableAgents = await schedulableAgentsFromDatabase()
         let sandboxId = sandbox.id?.uuidString ?? ""
+
+        var requiredArchitecture: CPUArchitecture?
+        if let snapshotID = sandbox.restoredFromSnapshotId {
+            guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: db),
+                snapshot.isReady,
+                let pinnedAgentID = snapshot.agentId
+            else {
+                throw AgentServiceError.schedulingFailed(
+                    "the restore snapshot is unavailable, not ready, or has no owning agent")
+            }
+            guard let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID }) else {
+                throw AgentServiceError.schedulingFailed(
+                    "snapshot artifacts are pinned to agent \(pinnedAgentID), which is not schedulable")
+            }
+            guard WireProtocol.supportsSandboxFork(pinned.wireProtocolVersion ?? 0) else {
+                throw AgentServiceError.schedulingFailed(
+                    "snapshot agent \(pinned.name) is too old for sandbox forks (need wire protocol >= \(WireProtocol.sandboxForkMinimumVersion))"
+                )
+            }
+            schedulableAgents = [pinned]
+            if let rawArchitecture = snapshot.architecture {
+                guard let architecture = CPUArchitecture(rawValue: rawArchitecture) else {
+                    throw AgentServiceError.schedulingFailed(
+                        "restore snapshot records unsupported architecture '\(rawArchitecture)'")
+                }
+                requiredArchitecture = architecture
+            }
+        }
 
         let agentId: String
         do {
@@ -2686,7 +2740,7 @@ actor AgentService {
                     memory: sandbox.memory,
                     disk: 0,
                     hypervisorType: .firecracker,
-                    architecture: nil,
+                    architecture: requiredArchitecture,
                     siteID: nil,
                     requiresSandboxRuntime: true
                 ),

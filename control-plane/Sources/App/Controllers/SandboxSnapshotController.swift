@@ -286,6 +286,11 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'")
         }
+        guard try await Self.liveForkCount(from: snapshotID, on: req.db) == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot cannot be deleted while sandboxes forked from it still exist")
+        }
 
         let operation = try await ResourceOperation.begin(
             .snapshotDelete,
@@ -390,6 +395,14 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be restored in status '\(snapshot.status.rawValue)'")
         }
+        // Clone-safety policy (issue #427): do not rewind the source identity
+        // to the same memory/RNG/TCP state while live forks of that checkpoint
+        // exist. The operator can snapshot again or delete the forks first.
+        guard try await Self.liveForkCount(from: snapshotID, on: req.db) == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot cannot be restored in place while live forks of it exist")
+        }
         guard let agentId = sandbox.hypervisorId else {
             throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
         }
@@ -455,6 +468,12 @@ extension SandboxController {
     }
 
     // MARK: - Shared
+
+    static func liveForkCount(from snapshotID: UUID, on db: any Database) async throws -> Int {
+        try await Sandbox.query(on: db)
+            .filter(\.$restoredFromSnapshotId == snapshotID)
+            .count()
+    }
 
     /// Fetch the :snapshotID snapshot and confirm it belongs to `sandbox`
     /// (the route nests snapshots under their sandbox).

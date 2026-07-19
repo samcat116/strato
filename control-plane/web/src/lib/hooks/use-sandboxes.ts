@@ -22,6 +22,15 @@ export function useSandbox(id: string) {
   });
 }
 
+export function useSandboxSnapshots(id: string) {
+  return useQuery({
+    queryKey: ["sandboxes", id, "snapshots"],
+    queryFn: () => sandboxesApi.listSnapshots(id),
+    enabled: !!id,
+    refetchInterval: 5000,
+  });
+}
+
 export function useInvalidateSandboxes() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["sandboxes"] });

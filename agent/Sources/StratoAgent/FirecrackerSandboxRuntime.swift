@@ -295,6 +295,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             await sweepLeakedWarmTemplates()
         }
 
+        // User checkpoint fork (issue #427): unlike a warm template this
+        // snapshot already contains a running workload, so restore, rotate its
+        // identity, and report it healthy as one create operation. No registry
+        // pull or cold/warm image provisioning belongs on this path.
+        if let restoreFrom = spec.restoreFrom {
+            try await provisionFromSandboxSnapshot(
+                sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom)
+            return
+        }
+
         let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
 
         // Materialize the flattened container rootfs (cache-owned, read-only),
@@ -544,6 +554,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.configureDrive(
                 Drive.dataDrive(id: "config", path: apiPaths.config, readOnly: true))
 
+            // Firecracker's VMGenID already rotates on every snapshot load on
+            // supported kernels; virtio-rng supplies continuing host entropy as
+            // defense in depth. Older Firecracker binaries may reject the
+            // optional device, so explicit guest-side reseeding remains the
+            // load-bearing fork boundary.
+            do {
+                try await manager.configureEntropy()
+            } catch {
+                logger.warning(
+                    "Firecracker did not accept the optional entropy device",
+                    metadata: [
+                        "sandboxId": .string(vmId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+
             // No network interface: networked specs are rejected above until the
             // guest image can configure one.
 
@@ -632,6 +658,160 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             await removeJailArtifacts(plan)
             throw error
         }
+    }
+
+    /// Restore a user checkpoint into a new jailed sandbox and establish a
+    /// hard identity boundary before exposing it as running (issue #427).
+    /// Firecracker vmstate stores drive/vsock paths; distinct jail roots make
+    /// its chroot-relative paths reusable without colliding with the source.
+    private func provisionFromSandboxSnapshot(
+        sandboxId: String,
+        spec: SandboxSpec,
+        restoreFrom: SandboxSnapshotRef
+    ) async throws {
+        guard jailNewSandboxes else {
+            throw SandboxRuntimeError.warmStartFailed(
+                "sandbox forks require the jailer because snapshot devices record their backing paths")
+        }
+
+        let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
+        let snapshotId = restoreFrom.snapshotId.uuidString
+        let archiveDir = snapshotDirectory(sourceSandboxId, snapshotId: snapshotId)
+        let archiveMemory = archiveDir + "/" + SnapshotFile.memory
+        let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
+        let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
+        let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
+        for required in [archiveMemory, archiveVmstate, archiveRootfs, archiveConfig] {
+            guard FileManager.default.fileExists(atPath: required) else {
+                throw SandboxRuntimeError.snapshotNotFound(
+                    sandboxId: sourceSandboxId, snapshotId: snapshotId)
+            }
+        }
+
+        let sourceConfig = try SandboxConfigDrive.decode(
+            fromBlockImage: Data(contentsOf: URL(fileURLWithPath: archiveConfig)))
+        guard sourceConfig.sandboxId == sourceSandboxId else {
+            throw SandboxControlError.identityMismatch(
+                expected: sourceSandboxId, got: sourceConfig.sandboxId)
+        }
+
+        let plan = SandboxJailPlan(
+            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        do {
+            try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+            try FileManager.default.createDirectory(
+                atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
+            let rootfsHost = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            let configHost = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            let snapshotDirHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+            try await reflinkCopy(from: archiveRootfs, to: rootfsHost)
+            try await reflinkCopy(from: archiveConfig, to: configHost)
+            try FileManager.default.createDirectory(
+                atPath: snapshotDirHost, withIntermediateDirectories: true)
+            try await reflinkCopy(
+                from: archiveMemory,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail))
+            try await reflinkCopy(
+                from: archiveVmstate,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail))
+            for path in [
+                plan.jailRoot, plan.jailRoot + "/run", rootfsHost, configHost, snapshotDirHost,
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+            ] {
+                try chownPath(path, uid: plan.uid, gid: plan.gid)
+            }
+            try await createNetns(plan.netnsName)
+
+            let manager = try await client.restoreVM(
+                vmId: sandboxId,
+                jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
+                snapshot: SnapshotLoadConfig(
+                    snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                    resumeVM: true))
+
+            let sourceResponse = try await sendControl(
+                .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
+            guard
+                identityMatches(
+                    sourceResponse,
+                    sandboxId: sourceConfig.sandboxId,
+                    expectedNonce: sourceConfig.identityNonce)
+            else {
+                throw SandboxControlError.identityMismatch(
+                    expected: "\(sourceConfig.sandboxId)/\(sourceConfig.identityNonce)",
+                    got: "\(sourceResponse)")
+            }
+
+            let nonce = UUID().uuidString
+            let entropy = Self.freshEntropy()
+            let hostname =
+                "strato-"
+                + String(sandboxId.replacingOccurrences(of: "-", with: "").prefix(12))
+            let response = try await sendControl(
+                .reidentify(
+                    SandboxControlProtocol.ReidentifyRequest(
+                        expectedSandboxId: sourceConfig.sandboxId,
+                        expectedNonce: sourceConfig.identityNonce,
+                        sandboxId: sandboxId,
+                        identityNonce: nonce,
+                        hostname: hostname,
+                        entropy: entropy,
+                        unixNanos: Int64(Date().timeIntervalSince1970 * 1_000_000_000))),
+                udsPath: plan.vsockUDSHostPath,
+                timeout: 20)
+            guard case .reidentified = response else {
+                throw SandboxControlError.malformedResponse(
+                    "expected reidentified, got \(response)")
+            }
+            let health = try await sendControl(
+                .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
+            guard identityMatches(health, sandboxId: sandboxId, expectedNonce: nonce) else {
+                throw SandboxControlError.identityMismatch(
+                    expected: "\(sandboxId)/\(nonce)", got: "\(health)")
+            }
+
+            // Persist the new identity for adoption and for snapshots taken
+            // from this fork. Firecracker retains the already-open source
+            // config inode; replacing the path is safe and intentionally only
+            // affects future host reads/copies.
+            let targetConfig = SandboxConfigDrive(
+                sandboxId: sandboxId,
+                identityNonce: nonce,
+                imageConfig: sourceConfig.imageConfig,
+                overrides: sourceConfig.overrides)
+            let originalConfigBytes = max(Int(fileSize(archiveConfig)), 512)
+            try targetConfig.blockImage(minimumBytes: originalConfigBytes)
+                .write(to: URL(fileURLWithPath: configHost), options: .atomic)
+            try chownPath(configHost, uid: plan.uid, gid: plan.gid)
+
+            sandboxes[sandboxId] = Managed(
+                spec: spec, rootfsPath: rootfsHost, configPath: configHost,
+                vsockUdsPath: plan.vsockUDSHostPath, identityNonce: nonce,
+                jail: plan, manager: manager, lastExitCode: nil)
+            startLogFollow(sandboxId: sandboxId)
+            logger.info(
+                "Sandbox fork restored and re-identified",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "sourceSandboxId": .string(sourceSandboxId),
+                    "snapshotId": .string(snapshotId),
+                ])
+        } catch {
+            try? await client.destroyVM(vmId: sandboxId)
+            await removeJailArtifacts(plan)
+            throw error
+        }
+    }
+
+    private static func freshEntropy() -> Data {
+        var generator = SystemRandomNumberGenerator()
+        var entropy = Data(capacity: 32)
+        while entropy.count < 32 {
+            withUnsafeBytes(of: generator.next()) { entropy.append(contentsOf: $0) }
+        }
+        return entropy
     }
 
     /// The jailer options for one microVM's jail plan — shared by cold
@@ -783,13 +963,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
 
         // Fresh randomness so N sandboxes launched from one template do not
-        // share the snapshot's frozen RNG pool (best-effort until #427's
-        // proper reseed).
-        var generator = SystemRandomNumberGenerator()
-        var entropy = Data(capacity: 32)
-        for _ in 0..<4 {
-            withUnsafeBytes(of: generator.next()) { entropy.append(contentsOf: $0) }
-        }
+        // share the snapshot's frozen RNG pool. Warm launch keeps this
+        // best-effort; user-checkpoint fork re-identification requires it.
+        let entropy = Self.freshEntropy()
         let launch = SandboxControlProtocol.LaunchRequest(
             sandboxId: sandboxId, identityNonce: drive.identityNonce,
             imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy)

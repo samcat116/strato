@@ -61,7 +61,9 @@ final class SandboxTests {
         app: Application,
         sandbox: Sandbox? = nil,
         named agentName: String = "sandbox-agent",
-        sandboxCapable: Bool? = nil
+        sandboxCapable: Bool? = nil,
+        protocolVersion: Int? = WireProtocol.currentVersion,
+        architecture: CPUArchitecture? = nil
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -73,7 +75,8 @@ final class SandboxTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion,
+            architecture: architecture,
+            protocolVersion: protocolVersion,
             sandboxCapable: sandboxCapable
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
@@ -268,6 +271,137 @@ final class SandboxTests {
             let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
             #expect(completed?.status == .failed)
             try await self.pollSandboxStatus(accepted.resourceId, until: .error, on: app.db)
+        }
+    }
+
+    @Test("POST /api/sandboxes forks a ready snapshot with new identity and pinned placement")
+    func createFromSnapshot() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "fork-agent",
+                sandboxCapable: true,
+                architecture: CPUArchitecture.current)
+
+            source.imageDigest = "sha256:" + String(repeating: "a", count: 64)
+            source.cpus = 3
+            source.memory = 2 * 1024 * 1024 * 1024
+            source.entrypoint = ["/usr/bin/worker"]
+            source.cmd = ["--serve"]
+            source.env = ["MODE": "source"]
+            source.workingDir = "/srv"
+            try await source.save(on: app.db)
+
+            let sourceNIC = SandboxNetworkInterface(
+                sandboxID: source.id!,
+                macAddress: "52:54:00:00:00:01")
+            try await sourceNIC.save(on: app.db)
+
+            let snapshot = SandboxSnapshot(
+                name: "fork-point",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.architecture = CPUArchitecture.current.rawValue
+            try await snapshot.save(on: app.db)
+
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "worker-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+
+            let accepted = try #require(operation)
+            let forkID = accepted.resourceId
+            var fork = try #require(await Sandbox.find(forkID, on: app.db))
+            #expect(fork.restoredFromSnapshotId == snapshot.id)
+            #expect(fork.image == source.image)
+            #expect(fork.imageDigest == source.imageDigest)
+            #expect(fork.cpus == source.cpus)
+            #expect(fork.memory == source.memory)
+            #expect(fork.entrypoint == source.entrypoint)
+            #expect(fork.cmd == source.cmd)
+            #expect(fork.env == source.env)
+            #expect(fork.workingDir == source.workingDir)
+            #expect(fork.desiredStatus == .running)
+            #expect(fork.generation == 1)
+
+            for _ in 0..<100 where fork.hypervisorId == nil {
+                try await Task.sleep(for: .milliseconds(20))
+                fork = try #require(await Sandbox.find(forkID, on: app.db))
+            }
+            #expect(fork.hypervisorId == agentId)
+
+            let desired = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let forkState = try #require(desired.sandboxes.first { $0.sandboxId == forkID })
+            let expectedRef = SandboxSnapshotRef(
+                snapshotId: snapshot.id!, sourceSandboxId: source.id!)
+            #expect(forkState.restoreFrom == expectedRef)
+            #expect(forkState.spec.restoreFrom == expectedRef)
+            #expect(forkState.registryCredential == nil)
+
+            let forkNIC = try #require(
+                await SandboxNetworkInterface.query(on: app.db)
+                    .filter(\.$sandbox.$id == forkID)
+                    .first())
+            #expect(forkNIC.macAddress != sourceNIC.macAddress)
+            #expect(forkNIC.deviceName == "net0")
+        }
+    }
+
+    @Test("Fork refuses machine overrides and an agent below wire v12")
+    func createFromSnapshotGuards() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let oldAgent = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "old-fork-agent",
+                sandboxCapable: true,
+                protocolVersion: WireProtocol.sandboxForkMinimumVersion - 1)
+            let snapshot = SandboxSnapshot(
+                name: "old-agent-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: oldAgent,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "invalid-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "image": "docker.io/library/alpine:latest",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "old-agent-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("too old"))
+            }
         }
     }
 

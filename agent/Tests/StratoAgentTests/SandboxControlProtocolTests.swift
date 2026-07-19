@@ -170,6 +170,35 @@ struct SandboxControlProtocolTests {
         #expect(response == .launched)
     }
 
+    @Test("reidentify encodes source guard, target identity, clock, and entropy")
+    func reidentifyEncodes() throws {
+        let entropy = Data(repeating: 0xA5, count: 32)
+        let request = SandboxControlProtocol.ReidentifyRequest(
+            expectedSandboxId: "source",
+            expectedNonce: "old-nonce",
+            sandboxId: "fork",
+            identityNonce: "new-nonce",
+            hostname: "strato-fork",
+            entropy: entropy,
+            unixNanos: 1_752_700_000_000_000_000)
+
+        let object = try decodedObject(.reidentify(request))
+        #expect(object["type"] as? String == "reidentify")
+        #expect(object["expected_sandbox_id"] as? String == "source")
+        #expect(object["expected_nonce"] as? String == "old-nonce")
+        #expect(object["sandbox_id"] as? String == "fork")
+        #expect(object["identity_nonce"] as? String == "new-nonce")
+        #expect(object["hostname"] as? String == "strato-fork")
+        #expect(object["entropy"] as? String == entropy.base64EncodedString())
+        #expect((object["unix_nanos"] as? NSNumber)?.int64Value == 1_752_700_000_000_000_000)
+    }
+
+    @Test("reidentified decodes")
+    func reidentifiedDecodes() throws {
+        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"reidentified"}"#)
+        #expect(response == .reidentified)
+    }
+
     @Test("held workload state decodes in a status response")
     func heldStateDecodes() throws {
         let response = try SandboxControlProtocol.Response.decode(

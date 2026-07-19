@@ -246,7 +246,10 @@ struct SandboxController: RouteCollection {
         struct CreateSandboxRequest: Content {
             let name: String
             /// OCI image reference, e.g. `ghcr.io/acme/worker:v3`.
-            let image: String
+            let image: String?
+            /// Ready sandbox snapshot to restore into a new identity (issue
+            /// #427). Mutually exclusive with image/machine/process fields.
+            let restoreFrom: UUID?
             let projectId: UUID?
             let environment: String?
             let cpus: Int?
@@ -261,9 +264,65 @@ struct SandboxController: RouteCollection {
 
         let createRequest = try req.content.decode(CreateSandboxRequest.self)
 
-        let imageRef = createRequest.image.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !imageRef.isEmpty else {
-            throw Abort(.badRequest, reason: "'image' must be a non-empty OCI image reference")
+        let requestedName = createRequest.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requestedName.isEmpty else {
+            throw Abort(.badRequest, reason: "'name' must be non-empty")
+        }
+
+        var restoreSnapshot: SandboxSnapshot?
+        var restoreSource: Sandbox?
+        if let snapshotID = createRequest.restoreFrom {
+            guard createRequest.image == nil, createRequest.cpus == nil, createRequest.memory == nil,
+                createRequest.entrypoint == nil, createRequest.cmd == nil, createRequest.env == nil,
+                createRequest.workingDir == nil
+            else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "'restoreFrom' cannot be combined with image, CPU, memory, or process overrides; a fork preserves the checkpointed machine shape"
+                )
+            }
+            let canReadSnapshot = try await req.spicedb.checkPermission(
+                subject: try user.requireID().uuidString,
+                permission: "read",
+                resource: "sandbox_snapshot",
+                resourceId: snapshotID.uuidString)
+            guard canReadSnapshot else {
+                throw Abort(.forbidden, reason: "You don't have permission to read this snapshot")
+            }
+            guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db) else {
+                throw Abort(.notFound, reason: "Restore snapshot not found")
+            }
+            guard snapshot.isReady else {
+                throw Abort(
+                    .conflict,
+                    reason: "Snapshot cannot be forked in status '\(snapshot.status.rawValue)'")
+            }
+            guard let source = try await Sandbox.find(snapshot.$sandbox.id, on: req.db) else {
+                throw Abort(.conflict, reason: "Snapshot source sandbox no longer exists")
+            }
+            guard let pinnedAgentID = snapshot.agentId,
+                let pinnedAgentUUID = UUID(uuidString: pinnedAgentID),
+                let pinnedAgent = try await Agent.find(pinnedAgentUUID, on: req.db)
+            else {
+                throw Abort(.conflict, reason: "Snapshot has no available owning agent")
+            }
+            guard WireProtocol.supportsSandboxFork(pinnedAgent.wireProtocolVersion ?? 0) else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion))"
+                )
+            }
+            restoreSnapshot = snapshot
+            restoreSource = source
+        } else {
+            let imageRef = createRequest.image?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !imageRef.isEmpty else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Exactly one of 'image' or 'restoreFrom' must be provided")
+            }
         }
 
         // Resolve the project context, mirroring VM creation: an explicit
@@ -323,8 +382,11 @@ struct SandboxController: RouteCollection {
             )
         }
 
-        let cpus = createRequest.cpus ?? 1
-        let memory = createRequest.memory ?? Int64(1024 * 1024 * 1024)
+        let imageRef =
+            restoreSource?.image
+            ?? (createRequest.image ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cpus = restoreSource?.cpus ?? createRequest.cpus ?? 1
+        let memory = restoreSource?.memory ?? createRequest.memory ?? Int64(1024 * 1024 * 1024)
         guard cpus > 0 else {
             throw Abort(.badRequest, reason: "'cpus' must be positive")
         }
@@ -336,20 +398,24 @@ struct SandboxController: RouteCollection {
         }
 
         let sandbox = Sandbox(
-            name: createRequest.name,
+            name: requestedName,
             projectID: projectId,
             environment: environment,
             image: imageRef,
             cpus: cpus,
             memory: memory,
-            entrypoint: createRequest.entrypoint,
-            cmd: createRequest.cmd,
-            env: createRequest.env ?? [:],
-            workingDir: createRequest.workingDir,
-            ttlSeconds: createRequest.ttlSeconds
+            entrypoint: restoreSource?.entrypoint ?? createRequest.entrypoint,
+            cmd: restoreSource?.cmd ?? createRequest.cmd,
+            env: restoreSource?.env ?? createRequest.env ?? [:],
+            workingDir: restoreSource?.workingDir ?? createRequest.workingDir,
+            ttlSeconds: createRequest.ttlSeconds,
+            restoredFromSnapshotId: restoreSnapshot?.id
         )
+        sandbox.imageDigest = restoreSource?.imageDigest
 
         let userID = try user.requireID()
+        let initialDesiredStatus: DesiredSandboxStatus =
+            restoreSnapshot == nil ? .stopped : .running
 
         // Quota admission check, the sandbox insert, its NIC + address rows, the
         // initial desired-state bump, and the pending create operation commit
@@ -386,10 +452,12 @@ struct SandboxController: RouteCollection {
                     try await sandbox.save(on: db)
                     let sandboxID = try sandbox.requireID()
 
-                    // Desired state for a fresh sandbox: exists but not running.
+                    // A cold create starts stopped. A fork resumes the captured
+                    // guest during create and must be desired-running so the
+                    // reconciler does not immediately pause it again.
                     // The bump to generation 1 distinguishes "never confirmed by
                     // any agent" (observed_generation 0) from "confirmed".
-                    sandbox.setDesiredStatus(.stopped)
+                    sandbox.setDesiredStatus(initialDesiredStatus)
                     try await sandbox.update(on: db)
 
                     // One NIC on the default logical network, IPAM-allocated by
@@ -738,6 +806,23 @@ struct SandboxController: RouteCollection {
     func delete(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "delete")
+
+        let snapshotIDs = try await SandboxSnapshot.query(on: req.db)
+            .filter(\.$sandbox.$id == sandbox.requireID())
+            .all()
+            .compactMap(\.id)
+        if !snapshotIDs.isEmpty {
+            let descendants = try await Sandbox.query(on: req.db)
+                .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
+                .count()
+            guard descendants == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Sandbox cannot be deleted while forks derived from its snapshots still exist"
+                )
+            }
+        }
 
         // Deletion via state sync, exactly like VMs: desired becomes
         // `.absent`, the agent tears the sandbox down on its next sync, and

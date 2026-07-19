@@ -2,6 +2,20 @@ import Foundation
 
 // MARK: - Sandbox Specification
 
+/// Agent-local reference to the checkpoint artifacts used to create a sandbox
+/// fork (issue #427). Snapshot mobility is intentionally not implied: the
+/// control plane pins the target to the snapshot's agent, and the source
+/// sandbox id lets that agent resolve its host-owned artifact directory.
+public struct SandboxSnapshotRef: Codable, Equatable, Sendable {
+    public let snapshotId: UUID
+    public let sourceSandboxId: UUID
+
+    public init(snapshotId: UUID, sourceSandboxId: UUID) {
+        self.snapshotId = snapshotId
+        self.sourceSandboxId = sourceSandboxId
+    }
+}
+
 /// Description of a sandbox workload — a microVM booted from an OCI image —
 /// sent from the control plane to an agent.
 ///
@@ -38,6 +52,9 @@ public struct SandboxSpec: Codable, Sendable {
     /// The sandbox's single NIC, when networked. Reuses the VM NIC spec so
     /// agents realize the attachment through the same OVN/user-mode paths.
     public let network: NetworkSpec?
+    /// A ready checkpoint to restore into this new sandbox instead of booting
+    /// its image. Additive/optional for compatibility with pre-fork peers.
+    public let restoreFrom: SandboxSnapshotRef?
 
     public init(
         image: String,
@@ -48,7 +65,8 @@ public struct SandboxSpec: Codable, Sendable {
         cmd: [String]? = nil,
         env: [String: String] = [:],
         workingDir: String? = nil,
-        network: NetworkSpec? = nil
+        network: NetworkSpec? = nil,
+        restoreFrom: SandboxSnapshotRef? = nil
     ) {
         self.image = image
         self.imageDigest = imageDigest
@@ -59,6 +77,7 @@ public struct SandboxSpec: Codable, Sendable {
         self.env = env
         self.workingDir = workingDir
         self.network = network
+        self.restoreFrom = restoreFrom
     }
 }
 

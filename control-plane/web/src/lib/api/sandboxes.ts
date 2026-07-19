@@ -10,6 +10,7 @@ import type {
   SandboxLogEntry,
   SandboxLogsQueryParams,
   Operation,
+  SandboxSnapshot,
 } from "@/types/api";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
@@ -60,6 +61,10 @@ export const sandboxesApi = {
 
   getStatus(id: string): Promise<Sandbox> {
     return api.get<Sandbox>(`/api/sandboxes/${id}/status`);
+  },
+
+  listSnapshots(id: string): Promise<SandboxSnapshot[]> {
+    return api.get<SandboxSnapshot[]>(`/api/sandboxes/${id}/snapshots`);
   },
 
   // Creates a pending exec session (201). Attach to the returned

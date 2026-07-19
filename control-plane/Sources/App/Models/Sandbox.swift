@@ -66,6 +66,12 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    /// Durable lineage for a fork (issue #427). Kept as an opaque id rather
+    /// than a foreign key so database cascade rules can never delete a fork;
+    /// the controller protects live lineage explicitly.
+    @OptionalField(key: "restored_from_snapshot_id")
+    var restoredFromSnapshotId: UUID?
+
     /// The sandbox's NICs (single-NIC in v1), allocated at create time by the
     /// same IPAM as VMs (issue #416). Requires eager loading with
     /// `.with(\.$networkInterfaces)`.
@@ -119,7 +125,8 @@ final class Sandbox: Model, @unchecked Sendable {
         cmd: [String]? = nil,
         env: [String: String] = [:],
         workingDir: String? = nil,
-        ttlSeconds: Int? = nil
+        ttlSeconds: Int? = nil,
+        restoredFromSnapshotId: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -133,6 +140,7 @@ final class Sandbox: Model, @unchecked Sendable {
         self.env = env
         self.workingDir = workingDir
         self.ttlSeconds = ttlSeconds
+        self.restoredFromSnapshotId = restoredFromSnapshotId
         // A fresh sandbox exists but is not running, mirroring VM creation:
         // the create operation materializes it agent-side, and the user
         // starts it explicitly. `.stopped` here means "not yet confirmed by
@@ -230,7 +238,10 @@ extension Sandbox {
     /// is the sandbox's single NIC spec (issue #416), built by the caller from
     /// the eager-loaded interface + its logical network, or nil for a sandbox
     /// with no NIC.
-    func buildSpec(network: NetworkSpec? = nil) -> SandboxSpec {
+    func buildSpec(
+        network: NetworkSpec? = nil,
+        restoreFrom: SandboxSnapshotRef? = nil
+    ) -> SandboxSpec {
         SandboxSpec(
             image: image,
             imageDigest: imageDigest,
@@ -240,7 +251,8 @@ extension Sandbox {
             cmd: cmd,
             env: env,
             workingDir: workingDir,
-            network: network
+            network: network,
+            restoreFrom: restoreFrom
         )
     }
 }
@@ -265,6 +277,7 @@ struct SandboxDetailResponse: Content {
     /// without re-deriving the anchor. Nil when the sandbox has no TTL.
     let expiresAt: Date?
     let hypervisorId: String?
+    let restoredFromSnapshotId: UUID?
     let status: SandboxStatus
     let exitCode: Int?
     let createdAt: Date?
@@ -286,6 +299,7 @@ struct SandboxDetailResponse: Content {
         self.ttlSeconds = sandbox.ttlSeconds
         self.expiresAt = sandbox.expiresAt
         self.hypervisorId = sandbox.hypervisorId
+        self.restoredFromSnapshotId = sandbox.restoredFromSnapshotId
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode
         self.createdAt = sandbox.createdAt

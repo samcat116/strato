@@ -160,7 +160,8 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
             req @ (Request::Ping
             | Request::GetStatus
             | Request::SyncClock { .. }
-            | Request::Launch { .. }),
+            | Request::Launch { .. }
+            | Request::Reidentify { .. }),
         ) => serve_control(req, reader, writer, state),
         Ok(Request::Exec {
             argv,
@@ -227,10 +228,11 @@ fn serve_control(
                 req @ (Request::Ping
                 | Request::GetStatus
                 | Request::SyncClock { .. }
-                | Request::Launch { .. }),
+                | Request::Launch { .. }
+                | Request::Reidentify { .. }),
             ) => control_response(req, state),
             Ok(_) => Response::Error {
-                message: "only ping/get_status/sync_clock/launch are valid on a control connection"
+                message: "only ping/get_status/sync_clock/launch/reidentify are valid on a control connection"
                     .to_string(),
             },
             Err(e) => Response::Error {
@@ -265,6 +267,24 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             image_config,
             overrides,
             entropy,
+        ),
+        Request::Reidentify {
+            expected_sandbox_id,
+            expected_nonce,
+            sandbox_id,
+            identity_nonce,
+            hostname,
+            entropy,
+            unix_nanos,
+        } => handle_reidentify(
+            state,
+            &expected_sandbox_id,
+            &expected_nonce,
+            sandbox_id,
+            identity_nonce,
+            &hostname,
+            &entropy,
+            unix_nanos,
         ),
         Request::GetStatus => {
             let s = state.status.lock().expect("status poisoned");
@@ -356,23 +376,115 @@ fn handle_launch(
 /// diverge the pool contents across clones of one warm snapshot; failures
 /// are logged and non-fatal.
 fn seed_entropy(b64: &str) {
-    let bytes = match decode_base64(b64) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("[sandbox-init] entropy seed: bad base64: {e}");
-            return;
-        }
-    };
-    if bytes.is_empty() {
-        return;
-    }
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/urandom")
-        .and_then(|mut f| f.write_all(&bytes));
-    if let Err(e) = written {
+    if let Err(e) = reseed_entropy(b64) {
         eprintln!("[sandbox-init] entropy seed: {e}");
     }
+}
+
+fn reseed_entropy(b64: &str) -> Result<Vec<u8>, String> {
+    let bytes = decode_base64(b64).map_err(|e| format!("bad base64: {e}"))?;
+    if bytes.len() < 32 {
+        return Err("at least 32 bytes of entropy are required".to_string());
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/urandom")
+        .and_then(|mut f| f.write_all(&bytes))
+        .map_err(|e| format!("write /dev/urandom: {e}"))?;
+    Ok(bytes)
+}
+
+/// Apply the post-checkpoint identity boundary for a fork. Identity is swapped
+/// last, after every fallible mutation, so a failed request remains retryable
+/// under the checkpoint's source id/nonce.
+#[allow(clippy::too_many_arguments)]
+fn handle_reidentify(
+    state: &GuestState,
+    expected_sandbox_id: &str,
+    expected_nonce: &str,
+    sandbox_id: String,
+    identity_nonce: String,
+    hostname: &str,
+    entropy: &str,
+    unix_nanos: i64,
+) -> Response {
+    {
+        let s = state.status.lock().expect("status poisoned");
+        if s.sandbox_id != expected_sandbox_id || s.nonce != expected_nonce {
+            return Response::Error {
+                message: format!(
+                    "source identity mismatch: expected {expected_sandbox_id}/{expected_nonce}, got {}/{}",
+                    s.sandbox_id, s.nonce
+                ),
+            };
+        }
+    }
+
+    let entropy_bytes = match reseed_entropy(entropy) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Response::Error {
+                message: format!("RNG reseed failed: {e}"),
+            };
+        }
+    };
+    if let Err(e) = set_guest_hostname(hostname) {
+        return Response::Error {
+            message: format!("set hostname failed: {e}"),
+        };
+    }
+    if let Err(e) = reset_machine_id(&entropy_bytes) {
+        return Response::Error {
+            message: format!("reset machine-id failed: {e}"),
+        };
+    }
+    if let Err(e) = set_realtime_clock(unix_nanos) {
+        return Response::Error {
+            message: format!("clock_settime failed: {e}"),
+        };
+    }
+
+    // Log records belong to the identity that produced them. Keep the
+    // monotonic sequence and active stdio writers, but start target delivery
+    // after a clean boundary so source output is never replayed as fork output.
+    state.logs.discard_retained();
+
+    let mut s = state.status.lock().expect("status poisoned");
+    if s.sandbox_id != expected_sandbox_id || s.nonce != expected_nonce {
+        return Response::Error {
+            message: "source identity changed while re-identifying".to_string(),
+        };
+    }
+    s.sandbox_id = sandbox_id;
+    s.nonce = identity_nonce;
+    Response::Reidentified
+}
+
+fn set_guest_hostname(hostname: &str) -> Result<(), String> {
+    if hostname.is_empty() || hostname.len() > 63 || hostname.as_bytes().contains(&0) {
+        return Err("hostname must contain 1...63 non-NUL bytes".to_string());
+    }
+    let rc = unsafe { libc::sethostname(hostname.as_ptr().cast(), hostname.len()) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+fn reset_machine_id(entropy: &[u8]) -> Result<(), String> {
+    let machine_id = entropy[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write("/etc/machine-id", format!("{machine_id}\n"))
+        .map_err(|e| format!("write /etc/machine-id: {e}"))?;
+    let dbus_path = std::path::Path::new("/var/lib/dbus/machine-id");
+    if dbus_path.exists() && !dbus_path.is_symlink() {
+        std::fs::write(dbus_path, format!("{machine_id}\n"))
+            .map_err(|e| format!("write {}: {e}", dbus_path.display()))?;
+    }
+    Ok(())
 }
 
 /// Set CLOCK_REALTIME (issue #426): a guest restored from a snapshot resumes

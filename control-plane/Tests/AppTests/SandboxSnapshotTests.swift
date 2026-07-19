@@ -378,6 +378,58 @@ final class SandboxSnapshotTests {
 
     // MARK: - Restore
 
+    @Test("A live fork protects its source snapshot and source sandbox")
+    func liveForkProtectsLineage() async throws {
+        try await withSnapshotTestApp { app, user, project, sandbox, token in
+            let snapshot = SandboxSnapshot(
+                name: "fork-source",
+                sandboxID: sandbox.id!,
+                projectID: project.id!,
+                environment: sandbox.environment,
+                agentId: nil,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            let fork = Sandbox(
+                name: "live-fork",
+                projectID: project.id!,
+                environment: sandbox.environment,
+                image: sandbox.image,
+                cpus: sandbox.cpus,
+                memory: sandbox.memory,
+                restoredFromSnapshotId: snapshot.id)
+            try await fork.save(on: app.db)
+
+            try await app.test(
+                .DELETE,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("forked"))
+            }
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("live forks"))
+            }
+
+            try await app.test(.DELETE, "/api/sandboxes/\(sandbox.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("forks derived"))
+            }
+        }
+    }
+
     @Test("Restore refuses a snapshot that is not ready")
     func restoreRefusesNotReady() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
