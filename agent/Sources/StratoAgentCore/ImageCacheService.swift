@@ -1,14 +1,13 @@
 import Crypto
 import Foundation
 import Logging
-import StratoAgentCore
 import StratoShared
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
 /// Service for managing local image cache on the agent
-actor ImageCacheService {
+public actor ImageCacheService {
     private let logger: Logger
     private let cachePath: String
     private let controlPlaneURL: String
@@ -16,9 +15,43 @@ actor ImageCacheService {
     /// behavior). Enforced by LRU eviction of whole image directories before
     /// each download.
     private let maxCacheSizeBytes: Int64?
+    /// Collapses concurrent requests for the same cache entry into one download.
+    ///
+    /// The check-then-download path suspends on the network, and actors are reentrant across
+    /// suspension points, so without this two creates placed on this agent against the same
+    /// cold image would both miss the cache and both download to the same destination.
+    private let downloads = SingleFlight<String>()
+
+    /// The dedup key for one cache entry: destination path *and* expected checksum.
+    ///
+    /// The path alone is not enough. `uploadArtifact` replaces an artifact of a given kind in
+    /// place, so re-uploading under the same filename leaves the destination path unchanged
+    /// while the checksum and download URL change. Keyed on path alone, a create carrying the
+    /// new `ImageInfo` would join the in-flight download of the *old* bytes and take its result
+    /// without ever checking its own checksum. Including the checksum means a caller only ever
+    /// joins a flight fetching the bytes it actually asked for.
+    private func flightKey(path: String, checksum: String) -> String {
+        "\(path)\u{0}\(checksum.lowercased())"
+    }
+    /// Fetches one URL to a local temporary file, whose ownership passes to the caller.
+    /// Injectable so tests can exercise the cache and its concurrency without a network.
+    private let fetch: Fetcher
+
+    /// Fetches `url` to a temporary file and returns its location. Throws
+    /// `TransientDownloadFailure` for failures worth retrying (network errors, 5xx, 408, 429)
+    /// and any other error for failures that won't change within the operation.
+    public typealias Fetcher = @Sendable (URL) async throws -> URL
+
+    /// A download failure that another attempt might get past.
+    public struct TransientDownloadFailure: Error {
+        public let reason: String
+        public init(reason: String) {
+            self.reason = reason
+        }
+    }
 
     /// Default cache path for images (platform-specific)
-    static var defaultCachePath: String {
+    public static var defaultCachePath: String {
         #if os(macOS)
         // On macOS, use user's cache directory (writable without root)
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -29,11 +62,18 @@ actor ImageCacheService {
         #endif
     }
 
-    init(logger: Logger, cachePath: String? = nil, controlPlaneURL: String, maxCacheSizeBytes: Int64? = nil) {
+    public init(
+        logger: Logger,
+        cachePath: String? = nil,
+        controlPlaneURL: String,
+        maxCacheSizeBytes: Int64? = nil,
+        fetch: @escaping Fetcher = ImageCacheService.defaultFetch
+    ) {
         self.logger = logger
         self.cachePath = cachePath ?? Self.defaultCachePath
         self.controlPlaneURL = controlPlaneURL
         self.maxCacheSizeBytes = maxCacheSizeBytes
+        self.fetch = fetch
 
         // Ensure cache directory exists
         do {
@@ -52,9 +92,15 @@ actor ImageCacheService {
 
     /// Gets the local path for a cached image, downloading if necessary
     /// Returns the path to the image file ready for use by QEMU
-    func getImagePath(imageInfo: ImageInfo) async throws -> String {
+    public func getImagePath(imageInfo: ImageInfo) async throws -> String {
         let cachedPath = buildCachePath(imageInfo: imageInfo)
+        let key = flightKey(path: cachedPath, checksum: imageInfo.checksum)
+        return try await downloads.run(key: key) {
+            try await self.resolveImagePath(imageInfo: imageInfo, cachedPath: cachedPath)
+        }
+    }
 
+    private func resolveImagePath(imageInfo: ImageInfo, cachedPath: String) async throws -> String {
         // Check if image is already cached and valid
         if try await isCached(imageInfo: imageInfo) {
             DiskCacheLRU.touch(entryDirectory: imageDirectory(imageInfo: imageInfo))
@@ -82,7 +128,7 @@ actor ImageCacheService {
     }
 
     /// Checks if an image is cached and has valid checksum
-    func isCached(imageInfo: ImageInfo) async throws -> Bool {
+    public func isCached(imageInfo: ImageInfo) async throws -> Bool {
         let cachedPath = buildCachePath(imageInfo: imageInfo)
 
         // Check if file exists
@@ -111,7 +157,7 @@ actor ImageCacheService {
 
     /// Builds the local cache path for an image's primary disk
     /// Structure: {cachePath}/{projectId}/{imageId}/{filename}
-    func buildCachePath(imageInfo: ImageInfo) -> String {
+    public func buildCachePath(imageInfo: ImageInfo) -> String {
         return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(imageInfo.filename)"
     }
 
@@ -171,7 +217,7 @@ actor ImageCacheService {
     /// namespaced by kind so a kernel and a rootfs with colliding filenames
     /// never overwrite each other.
     /// Structure: {cachePath}/{projectId}/{imageId}/{kind}/{filename}
-    func buildArtifactCachePath(imageInfo: ImageInfo, artifact: ArtifactInfo) -> String {
+    public func buildArtifactCachePath(imageInfo: ImageInfo, artifact: ArtifactInfo) -> String {
         return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(artifact.kind.rawValue)/\(artifact.filename)"
     }
 
@@ -181,7 +227,7 @@ actor ImageCacheService {
     /// verifying it if it isn't cached. Falls back to the primary-disk path when
     /// the requested kind is `.diskImage` and the image carries no typed artifact
     /// set (legacy single-file images).
-    func getArtifactPath(imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
+    public func getArtifactPath(imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
         guard let artifact = imageInfo.artifact(ofKind: kind) else {
             if kind == .diskImage {
                 return try await getImagePath(imageInfo: imageInfo)
@@ -190,7 +236,16 @@ actor ImageCacheService {
         }
 
         let cachedPath = buildArtifactCachePath(imageInfo: imageInfo, artifact: artifact)
+        let key = flightKey(path: cachedPath, checksum: artifact.checksum)
+        return try await downloads.run(key: key) {
+            try await self.resolveArtifactPath(
+                imageInfo: imageInfo, artifact: artifact, kind: kind, cachedPath: cachedPath)
+        }
+    }
 
+    private func resolveArtifactPath(
+        imageInfo: ImageInfo, artifact: ArtifactInfo, kind: ArtifactKind, cachedPath: String
+    ) async throws -> String {
         if try await isArtifactCached(cachedPath: cachedPath, checksum: artifact.checksum) {
             DiskCacheLRU.touch(entryDirectory: imageDirectory(imageInfo: imageInfo))
             logger.info(
@@ -317,8 +372,10 @@ actor ImageCacheService {
         // different filesystem, in which case moveItem degrades to a copy —
         // doing that into a `.partial` sibling keeps the final rename atomic
         // and means an interrupted copy never masquerades as a cached image.
-        let stagingPath = localPath + ".partial"
-        try? FileManager.default.removeItem(atPath: stagingPath)
+        // The staging name is unique per download so a concurrent writer of the
+        // same image (another agent process, or a stale `.partial` left by a
+        // crash) can't have its bytes clobbered mid-copy.
+        let stagingPath = localPath + ".partial." + UUID().uuidString
         do {
             try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: stagingPath))
 
@@ -329,14 +386,26 @@ actor ImageCacheService {
                 throw ImageCacheError.checksumMismatch(expected: checksum, actual: actualChecksum)
             }
 
-            if FileManager.default.fileExists(atPath: localPath) {
-                try FileManager.default.removeItem(atPath: localPath)
-            }
-            try FileManager.default.moveItem(atPath: stagingPath, toPath: localPath)
+            try publish(stagingPath: stagingPath, to: localPath)
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
             try? FileManager.default.removeItem(at: tempURL)
             throw error
+        }
+    }
+
+    /// Publishes verified staged bytes at their final cache path.
+    ///
+    /// Uses POSIX rename(2) rather than FileManager: rename(2) atomically replaces an existing
+    /// destination on the same filesystem whether or not it is already there, so a destination
+    /// that appeared concurrently (another writer publishing the same image) is a no-op rather
+    /// than an error. FileManager's moveItem throws when the destination exists, which made the
+    /// old check-then-move a race that failed healthy creates.
+    private func publish(stagingPath: String, to localPath: String) throws {
+        guard rename(stagingPath, localPath) == 0 else {
+            let code = errno
+            throw ImageCacheError.storageFailed(
+                "publishing \(stagingPath) to \(localPath) failed: \(String(cString: strerror(code)))")
         }
     }
 
@@ -359,31 +428,41 @@ actor ImageCacheService {
             }
 
             do {
-                let (tempURL, response) = try await URLSession.shared.download(from: url)
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    try? FileManager.default.removeItem(at: tempURL)
-                    throw ImageCacheError.downloadFailed("non-HTTP response")
-                }
-                guard httpResponse.statusCode == 200 else {
-                    try? FileManager.default.removeItem(at: tempURL)
-                    let error = ImageCacheError.downloadFailed("HTTP \(httpResponse.statusCode)")
-                    // Server-side and throttling failures are worth retrying;
-                    // other statuses (403 expired signature, 404) are not
-                    // going to change within this operation.
-                    if Self.isRetryableStatus(httpResponse.statusCode) {
-                        lastError = error
-                        continue
-                    }
-                    throw error
-                }
-                return tempURL
-            } catch let error as URLError {
-                lastError = ImageCacheError.downloadFailed(error.localizedDescription)
-                continue  // network-level errors are transient by nature
+                return try await fetch(url)
+            } catch let error as TransientDownloadFailure {
+                lastError = ImageCacheError.downloadFailed(error.reason)
+                continue
             }
         }
 
         throw lastError
+    }
+
+    /// The production fetcher: one URLSession download, with server-side and throttling
+    /// failures reported as transient. Other statuses (403 expired signature, 404) are not
+    /// going to change within this operation, so they surface as-is and end the retry loop.
+    public static let defaultFetch: Fetcher = { url in
+        let tempURL: URL
+        let response: URLResponse
+        do {
+            (tempURL, response) = try await URLSession.shared.download(from: url)
+        } catch let error as URLError {
+            // Network-level errors are transient by nature.
+            throw TransientDownloadFailure(reason: error.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw ImageCacheError.downloadFailed("non-HTTP response")
+        }
+        guard httpResponse.statusCode == 200 else {
+            try? FileManager.default.removeItem(at: tempURL)
+            if isRetryableStatus(httpResponse.statusCode) {
+                throw TransientDownloadFailure(reason: "HTTP \(httpResponse.statusCode)")
+            }
+            throw ImageCacheError.downloadFailed("HTTP \(httpResponse.statusCode)")
+        }
+        return tempURL
     }
 
     private static func isRetryableStatus(_ status: Int) -> Bool {
@@ -415,18 +494,18 @@ actor ImageCacheService {
 
 /// The storage layer pulls image bytes through this hook when materializing disks.
 extension ImageCacheService: ImageSource {
-    func localImagePath(for imageInfo: ImageInfo) async throws -> String {
+    public func localImagePath(for imageInfo: ImageInfo) async throws -> String {
         try await getImagePath(imageInfo: imageInfo)
     }
 
-    func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
+    public func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
         try await getArtifactPath(imageInfo: imageInfo, kind: kind)
     }
 }
 
 // MARK: - Errors
 
-enum ImageCacheError: Error, LocalizedError {
+public enum ImageCacheError: Error, LocalizedError {
     case invalidURL(String)
     case downloadFailed(String)
     case checksumMismatch(expected: String, actual: String)
@@ -435,7 +514,7 @@ enum ImageCacheError: Error, LocalizedError {
     case storageFailed(String)
     case insufficientDiskSpace(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidURL(let url):
             return "Invalid download URL: \(url)"
@@ -456,7 +535,7 @@ enum ImageCacheError: Error, LocalizedError {
 }
 
 extension ImageCacheError: ClassifiableError {
-    var failureClassification: FailureClassification {
+    public var failureClassification: FailureClassification {
         switch self {
         case .invalidURL, .artifactNotFound, .insufficientDiskSpace:
             // Nothing on this host will change these; retrying the same

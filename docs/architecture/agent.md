@@ -147,10 +147,12 @@ differs (qcow2 cloud image → raw Firecracker rootfs), preflights free
 space, writes to a `.partial` staging path, and publishes with an atomic
 rename. See [storage](./storage.md).
 
-`ImageCacheService` (executable target) feeds `materializeDisk` through the
-`ImageSource` seam: downloaded image artifacts are checksum-verified and
-kept under `image_cache_dir` so repeat launches of the same image skip the
-download. The cache is LRU-evicted to the `image_cache_max_size_gb` budget
+`ImageCacheService` feeds `materializeDisk` through the `ImageSource` seam:
+downloaded image artifacts are checksum-verified and kept under
+`image_cache_dir` so repeat launches of the same image skip the download.
+Concurrent requests for one entry are deduplicated by `SingleFlight` (the
+counterpart to `SerialTaskQueue`: it collapses work that need only happen
+once, rather than ordering work that must all happen). The cache is LRU-evicted to the `image_cache_max_size_gb` budget
 (unset = unbounded) using the shared `DiskCacheLRU` helper in
 `StratoAgentCore`; the sandbox rootfs cache enforces
 `sandbox_image_cache_max_size_gb` the same way, on top of its idle TTL.

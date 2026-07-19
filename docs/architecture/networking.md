@@ -21,7 +21,10 @@ Strato does **L2-only, single-switch, single-node** networking:
   an optional `gateway` (used only as an excluded IP + DHCP `router` option),
   and DHCP config. Networks are global-by-name, optionally project-scoped for
   tenancy. IPAM (`IPAMService`) allocates non-overlapping IPs across the fleet
-  for a given network name.
+  for a given network name. The seeded `default` network ships with public
+  resolvers (`1.1.1.1`, `8.8.8.8`) so guests can resolve names out of the box;
+  `STRATO_DEFAULT_NETWORK_DNS_SERVERS` overrides the list, and setting it empty
+  seeds none.
 - **Networks are not first-class in reconciliation.** They are realized as a
   side effect of each VM's `VMSpec.networks` — the agent "finds or creates" the
   switch by name when a VM lands. `NetworkCreate`/`NetworkDelete` wire messages
