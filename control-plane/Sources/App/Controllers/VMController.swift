@@ -595,6 +595,15 @@ struct VMController: RouteCollection {
         // on, so no trimming).
         vm.userData = try Self.validatedUserData(createRequest.userData)
 
+        // User data is only delivered on the QEMU disk-boot path (the NoCloud
+        // seed ISO); Firecracker VMs have no injection path yet. Reject rather
+        // than return 202 and silently ignore the payload.
+        if vm.userData != nil, vm.hypervisorType == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
+        }
+
         let userID = try user.requireID()
 
         // Reserve quota and persist the VM and its pending create operation in one
@@ -807,7 +816,7 @@ struct VMController: RouteCollection {
         }
     }
 
-    func update(req: Request) async throws -> VM {
+    func update(req: Request) async throws -> VMDetailResponse {
         let user = try req.auth.require(User.self)
         let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
@@ -829,7 +838,14 @@ struct VMController: RouteCollection {
         }
 
         try await existingVM.save(on: req.db)
-        return existingVM
+
+        // The DTO, not the model: the raw `VM` encoding would expose fields
+        // that must stay server-side (cloud-init user_data can carry secrets).
+        try await existingVM.$networkInterfaces.load(on: req.db)
+        for interface in existingVM.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
+        return VMDetailResponse(from: existingVM)
     }
 
     func delete(req: Request) async throws -> Response {
@@ -933,15 +949,21 @@ struct VMController: RouteCollection {
         return try Self.accepted(operation)
     }
 
-    func status(req: Request) async throws -> VM {
+    func status(req: Request) async throws -> VMDetailResponse {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh (issue #260), so no
         // agent round-trip happens here — which also makes this endpoint
-        // replica-independent (issue #261).
-        return vm
+        // replica-independent (issue #261). Returned as the DTO, not the
+        // model: the raw `VM` encoding would expose fields that must stay
+        // server-side (cloud-init user_data can carry secrets).
+        try await vm.$networkInterfaces.load(on: req.db)
+        for interface in vm.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
+        return VMDetailResponse(from: vm)
     }
 
     func start(req: Request) async throws -> Response {
