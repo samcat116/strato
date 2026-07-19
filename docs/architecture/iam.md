@@ -324,6 +324,55 @@ inverts the data flow:
 - The Swift↔Cedar binding wraps the `cedar-policy` crate's FFI module
   (JSON-in/JSON-out) from Rust; there is no official Swift binding.
 
+### The Cedar encoding (shipped with #480)
+
+The schema, the static policies, the loader, and the compiled-set cache are in
+`Sources/App/IAM/Cedar/`. The choices that matter:
+
+- **The schema is generated from the role registry** (`CedarSchemaBuilder`),
+  never hand-maintained: entity types (one per `IAMNodeType`, with the OU →
+  `Folder` rename already in the Cedar vocabulary), the per-operation action
+  inventory, and the condition vocabulary as the request `Context` (`mfa`,
+  `sourceIP`; `expires_at` is enforced when bindings are read, and
+  `environment` matches the resource).
+- **Roles are nested action groups, lower-inside-higher**: `vm:read` is a
+  member of `role:viewer`, and `role:viewer` of `role:operator`, up the chain
+  — so `action in Action::"role:admin"` transitively reaches everything while
+  `role:viewer` reaches only the viewer set. The direction is the easy thing
+  to get backwards; `CedarSchemaTests` proves every action's group closure
+  equals `IAMRoleRegistry.roles(granting:)`, which over a finite inventory is
+  the subsumption check in full.
+- **Per-service action groups** (`svc:vm`, …) are the compilation target for
+  `service:*` guardrail patterns, so a service ceiling covers actions shipped
+  after it was written.
+- **Bindings enter as request data, not policies.** The entity-slice loader
+  (`EntitySliceLoader`) flattens the principal's active, unconditioned
+  bindings along the ancestor chain into `context.grants` (per-role user and
+  group sets); the static role policies test membership in those sets. This is
+  what keeps grant/revoke free of cache invalidation. Conditioned bindings are
+  skipped and counted, never flattened — flattening one would widen it.
+- **Guardrails compile to `forbid` policies** (`CedarPolicyAssembler`), one
+  per row, id `guardrail-<row id>` so a denial names its ceiling. The attach
+  node becomes `resource in <node>` over the chain's parent edges;
+  `external_to_organization` compiles against the attach node's resolved org.
+  The compiler can emit forbids and nothing else.
+- **`CedarPolicySetCache`** holds the per-replica compiled set, reconciled on
+  every `PolicySetVersionCache` refresh — the Valkey broadcast and the 30s
+  re-read both funnel through it, so the cache adds no invalidation machinery.
+  The hook is **level-triggered** (rebuild whenever the cached set's version
+  differs from the observed one, an integer comparison when in sync): the
+  version cache advances before listeners run, so an edge-triggered listener
+  whose rebuild failed would wait for the *next* policy write. A failed
+  rebuild keeps the previous set — stale converges within one tick, empty
+  would deny everything or drop ceilings.
+- **The engine itself sits behind `CedarEngine`.** swift-cedar cannot be a
+  package dependency yet (unpublished binary artifact, Apple-only packaging,
+  while the control plane deploys on Linux), so the compiled artifact is
+  currently the assembled text. The generated schema, policies, entities JSON,
+  and decision semantics were verified against the real `cedar-policy` crate
+  (strict validation plus a full (role, action) enumeration); #481 swaps the
+  engine in behind this seam.
+
 ### Required APIs (day one of the new system, not v2)
 
 1. **`can-i`** — hypothetical checks, `POST /api/authorization/check`. **Shipped.**
@@ -384,7 +433,9 @@ Phases; each lands independently:
    enforcement path, which arrives with the evaluator.
 3. **Cedar integration.** Swift binding (separate track), Cedar schema (entity
    types, action groups, binding templates), entity-slice loader, compiled
-   policy-set cache with Valkey invalidation.
+   policy-set cache with Valkey invalidation. **Shipped** — see "The Cedar
+   encoding" above; the engine itself plugs into the `CedarEngine` seam when
+   the swift-cedar packaging (Linux included) lands.
 4. **Shadow evaluation + decision logs.** Every check runs through both
    engines; mismatches are logged with both verdicts and burned down against
    this document's semantics. The decision-log infrastructure is built here.

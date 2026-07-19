@@ -481,7 +481,13 @@ public func configure(_ app: Application) async throws {
     // and before anything can change policy. Under `.testing` the periodic
     // re-read would outlive the test's application, and the tests that care
     // drive the cache directly.
+    //
+    // IAM phase 3 (#480): the compiled Cedar policy set hangs off the version
+    // watch, level-triggered so a failed rebuild retries on the periodic
+    // re-read. The listener registers first so the watch's initial refresh
+    // performs the boot-time build.
     if app.environment != .testing {
+        await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()
     }
 

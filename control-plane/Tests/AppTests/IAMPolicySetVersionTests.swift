@@ -186,6 +186,27 @@ final class IAMPolicySetVersionTests {
         }
     }
 
+    @Test("Refresh listeners fire on every successful re-read, changed or not")
+    func refreshListenersAreLevelTriggered() async throws {
+        try await withApp { app in
+            let cache = PolicySetVersionCache(logger: app.logger)
+            let observed = ObservedVersions()
+            // Unlike the change listeners above, this hook exists for work
+            // that must converge even when the version already advanced — a
+            // compiled-set rebuild that failed gets no second change event,
+            // only the next tick.
+            await cache.onEveryRefresh { version in
+                await observed.record(version)
+            }
+
+            let expected = try await PolicySetVersionService.current(on: app.db)
+            await cache.refresh(on: app.db)
+            await cache.refresh(on: app.db)
+            let recorded = await observed.all()
+            #expect(recorded == [expected, expected])
+        }
+    }
+
     /// Counts how many times a retried closure ran.
     private actor AttemptCounter {
         private var attempts = 0

@@ -1,0 +1,215 @@
+import Foundation
+
+// IAM phase 3 (issue #480): assembly of the Cedar policy set.
+//
+// The compiled set holds exactly what changes only on a policy-set version
+// bump: the platform (tier-1) policies, the role policies, and the guardrail
+// (tier-2) forbids. Role *bindings* are deliberately absent — they are data,
+// read per-request from Postgres and delivered by the entity-slice loader as
+// `context.grants`, which is why grant/revoke needs no cache invalidation
+// (docs/architecture/iam.md).
+
+enum CedarPolicyAssembler {
+
+    // MARK: - Static policies (tier 1 + tier 3 role policies)
+
+    /// The policies that depend on nothing but the registry. Every policy
+    /// carries an `@id` so decision logs (#481) can name what decided.
+    static func staticPolicyText() -> String {
+        var policies: [String] = []
+
+        // The system-admin bypass as a tier-1 platform policy — the design's
+        // replacement for today's middleware short-circuit, so it flows
+        // through the evaluator and shows up in decision logs.
+        policies.append(
+            """
+            @id("platform-system-admin")
+            permit (principal, action, resource)
+            when { principal.systemAdmin };
+            """)
+
+        // A global network — one with no project — is readable by every
+        // authenticated user, because it is the fallback every VM create can
+        // land on. Today a special case in `NetworkController` and `who-can`;
+        // here it is an ordinary tier-1 permit.
+        policies.append(
+            """
+            @id("platform-open-network-read")
+            permit (principal, action == Action::"network:read", resource is Network)
+            when { resource.openToAllUsers };
+            """)
+
+        // Bare org membership grants `org:read` + `project:create` — nothing
+        // else. `resource in principal.memberOfOrgs` covers both the org
+        // itself and a folder beneath it (the entity slice carries the parent
+        // chain), matching "anywhere in the org" for project creation.
+        let membershipActions = IAMRoleRegistry.membershipDerivedActions.sorted()
+            .map { "Action::\(CedarText.stringLiteral($0))" }
+            .joined(separator: ", ")
+        policies.append(
+            """
+            @id("org-membership")
+            permit (principal, action in [\(membershipActions)], resource)
+            when { resource in principal.memberOfOrgs };
+            """)
+
+        // One policy per role. The action side is the role's action group
+        // (nested, so `role:admin` reaches everything); the principal side is
+        // the flattened per-request grants the loader computed from
+        // `role_bindings`. `principal in <Set<Group>>` resolves through the
+        // principal's group parent edges, so a group grant covers its members.
+        for role in IAMRole.allCases {
+            policies.append(
+                """
+                @id("role-\(role.rawValue)")
+                permit (principal, action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(role))), resource)
+                when {
+                    principal in context.grants[\(CedarText.stringLiteral(role.grantsUsersField))] ||
+                    principal in context.grants[\(CedarText.stringLiteral(role.grantsGroupsField))]
+                };
+                """)
+        }
+
+        return policies.joined(separator: "\n\n") + "\n"
+    }
+
+    // MARK: - Guardrail forbids (tier 2)
+
+    /// A guardrail the compiler had to leave out of the policy set, with the
+    /// reason. Skipping is the same semantics `GuardrailStore` gives an
+    /// unresolvable row (it matches nobody), but it is still a ceiling not
+    /// being enforced, so the cache logs every one loudly.
+    struct SkippedGuardrail: Equatable, Sendable {
+        let id: UUID?
+        let name: String
+        let reason: String
+    }
+
+    struct GuardrailPolicySet: Sendable {
+        let policyText: String
+        let compiledGuardrailIDs: [UUID]
+        let skipped: [SkippedGuardrail]
+    }
+
+    /// Compile guardrail rows into `forbid` policies.
+    ///
+    /// Structurally forbid-only: this function can emit nothing else, which is
+    /// the compiler-side leg of the tier-2 invariant. Each policy's id is
+    /// `guardrail-<row id>`, so a denial can name the exact ceiling in the
+    /// way.
+    ///
+    /// `organizationIDsByGuardrail` carries the resolved organization of each
+    /// `external_to_organization` guardrail's attach node (the caller walks
+    /// the tree; this stays pure for testability). Embedding the org id in the
+    /// compiled text is sound because attach nodes cannot move to another org
+    /// without a delete/recreate, which bumps the policy-set version.
+    static func guardrailPolicyText(
+        _ guardrails: [Guardrail],
+        organizationIDsByGuardrail: [UUID: UUID]
+    ) -> GuardrailPolicySet {
+        var policies: [String] = []
+        var compiled: [UUID] = []
+        var skipped: [SkippedGuardrail] = []
+
+        // Sorted for a deterministic policy set — rebuilds on two replicas
+        // must produce identical text for the same version.
+        let ordered = guardrails.sorted {
+            ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
+        }
+
+        for guardrail in ordered {
+            guard let id = guardrail.id else {
+                skipped.append(SkippedGuardrail(id: nil, name: guardrail.name, reason: "row has no id"))
+                continue
+            }
+            guard let node = guardrail.node else {
+                skipped.append(
+                    SkippedGuardrail(id: id, name: guardrail.name, reason: "unknown node type '\(guardrail.nodeType)'"))
+                continue
+            }
+            let principalMatch: GuardrailPrincipalMatch
+            let resourceMatch: GuardrailResourceMatch
+            do {
+                principalMatch = try guardrail.principalMatch()
+                resourceMatch = try guardrail.resourceMatch()
+            } catch {
+                skipped.append(SkippedGuardrail(id: id, name: guardrail.name, reason: "unreadable match: \(error)"))
+                continue
+            }
+
+            var conditions: [String] = []
+
+            let principalClause: String
+            switch principalMatch {
+            case .any:
+                principalClause = "principal"
+            case .user(let userID):
+                principalClause = "principal == \(CedarEntityUID(type: .user, id: userID).cedarLiteral)"
+            case .group(let groupID):
+                // `in`, not `==`: the group is how a grant reaches a user, so
+                // it must be how the ceiling does too. The principal's group
+                // parent edges make this cover the members.
+                principalClause = "principal in \(CedarEntityUID(type: .group, id: groupID).cedarLiteral)"
+            case .externalToOrganization:
+                // "External" is defined against the attach node's org. With no
+                // resolvable org there is no outside to be on — the store
+                // matches nobody, and so must the compiled set.
+                guard let organizationID = organizationIDsByGuardrail[id] else {
+                    skipped.append(
+                        SkippedGuardrail(
+                            id: id, name: guardrail.name,
+                            reason:
+                                "attach node resolves to no organization; an external-principal ceiling has nothing to be external to"
+                        ))
+                    continue
+                }
+                principalClause = "principal"
+                let orgLiteral = CedarEntityUID(type: .organization, id: organizationID).cedarLiteral
+                conditions.append("!(principal.memberOfOrgs.contains(\(orgLiteral)))")
+            }
+
+            let actionClause: String
+            if guardrail.actions.contains(GuardrailActions.wildcard) {
+                actionClause = "action"
+            } else {
+                let refs = guardrail.actions.map { pattern -> String in
+                    if pattern.hasSuffix(":*") {
+                        let service = String(pattern.dropLast(2))
+                        return "Action::\(CedarText.stringLiteral(CedarSchemaBuilder.serviceGroupName(service)))"
+                    }
+                    return "Action::\(CedarText.stringLiteral(pattern))"
+                }
+                actionClause = "action in [\(refs.joined(separator: ", "))]"
+            }
+
+            switch resourceMatch {
+            case .any:
+                break
+            case .environment(let environment):
+                // Matches the resource being acted on, never its ancestry:
+                // environment is an attribute, not a container. A resource
+                // with no environment is in no environment, so `has` guards
+                // the ceiling off it.
+                conditions.append(
+                    "resource has environment && resource.environment == \(CedarText.stringLiteral(environment))")
+            }
+
+            var policy = """
+                @id("guardrail-\(id.uuidString.lowercased())")
+                forbid (\(principalClause), \(actionClause), resource in \(node.cedarUID.cedarLiteral))
+                """
+            if !conditions.isEmpty {
+                policy += "\nwhen { \(conditions.joined(separator: " && ")) }"
+            }
+            policy += ";"
+            policies.append(policy)
+            compiled.append(id)
+        }
+
+        return GuardrailPolicySet(
+            policyText: policies.isEmpty ? "" : policies.joined(separator: "\n\n") + "\n",
+            compiledGuardrailIDs: compiled,
+            skipped: skipped
+        )
+    }
+}

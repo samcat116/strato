@@ -102,9 +102,15 @@ actor PolicySetVersionCache {
 
     private let logger: Logger
     private var version: Int = 0
-    /// Called on every observed version change, with the new version. This is
-    /// where #480 rebuilds the compiled policy set.
+    /// Called on every observed version change, with the new version.
+    /// Edge-triggered: silent while the version holds still.
     private var onChange: [@Sendable (Int) async -> Void] = []
+    /// Called after every successful re-read with the latest version, changed
+    /// or not. Level-triggered: this is what the compiled-policy-set cache
+    /// (#480) hangs off, so a rebuild that *failed* is retried at the next
+    /// tick — an edge-only listener would never hear about the same version
+    /// twice and a transient failure would stick until the next policy write.
+    private var onRefresh: [@Sendable (Int) async -> Void] = []
 
     init(logger: Logger) {
         self.logger = logger
@@ -120,17 +126,29 @@ actor PolicySetVersionCache {
         onChange.append(handler)
     }
 
-    /// Re-read the version from the database and fire listeners if it moved.
+    /// Register a listener fired on every successful refresh, with the latest
+    /// version. Listeners must be cheap when nothing changed — this fires on
+    /// each periodic tick, so idempotence is theirs to provide.
+    func onEveryRefresh(_ handler: @escaping @Sendable (Int) async -> Void) {
+        onRefresh.append(handler)
+    }
+
+    /// Re-read the version from the database; fire change listeners if it
+    /// moved and refresh listeners either way.
     func refresh(on db: any Database) async {
         do {
             let latest = try await PolicySetVersionService.current(on: db)
-            guard latest != version else { return }
-            let previous = version
-            version = latest
-            logger.info(
-                "Policy set version changed",
-                metadata: ["from": .stringConvertible(previous), "to": .stringConvertible(latest)])
-            for handler in onChange {
+            if latest != version {
+                let previous = version
+                version = latest
+                logger.info(
+                    "Policy set version changed",
+                    metadata: ["from": .stringConvertible(previous), "to": .stringConvertible(latest)])
+                for handler in onChange {
+                    await handler(latest)
+                }
+            }
+            for handler in onRefresh {
                 await handler(latest)
             }
         } catch {
