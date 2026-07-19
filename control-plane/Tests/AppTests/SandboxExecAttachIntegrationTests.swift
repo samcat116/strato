@@ -235,7 +235,10 @@ private final class ExecWSClient: Sendable {
     // dozens of suites start up. On the happy path the waits return
     // immediately, so the headroom costs nothing.
     func nextFrame(timeout: Duration = .seconds(30)) async throws -> WSFrame {
-        try await withExecTimeout(timeout) { [frames] in await frames.next() }
+        guard let frame = try await withExecTimeout(timeout, { [frames] in await frames.next() }) else {
+            throw ExecTimeoutError()
+        }
+        return frame
     }
 
     /// Await the next inbound frame decoded as a browser-facing JSON control
@@ -273,10 +276,19 @@ private final class ExecWSClient: Sendable {
         }
     }
 
+    /// Polls rather than awaiting `onClose.get()`: the future wait is not
+    /// cancellation-aware, and on a timeout the task group would wait forever
+    /// on a close that can only arrive after test teardown.
     func waitForClose(timeout: Duration = .seconds(30)) async throws {
-        let onClose = ws.onClose
-        try await withExecTimeout(timeout) {
-            try? await onClose.get()
+        _ = try await withExecTimeout(timeout) { [ws] () -> Bool? in
+            while !ws.isClosed {
+                do {
+                    try await Task.sleep(for: .milliseconds(10))
+                } catch {
+                    return nil
+                }
+            }
+            return true
         }
     }
 
@@ -287,26 +299,51 @@ private final class ExecWSClient: Sendable {
 
 /// Serializes inbound WebSocket frames (delivered on NIO event loops) into an
 /// async queue a single consumer can await.
+///
+/// The wait is cancellation-aware and resumes with nil on cancellation. This
+/// is load-bearing for `withExecTimeout`: `withThrowingTaskGroup` waits for
+/// its cancelled children before returning, so a wait that ignored
+/// cancellation would turn every real timeout into a suite-wide hang instead
+/// of an `ExecTimeoutError`.
 private actor ExecFrameCollector {
     private var buffered: [WSFrame] = []
-    private var waiter: CheckedContinuation<WSFrame, Never>?
+    private var waiter: (id: UInt64, continuation: CheckedContinuation<WSFrame?, Never>)?
+    private var nextWaiterID: UInt64 = 0
 
     func deliver(_ frame: WSFrame) {
         if let waiter {
             self.waiter = nil
-            waiter.resume(returning: frame)
+            waiter.continuation.resume(returning: frame)
         } else {
             buffered.append(frame)
         }
     }
 
-    func next() async -> WSFrame {
+    func next() async -> WSFrame? {
         if !buffered.isEmpty {
             return buffered.removeFirst()
         }
-        return await withCheckedContinuation { continuation in
-            waiter = continuation
+        let id = nextWaiterID
+        nextWaiterID += 1
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation that lands before the waiter is armed is caught
+                // here; cancellation after runs cancelWaiter, which resumes it.
+                if Task.isCancelled {
+                    continuation.resume(returning: nil)
+                } else {
+                    waiter = (id, continuation)
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id: id) }
         }
+    }
+
+    private func cancelWaiter(id: UInt64) {
+        guard let waiter, waiter.id == id else { return }
+        self.waiter = nil
+        waiter.continuation.resume(returning: nil)
     }
 }
 

@@ -334,7 +334,9 @@ private final class AgentTestClient: Sendable {
     /// stall for many seconds while dozens of suites start up; on the happy path
     /// the wait returns immediately.
     func nextEnvelope(timeout: Duration = .seconds(30)) async throws -> MessageEnvelope {
-        let data = try await withTimeout(timeout) { [frames] in await frames.next() }
+        guard let data = try await withTimeout(timeout, { [frames] in await frames.next() }) else {
+            throw TimeoutError()
+        }
         return try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
     }
 
@@ -353,26 +355,51 @@ private final class AgentTestClient: Sendable {
 
 /// Serializes inbound WebSocket frames (delivered on NIO event loops) into an
 /// async queue a single consumer can await.
+///
+/// The wait is cancellation-aware and resumes with nil on cancellation. This
+/// is load-bearing for `withTimeout`: `withThrowingTaskGroup` waits for its
+/// cancelled children before returning, so a wait that ignored cancellation
+/// would turn every real timeout into a suite-wide hang instead of a
+/// `TimeoutError`.
 private actor FrameCollector {
     private var buffered: [Data] = []
-    private var waiter: CheckedContinuation<Data, Never>?
+    private var waiter: (id: UInt64, continuation: CheckedContinuation<Data?, Never>)?
+    private var nextWaiterID: UInt64 = 0
 
     func deliver(_ data: Data) {
         if let waiter {
             self.waiter = nil
-            waiter.resume(returning: data)
+            waiter.continuation.resume(returning: data)
         } else {
             buffered.append(data)
         }
     }
 
-    func next() async -> Data {
+    func next() async -> Data? {
         if !buffered.isEmpty {
             return buffered.removeFirst()
         }
-        return await withCheckedContinuation { continuation in
-            waiter = continuation
+        let id = nextWaiterID
+        nextWaiterID += 1
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation that lands before the waiter is armed is caught
+                // here; cancellation after runs cancelWaiter, which resumes it.
+                if Task.isCancelled {
+                    continuation.resume(returning: nil)
+                } else {
+                    waiter = (id, continuation)
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id: id) }
         }
+    }
+
+    private func cancelWaiter(id: UInt64) {
+        guard let waiter, waiter.id == id else { return }
+        self.waiter = nil
+        waiter.continuation.resume(returning: nil)
     }
 }
 
