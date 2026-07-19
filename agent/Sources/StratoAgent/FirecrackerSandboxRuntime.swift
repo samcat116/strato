@@ -1479,11 +1479,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             await teardownWarmTemplate(templateId: templateId, vm: vm)
             warmBuildFailures.removeValue(forKey: key.directoryName)
             // The sweep walks and deletes multi-GB entries; run it off the
-            // actor so it cannot stall sandbox operations.
+            // actor so it cannot stall sandbox operations. Sweep twice: once
+            // now, and once after DiskCacheLRU's recent-use grace window has
+            // passed — a burst of builds can land the cache over budget with
+            // every entry still grace-protected, and without the re-sweep
+            // nothing would enforce the cap until the next publish.
             let cache = warmCache
             let budget = warmCacheBudgetBytes
             let sweepLogger = logger
             Task.detached(priority: .utility) {
+                cache.sweep(budgetBytes: budget, logger: sweepLogger)
+                let regraceDelay = DiskCacheLRU.defaultGraceInterval + 60
+                try? await Task.sleep(nanoseconds: UInt64(regraceDelay * 1_000_000_000))
                 cache.sweep(budgetBytes: budget, logger: sweepLogger)
             }
             logger.info(
@@ -1550,16 +1557,30 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 try? await client.destroyVM(vmId: templateId)
             }
             await teardownWarmTemplate(templateId: templateId, vm: nil)
-            await removeJailArtifacts(plan)
+        }
+        // The previous life may also have left the cache over budget (its
+        // post-publish sweeps could have been cut short); re-enforce once,
+        // off-actor.
+        let cache = warmCache
+        let budget = warmCacheBudgetBytes
+        let sweepLogger = logger
+        Task.detached(priority: .utility) {
+            cache.sweep(budgetBytes: budget, logger: sweepLogger)
         }
     }
 
     /// Best-effort teardown of a template microVM and its staging artifacts.
+    /// The jail layout is derived from the template id rather than trusting
+    /// `vm`: a provisioning failure leaves `vm` nil with a partially staged
+    /// jail, and — template ids being random, never retried — nothing else
+    /// would ever clean it this agent life (the leak sweep already ran).
     private func teardownWarmTemplate(templateId: String, vm: ProvisionedMicroVM?) async {
         try? await client.destroyVM(vmId: templateId)
-        if let plan = vm?.jail {
-            await removeJailArtifacts(plan)
-        }
+        let plan =
+            vm?.jail
+            ?? SandboxJailPlan(
+                sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        await removeJailArtifacts(plan)
         removeArtifacts(templateId)
         try? FileManager.default.removeItem(atPath: vsockUDSPath(templateId))
     }
