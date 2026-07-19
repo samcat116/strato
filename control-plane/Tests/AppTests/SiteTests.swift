@@ -214,6 +214,59 @@ final class SiteTests {
         }
     }
 
+    @Test("Designating a pre-v12 controller is refused while floating IPs are attached")
+    func controllerDesignationFloatingIPGate() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "fip-gate-site")
+            let currentId = try await self.registerAgent(app: app, named: "fip-current", siteID: site.id)
+            let oldId = try await self.registerAgent(
+                app: app, named: "fip-old", siteID: site.id, protocolVersion: 11)
+            try await self.placeVM(
+                app: app, project: project, named: "fip-gate-vm", onAgent: currentId, network: "default")
+
+            // An attached floating IP on the site's VM (rows built directly —
+            // the attach API's own gates are covered elsewhere).
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "fip-gate-vm").first())
+            let nic = try #require(
+                try await VMNetworkInterface.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
+            let pool = FloatingIPPool(name: "fip-gate-pool", cidr: "203.0.113.0/29")
+            try await pool.save(on: app.db)
+            let floatingIP = FloatingIP(
+                poolID: pool.id!, address: "203.0.113.2", projectID: project.id!, interfaceID: nic.id!)
+            try await floatingIP.save(on: app.db)
+
+            // A pre-v12 controller would silently drop the attached NAT.
+            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // A current-protocol controller is fine.
+            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(
+                        description: nil, networkControllerAgentId: UUID(uuidString: currentId)))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Detached, the old controller becomes designatable again.
+            floatingIP.$interface.id = nil
+            try await floatingIP.save(on: app.db)
+            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
     @Test("A site's network controller cannot be deregistered")
     func controllerDeregistrationGuard() async throws {
         try await withSiteTestApp { app, _, _, token in

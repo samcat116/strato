@@ -398,6 +398,85 @@ final class FloatingIPControllerTests {
         }
     }
 
+    @Test("Attach is refused when the VM's site has no network controller")
+    func attachNoControllerGate() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "no-controller-net", subnet: "10.95.0.0/24", gateway: "10.95.0.1",
+                projectID: project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, network: network, fixedIP: "10.95.0.5")
+
+            // Move the hosting agent into a site with no designated
+            // controller: assembly then sends *no* agent the network state,
+            // so nothing would realize the NAT rule.
+            let site = Site(name: "controllerless", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let agent = try #require(
+                try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
+            agent.$site.id = site.id
+            try await agent.save(on: app.db)
+
+            var fipId: UUID?
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                fipId = try res.content.decode(FloatingIPResponse.self).id
+            }
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // Designating the (current-protocol) host as controller unblocks it.
+            site.$networkControllerAgent.id = agent.id
+            try await site.save(on: app.db)
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("System admins list floating IPs without per-project SpiceDB tuples")
+    func adminListBypass() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Deny every project permission: the admin flag alone must be
+            // enough to list, with and without an explicit project filter.
+            app.spicedbMockDeniedResources = ["project"]
+            try await app.test(.GET, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
+                #expect(addresses.contains("203.0.113.2"))
+            }
+            try await app.test(.GET, "/api/floating-ips?project_id=\(project.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
+                #expect(addresses.contains("203.0.113.2"))
+            }
+            app.spicedbMockDeniedResources = []
+        }
+    }
+
     @Test("Site deletion is refused while floating IP pools are pinned to it")
     func siteDeletePoolGuard() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in

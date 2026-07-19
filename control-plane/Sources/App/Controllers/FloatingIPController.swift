@@ -278,30 +278,36 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func listFloatingIPs(req: Request) async throws -> [FloatingIPResponse] {
         let user = try req.auth.require(User.self)
+        let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
-        let projectScope: [UUID]
-        if let projectIdString = req.query[String.self, at: "project_id"],
-            let projectId = UUID(uuidString: projectIdString)
-        {
+        var query = FloatingIP.query(on: req.db)
+            .with(\.$interface) { $0.with(\.$addresses) }
+            .sort(\.$createdAt, .descending)
+
+        // System admins bypass the SpiceDB scoping (they may have no
+        // per-project tuples at all), like the pool list and fetch helpers;
+        // an explicit project filter still narrows their view.
+        if user.isSystemAdmin {
+            if let requestedProjectId {
+                query = query.filter(\.$project.$id == requestedProjectId)
+            }
+        } else if let requestedProjectId {
             let hasAccess = try await req.spicedb.checkPermission(
                 subject: user.id!.uuidString,
                 permission: "view_project",
                 resource: "project",
-                resourceId: projectId.uuidString
+                resourceId: requestedProjectId.uuidString
             )
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
-            projectScope = [projectId]
+            query = query.filter(\.$project.$id == requestedProjectId)
         } else {
-            projectScope = try await getAccessibleProjects(for: user, on: req)
+            let projectScope = try await getAccessibleProjects(for: user, on: req)
+            query = query.filter(\.$project.$id ~~ projectScope)
         }
 
-        let floatingIPs = try await FloatingIP.query(on: req.db)
-            .filter(\.$project.$id ~~ projectScope)
-            .with(\.$interface) { $0.with(\.$addresses) }
-            .sort(\.$createdAt, .descending)
-            .all()
+        let floatingIPs = try await query.all()
         return try floatingIPs.map { try FloatingIPResponse(from: $0, interface: $0.interface) }
     }
 
@@ -526,11 +532,7 @@ struct FloatingIPController: RouteCollection {
         // floating-IP capability requirement: an attach accepted now could
         // land the VM on a pre-v12 agent later, reopening the same hole
         // behind the gate's back.
-        guard let realizer = try await Self.natRealizingAgent(for: vm, on: req.db) else {
-            throw Abort(
-                .conflict,
-                reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
-        }
+        let realizer = try await Self.requireNATRealizingAgent(for: vm, on: req.db)
         guard WireProtocol.supportsFloatingIPs(realizer.wireProtocolVersion ?? 0) else {
             throw Abort(
                 .conflict,
@@ -670,21 +672,34 @@ struct FloatingIPController: RouteCollection {
 
     /// The agent whose network reconciler would realize NAT for the VM: the
     /// site's network controller for a sited host, the hosting agent itself
-    /// for the legacy site-less model (including a sited host whose site has
-    /// no designated controller yet). Nil while the VM is unplaced or the
-    /// agent row is gone — attach refuses that case, because the scheduler
-    /// carries no floating-IP capability requirement and a later placement
-    /// could land on an agent too old to realize the NAT.
-    static func natRealizingAgent(for vm: VM, on db: Database) async throws -> Agent? {
+    /// for the legacy site-less model. Throws 409 in every state where
+    /// *nothing* would realize the NAT rule, so an attach can never persist
+    /// an address the sync path won't back:
+    /// - the VM is unplaced (the scheduler has no floating-IP capability
+    ///   requirement, so a later placement could land on a too-old agent);
+    /// - the host is sited but the site has no designated network controller
+    ///   (assembly then sends *no* agent the network state — unlike the
+    ///   site-less model, the hosting agent has no topology authority).
+    static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let agent = try await Agent.find(agentUUID, on: db)
-        else { return nil }
-        guard let siteID = agent.$site.id,
-            let site = try await Site.find(siteID, on: db),
+        else {
+            throw Abort(
+                .conflict,
+                reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
+        }
+        guard let siteID = agent.$site.id else { return agent }
+        guard let site = try await Site.find(siteID, on: db),
             let controllerID = site.$networkControllerAgent.id,
             let controller = try await Agent.find(controllerID, on: db)
-        else { return agent }
+        else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "The VM's site has no network controller, so nothing would realize the NAT rule; designate one first"
+            )
+        }
         return controller
     }
 

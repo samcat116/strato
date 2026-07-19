@@ -81,6 +81,31 @@ struct SiteController: RouteCollection {
         }
     }
 
+    /// How many floating IPs are attached to NICs of VMs hosted in the site —
+    /// the set whose NAT rules the site's controller realizes.
+    static func attachedFloatingIPCount(inSite site: Site, on db: Database) async throws -> Int {
+        let siteAgentIDs = try await Agent.query(on: db)
+            .filter(\.$site.$id == site.requireID())
+            .all()
+            .compactMap { $0.id?.uuidString }
+        guard !siteAgentIDs.isEmpty else { return 0 }
+        let siteVMIDs = try await VM.query(on: db)
+            .filter(\.$hypervisorId ~~ siteAgentIDs)
+            .all()
+            .compactMap(\.id)
+        guard !siteVMIDs.isEmpty else { return 0 }
+        let nicIDs = Set(
+            try await VMNetworkInterface.query(on: db)
+                .filter(\.$vm.$id ~~ siteVMIDs)
+                .all()
+                .compactMap(\.id))
+        guard !nicIDs.isEmpty else { return 0 }
+        return try await FloatingIP.query(on: db)
+            .all()
+            .filter { floatingIP in floatingIP.$interface.id.map(nicIDs.contains) ?? false }
+            .count
+    }
+
     private func findSite(_ req: Request) async throws -> Site {
         guard let siteId = req.parameters.get("siteId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid site ID")
@@ -208,6 +233,20 @@ struct SiteController: RouteCollection {
                     reason:
                         "Agent '\(agent.name)' has no overlay (OVN) networking capability and cannot author site topology"
                 )
+            }
+            // A pre-v12 controller would decode syncs but ignore their
+            // `floatingIPs`, so every attached floating IP in the site would
+            // silently lose its NAT while the API kept reporting it attached
+            // (issue #344). Gate the designation, not just the attach path.
+            if !WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0) {
+                let attached = try await Self.attachedFloatingIPCount(inSite: site, on: req.db)
+                guard attached == 0 else {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Agent '\(agent.name)' registered with a protocol too old for floating IPs, and this site has \(attached) attached floating IP(s); upgrade the agent or detach them first"
+                    )
+                }
             }
         }
 
