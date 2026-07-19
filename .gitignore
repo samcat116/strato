@@ -21,6 +21,9 @@ charts
 /tls.key
 /strato-control-plane-0.1.0.tgz
 
+# Local agent config, copied from config.toml.example
+/config.toml
+
 Package.resolved
 !/agent/Package.resolved
 !/shared/Package.resolved

@@ -33,22 +33,22 @@ features:
     title: Intelligent Scheduling
     details: Multiple scheduling strategies (least-loaded, best-fit, round-robin) for optimal resource utilization
   - icon: 🛠️
-    title: Developer Friendly
-    details: Hot-reload development with Skaffold, comprehensive API, and modern web UI with HTMX
+    title: Easy to Deploy
+    details: Single-host Docker Compose or a Kubernetes Helm chart, both secure by default with a comprehensive API and modern web UI
 ---
 
 ## Quick Start
 
 ```bash
-# Start local Kubernetes cluster
-minikube start --memory=4096 --cpus=2
-
-# Build Helm dependencies
-cd helm/strato && helm dependency build
-
-# Start development environment
-cd ../.. && skaffold dev
+git clone https://github.com/samcat116/strato.git
+cd strato/deploy/compose
+./setup.sh            # generates .env with strong random secrets
+docker compose up -d
 ```
+
+Visit `http://localhost` and register — the first user becomes the system
+administrator. For clusters, see the
+[Kubernetes guide](/deployment/kubernetes).
 
 ## Architecture Overview
 
@@ -70,7 +70,7 @@ Strato uses a distributed **Control Plane** and **Agent** architecture:
 ## Learn More
 
 - [Architecture Overview](/architecture/overview)
-- [Development with Skaffold](/development/skaffold)
+- [Local Development](/development/local-development)
 - [Deployment Guide](/deployment/overview)
 - [Logging & Log Visibility](/deployment/logging)
 - [Observability: Metrics & Alerts](/deployment/observability)

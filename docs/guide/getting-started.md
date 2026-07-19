@@ -1,194 +1,129 @@
 # Getting Started
 
-This guide will help you set up Strato for development or production use.
+This guide walks through installing Strato and creating your first VM. If you
+want to get running as fast as possible, the [Quick Start](/guide/quick-start)
+is the condensed version. If you want to work on Strato itself, see
+[Local Development](/development/local-development).
 
 ## Prerequisites
 
-### Required
+### Control plane
 
-- **Kubernetes**: minikube, kind, or production cluster
-- **Helm**: v3.0 or later
-- **Skaffold**: v2.0 or later (for development)
-- **Docker**: For building container images
+Pick one of the two supported deployment paths:
 
-### Platform-Specific
+- **Docker Compose** — Docker Engine with the Compose plugin, on a single host
+- **Kubernetes (Helm)** — a cluster (minikube, kind, or managed) and Helm v3+
 
-#### Linux (Production)
+Both generate strong secrets on first run; there is nothing to configure
+before production except your hostname.
+
+### Hypervisor hosts (agents)
+
+VMs run on agents, which can be the same machine as the control plane or
+separate hosts.
+
+#### Linux (production)
 
 - KVM kernel module (`/dev/kvm` access)
 - QEMU packages: `qemu-system-x86_64`, `qemu-utils`
-- OVN/OVS packages: `ovn-host`, `openvswitch-switch` (hypervisors run only the
-  chassis side; the per-site NB/SB/northd central runs separately — see
+- OVN/OVS packages: `ovn-host`, `openvswitch-switch` — hypervisors run only
+  the chassis side; the per-site NB/SB/northd central runs separately (see
   `deploy/ovn-central/`)
 - Network capabilities: `NET_ADMIN`, `SYS_ADMIN`
 
-#### macOS (Development)
+#### macOS (development only)
 
 - macOS 14.0 or later
 - QEMU: `brew install qemu`
 - Xcode Command Line Tools
 
-### Swift Development (Optional)
-
-- Swift 6.2 or later
-- Vapor CLI (optional): `brew install vapor`
+Networking on macOS is QEMU user-mode only — outbound NAT, no inbound and no
+VM-to-VM traffic. Use it for development and testing, not production.
 
 ## Installation
 
-### Development Setup with Skaffold
-
-1. **Start Kubernetes cluster:**
-
-```bash
-minikube start --memory=4096 --cpus=2
-```
-
-2. **Clone the repository:**
+### Docker Compose
 
 ```bash
 git clone https://github.com/samcat116/strato.git
-cd strato
+cd strato/deploy/compose
+./setup.sh            # generates .env with strong random secrets
+docker compose up -d
 ```
 
-3. **Build Helm dependencies:**
+Visit `http://localhost`. For a real hostname, run
+`./setup.sh --hostname strato.example.com` and terminate TLS in front of the
+proxy — WebAuthn requires HTTPS for anything other than `localhost`. See the
+[Docker Compose guide](/deployment/docker-compose).
+
+### Kubernetes (Helm)
 
 ```bash
-cd helm/strato-control-plane
+git clone https://github.com/samcat116/strato.git
+cd strato/helm/strato-control-plane
 helm dependency build
-cd ../..
+helm install strato .
+
+# In another terminal:
+kubectl port-forward service/strato-strato-control-plane 8080:8080
 ```
 
-4. **Start development environment:**
+Visit `http://localhost:8080`. Credentials are auto-generated into the
+`strato-strato-credentials` secret and reused across upgrades. For production
+values (ingress, TLS, WebAuthn hostname), see the
+[Kubernetes guide](/deployment/kubernetes).
+
+Database migrations and authorization schema loading run automatically at
+startup on both paths.
+
+## First steps
+
+### 1. Register a user
+
+1. Click **Register** and enter a username, email, and display name
+2. Click **Register with Passkey** and follow your browser's prompts
+3. **The first registered user automatically becomes the system
+   administrator** — register yourself before exposing the URL to others
+4. Complete onboarding to create your organization
+
+### 2. Add a hypervisor
+
+1. Go to **Agents → Create Registration Token** and name the host
+2. Run the generated command on the hypervisor host:
+
+   ```bash
+   strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+   ```
+
+The token is single-use and expires. The agent stores its rotated reconnect
+credential in a state file, so plain `strato-agent` restarts reconnect
+automatically. See [Deploying agents](/deployment/agents) for details,
+including running the agent in Docker.
+
+### 3. Create a virtual machine
+
+1. Navigate to the VMs page and click **Create VM**
+2. Configure the name, CPU cores, memory, disk size, and OS image
+3. Click **Create** — the VM is scheduled onto an available agent
+4. Click **Start**, then use the web console to connect
+
+## Viewing logs
 
 ```bash
-# Full environment
-skaffold dev
+# Docker Compose
+docker compose logs -f control-plane
 
-# Or minimal environment (Control Plane + PostgreSQL + SpiceDB only)
-skaffold dev --profile=minimal
-
-# Or with debug logging
-skaffold dev --profile=debug
-```
-
-The development environment includes:
-- Control Plane (web UI and API)
-- PostgreSQL database
-- SpiceDB authorization service
-- Agents (in full mode)
-- OVN/OVS networking (Linux only, in full mode)
-
-### Production Deployment
-
-See the [Deployment Guide](/deployment/overview) for production installation instructions.
-
-## Accessing the Application
-
-### During Development
-
-Get the Control Plane URL:
-
-```bash
-# Port forward (recommended)
-kubectl port-forward service/strato-control-plane 8080:8080
-
-# Or get minikube URL
-minikube service strato-control-plane --url
-```
-
-Access the web UI at `http://localhost:8080`
-
-### View Logs
-
-```bash
-# Control Plane logs
-kubectl logs -f deployment/strato-control-plane
-
-# Agent logs
-kubectl logs -f deployment/strato-agent
-
-# All pods
+# Kubernetes
+kubectl logs -f deployment/strato-strato-control-plane
 kubectl get pods
 ```
 
-## First Steps
+See [Logging & Log Visibility](/deployment/logging) for VM console logs and
+agent journal ingestion.
 
-### 1. Register a User
-
-Visit the registration page and create an account using WebAuthn/Passkeys:
-
-1. Navigate to `/register`
-2. Enter username, email, and display name
-3. Click "Register with Passkey"
-4. Follow your browser's prompts to create a passkey
-
-### 2. Create a Virtual Machine
-
-After logging in:
-
-1. Navigate to the VMs page
-2. Click "Create VM"
-3. Configure:
-   - Name and description
-   - CPU cores and memory
-   - Disk size
-   - OS image
-4. Click "Create"
-
-The VM will be automatically scheduled to an available agent.
-
-### 3. Start and Connect
-
-1. Click "Start" on your VM
-2. Wait for it to boot
-3. Use the web console to interact with your VM
-
-## Development Workflow
-
-### Hot Reload
-
-Skaffold provides automatic rebuilding and redeployment:
-
-1. Edit Swift code in `control-plane/` or `agent/`
-2. Save the file
-3. Skaffold detects changes and rebuilds
-4. New containers are deployed automatically
-
-### Running Tests
-
-```bash
-# Control Plane tests
-cd control-plane
-swift test
-
-# Agent tests
-cd agent
-swift test
-
-# Shared package tests
-cd shared
-swift test
-
-# JavaScript linting
-cd control-plane/web
-bun run lint
-```
-
-### Building Locally
-
-```bash
-# Control Plane
-cd control-plane
-swift build
-
-# Agent
-cd agent
-swift build
-```
-
-## Next Steps
+## Next steps
 
 - [Quick Start Guide](/guide/quick-start)
 - [Architecture Overview](/architecture/overview)
-- [Development with Skaffold](/development/skaffold)
-- [Troubleshooting](/development/troubleshooting-k8s)
+- [Local Development](/development/local-development)
+- [Kubernetes troubleshooting](/development/troubleshooting-k8s)

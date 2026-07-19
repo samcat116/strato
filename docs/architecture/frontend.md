@@ -124,8 +124,8 @@ simply succeed when the backend enables it.
   added at runtime by `src/middleware.ts`, gated on `X-Forwarded-Proto`.
 - **Dev**: `rewrites()` (development only) proxy `/api`, `/auth`, `/agent`,
   `/health`, and `/organizations` to `NEXT_PUBLIC_API_URL` (default
-  `http://localhost:8080`) — this is what makes `task dev-frontend` work
-  against a natively-running control plane.
+  `http://localhost:8080`) — this is what makes `bun run dev` work against a
+  natively-running control plane.
 - **Deployed**: `control-plane/web/Dockerfile` builds with Bun and runs the
   standalone server on Node as a non-root user. In the compose deployment,
   `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/agent/`,

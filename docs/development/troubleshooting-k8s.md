@@ -1,6 +1,7 @@
 # Kubernetes Troubleshooting Guide
 
-This guide covers common issues and solutions when developing with Skaffold and Helm.
+This guide covers common issues and solutions when running Strato on
+Kubernetes via the Helm chart, whether in a local cluster or in production.
 
 ## Quick Diagnostic Commands
 
@@ -63,7 +64,7 @@ kubectl get events | grep <pod-name>
    
    # Solution: Build local images
    eval $(minikube docker-env)
-   skaffold build
+   docker build -t strato-control-plane:dev -f control-plane/Dockerfile .
    ```
 
 ### Pod Stuck in CrashLoopBackOff
@@ -94,7 +95,7 @@ kubectl describe pod <pod-name>
    ```bash
    kubectl describe pod <pod-name> | grep -A 10 "Limits"
    
-   # Increase limits in values-dev.yaml
+   # Increase limits in my-values.yaml
    resources:
      limits:
        memory: 1Gi  # Increase from 512Mi
@@ -256,12 +257,13 @@ kubectl describe pod <pod-name> | grep -A 10 "Events"
    ```bash
    # Point Docker to minikube
    eval $(minikube docker-env)
-   
+
    # Build images locally
-   skaffold build
-   
+   docker build -t strato-control-plane:dev -f control-plane/Dockerfile .
+   docker build -t strato-frontend:dev -f control-plane/web/Dockerfile .
+
    # Ensure imagePullPolicy is correct
-   # In values-dev.yaml:
+   # In my-values.yaml:
    global:
      imagePullPolicy: Never
    ```
@@ -270,23 +272,20 @@ kubectl describe pod <pod-name> | grep -A 10 "Events"
    ```bash
    # List available images
    docker images | grep strato
-   
-   # Verify Skaffold configuration
-   skaffold config list
+
+   # Confirm the tags the chart is asking for
+   helm get values strato
    ```
 
 ### Slow Image Builds
 
 **Solutions**:
 ```bash
-# Use Docker buildx cache
+# Enable BuildKit for layer caching and parallel stages
 export DOCKER_BUILDKIT=1
 
-# Configure Skaffold cache
-export SKAFFOLD_CACHE_ARTIFACTS=true
-
-# Use multi-stage builds efficiently
-# Check Dockerfile for optimal layer caching
+# Check the Dockerfile for optimal layer caching — dependency
+# resolution should be a separate layer from source compilation
 ```
 
 ## Performance Issues
@@ -314,7 +313,7 @@ kubectl get events | grep Started
 
 2. **Optimize Resource Requests**
    ```yaml
-   # In values-dev.yaml - reduce for faster startup
+   # In my-values.yaml - reduce for faster startup
    controlPlane:
      resources:
        requests:
@@ -340,7 +339,7 @@ kubectl describe node minikube | grep -A 10 "Allocated resources"
 
 1. **Reduce Resource Limits**
    ```yaml
-   # values-dev.yaml
+   # my-values.yaml
    postgresql:
      resources:
        limits:
@@ -349,7 +348,7 @@ kubectl describe node minikube | grep -A 10 "Allocated resources"
 
 2. **Disable Unused Services**
    ```yaml
-   # values-dev.yaml
+   # my-values.yaml
    agent:
      enabled: false
    ovn:
@@ -358,60 +357,23 @@ kubectl describe node minikube | grep -A 10 "Allocated resources"
      enabled: false
    ```
 
-## Skaffold Issues
+## Code Changes Not Taking Effect
 
-### Skaffold Build Failures
+There is no file-sync or hot-reload path into a cluster. Applying a source
+change means rebuilding the image and rolling the deployment:
 
-**Diagnosis**:
 ```bash
-skaffold diagnose
-skaffold config list
+eval $(minikube docker-env)
+docker build -t strato-control-plane:dev -f control-plane/Dockerfile .
+helm upgrade strato helm/strato-control-plane -f my-values.yaml
+kubectl rollout restart deployment/strato-strato-control-plane
 ```
 
-**Solutions**:
+If the tag didn't change, Kubernetes won't pull a new image — either use a
+unique tag per build or `kubectl rollout restart` as above.
 
-1. **Check Docker Context**
-   ```bash
-   docker context list
-   eval $(minikube docker-env)
-   ```
-
-2. **Clear Skaffold Cache**
-   ```bash
-   skaffold cache purge
-   ```
-
-3. **Verbose Logging**
-   ```bash
-   skaffold dev -v info
-   ```
-
-### File Sync Not Working
-
-**Symptoms**: Code changes don't trigger updates
-
-**Diagnosis**:
-```bash
-# Check Skaffold file watchers
-skaffold dev -v debug | grep sync
-```
-
-**Solutions**:
-
-1. **Check Sync Configuration**
-   ```yaml
-   # skaffold.yaml
-   sync:
-     manual:
-       - src: "Sources/**/*.swift"
-         dest: /app/Sources
-   ```
-
-2. **File Permissions**
-   ```bash
-   # Ensure files are accessible
-   ls -la control-plane/Sources/
-   ```
+For a fast inner loop, prefer `swift build` / `swift test` locally and the
+Docker Compose stack; see [Local Development](/development/local-development).
 
 ## Helm Issues
 
@@ -419,8 +381,17 @@ skaffold dev -v debug | grep sync
 
 **Diagnosis**:
 ```bash
-helm template strato helm/strato-control-plane --values helm-test-values.yaml
+helm template strato helm/strato-control-plane
 helm lint helm/strato-control-plane
+```
+
+The chart ships example values files under `helm/strato-control-plane/ci/`
+(`default-values.yaml`, `minimal-values.yaml`, `production-values.yaml`,
+`external-db-values.yaml`) — the same ones CI templates against:
+
+```bash
+helm template strato helm/strato-control-plane \
+  --values helm/strato-control-plane/ci/minimal-values.yaml
 ```
 
 **Solutions**:
@@ -428,17 +399,17 @@ helm lint helm/strato-control-plane
 1. **Check Values Syntax**
    ```bash
    # Validate YAML syntax
-   yamllint helm-test-values.yaml
+   yamllint my-values.yaml
    ```
 
 2. **Debug Template Rendering**
    ```bash
-   helm template strato helm/strato-control-plane --values helm-test-values.yaml --debug
+   helm template strato helm/strato-control-plane --values my-values.yaml --debug
    ```
 
 3. **Check Dependencies**
    ```bash
-   cd helm/strato
+   cd helm/strato-control-plane
    helm dependency build
    ```
 
@@ -475,7 +446,7 @@ netstat -tulpn | grep 8080
 kubectl port-forward service/strato-control-plane 8081:8080
 
 # Or configure different NodePort
-# In values-dev.yaml:
+# In my-values.yaml:
 controlPlane:
   service:
     nodePort: 30081
@@ -487,20 +458,17 @@ controlPlane:
 
 ```bash
 # Stop everything
-skaffold delete
+helm uninstall strato
 minikube stop
 
 # Reset minikube
 minikube delete
 minikube start --memory=4096 --cpus=2
 
-# Rebuild dependencies
-cd helm/strato
+# Rebuild dependencies and reinstall
+cd helm/strato-control-plane
 helm dependency build
-cd ../..
-
-# Restart development
-skaffold dev
+helm install strato .
 ```
 
 ### Backup Development Data
@@ -545,5 +513,5 @@ kubectl get events --watch | grep -i "failed\|error\|warning"
 
 4. **Community Resources**
    - Kubernetes Slack: #kubectl channel
-   - Skaffold GitHub issues
    - Helm GitHub issues
+   - [Strato issues](https://github.com/samcat116/strato/issues)

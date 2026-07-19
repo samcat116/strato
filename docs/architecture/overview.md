@@ -220,9 +220,7 @@ external backends, with retention pruning.
 
 - **`deploy/compose/`** — the supported single-host production deployment
   (published images, generated secrets).
-- **Helm + Skaffold** — Kubernetes deployment and development.
-- **`task dev`** — the primary local development flow (Docker
-  dependencies, native control plane and agent).
+- **`helm/strato-control-plane/`** — the supported Kubernetes deployment.
 - Agents self-update from the control plane over the existing WebSocket —
   see [agent-updates](./agent-updates.md).
 

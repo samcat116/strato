@@ -47,8 +47,7 @@ export default defineConfig({
       {
         text: 'Development',
         items: [
-          { text: 'Development with Skaffold', link: '/development/skaffold' },
-          { text: 'Migration Guide', link: '/development/migration-guide' },
+          { text: 'Local Development', link: '/development/local-development' },
           { text: 'Troubleshooting Kubernetes', link: '/development/troubleshooting-k8s' }
         ]
       },

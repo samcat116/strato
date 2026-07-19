@@ -14,7 +14,7 @@ OpenTelemetry is bootstrapped. Controlled by environment variables (see
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OTEL_METRICS_ENABLED` | `true` (except dev Taskfile, which disables it) | Master switch for metric export |
+| `OTEL_METRICS_ENABLED` | `true` (the compose deployment sets it to `false`) | Master switch for metric export |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
 
@@ -98,9 +98,9 @@ Thresholds are starting points; tune to your fleet size and SLOs.
 
 ## Verifying locally
 
-The dev Taskfile disables OTel. To exercise metrics, run the control plane with
-`OTEL_METRICS_ENABLED=true` and an OTLP collector (the Taskfile's
-`start-otel-collector` brings one up), then:
+The compose deployment ships with OTel export disabled. To exercise metrics,
+run the control plane with `OTEL_METRICS_ENABLED=true` and point
+`OTEL_EXPORTER_OTLP_ENDPOINT` at an OTLP collector of your own, then:
 
 - Kill an agent → expect `strato_agent_up{agent="…"}` to drop to `0` (and stay
   there) and a `strato_agent_disconnections_total{reason="stale"}` (or
