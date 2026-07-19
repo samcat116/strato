@@ -1,0 +1,44 @@
+control-plane/Sources/App/configure.swift
+  s_40b066691edadc::t_c0762d80b8b19e 593-597
+deploy/compose/README.md
+  s_40b066691edadc::t_5f626b0a91dfb9 20-27,30-67
+  s_40b066691edadc::t_e82a1470fbb2a5 28-29
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_40b066691edadc::t_2e5dd87e160831 142
+  s_40b066691edadc::t_5a7e1561e1ff4a 1-141,143-161
+deploy/compose/docker-compose.yml
+  s_40b066691edadc::t_09a3502e93e6a4 312
+  s_40b066691edadc::t_7bb6a1b0b7f05e 421-423
+  s_40b066691edadc::t_bf50da34edd968 414-420,424-445
+deploy/compose/nginx.conf
+  s_40b066691edadc::t_d9308ee5599ab7 6-13
+  s_40b066691edadc::t_b04a6d24a6c21a 55,61,65,73,77,85,90
+  s_40b066691edadc::t_4e524ada57f58c 27-32
+control-plane/Tests/AppTests/BootstrapCommandTests.swift
+  s_40b066691edadc::t_12ca5af87b89a3 1-105
+deploy/compose/redeploy.sh
+  s_40b066691edadc::t_8bd8cb13de2471 1-37,39-85
+  s_40b066691edadc::t_68da3628f31e8f 38
+deploy/compose/smoke-test.sh
+  s_40b066691edadc::t_4c2734577ed69d 1-45,47-208
+  s_40b066691edadc::t_ed946feaddffaf 46
+docs/deployment/docker-compose.md
+  s_40b066691edadc::t_5143eec816071f 33-35
+  s_40b066691edadc::t_b853c5724c2f88 26-32,36-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0efad861dd10b04f6d3a03e16ee64da02730a195",
+  "prompts": {},
+  "sessions": {
+    "s_40b066691edadc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82d68b37-032e-4e88-a505-3eb02198dc25",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
