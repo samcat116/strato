@@ -124,6 +124,10 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
 /// the cold-boot path and the warm-start `launch` request (issue #426),
 /// which calls it from a vsock connection thread.
 pub(crate) fn launch_workload(state: &GuestState, process: ResolvedProcess) -> Result<(), String> {
+    // Exits reaped before now belong to reparented orphans (template boot
+    // scripts, snapshot-frozen leftovers); drop them so a recycled pid can
+    // never mis-claim a stale exit as the workload's.
+    state.children.clear_unclaimed();
     let pid = spawn_workload(&process, &state.logs).map_err(|e| e.to_string())?;
     *state.process.lock().expect("process poisoned") = process;
     *state.workload_pid.lock().expect("workload pid poisoned") = Some(pid);

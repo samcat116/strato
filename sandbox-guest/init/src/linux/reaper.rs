@@ -114,6 +114,17 @@ impl ChildRegistry {
             .map(|(_, code)| code)
     }
 
+    /// Drop every remembered unclaimed exit. Called right before the
+    /// workload spawns: anything reaped earlier belongs to reparented
+    /// orphans nobody will ever wait on, and leaving those entries around
+    /// would let a recycled pid mis-claim a stale exit as the workload's
+    /// (exec sessions cannot race this — they only start after boot
+    /// completes, which is after the workload launch).
+    pub fn clear_unclaimed(&self) {
+        let mut inner = self.inner.lock().expect("child registry poisoned");
+        inner.unclaimed.clear();
+    }
+
     fn spawn_generation(&self) -> u64 {
         self.inner
             .lock()
@@ -183,20 +194,19 @@ pub fn reap_forever(
             Ok(_) => {} // stopped/continued/etc — keep waiting
             Err(Errno::ECHILD) => {
                 // No children left. If a workload was spawned but its exit
-                // was never observed, treat it as an unknown exit so the
-                // host is not left hanging. A held guest (no workload yet)
-                // simply parks until something spawns.
-                if workload_pid(workload).is_some() {
-                    record_workload_exit_once(status, -1);
-                }
+                // was never observed, record it — preferring an exit the
+                // reaper collected as an unknown pid in the window before
+                // the launch path published the workload pid, and falling
+                // back to -1 so the host is never left hanging. A held
+                // guest (no workload yet) simply parks until something
+                // spawns.
+                record_fallback_workload_exit(workload, status, registry);
                 registry.wait_for_spawn(generation);
             }
             Err(Errno::EINTR) => {}
             Err(e) => {
                 eprintln!("[sandbox-init] waitpid failed: {e}");
-                if workload_pid(workload).is_some() {
-                    record_workload_exit_once(status, -1);
-                }
+                record_fallback_workload_exit(workload, status, registry);
                 // Park rather than spinning on a persistent error.
                 registry.wait_for_spawn(generation);
             }
@@ -208,6 +218,10 @@ fn workload_pid(workload: &SharedWorkloadPid) -> Option<Pid> {
     *workload.lock().expect("workload pid poisoned")
 }
 
+fn workload_exit_recorded(status: &SharedStatus) -> bool {
+    status.lock().expect("status poisoned").state == WorkloadState::Exited
+}
+
 fn deliver_exit(
     pid: Pid,
     code: i32,
@@ -215,22 +229,43 @@ fn deliver_exit(
     status: &SharedStatus,
     registry: &ChildRegistry,
 ) {
-    if workload_pid(workload) == Some(pid) {
-        record_workload_exit_once(status, code);
-    } else {
-        registry.record_exit(pid.as_raw(), code);
+    if workload_pid(workload) == Some(pid) && record_workload_exit_once(status, code) {
+        return;
     }
+    // Not the workload — or the workload's exit was already recorded, in
+    // which case this pid is a recycled one now belonging to some other
+    // child (an exec session) and its code must still reach its waiter.
+    registry.record_exit(pid.as_raw(), code);
+}
+
+/// The reaper ran out of children while a workload was supposedly alive:
+/// its exit was either reaped as an unknown pid before the launch path
+/// published the workload pid (claim it back), or genuinely lost (-1).
+fn record_fallback_workload_exit(
+    workload: &SharedWorkloadPid,
+    status: &SharedStatus,
+    registry: &ChildRegistry,
+) {
+    let Some(pid) = workload_pid(workload) else {
+        return;
+    };
+    if workload_exit_recorded(status) {
+        return;
+    }
+    let code = registry.claim_unclaimed(pid.as_raw()).unwrap_or(-1);
+    record_workload_exit_once(status, code);
 }
 
 /// Record the workload's exit unless one was already recorded (the status
 /// being `Exited` is the single source of truth, shared with the launch
-/// path's claim_unclaimed recording).
-pub(crate) fn record_workload_exit_once(status: &SharedStatus, code: i32) {
+/// path's claim_unclaimed recording). Returns whether this call recorded it.
+pub(crate) fn record_workload_exit_once(status: &SharedStatus, code: i32) -> bool {
     let mut s = status.lock().expect("status poisoned");
     if s.state == WorkloadState::Exited {
-        return;
+        return false;
     }
     s.state = WorkloadState::Exited;
     s.exit_code = Some(code);
     eprintln!("[sandbox-init] workload exited with code {code}");
+    true
 }

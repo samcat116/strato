@@ -172,21 +172,19 @@ public enum SandboxControlProtocol {
 
         /// Encode as a single newline-terminated JSON line.
         public func encodedLine() -> Data {
-            if case .launch(let request) = self {
-                let raw = RawLaunchRequest(
+            var raw: RawRequest
+            switch self {
+            case .launch(let request):
+                // The one request with nested payloads — encoded via its own
+                // raw shape instead of the flat RawRequest.
+                let rawLaunch = RawLaunchRequest(
                     type: "launch",
                     sandboxId: request.sandboxId,
                     identityNonce: request.identityNonce,
                     imageConfig: request.imageConfig,
                     overrides: request.overrides,
                     entropy: request.entropy?.base64EncodedString())
-                var line = (try? JSONEncoder().encode(raw)) ?? Data("{}".utf8)
-                line.append(0x0A)
-                return line
-            }
-
-            var raw: RawRequest
-            switch self {
+                return Self.terminatedLine(encoding: rawLaunch)
             case .ping:
                 raw = RawRequest(type: "ping")
             case .getStatus:
@@ -214,13 +212,15 @@ public enum SandboxControlProtocol {
             case .syncClock(let unixNanos):
                 raw = RawRequest(type: "sync_clock")
                 raw.unixNanos = unixNanos
-            case .launch:
-                // Handled by the early return above; unreachable.
-                raw = RawRequest(type: "launch")
             }
-            // A flat struct of JSON scalars/arrays/string-maps cannot fail to
-            // encode; fall back to an empty line rather than crashing the host
-            // if that invariant is ever broken.
+            return Self.terminatedLine(encoding: raw)
+        }
+
+        /// Encode a raw request shape as one newline-terminated line. A flat
+        /// struct of JSON scalars/arrays/string-maps cannot fail to encode;
+        /// fall back to an empty line rather than crashing the host if that
+        /// invariant is ever broken.
+        private static func terminatedLine(encoding raw: some Encodable) -> Data {
             var line = (try? JSONEncoder().encode(raw)) ?? Data("{}".utf8)
             line.append(0x0A)
             return line

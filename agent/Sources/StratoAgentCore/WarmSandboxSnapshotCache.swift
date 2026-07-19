@@ -15,6 +15,9 @@ import Logging
 /// - `firecrackerFingerprint` — a cheap identity for the Firecracker binary
 ///   (snapshots do not load across Firecracker versions);
 /// - `vcpus`/`memoryMiB` — the machine shape baked into memory + vmstate;
+/// - `configCapacityBytes` — the config drive's block-device capacity, also
+///   baked into the saved virtio state (restores stage a different document
+///   at the same capacity);
 /// - `jailed` — jailed snapshots record chroot-relative drive paths,
 ///   unjailed ones absolute paths, so the two never mix.
 public struct WarmSnapshotKey: Sendable, Equatable {
@@ -24,6 +27,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
     public let firecrackerFingerprint: String
     public let vcpus: Int
     public let memoryMiB: Int64
+    public let configCapacityBytes: Int
     public let jailed: Bool
 
     public init(
@@ -33,6 +37,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         firecrackerFingerprint: String,
         vcpus: Int,
         memoryMiB: Int64,
+        configCapacityBytes: Int,
         jailed: Bool
     ) {
         self.imageDigest = imageDigest
@@ -41,6 +46,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         self.firecrackerFingerprint = firecrackerFingerprint
         self.vcpus = vcpus
         self.memoryMiB = memoryMiB
+        self.configCapacityBytes = configCapacityBytes
         self.jailed = jailed
     }
 
@@ -56,6 +62,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
             Self.sanitize(firecrackerFingerprint),
             "\(vcpus)c",
             "\(memoryMiB)m",
+            "\(configCapacityBytes)cfg",
             jailed ? "jailed" : "flat",
         ]
         return components.joined(separator: "_")
@@ -113,18 +120,28 @@ public struct WarmSandboxSnapshotCache: Sendable {
         self.rootPath = rootPath
     }
 
-    /// Diagnostic sidecar written next to the artifacts. Informational only —
-    /// compatibility is enforced by the key, not by validating this.
+    /// Sidecar written next to the artifacts. `templateId`/`templateNonce`
+    /// are load-bearing: the snapshotted guest memory carries them, and the
+    /// restore path requires a held guest to echo exactly this identity
+    /// before launching a workload into it. The rest is diagnostics.
     public struct Meta: Codable, Sendable, Equatable {
+        /// The throwaway template microVM's id, echoed by the held guest.
+        public let templateId: String
+        /// The template's boot nonce, echoed by the held guest.
+        public let templateNonce: String
         public let imageDigest: String
         public let guestVersion: String
+        /// Firecracker's `vmm_version` at snapshot time (SwiftFirecracker
+        /// surfaces it as `vmlinuxVersion`).
         public let firecrackerVersion: String
         public let createdAtUnixSeconds: Int64
 
         public init(
-            imageDigest: String, guestVersion: String, firecrackerVersion: String,
-            createdAtUnixSeconds: Int64
+            templateId: String, templateNonce: String, imageDigest: String,
+            guestVersion: String, firecrackerVersion: String, createdAtUnixSeconds: Int64
         ) {
+            self.templateId = templateId
+            self.templateNonce = templateNonce
             self.imageDigest = imageDigest
             self.guestVersion = guestVersion
             self.firecrackerVersion = firecrackerVersion
@@ -132,16 +149,27 @@ public struct WarmSandboxSnapshotCache: Sendable {
         }
     }
 
+    /// Read an entry's meta sidecar. Nil when missing or undecodable —
+    /// callers treat that as "entry unusable" (the identity binding cannot
+    /// be verified without it).
+    public func loadMeta(_ key: WarmSnapshotKey, fileManager: FileManager = .default) -> Meta? {
+        let path = entryDirectory(for: key) + "/" + Self.metaFile
+        guard let data = fileManager.contents(atPath: path) else { return nil }
+        return try? JSONDecoder().decode(Meta.self, from: data)
+    }
+
     public func entryDirectory(for key: WarmSnapshotKey) -> String {
         rootPath + "/" + key.directoryName
     }
 
     /// The published entry for `key`, or nil when absent or incomplete (a
-    /// partially deleted entry is treated as a miss). A hit refreshes the
-    /// entry's LRU timestamp.
+    /// partially deleted entry is treated as a miss; the meta sidecar is
+    /// required because restores verify the template identity it carries).
+    /// A hit refreshes the entry's LRU timestamp.
     public func lookup(_ key: WarmSnapshotKey, fileManager: FileManager = .default) -> WarmSnapshotEntry? {
         let entry = WarmSnapshotEntry(directory: entryDirectory(for: key))
-        for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath] {
+        let metaPath = entry.directory + "/" + Self.metaFile
+        for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath, metaPath] {
             guard fileManager.fileExists(atPath: required) else { return nil }
         }
         DiskCacheLRU.touch(entryDirectory: entry.directory)

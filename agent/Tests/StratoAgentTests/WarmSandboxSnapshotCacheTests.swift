@@ -17,6 +17,7 @@ struct WarmSandboxSnapshotCacheTests {
         guestVersion: String = "6.12.9+init0.3.0",
         vcpus: Int = 2,
         memoryMiB: Int64 = 512,
+        configCapacityBytes: Int = 256 * 1024,
         jailed: Bool = true
     ) -> WarmSnapshotKey {
         WarmSnapshotKey(
@@ -26,6 +27,7 @@ struct WarmSandboxSnapshotCacheTests {
             firecrackerFingerprint: "4194304-1752700000",
             vcpus: vcpus,
             memoryMiB: memoryMiB,
+            configCapacityBytes: configCapacityBytes,
             jailed: jailed)
     }
 
@@ -35,9 +37,11 @@ struct WarmSandboxSnapshotCacheTests {
         return root
     }
 
-    /// Stage a complete artifact set and publish it for `key`.
+    /// Stage a complete artifact set (including the required meta sidecar)
+    /// and publish it for `key`.
     private func publishEntry(
-        _ cache: WarmSandboxSnapshotCache, key: WarmSnapshotKey, fill: String = "x"
+        _ cache: WarmSandboxSnapshotCache, key: WarmSnapshotKey, fill: String = "x",
+        templateNonce: String = "template-nonce"
     ) throws -> WarmSnapshotEntry {
         let staging = try cache.makeStagingDirectory()
         for file in [
@@ -47,6 +51,12 @@ struct WarmSandboxSnapshotCacheTests {
         ] {
             try Data(fill.utf8).write(to: URL(fileURLWithPath: staging + "/" + file))
         }
+        let meta = WarmSandboxSnapshotCache.Meta(
+            templateId: "warm-template-test", templateNonce: templateNonce,
+            imageDigest: key.imageDigest, guestVersion: key.guestVersion,
+            firecrackerVersion: "1.10.0", createdAtUnixSeconds: 1_752_700_000)
+        try JSONEncoder().encode(meta).write(
+            to: URL(fileURLWithPath: staging + "/" + WarmSandboxSnapshotCache.metaFile))
         return try cache.publish(stagingDirectory: staging, for: key)
     }
 
@@ -68,6 +78,7 @@ struct WarmSandboxSnapshotCacheTests {
         let base = makeKey()
         #expect(makeKey(vcpus: 4).directoryName != base.directoryName)
         #expect(makeKey(memoryMiB: 1024).directoryName != base.directoryName)
+        #expect(makeKey(configCapacityBytes: 512 * 1024).directoryName != base.directoryName)
         #expect(makeKey(jailed: false).directoryName != base.directoryName)
         #expect(makeKey(digest: "sha256:fedcba").directoryName != base.directoryName)
         #expect(makeKey(guestVersion: "other").directoryName != base.directoryName)
@@ -131,6 +142,33 @@ struct WarmSandboxSnapshotCacheTests {
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: root)
             .filter { $0.hasPrefix(".staging-") }
         #expect(leftovers.isEmpty)
+    }
+
+    @Test("loadMeta round-trips the template identity binding")
+    func loadMetaRoundTrips() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let key = makeKey()
+
+        #expect(cache.loadMeta(key) == nil, "no entry, no meta")
+        _ = try publishEntry(cache, key: key, templateNonce: "n-tpl")
+        let meta = try #require(cache.loadMeta(key))
+        #expect(meta.templateId == "warm-template-test")
+        #expect(meta.templateNonce == "n-tpl")
+    }
+
+    @Test("an entry without its meta sidecar is a miss")
+    func entryWithoutMetaMisses() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let key = makeKey()
+
+        _ = try publishEntry(cache, key: key)
+        try FileManager.default.removeItem(
+            atPath: cache.entryDirectory(for: key) + "/" + WarmSandboxSnapshotCache.metaFile)
+        #expect(cache.lookup(key) == nil, "the identity binding requires the meta sidecar")
     }
 
     @Test("invalidate removes the entry and is idempotent")
