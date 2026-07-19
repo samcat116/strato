@@ -122,6 +122,14 @@ simply succeed when the backend enables it.
   the bundle (`NEXT_PUBLIC_APP_VERSION`, `NEXT_PUBLIC_GIT_SHA`, rendered in
   the sidebar via `lib/version.ts`). Security headers are set here; HSTS is
   added at runtime by `src/middleware.ts`, gated on `X-Forwarded-Proto`.
+- Anything an operator must be able to change **without rebuilding** cannot live
+  in `next.config.ts` — `NEXT_PUBLIC_*` values are inlined into the bundle at
+  build time, and deployments run a prebuilt image. Such settings are read per
+  request in `src/middleware.ts` instead: `STRATO_API_URL` for same-origin API
+  proxying, and `STRATO_GRAVATAR_ENABLED` (default on), which middleware
+  publishes to the browser on a non-`httpOnly` `strato_gravatar` cookie that
+  `components/ui/user-avatar.tsx` reads. Disabling it stops the UI from sending
+  any email hash to gravatar.com and falls back to initials avatars.
 - **Dev**: `rewrites()` (development only) proxy `/api`, `/auth`, `/agent`,
   `/health`, and `/organizations` to `NEXT_PUBLIC_API_URL` (default
   `http://localhost:8080`) — this is what makes `bun run dev` work against a

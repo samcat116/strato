@@ -156,6 +156,7 @@ spicedb:
 | `frontend.enabled` | bool | `true` | Deploy the standalone Next.js frontend |
 | `frontend.service.port` | int | `3000` | Frontend service port |
 | `frontend.env.STRATO_API_URL` | string | `""` | Server-side API proxy destination; empty derives the in-cluster control-plane service URL |
+| `frontend.env.STRATO_GRAVATAR_ENABLED` | string | `"true"` | Show Gravatar profile pictures; sends a hash of each user's email to gravatar.com. `"false"` falls back to initials |
 | `resources.limits.cpu` | string | `"1000m"` | CPU limit |
 | `resources.limits.memory` | string | `"1Gi"` | Memory limit |
 | `resources.requests.cpu` | string | `"500m"` | CPU request |
