@@ -26,14 +26,24 @@ public func configure(_ app: Application) async throws {
     // before anything that can spawn work.
     app.setUpBackgroundTaskRegistry()
 
-    // The shared HTTP client is only ever used for server-side fetches to
-    // operator-configured, security-sensitive endpoints (OIDC discovery/token/
-    // userinfo/JWKS and OCI registry manifests/token realms). Those hosts are
-    // validated up front, but a 3xx from a validated host would otherwise let
-    // the client silently follow a redirect to an internal address (cloud
-    // metadata, loopback, private services), defeating the check. None of these
-    // flows legitimately need redirect-following, so disable it globally; the
-    // image downloader manages its own client and revalidates every hop by hand.
+    // How far to trust `X-Forwarded-For`, shared by rate limiting, audit
+    // `sourceIP`, and API-key `lastUsedIP` so one request resolves to one
+    // address everywhere. Set before any middleware that reads it.
+    app.proxyTrust = .fromEnvironment()
+
+    // The shared HTTP client makes server-side fetches to security-sensitive
+    // endpoints (OIDC discovery/token/userinfo/JWKS, OCI registry manifests and
+    // token realms). Those hosts are validated up front, but a 3xx from a
+    // validated host would otherwise let the client silently follow a redirect
+    // to an internal address (cloud metadata, loopback, private services),
+    // defeating the check — so redirect-following is off by default.
+    //
+    // Callers that legitimately need redirects follow them explicitly rather
+    // than relying on this client: `ImageFetchService` manages its own client
+    // and revalidates every hop against `SSRFGuard`, and
+    // `AgentUpdateArtifacts` follows the release host's CDN redirect by hand
+    // (its base URL is operator-configured, never tenant-supplied). Anything
+    // added here that fetches a redirecting host must do likewise.
     app.http.client.configuration.redirectConfiguration = .disallow
 
     // Request logging: one structured line per HTTP request (method/path/status/

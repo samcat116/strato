@@ -135,6 +135,58 @@ enum AgentUpdateArtifacts {
         return token
     }
 
+    /// How many redirects an artifact-metadata fetch may follow.
+    private static let maxRedirects = 5
+
+    /// GET a release-metadata URL, following redirects explicitly.
+    ///
+    /// The shared client has redirect-following disabled globally (see
+    /// `configure`) so that tenant-influenced fetches can't be steered at
+    /// internal addresses by a 3xx. These two fetches are neither tenant-
+    /// influenced nor optional: the base URL is operator configuration
+    /// (`AGENT_UPDATE_ARTIFACT_BASE_URL`, defaulting to the project's GitHub
+    /// releases), and GitHub *always* answers a release download with a 302 to
+    /// its asset CDN. Without following it the manifest read sees a 302, falls
+    /// through to the pre-manifest convention path, and the checksum sidecar
+    /// then fails outright — agent updates stop resolving entirely.
+    ///
+    /// Bounded, and restricted to http(s) so a redirect can't pivot to another
+    /// scheme. No credentials are attached to these requests, so following a
+    /// redirect leaks nothing.
+    static func getFollowingRedirects(
+        _ url: String,
+        client: any Client,
+        logger: Logger
+    ) async throws -> ClientResponse {
+        var currentURL = url
+        for _ in 0...maxRedirects {
+            let response = try await client.get(URI(string: currentURL))
+            guard (300..<400).contains(response.status.code),
+                let location = response.headers.first(name: .location)
+            else {
+                return response
+            }
+            guard let resolved = URL(string: location, relativeTo: URL(string: currentURL)),
+                let scheme = resolved.scheme?.lowercased(),
+                scheme == "http" || scheme == "https"
+            else {
+                throw Abort(
+                    .badGateway,
+                    reason: "Release metadata at \(currentURL) redirected to an unsupported location")
+            }
+            logger.debug(
+                "Following release metadata redirect",
+                metadata: [
+                    "from": .string(currentURL),
+                    "status": .stringConvertible(response.status.code),
+                ])
+            currentURL = resolved.absoluteString
+        }
+        throw Abort(
+            .badGateway,
+            reason: "Release metadata at \(url) exceeded \(maxRedirects) redirects")
+    }
+
     /// Resolves the artifact for a target version and host platform:
     /// manifest first, convention + sidecar for releases that predate it.
     static func resolveArtifact(
@@ -154,7 +206,8 @@ enum AgentUpdateArtifacts {
 
         let manifestResponse: ClientResponse
         do {
-            manifestResponse = try await client.get(URI(string: manifestURL))
+            manifestResponse = try await getFollowingRedirects(
+                manifestURL, client: client, logger: logger)
         } catch {
             throw Abort(
                 .badGateway,
@@ -200,17 +253,19 @@ enum AgentUpdateArtifacts {
             // Unreachable: manifestURL above already gated on hasReleaseAssets.
             throw Abort(.badRequest, reason: "Target version '\(targetVersion)' has no release assets")
         }
-        let sha256 = try await fetchChecksum(forAssetAt: assetURL, client: client)
+        let sha256 = try await fetchChecksum(forAssetAt: assetURL, client: client, logger: logger)
         return ResolvedAgentArtifact(
             url: assetURL, sha256: sha256, kind: .tarball, tarballMember: defaultTarballMember)
     }
 
     /// Fetches and parses the `.sha256` sidecar for an asset URL.
-    static func fetchChecksum(forAssetAt assetURL: String, client: any Client) async throws -> String {
+    static func fetchChecksum(
+        forAssetAt assetURL: String, client: any Client, logger: Logger
+    ) async throws -> String {
         let checksumURL = assetURL + ".sha256"
         let response: ClientResponse
         do {
-            response = try await client.get(URI(string: checksumURL))
+            response = try await getFollowingRedirects(checksumURL, client: client, logger: logger)
         } catch {
             throw Abort(
                 .badGateway,
