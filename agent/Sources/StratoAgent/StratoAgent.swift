@@ -1,3 +1,8 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import ArgumentParser
 import Foundation
 import Logging
@@ -272,6 +277,20 @@ private func launchAgent(options: AgentOptions) async throws {
     let signalLogger = logger
     let signalHandler = SignalHandler { sig in
         signalLogger.info("Received signal \(sig); shutting down gracefully")
+        // Watchdog: leave regardless of what shutdown does. Whatever we would
+        // still be waiting on, waiting longer does not help — a stop that has
+        // not finished in this long is wedged, and the workloads that matter
+        // (QEMU/Firecracker) are separate processes that outlive us by design.
+        //
+        // Deliberately a Dispatch timer, not `Task.sleep`: the failure this
+        // guards against includes the concurrency runtime itself failing to
+        // wind the process down, and a watchdog that runs on the pool it is
+        // watching is no watchdog at all.
+        DispatchQueue.global().asyncAfter(deadline: .now() + shutdownWatchdogSeconds) {
+            signalLogger.error(
+                "Shutdown did not reach process exit within \(Int(shutdownWatchdogSeconds))s; exiting now")
+            exitImmediately(0)
+        }
         Task {
             await agent.stop()
         }
@@ -287,10 +306,12 @@ private func launchAgent(options: AgentOptions) async throws {
                 "The control plane rejected this agent's identity. Verify the SPIRE registration entry for this agent's SPIFFE ID and that the control plane trusts the same trust domain."
             )
         }
-        throw ExitCode.failure
+        // Same reason as the success path below: subsystems have already spun
+        // up threads by the time start() can fail, so leave explicitly.
+        exitImmediately(1)
     } catch {
         logger.error("Agent failed to start: \(error)")
-        throw ExitCode.failure
+        exitImmediately(1)
     }
 
     // A successful self-update ends with a deliberate non-zero exit so a
@@ -299,6 +320,36 @@ private func launchAgent(options: AgentOptions) async throws {
     if await agent.updateRestartPending {
         logger.notice(
             "Exiting with code \(AgentUpdater.restartExitCode) so the supervisor restarts the updated binary")
-        throw ExitCode(AgentUpdater.restartExitCode)
+        exitImmediately(AgentUpdater.restartExitCode)
     }
+
+    exitImmediately(0)
+}
+
+/// How long after a termination signal the agent gives graceful shutdown before
+/// leaving anyway. Comfortably above a healthy shutdown (a second or two) and
+/// well under the unit's `TimeoutStopSec`, so a wedged stop still produces a
+/// clean exit rather than a SIGKILL.
+private let shutdownWatchdogSeconds: Double = 20
+
+/// Ends the process now, without unwinding.
+///
+/// Nothing else here terminates the process on a clean shutdown. ArgumentParser
+/// only calls `exit` when a command *throws*; returning normally hands control
+/// back to the Swift runtime's async-main shim, whose closing `exit(0)` is
+/// MainActor-isolated and so has to be drained off the main dispatch queue —
+/// after `dispatch_main()` has already `pthread_exit`ed the main thread. In the
+/// field that last hop did not happen: the agent logged its final shutdown step
+/// and then sat there until systemd's 90s `TimeoutStopSec` SIGKILLed a process
+/// with nothing left to do (issue #522). It also explains why the self-update
+/// path, which throws `ExitCode` and thus exits directly, was never affected.
+///
+/// Calling it here runs on the cooperative thread that finished shutdown and
+/// needs no hop. `_exit` rather than `exit` so it cannot deadlock in an atexit
+/// handler or a static destructor; there is nothing to lose — the log handler
+/// writes to stderr with unbuffered `write(2)` — beyond stdio, flushed below.
+private func exitImmediately(_ code: Int32) -> Never {
+    fflush(stdout)
+    fflush(stderr)
+    _exit(code)
 }

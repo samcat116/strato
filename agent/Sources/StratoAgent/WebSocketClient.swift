@@ -274,6 +274,27 @@ actor WebSocketClient {
         logger.info("Disconnected from WebSocket server")
     }
 
+    /// Releases the connection's event loop. Call once, after `disconnect()`,
+    /// when this client will not be reused — the agent does so during shutdown.
+    ///
+    /// The group used to be torn down in `deinit` with `syncShutdownGracefully()`,
+    /// a `DispatchSemaphore.wait()` that blocks whichever thread happens to
+    /// release the last reference. That is usually a cooperative-pool thread (the
+    /// heartbeat task holds the client strongly), so a shutdown step stalls the
+    /// pool it is running on; and if the last release ever lands on one of this
+    /// group's own event loops, NIO turns it into a `preconditionFailure`. Neither
+    /// belongs in a deinit. Shutting the group down explicitly and asynchronously
+    /// blocks nothing. See issue #522.
+    func shutdown() async {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        do {
+            try await eventLoopGroup.shutdownGracefully()
+        } catch {
+            logger.debug("Error shutting down WebSocket event loop group: \(error)")
+        }
+    }
+
     func sendMessage<T: WebSocketMessage>(_ message: T) async throws {
         guard isConnected else {
             throw WebSocketClientError.notConnected
@@ -345,8 +366,10 @@ actor WebSocketClient {
     }
 
     deinit {
+        // Deliberately no `syncShutdownGracefully()` here: see `shutdown()`.
+        // A blocking shutdown in deinit runs on whatever thread drops the last
+        // reference, which may be one of this group's own event loops.
         heartbeatTask?.cancel()
-        try? eventLoopGroup.syncShutdownGracefully()
     }
 }
 
