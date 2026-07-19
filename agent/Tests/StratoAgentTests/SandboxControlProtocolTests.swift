@@ -114,6 +114,71 @@ struct SandboxControlProtocolTests {
         #expect(response == .clockSynced)
     }
 
+    // MARK: - Warm start (issue #426)
+
+    @Test("launch encodes identity, config-drive shapes, and base64 entropy")
+    func launchEncodes() throws {
+        let entropy = Data([0x01, 0x02, 0xFE])
+        let request = SandboxControlProtocol.LaunchRequest(
+            sandboxId: "sb-2",
+            identityNonce: "n-2",
+            imageConfig: SandboxConfigDrive.ImageConfig(
+                env: ["PATH=/bin"], entrypoint: ["/bin/app"], cmd: ["--serve"],
+                workingDir: "/app", user: "1000:1000"),
+            overrides: SandboxConfigDrive.ProcessOverrides(
+                entrypoint: nil, cmd: ["--other"], env: ["DEBUG": "1"], workdir: nil, user: nil),
+            entropy: entropy)
+        let object = try decodedObject(.launch(request))
+        #expect(object["type"] as? String == "launch")
+        #expect(object["sandbox_id"] as? String == "sb-2")
+        #expect(object["identity_nonce"] as? String == "n-2")
+        #expect(object["entropy"] as? String == entropy.base64EncodedString())
+
+        // The nested shapes are the config drive's serde contracts: OCI
+        // PascalCase inside image_config, snake_case inside overrides, with
+        // absent optionals omitted (never null).
+        let imageConfig = try #require(object["image_config"] as? [String: Any])
+        #expect(imageConfig["Env"] as? [String] == ["PATH=/bin"])
+        #expect(imageConfig["Entrypoint"] as? [String] == ["/bin/app"])
+        #expect(imageConfig["Cmd"] as? [String] == ["--serve"])
+        #expect(imageConfig["WorkingDir"] as? String == "/app")
+        #expect(imageConfig["User"] as? String == "1000:1000")
+        let overrides = try #require(object["overrides"] as? [String: Any])
+        #expect(overrides["cmd"] as? [String] == ["--other"])
+        #expect(overrides["env"] as? [String: String] == ["DEBUG": "1"])
+        #expect(overrides["entrypoint"] == nil)
+        #expect(overrides["workdir"] == nil)
+        #expect(overrides["user"] == nil)
+    }
+
+    @Test("launch omits entropy when absent")
+    func launchOmitsAbsentEntropy() throws {
+        let request = SandboxControlProtocol.LaunchRequest(
+            sandboxId: "sb-3", identityNonce: "n-3",
+            imageConfig: SandboxConfigDrive.ImageConfig(
+                env: [], entrypoint: [], cmd: ["/bin/true"], workingDir: "", user: ""),
+            overrides: SandboxConfigDrive.ProcessOverrides(
+                entrypoint: nil, cmd: nil, env: [:], workdir: nil, user: nil),
+            entropy: nil)
+        let object = try decodedObject(.launch(request))
+        #expect(object["entropy"] == nil)
+    }
+
+    @Test("launched decodes")
+    func launchedDecodes() throws {
+        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"launched"}"#)
+        #expect(response == .launched)
+    }
+
+    @Test("held workload state decodes in a status response")
+    func heldStateDecodes() throws {
+        let response = try SandboxControlProtocol.Response.decode(
+            line: #"{"type":"status","sandbox_id":"tpl","nonce":"n","state":"held"}"#)
+        let expected = SandboxControlProtocol.Response.status(
+            sandboxId: "tpl", nonce: "n", state: .held, exitCode: nil)
+        #expect(response == expected)
+    }
+
     @Test("SandboxExecRequest maps onto the guest exec request field by field")
     func execRequestBridgesToGuestRequest() {
         let request = SandboxExecRequest(

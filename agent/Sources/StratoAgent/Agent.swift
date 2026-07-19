@@ -197,6 +197,10 @@ actor Agent {
     private let sandboxJailerChrootDir: String
     private let sandboxJailerUidBase: UInt32
     private var sandboxJailerBlockedReason: String?
+    // Warm start (issue #426): provision sandboxes from per-image template
+    // snapshots when possible. Default on; warm failures cold-boot.
+    private let sandboxWarmStart: Bool
+    private let sandboxWarmCacheMaxSizeBytes: Int64?
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
 
@@ -261,6 +265,8 @@ actor Agent {
         sandboxJailerBinaryPath: String = "/usr/local/bin/jailer",
         sandboxJailerChrootDir: String = "/var/lib/strato/vms/jailer",
         sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
+        sandboxWarmStart: Bool = true,
+        sandboxWarmCacheMaxSizeBytes: Int64? = nil,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
@@ -293,6 +299,8 @@ actor Agent {
         self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
+        self.sandboxWarmStart = sandboxWarmStart
+        self.sandboxWarmCacheMaxSizeBytes = sandboxWarmCacheMaxSizeBytes
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.simulation = simulation
@@ -559,7 +567,9 @@ actor Agent {
                     firecrackerBinaryPath: firecrackerBinaryPath,
                     jailer: jailerConfig,
                     jailNewSandboxes: jailNewSandboxes,
-                    jailerBlockedReason: sandboxJailerBlockedReason
+                    jailerBlockedReason: sandboxJailerBlockedReason,
+                    warmStartEnabled: sandboxWarmStart,
+                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")

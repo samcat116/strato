@@ -189,6 +189,10 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     /// Copying or moving snapshot artifacts failed host-side. Transient:
     /// disk pressure or an I/O hiccup a retry can clear.
     case snapshotIOFailed(String)
+    /// A warm-start step failed (issue #426): template staging, the held-state
+    /// handshake, or the post-restore launch. Transient: every warm failure
+    /// falls back to (or is retried as) a cold boot.
+    case warmStartFailed(String)
 
     public var failureClassification: FailureClassification {
         switch self {
@@ -196,7 +200,7 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             .notSnapshottable, .snapshotNotFound:
             return .permanent
         case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed,
-            .checkpointInProgress, .snapshotIOFailed:
+            .checkpointInProgress, .snapshotIOFailed, .warmStartFailed:
             return .transient
         }
     }
@@ -227,6 +231,8 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             return "sandbox cannot be checkpointed: \(reason)"
         case .snapshotIOFailed(let reason):
             return "snapshot artifact I/O failed: \(reason)"
+        case .warmStartFailed(let reason):
+            return "sandbox warm start failed: \(reason)"
         }
     }
 }

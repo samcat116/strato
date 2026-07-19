@@ -100,14 +100,18 @@ fn session(
 
     // Workload context: request env merges OVER the resolved env; cwd
     // defaults to the workload's; uid/gid are the workload's, always.
-    let env = merge_env(&state.process.env, &req.env.clone().unwrap_or_default());
+    // Snapshot under the lock — a warm-start `launch` may replace the
+    // process concurrently, and a consistent pre- or post-launch view is
+    // all a session needs.
+    let workload = state.process.lock().expect("process poisoned").clone();
+    let env = merge_env(&workload.env, &req.env.clone().unwrap_or_default());
     let cwd = req
         .cwd
         .clone()
         .filter(|c| !c.is_empty())
-        .unwrap_or_else(|| state.process.cwd.clone());
-    let uid = state.process.uid;
-    let gid = state.process.gid;
+        .unwrap_or_else(|| workload.cwd.clone());
+    let uid = workload.uid;
+    let gid = workload.gid;
 
     let mut cmd = Command::new(program);
     cmd.args(args)

@@ -50,7 +50,22 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
     let raw = mounts::read_config_drive(&config_device)?;
     let cfg =
         GuestConfig::from_config_drive(&raw).map_err(|e| format!("parse config drive: {e}"))?;
-    let process = cfg.resolve_process()?;
+    // Resolve before touching disks so a bad config fails fast. A warm-start
+    // template (issue #426) has no workload of its own — the real process
+    // arrives with the post-restore `launch` request — so it parks with a
+    // placeholder root context instead (exec sessions on a held template,
+    // should the host ever open one, run as root at `/`).
+    let process = if cfg.warm_hold {
+        ResolvedProcess {
+            argv: Vec::new(),
+            env: cfg.image_config.env.clone(),
+            cwd: "/".to_string(),
+            uid: 0,
+            gid: 0,
+        }
+    } else {
+        cfg.resolve_process()?
+    };
 
     mounts::mount_container_rootfs(&cfg.rootfs)?;
     mounts::switch_into_rootfs()?;
@@ -59,40 +74,74 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
     let status: SharedStatus = Arc::new(Mutex::new(Status {
         sandbox_id: cfg.sandbox_id.clone(),
         nonce: cfg.identity_nonce.clone(),
-        state: WorkloadState::Starting,
+        state: if cfg.warm_hold {
+            WorkloadState::Held
+        } else {
+            WorkloadState::Starting
+        },
         exit_code: None,
     }));
     let logs = Arc::new(LogBuffer::new());
     let children = Arc::new(ChildRegistry::new());
+    let workload_pid: reaper::SharedWorkloadPid = Arc::new(Mutex::new(None));
 
     // The vsock agent runs for the life of the microVM. A bind failure is
     // logged and non-fatal — the workload still runs, just without a control
-    // channel — so we do not propagate the error.
+    // channel — so we do not propagate the error. (A held template without a
+    // control channel is useless but harmless: it can never launch, and the
+    // host's health check fails the template boot.)
     let state = Arc::new(GuestState {
         status: status.clone(),
-        process: process.clone(),
+        process: Mutex::new(process.clone()),
         logs: logs.clone(),
         children: children.clone(),
+        workload_pid: workload_pid.clone(),
     });
     let vsock_port = cfg.vsock_port;
-    std::thread::Builder::new()
-        .name("vsock-agent".into())
-        .spawn(move || {
-            if let Err(e) = vsock::serve(vsock_port, state) {
-                eprintln!("[sandbox-init] vsock agent stopped: {e}");
-            }
-        })?;
-
-    let workload_pid = spawn_workload(&process, &logs)?;
-    children.notify_spawned();
     {
-        let mut s = status.lock().expect("status poisoned");
-        s.state = WorkloadState::Running;
+        let state = state.clone();
+        std::thread::Builder::new()
+            .name("vsock-agent".into())
+            .spawn(move || {
+                if let Err(e) = vsock::serve(vsock_port, state) {
+                    eprintln!("[sandbox-init] vsock agent stopped: {e}");
+                }
+            })?;
+    }
+
+    if !cfg.warm_hold {
+        launch_workload(&state, process)?;
     }
 
     // PID 1's forever duty: reap every child, route exec exit codes, and keep
     // the workload's exit status available until the host powers us off.
-    reaper::reap_forever(workload_pid, &status, &children)
+    reaper::reap_forever(&workload_pid, &status, &children)
+}
+
+/// Spawn the workload and publish it to the shared state: the resolved
+/// process becomes the exec-session default context, the pid becomes the
+/// reaper's workload pid, and the status moves to `Running`. Shared between
+/// the cold-boot path and the warm-start `launch` request (issue #426),
+/// which calls it from a vsock connection thread.
+pub(crate) fn launch_workload(state: &GuestState, process: ResolvedProcess) -> Result<(), String> {
+    let pid = spawn_workload(&process, &state.logs).map_err(|e| e.to_string())?;
+    *state.process.lock().expect("process poisoned") = process;
+    *state.workload_pid.lock().expect("workload pid poisoned") = Some(pid);
+    state.children.notify_spawned();
+
+    // The reaper only learned the workload pid just now; if the process
+    // already exited and was reaped as an unknown pid, claim that exit —
+    // otherwise mark the workload running (unless the reaper beat us to the
+    // exit in the meantime, which record-once semantics respect).
+    if let Some(code) = state.children.claim_unclaimed(pid.as_raw()) {
+        reaper::record_workload_exit_once(&state.status, code);
+    } else {
+        let mut s = state.status.lock().expect("status poisoned");
+        if s.state != WorkloadState::Exited {
+            s.state = WorkloadState::Running;
+        }
+    }
+    Ok(())
 }
 
 /// Launch the container workload as a child process with the resolved

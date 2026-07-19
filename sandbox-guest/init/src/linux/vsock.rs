@@ -24,15 +24,15 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
-use strato_sandbox_init::config::ResolvedProcess;
+use strato_sandbox_init::config::{self, ImageConfig, ProcessOverrides, ResolvedProcess};
 use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::{
-    decode_request, encode_line, Request, Response, WorkloadState,
+    decode_base64, decode_request, encode_line, Request, Response, WorkloadState,
 };
 
 use super::exec::{self, ExecRequest};
 use super::logs;
-use super::reaper::ChildRegistry;
+use super::reaper::{ChildRegistry, SharedWorkloadPid};
 
 /// Workload lifecycle state shared between the reaper (writer) and the vsock
 /// agent (reader).
@@ -51,12 +51,17 @@ pub struct GuestState {
     /// Live workload status, updated by the reaper.
     pub status: SharedStatus,
     /// The workload's resolved process — exec sessions inherit its env, cwd,
-    /// and uid/gid as their defaults.
-    pub process: ResolvedProcess,
+    /// and uid/gid as their defaults. Behind a mutex because a warm-start
+    /// `launch` (issue #426) replaces the held template's placeholder with
+    /// the launched sandbox's real process.
+    pub process: Mutex<ResolvedProcess>,
     /// Ring buffer of captured workload stdout/stderr.
     pub logs: Arc<LogBuffer>,
     /// Exit-code routing between PID 1's reaper and exec sessions.
     pub children: Arc<ChildRegistry>,
+    /// The workload's pid, filled in at spawn time — at boot for a normal
+    /// guest, at `launch` for a warm-hold guest.
+    pub workload_pid: SharedWorkloadPid,
 }
 
 /// Bind the guest vsock port and serve connections forever, one thread each.
@@ -151,9 +156,12 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
     }
 
     match decode_request(&first) {
-        Ok(req @ (Request::Ping | Request::GetStatus | Request::SyncClock { .. })) => {
-            serve_control(req, reader, writer, &state.status)
-        }
+        Ok(
+            req @ (Request::Ping
+            | Request::GetStatus
+            | Request::SyncClock { .. }
+            | Request::Launch { .. }),
+        ) => serve_control(req, reader, writer, state),
         Ok(Request::Exec {
             argv,
             env,
@@ -203,9 +211,9 @@ fn serve_control(
     first: Request,
     reader: BufReader<std::fs::File>,
     mut writer: std::fs::File,
-    status: &SharedStatus,
+    state: &GuestState,
 ) -> std::io::Result<()> {
-    let response = control_response(&first, status);
+    let response = control_response(first, state);
     writer.write_all(encode_line(&response).as_bytes())?;
     writer.flush()?;
 
@@ -215,11 +223,14 @@ fn serve_control(
             continue;
         }
         let response = match decode_request(&line) {
-            Ok(req @ (Request::Ping | Request::GetStatus | Request::SyncClock { .. })) => {
-                control_response(&req, status)
-            }
+            Ok(
+                req @ (Request::Ping
+                | Request::GetStatus
+                | Request::SyncClock { .. }
+                | Request::Launch { .. }),
+            ) => control_response(req, state),
             Ok(_) => Response::Error {
-                message: "only ping/get_status/sync_clock are valid on a control connection"
+                message: "only ping/get_status/sync_clock/launch are valid on a control connection"
                     .to_string(),
             },
             Err(e) => Response::Error {
@@ -232,31 +243,127 @@ fn serve_control(
     Ok(())
 }
 
-fn control_response(request: &Request, status: &SharedStatus) -> Response {
-    // Clock sync is stateless — handle it before taking the status lock.
-    if let Request::SyncClock { unix_nanos } = request {
-        return match set_realtime_clock(*unix_nanos) {
+fn control_response(request: Request, state: &GuestState) -> Response {
+    match request {
+        // Clock sync is stateless — no status lock needed.
+        Request::SyncClock { unix_nanos } => match set_realtime_clock(unix_nanos) {
             Ok(()) => Response::ClockSynced,
             Err(e) => Response::Error {
                 message: format!("clock_settime failed: {e}"),
             },
-        };
-    }
-
-    let s = status.lock().expect("status poisoned");
-    match request {
-        Request::GetStatus => Response::Status {
-            sandbox_id: s.sandbox_id.clone(),
-            nonce: s.nonce.clone(),
-            state: s.state,
-            exit_code: s.exit_code,
         },
+        Request::Launch {
+            sandbox_id,
+            identity_nonce,
+            image_config,
+            overrides,
+            entropy,
+        } => handle_launch(
+            state,
+            sandbox_id,
+            identity_nonce,
+            image_config,
+            overrides,
+            entropy,
+        ),
+        Request::GetStatus => {
+            let s = state.status.lock().expect("status poisoned");
+            Response::Status {
+                sandbox_id: s.sandbox_id.clone(),
+                nonce: s.nonce.clone(),
+                state: s.state,
+                exit_code: s.exit_code,
+            }
+        }
         // serve_control is only ever called with the control subset; answer
         // Pong for anything that is not GetStatus rather than panicking.
-        _ => Response::Pong {
-            sandbox_id: s.sandbox_id.clone(),
-            nonce: s.nonce.clone(),
-        },
+        _ => {
+            let s = state.status.lock().expect("status poisoned");
+            Response::Pong {
+                sandbox_id: s.sandbox_id.clone(),
+                nonce: s.nonce.clone(),
+            }
+        }
+    }
+}
+
+/// Handle a warm-start `launch` (issue #426): adopt the restored-into
+/// sandbox's identity, mix host entropy into the frozen RNG, resolve the
+/// process with the cold-boot rules, and spawn the workload. Only valid in
+/// the `held` state; on any failure the guest returns to `held` (keeping the
+/// new identity — the host tears the microVM down on a failed launch, so
+/// what matters is that the response is an `error`).
+fn handle_launch(
+    state: &GuestState,
+    sandbox_id: String,
+    identity_nonce: String,
+    image_config: Box<ImageConfig>,
+    overrides: Box<ProcessOverrides>,
+    entropy: Option<String>,
+) -> Response {
+    {
+        let mut s = state.status.lock().expect("status poisoned");
+        if s.state != WorkloadState::Held {
+            return Response::Error {
+                message: format!(
+                    "launch is only valid in the held state (state: {:?})",
+                    s.state
+                ),
+            };
+        }
+        s.state = WorkloadState::Starting;
+        s.sandbox_id = sandbox_id;
+        s.nonce = identity_nonce;
+    }
+
+    // Best-effort, like sync_clock: the workload should not fail to launch
+    // because the reseed did — the proper reseed story is #427.
+    if let Some(b64) = entropy.as_deref() {
+        seed_entropy(b64);
+    }
+
+    let process = match config::resolve_process(&image_config, &overrides) {
+        Ok(process) => process,
+        Err(e) => {
+            let mut s = state.status.lock().expect("status poisoned");
+            s.state = WorkloadState::Held;
+            return Response::Error {
+                message: format!("resolve launch process: {e}"),
+            };
+        }
+    };
+
+    match super::launch_workload(state, process) {
+        Ok(()) => Response::Launched,
+        Err(message) => {
+            let mut s = state.status.lock().expect("status poisoned");
+            s.state = WorkloadState::Held;
+            Response::Error { message }
+        }
+    }
+}
+
+/// Mix host-supplied random bytes into the kernel RNG by writing them to
+/// `/dev/urandom`. Uncredited (no RNDADDENTROPY), which is enough to
+/// diverge the pool contents across clones of one warm snapshot; failures
+/// are logged and non-fatal.
+fn seed_entropy(b64: &str) {
+    let bytes = match decode_base64(b64) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[sandbox-init] entropy seed: bad base64: {e}");
+            return;
+        }
+    };
+    if bytes.is_empty() {
+        return;
+    }
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/urandom")
+        .and_then(|mut f| f.write_all(&bytes));
+    if let Err(e) = written {
+        eprintln!("[sandbox-init] entropy seed: {e}");
     }
 }
 
