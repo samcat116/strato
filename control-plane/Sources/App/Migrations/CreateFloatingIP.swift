@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 
 /// Floating IPs (issue #344): external address pools plus per-address
 /// allocations attached to VM NICs, realized agent-side as OVN
@@ -41,6 +42,22 @@ struct CreateFloatingIP: AsyncMigration {
             .field("updated_at", .datetime)
             .unique(on: "pool_id", "address")
             .create()
+
+        // One floating IP per NIC, enforced in the schema: the controller's
+        // pre-check reads then writes, so two concurrent attaches could both
+        // see the NIC as free and commit — the partial unique index makes the
+        // second insert/update fail instead. Partial (NULLs excluded) because
+        // detached rows all share interface_id = NULL. Raw SQL: Fluent's
+        // schema builder has no partial-index support; the syntax is common to
+        // both SQLite and Postgres.
+        if let sql = database as? SQLDatabase {
+            try await sql.raw(
+                """
+                CREATE UNIQUE INDEX uq_floating_ips_interface
+                ON floating_ips (interface_id) WHERE interface_id IS NOT NULL
+                """
+            ).run()
+        }
     }
 
     func revert(on database: Database) async throws {

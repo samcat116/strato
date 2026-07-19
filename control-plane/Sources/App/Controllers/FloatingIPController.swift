@@ -131,6 +131,7 @@ struct FloatingIPController: RouteCollection {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
         }
+        try await Self.assertNoPoolOverlap(cidr: cidr, siteId: create.siteId, excluding: nil, on: req.db)
 
         let pool = FloatingIPPool(
             name: name, cidr: cidr, gateway: gateway, siteID: create.siteId, organizationScope: scope)
@@ -170,16 +171,35 @@ struct FloatingIPController: RouteCollection {
         try await requirePoolPermission(req, pool: pool, permission: "manage")
         let update = try req.content.decode(UpdateFloatingIPPoolRequest.self)
 
+        var canonicalGateway: String?
         if let gateway = update.gateway {
-            _ = try Self.validatePoolAddressing(cidr: pool.cidr, gateway: gateway)
+            (_, canonicalGateway) = try Self.validatePoolAddressing(cidr: pool.cidr, gateway: gateway)
+            // The gateway is excluded from *future* allocation only, so a new
+            // gateway that matches an already-allocated address would collide
+            // with a live, possibly NAT'd floating IP.
+            let collisions = try await FloatingIP.query(on: req.db)
+                .filter(\.$pool.$id == pool.requireID())
+                .filter(\.$address == canonicalGateway!)
+                .count()
+            guard collisions == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "Gateway \(canonicalGateway!) is already allocated as a floating IP; release it first")
+            }
         }
         if let siteId = update.siteId {
             guard try await Site.find(siteId, on: req.db) != nil else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
         }
+        // Moving the pool between sites (or unpinning it) changes which pools
+        // it can conflict with — re-check at the new scope.
+        if update.siteId != pool.$site.id {
+            try await Self.assertNoPoolOverlap(
+                cidr: pool.cidr, siteId: update.siteId, excluding: pool.id, on: req.db)
+        }
 
-        pool.gateway = update.gateway
+        pool.gateway = canonicalGateway
         pool.$site.id = update.siteId
         try await pool.save(on: req.db)
 
@@ -449,7 +469,10 @@ struct FloatingIPController: RouteCollection {
             }
         }
         // One floating IP per NIC: two rules would fight over the NIC's
-        // outbound SNAT.
+        // outbound SNAT. This read is the friendly-error fast path; the
+        // partial unique index on interface_id is the authority — two
+        // concurrent attaches can both pass this check, and the second one's
+        // save then fails the constraint (caught below).
         let existingOnNIC = try await FloatingIP.query(on: req.db)
             .filter(\.$interface.$id == interfaceId)
             .count()
@@ -461,9 +484,13 @@ struct FloatingIPController: RouteCollection {
         // Bump the network generation so a replayed pre-attach sync can't
         // resurrect the old NAT state on the agent.
         network.generation += 1
-        try await req.db.transaction { db in
-            try await floatingIP.save(on: db)
-            try await network.save(on: db)
+        do {
+            try await req.db.transaction { db in
+                try await floatingIP.save(on: db)
+                try await network.save(on: db)
+            }
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            throw Abort(.conflict, reason: "Interface already has a floating IP attached")
         }
 
         // Push the new NAT desired state to the fleet (the site's controller
@@ -528,6 +555,27 @@ struct FloatingIPController: RouteCollection {
             return false
         }
         return try await scope.contains(projectScope, on: db)
+    }
+
+    /// Rejects a pool CIDR that overlaps another pool's within the same
+    /// answering scope. Allocation only deduplicates within one pool, so two
+    /// overlapping pools that one OVN deployment answers for could both hand
+    /// out the same external address. Pools pinned to *different* sites are
+    /// separate fabrics and may overlap; a site-pinned pool conflicts with
+    /// same-site and unpinned pools, and an unpinned pool conflicts with
+    /// everything.
+    static func assertNoPoolOverlap(
+        cidr: String, siteId: UUID?, excluding poolId: UUID?, on db: Database
+    ) async throws {
+        let others = try await FloatingIPPool.query(on: db).all()
+        for other in others where other.id != poolId {
+            if let siteId, let otherSiteId = other.$site.id, siteId != otherSiteId { continue }
+            if NetworkController.subnetsOverlap(cidr, other.cidr) {
+                throw Abort(
+                    .conflict,
+                    reason: "Pool CIDR \(cidr) overlaps pool '\(other.name)' (\(other.cidr)) in the same scope")
+            }
+        }
     }
 
     /// Validates the pool CIDR (allocatable prefix range) and that the

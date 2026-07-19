@@ -111,6 +111,103 @@ final class FloatingIPControllerTests {
         }
     }
 
+    @Test("Overlapping pool CIDRs are rejected within a scope but allowed across sites")
+    func poolOverlapGuard() async throws {
+        try await withFloatingIPTestApp { app, _, org, _, token in
+            _ = try await self.createPool(app: app, org: org, token: token)  // 203.0.113.0/29, unpinned
+
+            // Overlapping unpinned pool → 409 (same answering scope).
+            try await app.test(.POST, "/api/floating-ip-pools") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "edge-overlap", "cidr": "203.0.113.0/28",
+                    "organizationId": org.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // The same CIDR pinned to two *different* sites is two fabrics and
+            // is allowed — but each still conflicts with the unpinned pool, so
+            // use a disjoint range.
+            let siteA = Site(name: "site-a", organizationScope: .organization(org.id!))
+            let siteB = Site(name: "site-b", organizationScope: .organization(org.id!))
+            try await siteA.save(on: app.db)
+            try await siteB.save(on: app.db)
+            for (name, site) in [("edge-a", siteA), ("edge-b", siteB)] {
+                try await app.test(.POST, "/api/floating-ip-pools") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode([
+                        "name": name, "cidr": "198.51.100.0/29",
+                        "siteId": site.id!.uuidString,
+                        "organizationId": org.id!.uuidString,
+                    ])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+        }
+    }
+
+    @Test("A gateway update matching an allocated address is rejected")
+    func gatewayCollisionGuard() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                // Lowest free past the .1 gateway.
+                let address = try res.content.decode(FloatingIPResponse.self).address
+                #expect(address == "203.0.113.2")
+            }
+
+            // Re-pointing the gateway onto the live allocation → 409.
+            try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["gateway": "203.0.113.2"])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // A free address is fine.
+            try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["gateway": "203.0.113.3"])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let gateway = try res.content.decode(FloatingIPPoolResponse.self).gateway
+                #expect(gateway == "203.0.113.3")
+            }
+        }
+    }
+
+    @Test("Attaching a second floating IP to a NIC fails on the schema backstop even without the pre-check")
+    func nicAttachmentUniquenessBackstop() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "backstop-net", subnet: "10.50.0.0/24", gateway: "10.50.0.1",
+                projectID: project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let (_, nic) = try await self.createVMWithNIC(
+                app: app, project: project, network: network, fixedIP: "10.50.0.5")
+
+            // First attachment via direct row write (simulating a concurrent
+            // winner the controller's pre-check didn't see).
+            let first = FloatingIP(
+                poolID: pool.id, address: "203.0.113.2", projectID: project.id!, interfaceID: nic.id!)
+            try await first.save(on: app.db)
+
+            // Second row targeting the same NIC hits the partial unique index.
+            let second = FloatingIP(
+                poolID: pool.id, address: "203.0.113.3", projectID: project.id!, interfaceID: nic.id!)
+            await #expect(throws: (any Error).self) {
+                try await second.save(on: app.db)
+            }
+        }
+    }
+
     @Test("Allocation hands out the lowest free address, skips the gateway, and exhausts to 409")
     func allocationSequence() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in
