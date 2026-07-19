@@ -240,6 +240,15 @@ struct SiteController: RouteCollection {
         guard networkCount == 0 else {
             throw Abort(.conflict, reason: "Site has \(networkCount) network(s) pinned to it; delete them first")
         }
+        // The FK would silently SET NULL the pin, turning a site-scoped pool
+        // into an unpinned one — a scope change that bypasses the pool-overlap
+        // validation (an unpinned pool conflicts with *every* site's pools).
+        let poolCount = try await FloatingIPPool.query(on: req.db).filter(\.$site.$id == siteId).count()
+        guard poolCount == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Site has \(poolCount) floating IP pool(s) pinned to it; move or delete them first")
+        }
 
         try await site.delete(on: req.db)
 

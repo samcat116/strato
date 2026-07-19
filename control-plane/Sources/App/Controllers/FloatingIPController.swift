@@ -48,6 +48,24 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
+    /// System admin, or `manage` on the site being pinned (resolved through
+    /// `site#parent` in SpiceDB). Pinning a pool occupies the site's
+    /// address-overlap scope, so authorizing only the pool's own org/OU would
+    /// let one tenant's admin claim (and block) another tenant's site.
+    private func requireSiteManage(_ req: Request, site: Site) async throws {
+        let user = try req.auth.require(User.self)
+        if user.isSystemAdmin { return }
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "manage",
+            resource: "site",
+            resourceId: try site.requireID().uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have 'manage' permission on this site")
+        }
+    }
+
     /// System admin, or the given permission on the pool itself (resolved
     /// through `floating_ip_pool#parent` in SpiceDB).
     private func requirePoolPermission(_ req: Request, pool: FloatingIPPool, permission: String) async throws {
@@ -127,9 +145,10 @@ struct FloatingIPController: RouteCollection {
         let (cidr, gateway) = try Self.validatePoolAddressing(cidr: create.cidr, gateway: create.gateway)
 
         if let siteId = create.siteId {
-            guard try await Site.find(siteId, on: req.db) != nil else {
+            guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
+            try await requireSiteManage(req, site: site)
         }
         try await Self.assertNoPoolOverlap(cidr: cidr, siteId: create.siteId, excluding: nil, on: req.db)
 
@@ -187,10 +206,11 @@ struct FloatingIPController: RouteCollection {
                     reason: "Gateway \(canonicalGateway!) is already allocated as a floating IP; release it first")
             }
         }
-        if let siteId = update.siteId {
-            guard try await Site.find(siteId, on: req.db) != nil else {
+        if let siteId = update.siteId, siteId != pool.$site.id {
+            guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
+            try await requireSiteManage(req, site: site)
         }
         // Moving the pool between sites (or unpinning it) changes which pools
         // it can conflict with — re-check at the new scope. And it must not
@@ -501,10 +521,17 @@ struct FloatingIPController: RouteCollection {
         }
         // Rolling-upgrade gate: a pre-v12 realizing agent decodes the sync but
         // silently ignores `floatingIPs`, so the API would report an attached
-        // address that no NAT rule ever backs. Refuse rather than strand.
-        if let realizer = try await Self.natRealizingAgent(for: vm, on: req.db),
-            !WireProtocol.supportsFloatingIPs(realizer.wireProtocolVersion ?? 0)
-        {
+        // address that no NAT rule ever backs. Refuse rather than strand — and
+        // refuse *unplaced* VMs outright, because the scheduler has no
+        // floating-IP capability requirement: an attach accepted now could
+        // land the VM on a pre-v12 agent later, reopening the same hole
+        // behind the gate's back.
+        guard let realizer = try await Self.natRealizingAgent(for: vm, on: req.db) else {
+            throw Abort(
+                .conflict,
+                reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
+        }
+        guard WireProtocol.supportsFloatingIPs(realizer.wireProtocolVersion ?? 0) else {
             throw Abort(
                 .conflict,
                 reason:
@@ -643,9 +670,11 @@ struct FloatingIPController: RouteCollection {
 
     /// The agent whose network reconciler would realize NAT for the VM: the
     /// site's network controller for a sited host, the hosting agent itself
-    /// for the legacy site-less model. Nil while the VM is unplaced or the
-    /// agent row is gone — nothing to gate against, and sync assembly omits
-    /// the field for unsupporting agents anyway.
+    /// for the legacy site-less model (including a sited host whose site has
+    /// no designated controller yet). Nil while the VM is unplaced or the
+    /// agent row is gone — attach refuses that case, because the scheduler
+    /// carries no floating-IP capability requirement and a later placement
+    /// could land on an agent too old to realize the NAT.
     static func natRealizingAgent(for vm: VM, on db: Database) async throws -> Agent? {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),

@@ -70,9 +70,10 @@ final class FloatingIPControllerTests {
         return created!
     }
 
-    /// A project VM with one NIC on `network` carrying a fixed IPv4 address.
+    /// A project VM with one NIC on `network` carrying a fixed IPv4 address,
+    /// placed on a fresh current-protocol agent (attach refuses unplaced VMs).
     private func createVMWithNIC(
-        app: Application, project: Project, network: LogicalNetwork, fixedIP: String
+        app: Application, org: Organization, project: Project, network: LogicalNetwork, fixedIP: String
     ) async throws -> (VM, VMNetworkInterface) {
         let builder = TestDataBuilder(db: app.db)
         let vm = try await builder.createVM(name: "fip-vm-\(UUID().uuidString.prefix(8))", project: project)
@@ -83,6 +84,9 @@ final class FloatingIPControllerTests {
             interfaceID: nic.id!, network: network.name, family: .ipv4,
             address: fixedIP, prefixLength: 24, gateway: network.gateway
         ).save(on: app.db)
+        try await placeVM(
+            vm, app: app, org: org, protocolVersion: WireProtocol.currentVersion,
+            named: "agent-\(UUID().uuidString.prefix(8))")
         return (vm, nic)
     }
 
@@ -192,7 +196,7 @@ final class FloatingIPControllerTests {
                 projectID: project.id, externalAccess: true)
             try await network.save(on: app.db)
             let (_, nic) = try await self.createVMWithNIC(
-                app: app, project: project, network: network, fixedIP: "10.50.0.5")
+                app: app, org: org, project: project, network: network, fixedIP: "10.50.0.5")
 
             // First attachment via direct row write (simulating a concurrent
             // winner the controller's pre-check didn't see).
@@ -253,9 +257,9 @@ final class FloatingIPControllerTests {
             try await isolated.save(on: app.db)
 
             let (vm, nic) = try await self.createVMWithNIC(
-                app: app, project: project, network: egress, fixedIP: "10.40.0.5")
+                app: app, org: org, project: project, network: egress, fixedIP: "10.40.0.5")
             let (isolatedVM, _) = try await self.createVMWithNIC(
-                app: app, project: project, network: isolated, fixedIP: "10.41.0.5")
+                app: app, org: org, project: project, network: isolated, fixedIP: "10.41.0.5")
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -278,7 +282,7 @@ final class FloatingIPControllerTests {
             let otherProject = try await builder.createProject(
                 name: "Other FIP Project", description: "", organization: org)
             let (foreignVM, _) = try await self.createVMWithNIC(
-                app: app, project: otherProject, network: egress, fixedIP: "10.40.0.6")
+                app: app, org: org, project: otherProject, network: egress, fixedIP: "10.40.0.6")
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": foreignVM.id!.uuidString])
@@ -362,6 +366,106 @@ final class FloatingIPControllerTests {
         try await vm.save(on: app.db)
     }
 
+    @Test("Attach is refused while the VM is unplaced")
+    func attachUnplacedVMGate() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "unplaced-net", subnet: "10.85.0.0/24", gateway: "10.85.0.1",
+                projectID: project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, network: network, fixedIP: "10.85.0.5")
+            // Simulate a scheduling-pending (or failed-placement) VM: the
+            // scheduler has no floating-IP capability requirement, so an
+            // attach accepted now could land on a pre-v12 agent later.
+            vm.hypervisorId = nil
+            try await vm.save(on: app.db)
+
+            var fipId: UUID?
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                fipId = try res.content.decode(FloatingIPResponse.self).id
+            }
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("Site deletion is refused while floating IP pools are pinned to it")
+    func siteDeletePoolGuard() async throws {
+        try await withFloatingIPTestApp { app, _, org, _, token in
+            let site = Site(name: "pool-pinned-site", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            try await app.test(.POST, "/api/floating-ip-pools") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "pinned", "cidr": "203.0.113.0/29",
+                    "siteId": site.id!.uuidString,
+                    "organizationId": org.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // The FK would silently unpin the pool, bypassing overlap scoping.
+            try await app.test(.DELETE, "/api/sites/\(site.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("Pinning a pool to a site requires manage permission on the site")
+    func poolSitePinPermission() async throws {
+        try await withFloatingIPTestApp { app, _, org, _, token in
+            let site = Site(name: "gated-site", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+
+            // A non-admin org admin (mock grants manage_agents on the org but
+            // denies site manage) must not occupy another scope's site.
+            let builder = TestDataBuilder(db: app.db)
+            let member = try await builder.createUser(
+                username: "poolmember",
+                email: "poolmember@example.com",
+                displayName: "Pool Member",
+                isSystemAdmin: false
+            )
+            let memberToken = try await member.generateAPIKey(on: app.db)
+            app.spicedbMockDeniedResources = ["site"]
+
+            try await app.test(.POST, "/api/floating-ip-pools") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+                try req.content.encode([
+                    "name": "cross-tenant", "cidr": "203.0.113.0/29",
+                    "siteId": site.id!.uuidString,
+                    "organizationId": org.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // Unpinned creation by the same caller is fine.
+            app.spicedbMockDeniedResources = []
+            try await app.test(.POST, "/api/floating-ip-pools") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+                try req.content.encode([
+                    "name": "cross-tenant", "cidr": "203.0.113.0/29",
+                    "organizationId": org.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
     @Test("Attach is refused when the realizing agent predates the floating IP protocol")
     func attachOldAgentGate() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in
@@ -371,7 +475,7 @@ final class FloatingIPControllerTests {
                 projectID: project.id, externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
-                app: app, project: project, network: network, fixedIP: "10.80.0.5")
+                app: app, org: org, project: project, network: network, fixedIP: "10.80.0.5")
             try await self.placeVM(vm, app: app, org: org, protocolVersion: 11, named: "old-fip-agent")
 
             var fipId: UUID?
@@ -411,7 +515,7 @@ final class FloatingIPControllerTests {
                 projectID: project.id, externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
-                app: app, project: project, network: network, fixedIP: "10.90.0.5")
+                app: app, org: org, project: project, network: network, fixedIP: "10.90.0.5")
 
             // A non-admin project member who owns the floating IP but is
             // denied on the VM must not be able to change its exposure.
@@ -460,7 +564,7 @@ final class FloatingIPControllerTests {
                 projectID: project.id, externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
-                app: app, project: project, network: network, fixedIP: "10.60.0.5")
+                app: app, org: org, project: project, network: network, fixedIP: "10.60.0.5")
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -508,7 +612,7 @@ final class FloatingIPControllerTests {
                 projectID: project.id, externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
-                app: app, project: project, network: network, fixedIP: "10.70.0.5")
+                app: app, org: org, project: project, network: network, fixedIP: "10.70.0.5")
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
