@@ -1829,6 +1829,10 @@ actor AgentService {
             // The sandbox's single NIC spec (issue #416), built from its
             // eager-loaded interface + the interface's logical network (for
             // DHCP/DNS config), reusing the networks index gathered above.
+            // Nil until guest networking lands (see
+            // SandboxSpecBuilder.guestNetworkingSupported) — agents reject
+            // networked sandbox specs, so a NIC on the wire would fail every
+            // create.
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,

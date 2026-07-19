@@ -101,7 +101,14 @@ A sandbox is described by `SandboxSpec`
   merged over the image config by the guest agent.
 - **Networking**: at most one NIC on a `LogicalNetwork`, reusing the VM
   `NetworkSpec` so agents realize it through the same OVN/user-mode paths
-  (#416, landed — see the control-plane section).
+  (#416, landed — see the control-plane section). **In v1 the NIC never goes
+  on the wire**: the guest image has no in-guest networking (the init doesn't
+  bring up eth0 and the kernel has no IP autoconfiguration), so the runtimes
+  reject any spec with a non-nil network rather than mis-converge, and sync
+  assembly omits the `NetworkSpec`
+  (`SandboxSpecBuilder.guestNetworkingSupported`). The interface row and its
+  IPAM allocation are still created at sandbox create, so the address is
+  reserved and stable for when guest networking lands.
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, and v1 has no attachable storage.
 

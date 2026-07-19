@@ -466,7 +466,11 @@ struct SandboxController: RouteCollection {
     /// `202` returns and before placement. A missing default-network row
     /// degrades to an address-less NIC (matching the VM implicit-default
     /// behavior on pre-migration data); the NIC row itself is always created so
-    /// the sandbox has a stable device name to attach.
+    /// the sandbox has a stable device name to attach. Until guest networking
+    /// lands the NIC is a control-plane-side reservation only — sync assembly
+    /// deliberately omits it from the wire spec (see
+    /// `SandboxSpecBuilder.guestNetworkingSupported`), because agents reject
+    /// networked sandbox specs.
     private static func attachDefaultNIC(to sandboxID: UUID, on db: Database) async throws {
         let networkName = LogicalNetwork.defaultNetworkName
 

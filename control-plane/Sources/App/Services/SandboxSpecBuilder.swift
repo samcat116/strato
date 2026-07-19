@@ -7,9 +7,21 @@ import StratoShared
 /// agent realizes a sandbox attachment through the same OVN/user-mode paths as
 /// a VM NIC.
 enum SandboxSpecBuilder {
+    /// Whether sandbox NICs go on the wire at all. The v1 guest image has no
+    /// in-guest networking — the init never brings up eth0 and the guest kernel
+    /// has no IP autoconfiguration — so both sandbox runtimes refuse any spec
+    /// with a non-nil network (`SandboxRuntimeError.networkingUnsupported`)
+    /// rather than mis-converge. Until the guest image learns to configure its
+    /// NIC, the sandbox's interface row and its IPAM allocation exist only
+    /// control-plane-side: the address stays reserved and stable, but the wire
+    /// spec omits the NetworkSpec so the sandbox can actually boot. Flip this
+    /// when guest networking lands.
+    static let guestNetworkingSupported = false
+
     /// Builds the NetworkSpec for a sandbox's NIC, or nil when the sandbox has
-    /// no interface. `interface.addresses` must be eager-loaded — the per-family
-    /// address rows are the source of NIC addressing.
+    /// no interface (or guest networking is not yet supported — see
+    /// `guestNetworkingSupported`). `interface.addresses` must be eager-loaded —
+    /// the per-family address rows are the source of NIC addressing.
     ///
     /// `network` supplies the DHCP/DNS configuration agents program into OVN;
     /// nil (network row absent) leaves DHCP disabled, matching the VM path.
@@ -17,7 +29,7 @@ enum SandboxSpecBuilder {
         from interface: SandboxNetworkInterface?,
         network: LogicalNetwork?
     ) -> NetworkSpec? {
-        guard let interface else { return nil }
+        guard guestNetworkingSupported, let interface else { return nil }
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
         return NetworkSpec(

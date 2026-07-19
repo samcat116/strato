@@ -610,8 +610,8 @@ final class SandboxTests {
         }
     }
 
-    @Test("assembleDesiredState carries the sandbox NIC spec")
-    func assemblyCarriesNICSpec() async throws {
+    @Test("assembleDesiredState omits the NIC from the wire spec until guest networking lands")
+    func assemblyOmitsNICSpec() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let network = try await self.defaultNetwork(on: app.db)
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
@@ -626,18 +626,59 @@ final class SandboxTests {
                 address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
+            // The v1 guest image has no in-guest networking and agents reject
+            // networked sandbox specs, so the NIC row must stay off the wire
+            // even when it holds an address.
             let message = try await app.agentService.assembleDesiredState(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
-            let netSpec = try #require(entry.spec.network)
-            #expect(netSpec.network == network.name)
-            #expect(netSpec.macAddress == "00:0c:29:ab:cd:ef")
-            #expect(netSpec.ipAddress == "192.168.1.7")
-            #expect(netSpec.netmask == "255.255.255.0")
-            #expect(netSpec.gateway == "192.168.1.1")
+            #expect(entry.spec.network == nil)
 
-            // The sandbox's network is realized on its host even though no VM
-            // references it.
+            // The sandbox's network is still realized on its host (scope
+            // computation is unchanged), ready for when guest networking lands.
             #expect(message.networks.contains { $0.name == network.name })
+        }
+    }
+
+    @Test("A freshly created sandbox's wire spec has no network, so it can boot")
+    func createdSandboxWireSpecHasNoNetwork() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "bootable",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let sandboxID = try #require(operation).resourceId
+            // Drain the background placement attempt (it fails — no
+            // sandbox-capable agent is registered yet) so its save cannot race
+            // the manual placement below.
+            _ = try await self.pollOperationCompleted(try #require(operation).id!, on: app.db)
+            let created = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let agentId = try await self.registerAgent(app: app, sandbox: created)
+
+            // The end-to-end contract with the v1 agent runtimes: both
+            // FirecrackerSandboxRuntime and MockSandboxRuntime throw
+            // `networkingUnsupported` for any spec with a non-nil network, so a
+            // freshly created sandbox converges only if its wire spec carries
+            // none.
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
+            #expect(entry.spec.network == nil)
+
+            // The create path still reserved the NIC and its address —
+            // control-plane-side only, stable for when guest networking lands.
+            let nic = try #require(
+                await SandboxNetworkInterface.query(on: app.db)
+                    .filter(\.$sandbox.$id == sandboxID)
+                    .with(\.$addresses)
+                    .first())
+            #expect(nic.ipv4Address != nil)
         }
     }
 
