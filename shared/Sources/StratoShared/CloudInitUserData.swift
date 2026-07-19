@@ -50,14 +50,20 @@ public enum CloudInitUserDataFormat: String, CaseIterable, Sendable {
     /// Detects the payload's format from its first line, mirroring cloud-init's
     /// own starts-with dispatch. Returns nil when the payload carries no header
     /// cloud-init recognizes (it would be silently ignored in the guest).
+    ///
+    /// Detection normalizes exactly like cloud-init's
+    /// `handlers.type_from_starts_with`: leading whitespace stripped and the
+    /// payload lowercased before the prefix match, so `"\n#Cloud-Config"` is
+    /// valid user data. Normalization is for detection ONLY — callers store
+    /// and transmit the payload verbatim.
     public static func detect(_ userData: String) -> CloudInitUserDataFormat? {
-        for (prefix, format) in prefixes where userData.hasPrefix(prefix) {
+        let normalized = String(userData.drop(while: \.isWhitespace)).lowercased()
+        for (prefix, format) in prefixes where normalized.hasPrefix(prefix) {
             return format
         }
         // A caller-composed MIME document: RFC 5322 headers at the top. Match
         // the two headers a valid cloud-init MIME payload must lead with.
-        let lowered = userData.lowercased()
-        if lowered.hasPrefix("content-type:") || lowered.hasPrefix("mime-version:") {
+        if normalized.hasPrefix("content-type:") || normalized.hasPrefix("mime-version:") {
             return .mime
         }
         return nil

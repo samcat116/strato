@@ -51,9 +51,18 @@ struct CloudInitUserDataTests {
         #expect(CloudInitUserDataFormat.detect("echo missing shebang") == nil)
         #expect(CloudInitUserDataFormat.detect("packages: [nginx]") == nil)
         #expect(CloudInitUserDataFormat.detect("") == nil)
-        // Header must be at the very start — cloud-init does not skip leading
-        // whitespace either.
-        #expect(CloudInitUserDataFormat.detect("\n#cloud-config") == nil)
+        #expect(CloudInitUserDataFormat.detect("   \n\t  ") == nil)
+    }
+
+    /// Cloud-init's `type_from_starts_with` lowercases and strips leading
+    /// whitespace before matching; a payload it would process must not be
+    /// rejected here (detection-only normalization — payloads travel verbatim).
+    @Test func normalizesLikeCloudInit() {
+        #expect(CloudInitUserDataFormat.detect("\n#cloud-config\npackages: [nginx]") == .cloudConfig)
+        #expect(CloudInitUserDataFormat.detect("  \t#!/bin/sh\ntrue") == .shellScript)
+        #expect(CloudInitUserDataFormat.detect("#Cloud-Config\npackages: [nginx]") == .cloudConfig)
+        #expect(CloudInitUserDataFormat.detect("#INCLUDE\nhttps://example.com/a") == .includeURL)
+        #expect(CloudInitUserDataFormat.detect("\n## Template: jinja\n#cloud-config\n") == .jinjaTemplate)
     }
 
     @Test func mimeTypeMapping() {
