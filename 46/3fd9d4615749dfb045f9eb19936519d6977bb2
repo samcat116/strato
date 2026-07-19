@@ -1,0 +1,23 @@
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_813aa373cc98ec::t_263552417fb650 212
+  s_813aa373cc98ec::t_bfe30e2915dd7c 104
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_813aa373cc98ec::t_1c9f9b7a5b0f09 49
+  s_813aa373cc98ec::t_ba2f6815e0265e 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "463fd9d4615749dfb045f9eb19936519d6977bb2",
+  "prompts": {},
+  "sessions": {
+    "s_813aa373cc98ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c5278dd-0125-4316-bde1-a16f5c49c6fc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
