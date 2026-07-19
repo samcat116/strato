@@ -288,7 +288,11 @@ enum GuardrailStore {
     /// is as much a production resource as the sandbox. Containers are absent
     /// because they genuinely have no environment: it is an attribute, never a
     /// container.
-    private static func resourceEnvironment(of node: IAMNode, on db: any Database) async throws -> String? {
+    ///
+    /// Shared with `EntitySliceLoader` (#480), which stamps the same attribute
+    /// onto the Cedar entity so the compiled environment ceilings match
+    /// exactly what this store's own evaluation matches.
+    static func resourceEnvironment(of node: IAMNode, on db: any Database) async throws -> String? {
         switch node.type {
         case .virtualMachine:
             return try await VM.find(node.id, on: db)?.environment
