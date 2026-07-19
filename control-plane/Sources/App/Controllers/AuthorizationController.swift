@@ -208,16 +208,17 @@ struct AuthorizationController: RouteCollection {
     /// anything. At cutover it becomes `iam:readPolicy` and the indirection
     /// goes away.
     ///
-    /// A node type absent here (`sandbox_snapshot`, which has no SpiceDB
-    /// definition) simply falls through to the containers above it.
-    private static func adminPermission(for nodeType: IAMNodeType) -> String? {
+    /// Every node type maps to something — a type with no entry here would
+    /// silently fall through to its containers and deny its own owners.
+    private static func adminPermission(for nodeType: IAMNodeType) -> String {
         switch nodeType {
         case .organization: return "manage_organization"
         case .organizationalUnit: return "manage_ou"
         case .project: return "manage_project"
         case .site, .agent: return "manage"
-        case .virtualMachine, .sandbox, .image, .volume, .network, .volumeSnapshot: return "delete"
-        case .sandboxSnapshot: return nil
+        case .virtualMachine, .sandbox, .image, .volume, .network,
+            .volumeSnapshot, .sandboxSnapshot:
+            return "delete"
         }
     }
 
@@ -237,10 +238,9 @@ struct AuthorizationController: RouteCollection {
 
         let chain = try await IAMResourceTree.ancestors(of: node, on: req.db)
         for ancestor in chain {
-            guard let permission = adminPermission(for: ancestor.type) else { continue }
             let allowed = try await req.spicedb.checkPermission(
                 subject: callerID,
-                permission: permission,
+                permission: adminPermission(for: ancestor.type),
                 resource: ancestor.type.rawValue,
                 resourceId: ancestor.id.uuidString
             )

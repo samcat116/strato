@@ -342,6 +342,97 @@ final class IAMWhoCanTests {
         }
     }
 
+    @Test("A disabled account cannot act on any grant it still holds")
+    func disabledPrincipalCannotAct() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Disabled")
+            let disabled = try await builder.createUser(username: "gone", email: "gone@example.com")
+            try await builder.addUserToOrganization(user: disabled, organization: tree.org, role: "member")
+            let group = try await builder.createGroup(name: "Gone Team", description: "d", organization: tree.org)
+            try await UserGroup(userID: disabled.id!, groupID: group.id!).save(on: app.db)
+
+            // Every grant shape at once: direct binding, group binding, org
+            // membership, and system admin.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: disabled.id!, role: .editor,
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .group, principalID: group.id!, role: .admin,
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+            disabled.isSystemAdmin = true
+            disabled.disabledAt = Date()
+            try await disabled.save(on: app.db)
+
+            for action in ["vm:create", "vm:read", "org:read"] {
+                let allowed = try await WhoCanService.can(
+                    principalType: .user, principalID: disabled.id!, action: action,
+                    node: tree.vmNode, on: app.db)
+                #expect(!allowed, "disabled account should not hold \(action)")
+            }
+        }
+    }
+
+    @Test("who-can still lists a disabled holder's grants, marked as unusable")
+    func disabledPrincipalStillListed() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "DisabledList")
+            let disabled = try await builder.createUser(username: "gone2", email: "gone2@example.com")
+            let active = try await builder.createUser(username: "here", email: "here@example.com")
+            for user in [disabled, active] {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .editor,
+                    nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+            }
+            disabled.disabledAt = Date()
+            try await disabled.save(on: app.db)
+
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+
+            // The un-revoked grant stays visible — that is the point of the
+            // audit — but is marked so it isn't read as live access.
+            let goneEntry = entries.first { $0.principal.id == disabled.id! }
+            #expect(goneEntry?.principalDisabled == true)
+            #expect(goneEntry?.role == IAMRole.editor.rawValue)
+            let hereEntry = entries.first { $0.principal.id == active.id! }
+            #expect(hereEntry?.principalDisabled == false)
+        }
+    }
+
+    @Test("Sandbox snapshot owners can read policy on their own snapshot")
+    func sandboxSnapshotIsAnAdminNode() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "SnapAdmin")
+            let sandbox = try await builder.createSandbox(name: "snap-sb", project: tree.project)
+            let owner = try await builder.createUser(username: "snapowner", email: "snapowner@example.com")
+            try await builder.addUserToOrganization(user: owner, organization: tree.org, role: "member")
+            let snapshot = SandboxSnapshot(
+                name: "snap-1", sandboxID: sandbox.id!, projectID: tree.project.id!,
+                environment: "development", agentId: nil, createdByID: owner.id!)
+            try await snapshot.save(on: app.db)
+            let token = try await owner.generateAPIKey(on: app.db)
+
+            // Admin on the snapshot itself, nothing above it.
+            app.spicedbMockAllows = true
+            app.spicedbMockDeniedResources = ["project", "organizational_unit", "organization"]
+            defer { app.spicedbMockDeniedResources = [] }
+
+            try await app.test(.POST, "/api/authorization/who-can") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AuthorizationController.WhoCanRequest(
+                        resourceType: "sandbox_snapshot",
+                        resourceId: snapshot.id!.uuidString,
+                        action: "sandbox:restore"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
     // MARK: - Org/folder-scoped infrastructure
 
     @Test("Sites and agents resolve to their org or folder scope")

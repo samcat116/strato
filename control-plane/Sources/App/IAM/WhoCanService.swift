@@ -39,6 +39,38 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     /// names the user directly.
     let via: WhoCanPrincipalRef?
     let expiresAt: Date?
+    /// The grant is real but its holder's account is disabled, so they cannot
+    /// currently act on it (`can()` returns false for them).
+    ///
+    /// Marked rather than filtered out: "who can reach this?" and "whose
+    /// grants are still sitting here?" are both things this endpoint is asked,
+    /// and dropping the row would make an un-revoked grant on a departed
+    /// employee invisible to exactly the audit meant to catch it.
+    let principalDisabled: Bool
+
+    init(
+        principal: WhoCanPrincipalRef,
+        source: WhoCanSource,
+        role: String?,
+        grantedOn: IAMNode?,
+        via: WhoCanPrincipalRef?,
+        expiresAt: Date?,
+        principalDisabled: Bool = false
+    ) {
+        self.principal = principal
+        self.source = source
+        self.role = role
+        self.grantedOn = grantedOn
+        self.via = via
+        self.expiresAt = expiresAt
+        self.principalDisabled = principalDisabled
+    }
+
+    fileprivate func markingPrincipalDisabled() -> WhoCanEntry {
+        WhoCanEntry(
+            principal: principal, source: source, role: role, grantedOn: grantedOn,
+            via: via, expiresAt: expiresAt, principalDisabled: true)
+    }
 }
 
 /// The answer to a reverse lookup.
@@ -86,10 +118,33 @@ enum WhoCanService {
         entries += try await systemAdminEntries(on: db)
 
         return WhoCanResult(
-            principals: dedupedAndSorted(entries),
+            principals: try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db),
             openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
                 action: action, node: node, on: db)
         )
+    }
+
+    /// Flag entries whose holder's account is disabled, so the list agrees with
+    /// `can()` about who may actually act.
+    private static func markingDisabledPrincipals(
+        _ entries: [WhoCanEntry], on db: any Database
+    ) async throws -> [WhoCanEntry] {
+        let userIDs = Set(entries.filter { $0.principal.type == .user }.map(\.principal.id))
+        guard !userIDs.isEmpty else { return entries }
+
+        let disabled = Set(
+            try await User.query(on: db)
+                .filter(\.$id ~~ Array(userIDs))
+                .filter(\.$disabledAt != nil)
+                .all()
+                .compactMap(\.id)
+        )
+        guard !disabled.isEmpty else { return entries }
+
+        return entries.map { entry in
+            guard entry.principal.type == .user, disabled.contains(entry.principal.id) else { return entry }
+            return entry.markingPrincipalDisabled()
+        }
     }
 
     /// Whether `action` on `node` is open to every authenticated user with no
@@ -252,16 +307,21 @@ enum WhoCanService {
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {
         let user = principalType == .user ? try await User.find(principalID, on: db) : nil
+
+        // A disabled account cannot act at all, whatever it still holds:
+        // `UserSecurityMiddleware` rejects it before any protected operation,
+        // so its bindings, group grants, membership, and even system-admin
+        // status are all unusable. This has to precede every grant lookup —
+        // guarding only one branch lets the others answer `true`.
+        if let user, user.disabledAt != nil { return false }
+
         if let user, user.isSystemAdmin { return true }
 
         // Actions open to every authenticated user need no grant — otherwise
         // this reports `false` for a request the API would allow. "Authenticated
         // user" is the whole rule, though: a group is not a principal that logs
-        // in, an unknown id is nobody, and a disabled account is rejected by
-        // `UserSecurityMiddleware` before authorization ever runs.
-        if let user, user.disabledAt == nil,
-            try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db)
-        {
+        // in, and an unknown id is nobody. (Disabled accounts are already out.)
+        if user != nil, try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db) {
             return true
         }
 
