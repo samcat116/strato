@@ -297,7 +297,7 @@ enum GuardrailStore {
         case .sandboxSnapshot:
             return try await SandboxSnapshot.find(node.id, on: db)?.environment
         case .organization, .organizationalUnit, .project, .image, .network,
-            .volume, .volumeSnapshot, .site, .agent:
+            .floatingIP, .volume, .volumeSnapshot, .site, .agent:
             // Listed exhaustively rather than defaulted: a new resource type
             // carrying an environment should fail to compile here, not quietly
             // fall out of every environment ceiling.
