@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Vapor
 import WebAuthn
@@ -106,22 +107,26 @@ struct WebAuthnService {
 
     func beginAuthentication(
         for username: String? = nil,
+        decoyKey: String,
         on database: Database
     ) async throws -> PublicKeyCredentialRequestOptions {
         var allowCredentials: [PublicKeyCredentialDescriptor] = []
 
         if let username = username {
-            // Get user's credentials
-            guard
-                let user = try await User.query(on: database)
-                    .filter(\.$username == username)
-                    .first()
-            else {
-                throw WebAuthnError.userNotFound
-            }
+            // Run the same query sequence (user lookup, then an indexed
+            // credential lookup — against a fabricated user ID when the user
+            // doesn't exist) and compute the decoy HMAC unconditionally, so a
+            // nonexistent username is not distinguishable from a registered one
+            // by response timing (best-effort; the DB round-trips dominate).
+            let user = try await User.query(on: database)
+                .filter(\.$username == username)
+                .first()
+            let userID = try user?.requireID() ?? UUID()
+            let credentials = try await UserCredential.query(on: database)
+                .filter(\.$user.$id == userID)
+                .all()
 
-            try await user.$credentials.load(on: database)
-            allowCredentials = user.credentials.map { credential in
+            allowCredentials = credentials.map { credential in
                 PublicKeyCredentialDescriptor(
                     type: .publicKey,
                     id: Array(credential.credentialID),
@@ -130,6 +135,25 @@ struct WebAuthnService {
                     }
                 )
             }
+
+            // No real credentials to return — either the username doesn't
+            // exist, or it belongs to a user with no passkeys (e.g. an
+            // OIDC/SCIM-provisioned account). Both cases must answer
+            // identically: a 404 for unknown usernames is a
+            // username-enumeration oracle (the same leak that was closed on
+            // the registration path), and an empty list for passkey-less users
+            // while unknown usernames get a credential would identify real
+            // accounts just as well. Return a single decoy credential so the
+            // response is shaped like a real (single-passkey) user's. The
+            // decoy id is HMAC(deployment key, username): stable per username
+            // (a value that changed between requests would itself reveal the
+            // account is fake) and unguessable without the key, so it cannot
+            // be told apart from a real credential. A later assertion against
+            // the decoy fails exactly like a wrong credential would.
+            let decoy = Self.decoyCredential(for: username, key: decoyKey)
+            if allowCredentials.isEmpty {
+                allowCredentials = [decoy]
+            }
         }
 
         let options = webAuthnManager.beginAuthentication(
@@ -137,6 +161,22 @@ struct WebAuthnService {
         )
 
         return options
+    }
+
+    /// A deterministic, unguessable placeholder credential returned for a
+    /// username with no real credentials (nonexistent, or provisioned without
+    /// a passkey), so `beginAuthentication` can't be used to tell whether an
+    /// account exists. Keyed with a deployment-wide secret and
+    /// domain-separated so it can't be derived from, or collide with, anything
+    /// else. The 20-byte id is a typical credential-id length, so it looks
+    /// ordinary in the response.
+    private static func decoyCredential(for username: String, key: String)
+        -> PublicKeyCredentialDescriptor
+    {
+        let mac = HMAC<SHA256>.authenticationCode(
+            for: Data("webauthn-login-decoy:\(username)".utf8),
+            using: SymmetricKey(data: Data(key.utf8)))
+        return PublicKeyCredentialDescriptor(type: .publicKey, id: Array(mac.prefix(20)), transports: [])
     }
 
     func finishAuthentication(
