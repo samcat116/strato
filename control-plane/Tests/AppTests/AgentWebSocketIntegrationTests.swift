@@ -329,8 +329,11 @@ private final class AgentTestClient: Sendable {
     }
 
     /// Await the next inbound frame, decoded as a wire envelope, failing the test
-    /// if none arrives within the timeout.
-    func nextEnvelope(timeout: Duration = .seconds(5)) async throws -> MessageEnvelope {
+    /// if none arrives within the timeout. The timeout is generous: CI runs the
+    /// suite with `--parallel` on a cold runner, where event-loop scheduling can
+    /// stall for many seconds while dozens of suites start up; on the happy path
+    /// the wait returns immediately.
+    func nextEnvelope(timeout: Duration = .seconds(30)) async throws -> MessageEnvelope {
         let data = try await withTimeout(timeout) { [frames] in await frames.next() }
         return try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
     }

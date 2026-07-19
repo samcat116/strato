@@ -230,13 +230,17 @@ private final class ExecWSClient: Sendable {
         ws.send([UInt8](binary))
     }
 
-    func nextFrame(timeout: Duration = .seconds(5)) async throws -> WSFrame {
+    // Timeouts are generous: CI runs the suite with `--parallel` on a cold
+    // runner, where event-loop scheduling can stall for many seconds while
+    // dozens of suites start up. On the happy path the waits return
+    // immediately, so the headroom costs nothing.
+    func nextFrame(timeout: Duration = .seconds(30)) async throws -> WSFrame {
         try await withExecTimeout(timeout) { [frames] in await frames.next() }
     }
 
     /// Await the next inbound frame decoded as a browser-facing JSON control
     /// frame (`{"type": ..., "exitCode": ..., "message": ...}`).
-    func nextControlFrame(timeout: Duration = .seconds(5)) async throws -> ControlFrame {
+    func nextControlFrame(timeout: Duration = .seconds(30)) async throws -> ControlFrame {
         let frame = try await nextFrame(timeout: timeout)
         guard case .text(let text) = frame else {
             throw ExecUnexpectedFrameError(frame: frame)
@@ -254,7 +258,7 @@ private final class ExecWSClient: Sendable {
     /// skipping envelope types that share the socket (periodic syncs).
     func nextEnvelope(
         skipping: Set<MessageType> = [],
-        timeout: Duration = .seconds(5)
+        timeout: Duration = .seconds(30)
     ) async throws -> MessageEnvelope {
         while true {
             let frame = try await nextFrame(timeout: timeout)
@@ -269,7 +273,7 @@ private final class ExecWSClient: Sendable {
         }
     }
 
-    func waitForClose(timeout: Duration = .seconds(5)) async throws {
+    func waitForClose(timeout: Duration = .seconds(30)) async throws {
         let onClose = ws.onClose
         try await withExecTimeout(timeout) {
             try? await onClose.get()
