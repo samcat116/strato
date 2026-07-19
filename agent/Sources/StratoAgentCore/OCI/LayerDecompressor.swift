@@ -9,7 +9,10 @@ import Foundation
 public struct LayerDecompressor: Sendable {
     /// Runs the decompression subprocess; injectable for tests.
     public typealias StreamingRunner =
-        @Sendable (_ executableURL: URL, _ arguments: [String], _ inputFile: URL, _ outputFile: URL)
+        @Sendable (
+            _ executableURL: URL, _ arguments: [String], _ inputFile: URL, _ outputFile: URL,
+            _ maxOutputBytes: Int?
+        )
         async throws -> ProcessResult
 
     private let gzipPath: String?
@@ -25,7 +28,7 @@ public struct LayerDecompressor: Sendable {
         zstdPath: String? = nil,
         runStreaming: @escaping StreamingRunner = {
             try await ProcessRunner.runStreaming(
-                executableURL: $0, arguments: $1, inputFile: $2, outputFile: $3)
+                executableURL: $0, arguments: $1, inputFile: $2, outputFile: $3, maxOutputBytes: $4)
         }
     ) {
         self.gzipPath = gzipPath
@@ -37,7 +40,8 @@ public struct LayerDecompressor: Sendable {
     /// layers are returned as-is (no copy); compressed ones are written to
     /// `outputPath`.
     public func decompressedTarPath(
-        blobPath: String, compression: OCILayerCompression, outputPath: String
+        blobPath: String, compression: OCILayerCompression, outputPath: String,
+        maxDecompressedBytes: Int? = nil
     ) async throws -> String {
         let tool: (name: String, path: String?, candidates: [String])
         switch compression {
@@ -52,7 +56,7 @@ public struct LayerDecompressor: Sendable {
         let executable = try resolveExecutable(name: tool.name, configured: tool.path, candidates: tool.candidates)
         let result = try await runStreaming(
             URL(fileURLWithPath: executable), ["-dc"],
-            URL(fileURLWithPath: blobPath), URL(fileURLWithPath: outputPath))
+            URL(fileURLWithPath: blobPath), URL(fileURLWithPath: outputPath), maxDecompressedBytes)
         guard result.terminationStatus == 0 else {
             try? FileManager.default.removeItem(atPath: outputPath)
             let stderr = String(data: result.standardError, encoding: .utf8) ?? ""
