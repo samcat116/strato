@@ -184,68 +184,18 @@ struct AuthorizationController: RouteCollection {
 
     // MARK: - Helpers
 
-    /// Parse a `(resourceType, resourceId)` pair into a tree node. An unknown
-    /// type is a `400`, not a `403` — naming a type that does not exist is a
-    /// malformed request, not a denied one.
     private static func node(resourceType: String, resourceId: String) throws -> IAMNode {
-        guard let type = IAMNodeType(rawValue: resourceType) else {
-            throw Abort(.badRequest, reason: "Unknown resource type '\(resourceType)'")
-        }
-        guard let id = UUID(uuidString: resourceId) else {
-            throw Abort(.badRequest, reason: "Resource id must be a UUID")
-        }
-        return IAMNode(type: type, id: id)
-    }
-
-    /// The SpiceDB permission standing for "administrative control of this
-    /// node" — the grantee set allowed to read who holds access here.
-    ///
-    /// Containers have an explicit `manage_*`. Individual resources have no
-    /// `manage` in `schema.zed`; their `delete` is the permission whose
-    /// grantees are exactly the resource owner plus project admins, which is
-    /// the set we want. Gating a *read* on `delete` reads oddly, so: this is a
-    /// grantee-set equivalence, not a claim that the caller may delete
-    /// anything. At cutover it becomes `iam:readPolicy` and the indirection
-    /// goes away.
-    ///
-    /// Every node type maps to something — a type with no entry here would
-    /// silently fall through to its containers and deny its own owners.
-    private static func adminPermission(for nodeType: IAMNodeType) -> String {
-        switch nodeType {
-        case .organization: return "manage_organization"
-        case .organizationalUnit: return "manage_ou"
-        case .project: return "manage_project"
-        case .site, .agent: return "manage"
-        case .virtualMachine, .sandbox, .image, .volume, .network,
-            .volumeSnapshot, .sandboxSnapshot:
-            return "delete"
-        }
+        try IAMPolicyGate.node(resourceType: resourceType, resourceId: resourceId)
     }
 
     /// Reading who holds access is itself an administrative act — the answer
-    /// lists other people's grants. Require system admin, or admin over the
-    /// resource itself or any container above it.
-    ///
-    /// The resource node is checked too, not just its containers: resource-level
-    /// grants exist from day one, so a VM's owner can audit their own VM without
-    /// holding project admin.
-    ///
-    /// Gated through SpiceDB because it is what enforces today; this moves to
-    /// `iam:readPolicy` through the evaluator at cutover.
+    /// lists other people's grants. See `IAMPolicyGate` for the rule.
     private static func requirePolicyRead(on node: IAMNode, caller: User, req: Request) async throws {
-        if caller.isSystemAdmin { return }
-        guard let callerID = caller.id?.uuidString else { throw Abort(.unauthorized) }
-
-        let chain = try await IAMResourceTree.ancestors(of: node, on: req.db)
-        for ancestor in chain {
-            let allowed = try await req.spicedb.checkPermission(
-                subject: callerID,
-                permission: adminPermission(for: ancestor.type),
-                resource: ancestor.type.rawValue,
-                resourceId: ancestor.id.uuidString
-            )
-            if allowed { return }
-        }
-        throw Abort(.forbidden, reason: "Reading access policy requires admin on the resource or a container above it")
+        try await IAMPolicyGate.requireAdmin(
+            on: node,
+            caller: caller,
+            deniedReason: "Reading access policy requires admin on the resource or a container above it",
+            req: req
+        )
     }
 }

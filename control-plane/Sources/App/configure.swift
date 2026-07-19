@@ -426,6 +426,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateRoleBinding())
     app.migrations.add(CreateIAMRoleRegistry())
 
+    // IAM phase 2 (issue #479): the forbid-only guardrail store and the
+    // policy-set version log that drives compiled-policy-set invalidation.
+    app.migrations.add(CreateGuardrail())
+    app.migrations.add(CreatePolicySetVersion())
+
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
 
@@ -450,6 +455,15 @@ public func configure(_ app: Application) async throws {
     // curated registry. Runs every startup so registry changes land with the
     // deploy that carries them.
     try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+
+    // IAM phase 2: track the policy-set version. Runs after the registry sync
+    // so this replica starts from the version that sync may have just written,
+    // and before anything can change policy. Under `.testing` the periodic
+    // re-read would outlive the test's application, and the tests that care
+    // drive the cache directly.
+    if app.environment != .testing {
+        await app.startPolicySetVersionWatch()
+    }
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
     // tokens) to encrypted form. Runs every startup (not a one-shot migration)
