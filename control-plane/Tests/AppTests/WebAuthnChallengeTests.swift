@@ -39,7 +39,7 @@ struct WebAuthnChallengeTests {
             try await service.consumeAuthenticationChallenge(challenge, on: app.db)
 
             // Replaying the same challenge must now fail: the row is gone.
-            await #expect(throws: WebAuthnError.self) {
+            await #expect(throws: App.WebAuthnError.self) {
                 try await service.consumeAuthenticationChallenge(challenge, on: app.db)
             }
         }
@@ -50,7 +50,7 @@ struct WebAuthnChallengeTests {
         try await withTestApp { app in
             let service = makeService()
 
-            await #expect(throws: WebAuthnError.self) {
+            await #expect(throws: App.WebAuthnError.self) {
                 try await service.consumeAuthenticationChallenge(
                     "never-stored-\(UUID().uuidString)",
                     on: app.db
@@ -71,7 +71,7 @@ struct WebAuthnChallengeTests {
                 on: app.db
             )
 
-            await #expect(throws: WebAuthnError.self) {
+            await #expect(throws: App.WebAuthnError.self) {
                 try await service.consumeAuthenticationChallenge(challenge, on: app.db)
             }
 
@@ -97,7 +97,7 @@ struct WebAuthnChallengeTests {
             stored.expiresAt = Date().addingTimeInterval(-60)
             try await stored.save(on: app.db)
 
-            await #expect(throws: WebAuthnError.self) {
+            await #expect(throws: App.WebAuthnError.self) {
                 try await service.consumeAuthenticationChallenge(challenge, on: app.db)
             }
         }
@@ -125,6 +125,63 @@ struct WebAuthnChallengeTests {
             // Keyed: a different deployment key produces a different decoy, so
             // the id cannot be recomputed without the server secret.
             #expect(a.allowCredentials?.first?.id != c.allowCredentials?.first?.id)
+        }
+    }
+
+    /// A registered user with zero passkeys (e.g. OIDC/SCIM JIT-provisioned)
+    /// must get the same single-decoy response as an unknown username — an
+    /// empty list here, while unknown usernames get a decoy, would identify
+    /// real passkey-less accounts just as effectively as the original 404.
+    @Test("Passkey-less user yields the same decoy shape as an unknown username")
+    func passkeylessUserYieldsDecoy() async throws {
+        try await withTestApp { app in
+            let service = makeService()
+            let username = "oidc-user-\(UUID().uuidString)"
+            let user = User(
+                username: username,
+                email: "\(username)@example.com",
+                displayName: "No Passkeys",
+                source: .oidc
+            )
+            try await user.save(on: app.db)
+
+            let a = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A", on: app.db)
+            let b = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A", on: app.db)
+
+            // Exactly one deterministic decoy — indistinguishable in shape from
+            // both a real single-passkey user and an unknown username.
+            #expect(a.allowCredentials?.count == 1)
+            #expect(a.allowCredentials?.first?.id == b.allowCredentials?.first?.id)
+        }
+    }
+
+    /// The decoy fallback must not leak into the real path: a user with a
+    /// registered passkey still gets their actual credential back.
+    @Test("User with a real passkey still receives their real credential")
+    func realCredentialIsReturnedUnchanged() async throws {
+        try await withTestApp { app in
+            let service = makeService()
+            let username = "passkey-user-\(UUID().uuidString)"
+            let user = User(
+                username: username,
+                email: "\(username)@example.com",
+                displayName: "Has Passkey"
+            )
+            try await user.save(on: app.db)
+
+            let credentialID = Data((0..<32).map { _ in UInt8.random(in: .min ... .max) })
+            let credential = UserCredential(
+                userID: try user.requireID(),
+                credentialID: credentialID,
+                publicKey: Data([0x01, 0x02, 0x03])
+            )
+            try await credential.save(on: app.db)
+
+            let options = try await service.beginAuthentication(
+                for: username, decoyKey: "deploy-key-A", on: app.db)
+
+            #expect(options.allowCredentials?.count == 1)
+            #expect(options.allowCredentials?.first?.id == Array(credentialID))
         }
     }
 }

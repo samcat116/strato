@@ -113,32 +113,46 @@ struct WebAuthnService {
         var allowCredentials: [PublicKeyCredentialDescriptor] = []
 
         if let username = username {
-            if let user = try await User.query(on: database)
+            // Run the same query sequence (user lookup, then an indexed
+            // credential lookup — against a fabricated user ID when the user
+            // doesn't exist) and compute the decoy HMAC unconditionally, so a
+            // nonexistent username is not distinguishable from a registered one
+            // by response timing (best-effort; the DB round-trips dominate).
+            let user = try await User.query(on: database)
                 .filter(\.$username == username)
                 .first()
-            {
-                try await user.$credentials.load(on: database)
-                allowCredentials = user.credentials.map { credential in
-                    PublicKeyCredentialDescriptor(
-                        type: .publicKey,
-                        id: Array(credential.credentialID),
-                        transports: credential.transports.compactMap { transport in
-                            PublicKeyCredentialDescriptor.AuthenticatorTransport(rawValue: transport)
-                        }
-                    )
-                }
-            } else {
-                // The username does not exist. Returning an error here (404)
-                // would make this endpoint a username-enumeration oracle — the
-                // same leak that was closed on the registration path. Instead
-                // return a single decoy credential so the response is shaped
-                // like a real (single-passkey) user's. The decoy id is
-                // HMAC(deployment key, username): stable per username (a value
-                // that changed between requests would itself reveal the account
-                // is fake) and unguessable without the key, so it cannot be
-                // told apart from a real credential. A later assertion against
-                // the decoy fails exactly like a wrong credential would.
-                allowCredentials = [Self.decoyCredential(for: username, key: decoyKey)]
+            let userID = try user?.requireID() ?? UUID()
+            let credentials = try await UserCredential.query(on: database)
+                .filter(\.$user.$id == userID)
+                .all()
+
+            allowCredentials = credentials.map { credential in
+                PublicKeyCredentialDescriptor(
+                    type: .publicKey,
+                    id: Array(credential.credentialID),
+                    transports: credential.transports.compactMap { transport in
+                        PublicKeyCredentialDescriptor.AuthenticatorTransport(rawValue: transport)
+                    }
+                )
+            }
+
+            // No real credentials to return — either the username doesn't
+            // exist, or it belongs to a user with no passkeys (e.g. an
+            // OIDC/SCIM-provisioned account). Both cases must answer
+            // identically: a 404 for unknown usernames is a
+            // username-enumeration oracle (the same leak that was closed on
+            // the registration path), and an empty list for passkey-less users
+            // while unknown usernames get a credential would identify real
+            // accounts just as well. Return a single decoy credential so the
+            // response is shaped like a real (single-passkey) user's. The
+            // decoy id is HMAC(deployment key, username): stable per username
+            // (a value that changed between requests would itself reveal the
+            // account is fake) and unguessable without the key, so it cannot
+            // be told apart from a real credential. A later assertion against
+            // the decoy fails exactly like a wrong credential would.
+            let decoy = Self.decoyCredential(for: username, key: decoyKey)
+            if allowCredentials.isEmpty {
+                allowCredentials = [decoy]
             }
         }
 
@@ -150,8 +164,9 @@ struct WebAuthnService {
     }
 
     /// A deterministic, unguessable placeholder credential returned for a
-    /// nonexistent username, so `beginAuthentication` can't be used to tell
-    /// whether an account exists. Keyed with a deployment-wide secret and
+    /// username with no real credentials (nonexistent, or provisioned without
+    /// a passkey), so `beginAuthentication` can't be used to tell whether an
+    /// account exists. Keyed with a deployment-wide secret and
     /// domain-separated so it can't be derived from, or collide with, anything
     /// else. The 20-byte id is a typical credential-id length, so it looks
     /// ordinary in the response.
