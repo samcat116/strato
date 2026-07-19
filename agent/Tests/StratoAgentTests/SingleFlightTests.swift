@@ -98,6 +98,46 @@ struct SingleFlightTests {
         #expect(remaining == 0)
     }
 
+    @Test("A cancelled waiter stops waiting without cancelling the shared operation")
+    func cancelledWaiterStopsWaiting() async throws {
+        let flight = SingleFlight<String>()
+        let recorder = Recorder()
+
+        // Two waiters on one flight. Callers wrap this in deadlines (StageBudget.run cancels
+        // the operation task on timeout), so a cancelled waiter has to come back promptly
+        // instead of sitting on someone else's download.
+        let cancelled = Task {
+            try await flight.run(key: "same") {
+                await recorder.begin()
+                await recorder.awaitRelease()
+                return "value"
+            }
+        }
+        let survivor = Task {
+            try await flight.run(key: "same") {
+                await recorder.begin()
+                await recorder.awaitRelease()
+                return "value"
+            }
+        }
+
+        while await recorder.executions == 0 {
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        cancelled.cancel()
+        let cancelledResult = await cancelled.result
+        #expect(throws: CancellationError.self) { try cancelledResult.get() }
+
+        // The shared operation was never cancelled: releasing it still resolves the survivor.
+        await recorder.release()
+        let value = try await survivor.value
+        #expect(value == "value")
+        let executions = await recorder.executions
+        #expect(executions == 1)
+    }
+
     @Test("Failures propagate to every caller in the flight")
     func failurePropagatesToAllCallers() async throws {
         struct Boom: Error {}

@@ -19,9 +19,20 @@ public actor ImageCacheService {
     ///
     /// The check-then-download path suspends on the network, and actors are reentrant across
     /// suspension points, so without this two creates placed on this agent against the same
-    /// cold image would both miss the cache and both download to the same destination. Keyed
-    /// by the destination path, which is unique per image (and per typed artifact).
+    /// cold image would both miss the cache and both download to the same destination.
     private let downloads = SingleFlight<String>()
+
+    /// The dedup key for one cache entry: destination path *and* expected checksum.
+    ///
+    /// The path alone is not enough. `uploadArtifact` replaces an artifact of a given kind in
+    /// place, so re-uploading under the same filename leaves the destination path unchanged
+    /// while the checksum and download URL change. Keyed on path alone, a create carrying the
+    /// new `ImageInfo` would join the in-flight download of the *old* bytes and take its result
+    /// without ever checking its own checksum. Including the checksum means a caller only ever
+    /// joins a flight fetching the bytes it actually asked for.
+    private func flightKey(path: String, checksum: String) -> String {
+        "\(path)\u{0}\(checksum.lowercased())"
+    }
     /// Fetches one URL to a local temporary file, whose ownership passes to the caller.
     /// Injectable so tests can exercise the cache and its concurrency without a network.
     private let fetch: Fetcher
@@ -83,7 +94,8 @@ public actor ImageCacheService {
     /// Returns the path to the image file ready for use by QEMU
     public func getImagePath(imageInfo: ImageInfo) async throws -> String {
         let cachedPath = buildCachePath(imageInfo: imageInfo)
-        return try await downloads.run(key: cachedPath) {
+        let key = flightKey(path: cachedPath, checksum: imageInfo.checksum)
+        return try await downloads.run(key: key) {
             try await self.resolveImagePath(imageInfo: imageInfo, cachedPath: cachedPath)
         }
     }
@@ -224,7 +236,8 @@ public actor ImageCacheService {
         }
 
         let cachedPath = buildArtifactCachePath(imageInfo: imageInfo, artifact: artifact)
-        return try await downloads.run(key: cachedPath) {
+        let key = flightKey(path: cachedPath, checksum: artifact.checksum)
+        return try await downloads.run(key: key) {
             try await self.resolveArtifactPath(
                 imageInfo: imageInfo, artifact: artifact, kind: kind, cachedPath: cachedPath)
         }

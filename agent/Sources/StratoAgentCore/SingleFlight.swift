@@ -14,12 +14,26 @@ import Foundation
 /// around in-flight work and never a cache: a later caller re-runs the operation (and, for the
 /// image cache, sees the now-populated cache on its own check).
 ///
-/// Cancellation of a waiter does not cancel the shared operation, since other waiters may
-/// still need its result.
+/// **Cancellation.** A cancelled waiter stops waiting and throws `CancellationError`; it does
+/// not cancel the shared operation, which the remaining waiters still need. Waiters must be
+/// individually cancellable because callers wrap this in deadlines — `StageBudget.run` enforces
+/// its budget by cancelling the operation task, and a waiter that ignored that would sit past
+/// its budget waiting on someone else's download. The operation runs to completion even if
+/// every waiter leaves, since a finished download still populates the cache for the next
+/// caller.
 public actor SingleFlight<Value: Sendable> {
-    /// The in-flight operation per key, tagged with an id so a finishing operation only
-    /// retires its own entry and never a successor that has since taken the slot.
-    private var inFlight: [String: (id: UInt64, task: Task<Value, any Error>)] = [:]
+    /// One in-flight execution and the callers parked on its result.
+    private struct Flight {
+        /// Distinguishes this execution from a successor that later takes the same key.
+        let id: UInt64
+        var waiters: [UInt64: CheckedContinuation<Value, any Error>] = [:]
+    }
+
+    /// Raised when the flight a caller meant to join finished before it could park on the
+    /// result. The caller runs its own flight instead; never surfaced to callers.
+    private struct FlightVanished: Error {}
+
+    private var flights: [String: Flight] = [:]
     private var nextID: UInt64 = 0
 
     public init() {}
@@ -27,35 +41,76 @@ public actor SingleFlight<Value: Sendable> {
     /// Runs `operation` for `key`, or joins the execution already in flight for that key.
     /// Both the value and any thrown error are shared by every caller in the same flight.
     public func run(key: String, operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
-        if let existing = inFlight[key] {
-            return try await existing.task.value
-        }
-
-        nextID += 1
-        let id = nextID
-        // Retire inside the task, before it resolves, so the entry is gone by the time any
-        // waiter observes the outcome. A caller that arrives after this flight ends therefore
-        // starts a fresh one rather than inheriting a stale failure.
-        let task = Task<Value, any Error> {
+        while true {
+            let waiterID = allocateID()
+            if flights[key] == nil {
+                start(key: key, operation: operation)
+            }
             do {
-                let value = try await operation()
-                await self.retire(key: key, id: id)
-                return value
-            } catch {
-                await self.retire(key: key, id: id)
-                throw error
+                return try await park(key: key, waiterID: waiterID)
+            } catch is FlightVanished {
+                continue  // it finished while we were parking; start our own
             }
         }
-        inFlight[key] = (id: id, task: task)
-        return try await task.value
     }
 
     /// Number of keys currently in flight. Exposed for tests.
-    public var inFlightCount: Int { inFlight.count }
+    public var inFlightCount: Int { flights.count }
 
-    private func retire(key: String, id: UInt64) {
-        if inFlight[key]?.id == id {
-            inFlight.removeValue(forKey: key)
+    private func allocateID() -> UInt64 {
+        nextID += 1
+        return nextID
+    }
+
+    /// Begins an execution for `key`, resuming every parked waiter when it settles.
+    private func start(key: String, operation: @escaping @Sendable () async throws -> Value) {
+        let flightID = allocateID()
+        flights[key] = Flight(id: flightID)
+        Task {
+            let result: Result<Value, any Error>
+            do {
+                result = .success(try await operation())
+            } catch {
+                result = .failure(error)
+            }
+            await self.finish(key: key, flightID: flightID, result: result)
         }
+    }
+
+    /// Suspends until this key's flight settles, or until the calling task is cancelled.
+    private func park(key: String, waiterID: UInt64) async throws -> Value {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard flights[key] != nil else {
+                    continuation.resume(throwing: FlightVanished())
+                    return
+                }
+                // Cancelled before parking: the handler below already ran and found no
+                // continuation to resume, so check here or this waiter never wakes.
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                flights[key]?.waiters[waiterID] = continuation
+            }
+        } onCancel: {
+            Task { await self.abandon(key: key, waiterID: waiterID) }
+        }
+    }
+
+    /// Hands `result` to every waiter and retires the key, guarding against retiring a
+    /// successor flight that has since taken the slot.
+    private func finish(key: String, flightID: UInt64, result: Result<Value, any Error>) {
+        guard let flight = flights[key], flight.id == flightID else { return }
+        flights.removeValue(forKey: key)
+        for continuation in flight.waiters.values {
+            continuation.resume(with: result)
+        }
+    }
+
+    /// Drops one cancelled waiter, leaving the flight running for the others.
+    private func abandon(key: String, waiterID: UInt64) {
+        guard let continuation = flights[key]?.waiters.removeValue(forKey: waiterID) else { return }
+        continuation.resume(throwing: CancellationError())
     }
 }
