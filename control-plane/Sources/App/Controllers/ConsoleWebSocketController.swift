@@ -47,30 +47,37 @@ struct ConsoleWebSocketController: RouteCollection {
                 websocket: ws
             )
 
-            // Set up message handlers for user input
-            ws.onBinary { ws, buffer in
-                // User is typing - send to agent
-                let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
-                let data = Data(bytes)
+            // WebSocketKit's frame-callback setters are loop-bound
+            // (`NIOLoopBoundBox`): calling them from this task — which runs on
+            // the concurrent executor, not the socket's event loop — trips
+            // `EventLoop.preconditionInEventLoop` and kills the whole process.
+            // Register them via an explicit hop to the socket's event loop.
+            ws.eventLoop.execute {
+                // Set up message handlers for user input
+                ws.onBinary { ws, buffer in
+                    // User is typing - send to agent
+                    let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
+                    let data = Data(bytes)
 
-                Task {
-                    do {
-                        try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
-                    } catch {
-                        req.logger.error("Failed to route console input to agent: \(error)")
+                    Task {
+                        do {
+                            try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
+                        } catch {
+                            req.logger.error("Failed to route console input to agent: \(error)")
+                        }
                     }
                 }
-            }
 
-            ws.onText { ws, text in
-                // User input as text - convert to data and send to agent
-                guard let data = text.data(using: .utf8) else { return }
+                ws.onText { ws, text in
+                    // User input as text - convert to data and send to agent
+                    guard let data = text.data(using: .utf8) else { return }
 
-                Task {
-                    do {
-                        try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
-                    } catch {
-                        req.logger.error("Failed to route console input to agent: \(error)")
+                    Task {
+                        do {
+                            try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
+                        } catch {
+                            req.logger.error("Failed to route console input to agent: \(error)")
+                        }
                     }
                 }
             }

@@ -135,17 +135,24 @@ struct SandboxExecWebSocketController: RouteCollection {
             // handlers exist, so no input/resize/close can precede it.
             eventContinuation.yield(.start)
 
-            // Binary frames are stdin bytes for the exec process.
-            ws.onBinary { _, buffer in
-                let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
-                eventContinuation.yield(.input(Data(bytes)))
-            }
+            // WebSocketKit's frame-callback setters are loop-bound
+            // (`NIOLoopBoundBox`): calling them from this task — which runs on
+            // the concurrent executor, not the socket's event loop — trips
+            // `EventLoop.preconditionInEventLoop` and kills the whole process.
+            // Register them via an explicit hop to the socket's event loop.
+            ws.eventLoop.execute {
+                // Binary frames are stdin bytes for the exec process.
+                ws.onBinary { _, buffer in
+                    let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
+                    eventContinuation.yield(.input(Data(bytes)))
+                }
 
-            // Text frames are JSON control messages; only resize is defined.
-            // Unknown or malformed frames are ignored.
-            ws.onText { _, text in
-                guard let resize = Self.decodeResizeFrame(text) else { return }
-                eventContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
+                // Text frames are JSON control messages; only resize is defined.
+                // Unknown or malformed frames are ignored.
+                ws.onText { _, text in
+                    guard let resize = Self.decodeResizeFrame(text) else { return }
+                    eventContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
+                }
             }
 
             ws.onClose.whenComplete { result in
