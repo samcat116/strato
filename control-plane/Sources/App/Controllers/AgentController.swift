@@ -334,6 +334,33 @@ struct AgentController: RouteCollection {
         do {
             try await enrollment.save(on: req.db)
         } catch {
+            // A concurrent create for the same name can pass the pre-check above
+            // and provision the same SPIRE entry (provisioning is idempotent by
+            // name), leaving this request to lose the unique agent_name
+            // constraint. Rolling back here would deprovision the entry the
+            // *winner's* enrollment depends on, stranding a node whose operator
+            // already holds a bootstrap command. Only withdraw the grant when no
+            // other enrollment claims the name.
+            //
+            // `try?` over an optional-returning query yields a double optional;
+            // flatten it so both "query failed" and "no row" read as unclaimed,
+            // which keeps the rollback behaviour for a genuine save failure.
+            let claimed =
+                ((try? await AgentEnrollment.query(on: req.db)
+                    .filter(\.$agentName == createRequest.agentName)
+                    .first()) ?? nil) != nil
+
+            if claimed {
+                req.logger.warning(
+                    "Concurrent enrollment won this agent name; leaving its SPIRE grant intact",
+                    metadata: ["agentName": .string(createRequest.agentName)])
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "An enrollment already exists for agent '\(createRequest.agentName)'. Revoke it before enrolling again."
+                )
+            }
+
             await spire.rollbackProvisioning(agentName: createRequest.agentName)
             throw error
         }

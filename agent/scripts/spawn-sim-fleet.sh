@@ -47,8 +47,10 @@
 #                            localhost:8080/api/organizations | jq .
 #   --svid-dir DIR       Per-agent SVID material (required to start); see
 #                        "Agent identity is SPIFFE-only" above
-#   --agent-ws-url URL   Agent WebSocket endpoint the dummies dial
-#                        (default: derived from --control-plane, /agent/ws)
+#   --agent-ws-url URL   Agent WebSocket endpoint the dummies dial; must be
+#                        wss:// (mTLS). Derived from --control-plane only when
+#                        that is https://, since a plain origin cannot carry a
+#                        client certificate. Required otherwise.
 #   --trust-domain TD    SPIFFE trust domain (default: strato.local)
 #   --control-plane URL  Control-plane HTTP base URL (default: http://localhost:8080)
 #   --name-prefix STR    Agent name prefix (default: sim)
@@ -352,8 +354,26 @@ SVID_DIR="$(cd "$SVID_DIR" && pwd -P)"
 if [[ -z "$AGENT_WS_URL" ]]; then
   case "$CONTROL_PLANE" in
     https://*) AGENT_WS_URL="wss://${CONTROL_PLANE#https://}/agent/ws" ;;
-    http://*)  AGENT_WS_URL="ws://${CONTROL_PLANE#http://}/agent/ws" ;;
+    http://*)
+      # Deriving ws:// from the plain origin used to work under token auth. It
+      # cannot now: mTLS needs TLS, so a ws:// dummy presents no client
+      # certificate and the control plane rejects it for missing XFCC.
+      echo "error: cannot derive an agent WebSocket URL from a plain http:// control plane." >&2
+      echo "Agent auth is SPIFFE-only, so the dummies must dial the Envoy mTLS listener" >&2
+      echo "rather than the browser/API origin. Pass it explicitly:" >&2
+      echo "  --agent-ws-url wss://<agents-host>/agent/ws" >&2
+      exit 2
+      ;;
     *) echo "error: --control-plane must start with http:// or https://" >&2; exit 2 ;;
+  esac
+else
+  case "$AGENT_WS_URL" in
+    wss://*) ;;
+    *)
+      echo "error: --agent-ws-url must be wss:// — agents authenticate with a client" >&2
+      echo "certificate, which a plaintext ws:// connection cannot carry." >&2
+      exit 2
+      ;;
   esac
 fi
 

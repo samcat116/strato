@@ -775,11 +775,31 @@ write_telemetry_config
 # even when installed with --network-mode user.
 write_config() {
   install -d "$STRATO_CONF_DIR"
+  local cp_url="${CONTROL_PLANE_URL%%\?*}"
   if [ -f "$CONFIG_FILE" ]; then
-    log "$CONFIG_FILE already exists; leaving it in place (ensure control_plane_url and the [spiffe] block are set)"
+    # Reinstall. Re-running the bootstrap command is exactly how an operator
+    # re-enrolls against a new control plane or a changed mTLS endpoint, and the
+    # command carries that URL — but the systemd unit passes no URL override, so
+    # leaving the old value here would silently keep the agent dialing the
+    # previous host. Update that one key and leave any hand-edits alone.
+    if grep -q '^[[:space:]]*control_plane_url[[:space:]]*=' "$CONFIG_FILE"; then
+      local current
+      current="$(sed -n 's/^[[:space:]]*control_plane_url[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$CONFIG_FILE" | head -1)"
+      if [ "$current" != "$cp_url" ]; then
+        log "Updating control_plane_url in $CONFIG_FILE ($current -> $cp_url)"
+        # Write through a temp file: in-place sed spelling differs GNU vs BSD.
+        sed "s|^[[:space:]]*control_plane_url[[:space:]]*=.*|control_plane_url = \"$cp_url\"|" \
+          "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+      fi
+    else
+      # Bare keys must precede the first table, so prepend rather than append.
+      log "Adding control_plane_url to $CONFIG_FILE"
+      printf 'control_plane_url = "%s"\n' "$cp_url" | cat - "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+        && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    fi
+    log "$CONFIG_FILE already existed; other settings left as-is (ensure the [spiffe] block is correct)"
     return 0
   fi
-  local cp_url="${CONTROL_PLANE_URL%%\?*}"
   log "Writing $CONFIG_FILE (network_mode = ${NETWORK_MODE})"
   # The agent's name is not a config-file field: it comes from --agent-id on
   # the command line (defaulting to the hostname), which the systemd unit above
