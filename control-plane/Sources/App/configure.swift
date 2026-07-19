@@ -26,6 +26,16 @@ public func configure(_ app: Application) async throws {
     // before anything that can spawn work.
     app.setUpBackgroundTaskRegistry()
 
+    // The shared HTTP client is only ever used for server-side fetches to
+    // operator-configured, security-sensitive endpoints (OIDC discovery/token/
+    // userinfo/JWKS and OCI registry manifests/token realms). Those hosts are
+    // validated up front, but a 3xx from a validated host would otherwise let
+    // the client silently follow a redirect to an internal address (cloud
+    // metadata, loopback, private services), defeating the check. None of these
+    // flows legitimately need redirect-following, so disable it globally; the
+    // image downloader manages its own client and revalidates every hop by hand.
+    app.http.client.configuration.redirectConfiguration = .disallow
+
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.

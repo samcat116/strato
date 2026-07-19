@@ -384,9 +384,11 @@ struct AgentWebSocketController: RouteCollection {
                 }
 
             case .success, .error:
-                // Correlated responses to control-plane-initiated requests
+                // Correlated responses to control-plane-initiated requests.
+                // Pass the authenticated connection's agent name so the service
+                // only resolves a request it actually dispatched to this agent.
                 Task {
-                    await req.agentService.handleAgentResponse(envelope)
+                    await req.agentService.handleAgentResponse(envelope, fromAgentNamed: agentName)
                 }
 
             case .observedState:
@@ -405,7 +407,8 @@ struct AgentWebSocketController: RouteCollection {
                     req.consoleSessionManager.routeToFrontend(
                         vmId: message.vmId,
                         sessionId: message.sessionId,
-                        data: data
+                        data: data,
+                        fromAgentNamed: agentName
                     )
                 }
 
@@ -418,7 +421,8 @@ struct AgentWebSocketController: RouteCollection {
                         "sessionId": .string(message.sessionId),
                     ])
                 // Notify the frontend that the console is ready for input
-                req.consoleSessionManager.notifyFrontendReady(sessionId: message.sessionId)
+                req.consoleSessionManager.notifyFrontendReady(
+                    sessionId: message.sessionId, fromAgentNamed: agentName)
 
             case .consoleDisconnected:
                 let message = try envelope.decode(as: ConsoleDisconnectedMessage.self)
@@ -430,7 +434,8 @@ struct AgentWebSocketController: RouteCollection {
                         "reason": .string(message.reason ?? "unknown"),
                     ])
                 // Clean up the session
-                req.consoleSessionManager.removeSession(sessionId: message.sessionId)
+                req.consoleSessionManager.removeSession(
+                    sessionId: message.sessionId, fromAgentNamed: agentName)
 
             case .sandboxExecStarted:
                 let message = try envelope.decode(as: SandboxExecStartedMessage.self)

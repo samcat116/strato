@@ -255,6 +255,20 @@ final class DistributionRegistryClient: RegistryClientProtocol {
     // MARK: - Plumbing
 
     private func send(_ method: HTTPMethod, url: String, headers: HTTPHeaders) async throws -> ClientResponse {
+        // The registry host, and any Bearer token realm advertised by it, come
+        // straight from a tenant-supplied image reference (e.g. a sandbox
+        // `image: "169.254.169.254/x:latest"`). Every hop this method makes —
+        // the manifest GET, the `/v2/` challenge probe, and the token-realm GET
+        // — must resolve to a public address, or the control plane becomes an
+        // SSRF proxy into cloud metadata and internal services (and could leak
+        // a decrypted pull secret to an attacker-chosen realm). Validation is
+        // environment-gated, so loopback/private dev registries still work.
+        guard let parsedURL = URL(string: url) else {
+            throw Abort(.badRequest, reason: "Invalid registry URL")
+        }
+        _ = try await SSRFGuard.validate(
+            url: parsedURL, environment: app.environment, on: app.threadPool)
+
         let request = ClientRequest(
             method: method, url: URI(string: url), headers: headers, body: nil,
             timeout: Self.requestTimeout)

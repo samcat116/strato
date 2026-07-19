@@ -512,6 +512,19 @@ struct VMController: RouteCollection {
         }
         let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
+        // The kernel cmdline is passed through to the agent's hypervisor
+        // invocation. Bound its length and reject control characters (newlines,
+        // NULs, escapes) so a caller cannot smuggle extra directives or line
+        // breaks into the boot arguments.
+        if let cmdline = cmdlineValue {
+            guard cmdline.utf8.count <= 4096 else {
+                throw Abort(.badRequest, reason: "'cmdline' exceeds the maximum length of 4096 bytes")
+            }
+            guard !cmdline.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+                throw Abort(.badRequest, reason: "'cmdline' contains disallowed control characters")
+            }
+        }
+
         // Choose the hypervisor: an explicit request wins; otherwise infer
         // it from the image when its artifact set is compatible with exactly
         // one hypervisor; otherwise fall back to the model default (QEMU).

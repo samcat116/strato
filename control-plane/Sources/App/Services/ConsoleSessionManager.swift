@@ -90,6 +90,28 @@ final class ConsoleSessionManager: @unchecked Sendable {
         }
     }
 
+    /// Agent-initiated session teardown (the agent reported its console
+    /// disconnected). Verify the reporting agent owns the session before
+    /// removing it, so a compromised agent cannot tear down another session by
+    /// guessing its (random) id. The frontend-initiated `removeSession` needs
+    /// no such check — a browser can only ever close its own session.
+    func removeSession(sessionId: String, fromAgentNamed agentName: String) {
+        let owns = lock.withLock { () -> Bool in
+            guard let session = sessions[sessionId] else { return false }
+            return session.agentName == agentName
+        }
+        guard owns else {
+            app.logger.warning(
+                "Dropping console disconnect from an agent that does not own the session",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "agentName": .string(agentName),
+                ])
+            return
+        }
+        removeSession(sessionId: sessionId)
+    }
+
     /// Get session info
     func getSession(sessionId: String) -> ConsoleSessionInfo? {
         lock.withLock {
@@ -146,19 +168,40 @@ final class ConsoleSessionManager: @unchecked Sendable {
 
     // MARK: - Data Routing
 
-    /// Route console data from agent to frontend(s)
-    func routeToFrontend(vmId: String, sessionId: String, data: Data) {
-        let websocket: WebSocket? = lock.withLock {
-            frontendConnections[sessionId]
+    /// Resolve the browser socket for an agent-reported console event, but only
+    /// when the reporting agent owns the session. Without this an agent that
+    /// learned another session's (random) id could inject console bytes into,
+    /// or signal readiness on, a session it does not host. Mirrors the
+    /// ownership gate `SandboxExecSessionManager.frontendConnection` enforces.
+    private func frontendConnection(
+        sessionId: String, fromAgentNamed agentName: String, event: String
+    ) -> WebSocket? {
+        let (session, websocket) = lock.withLock {
+            (sessions[sessionId], frontendConnections[sessionId])
         }
-
-        guard let ws = websocket else {
+        guard let session else {
+            app.logger.debug(
+                "Console \(event) for unknown session",
+                metadata: ["sessionId": .string(sessionId), "agentName": .string(agentName)])
+            return nil
+        }
+        guard session.agentName == agentName else {
             app.logger.warning(
-                "No frontend connection for session",
+                "Dropping console \(event) from an agent that does not own the session",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "vmId": .string(vmId),
+                    "agentName": .string(agentName),
+                    "sessionAgentName": .string(session.agentName),
                 ])
+            return nil
+        }
+        return websocket
+    }
+
+    /// Route console data from agent to frontend(s)
+    func routeToFrontend(vmId: String, sessionId: String, data: Data, fromAgentNamed agentName: String) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "data")
+        else {
             return
         }
 
@@ -167,17 +210,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
     }
 
     /// Notify the frontend that the console is ready for input
-    func notifyFrontendReady(sessionId: String) {
-        let websocket: WebSocket? = lock.withLock {
-            frontendConnections[sessionId]
-        }
-
-        guard let ws = websocket else {
-            app.logger.warning(
-                "No frontend connection for session to notify ready",
-                metadata: [
-                    "sessionId": .string(sessionId)
-                ])
+    func notifyFrontendReady(sessionId: String, fromAgentNamed agentName: String) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "ready")
+        else {
             return
         }
 

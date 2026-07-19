@@ -444,12 +444,27 @@ extension Request {
         application.audit
     }
 
-    /// Best-effort client IP: proxy headers first, then the socket peer.
-    /// Matches the extraction `APIKeyAuthenticator` uses for `lastUsedIP`.
+    /// Best-effort client IP for the audit trail.
+    ///
+    /// Trust only the *rightmost* `X-Forwarded-For` entry: our own proxy appends
+    /// the real peer on the right, while any hops further left are client-
+    /// supplied and spoofable. Taking the leftmost (or the raw header) let a
+    /// client forge the `sourceIP` of its own audit events — including failed-
+    /// auth and admin-bypass events — defeating attribution. Falls back to the
+    /// socket peer when no forwarding header is present. (`RateLimitMiddleware`
+    /// applies the same right-anchored logic for its buckets.)
     var auditClientIP: String? {
-        headers.first(name: "X-Forwarded-For")
-            ?? headers.first(name: "X-Real-IP")
-            ?? remoteAddress?.description
+        if let forwarded = headers.first(name: "X-Forwarded-For") {
+            let hops =
+                forwarded
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if let rightmost = hops.last {
+                return rightmost
+            }
+        }
+        return remoteAddress?.description
     }
 
     /// Record an authentication-flow audit event (login, logout, registration,
