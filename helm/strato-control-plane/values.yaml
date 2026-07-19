@@ -64,6 +64,11 @@ frontend:
     # service port-forward fully functional without ingress.
     STRATO_API_URL: ""
 
+    # Show users' Gravatar images as profile pictures. When enabled the browser
+    # sends a hash of each user's email address to gravatar.com; set to "false"
+    # to keep the UI free of third-party requests and fall back to initials.
+    STRATO_GRAVATAR_ENABLED: "true"
+
 serviceAccount:
   create: true
   annotations: {}

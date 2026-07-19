@@ -61,6 +61,42 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// jailer memory ceiling.
     private var warnedNoMemoryCeiling = false
 
+    // MARK: Warm start (issue #426)
+
+    /// Whether warm start is actually in effect: requested via
+    /// `sandbox_warm_start` AND the runtime jails new sandboxes. Unjailed
+    /// warm start is structurally impossible — the snapshot vmstate records
+    /// the template's *absolute* drive/vsock paths, which are gone after
+    /// template teardown; only jailed snapshots (chroot-relative paths,
+    /// identical in every jail) restore into a different sandbox's layout.
+    /// Every warm failure falls back to a cold boot, so this only trades
+    /// boot latency, never correctness.
+    private let warmStartActive: Bool
+    /// The per-(image, guest, machine shape) template snapshot cache, rooted
+    /// under the sandbox storage directory.
+    private let warmCache: WarmSandboxSnapshotCache
+    /// LRU budget for `warmCache`, swept after each template publish.
+    private let warmCacheBudgetBytes: Int64
+    /// Cheap identity for the Firecracker binary (size + mtime), part of the
+    /// warm key: snapshots do not load across Firecracker builds, so a binary
+    /// upgrade must miss the old entries rather than fail restoring them.
+    private let firecrackerFingerprint: String
+    /// Template builds in flight, keyed by the warm key's directory name.
+    /// Also serves as the global concurrency gate: at most one template
+    /// microVM (an unaccounted, guest-memory-sized guest) builds at a time.
+    private var warmBuildsInFlight: Set<String> = []
+    /// Failed template builds and when they may be retried. A failure damps
+    /// retries for `warmBuildRetryInterval` instead of forever: permanent
+    /// causes (a guest image without `warm_hold`) age out naturally when the
+    /// guest image — part of the key — changes, while transient causes
+    /// (disk pressure, a slow boot) deserve another attempt.
+    private var warmBuildFailures: [String: Date] = [:]
+    private static let warmBuildRetryInterval: TimeInterval = 15 * 60
+    /// One-shot sweep of template debris left by a crash mid-build (template
+    /// microVMs are deliberately not in the manifest, so ordinary orphan
+    /// recovery never finds them). Runs on the first create.
+    private var warmTemplateSweepDone = false
+
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
     private static let guestCID: UInt32 = 3
@@ -81,6 +117,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         /// (issue #425); nil for an unjailed sandbox (jailer disabled, or an
         /// orphan adopted from a pre-jailer life).
         let jail: SandboxJailPlan?
+        /// The registry credential the sandbox was created with, kept so the
+        /// warm-launch fallback (demote to cold) can re-materialize a
+        /// private-registry image even after the rootfs cache evicted it.
+        var registryCredential: RegistryCredential? = nil
+        /// For a warm-provisioned sandbox that has not launched yet: the
+        /// template identity its held guest must echo before the workload is
+        /// launched into it (issue #426). Nil after launch, for cold boots,
+        /// and for adopted sandboxes (where the binding is unrecoverable and
+        /// the held-state check alone gates the launch).
+        var warmHeldIdentity: (templateId: String, templateNonce: String)? = nil
         /// The live Firecracker session, present for the sandbox's whole life.
         var manager: FirecrackerManager
         /// The workload's exit code once it has ended, cached so it survives a
@@ -147,6 +193,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// spawn handshake.
     private static let execConnectTimeout: TimeInterval = 10
 
+    /// Default LRU budget for the warm-snapshot cache. Entries are roughly
+    /// guest-memory sized, so this holds a handful of distinct
+    /// (image, machine shape) combinations.
+    static let defaultWarmCacheBudgetBytes: Int64 = 20 * 1024 * 1024 * 1024
+
     init(
         logger: Logger,
         client: FirecrackerClient,
@@ -157,7 +208,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         firecrackerBinaryPath: String,
         jailer: SandboxJailerConfig,
         jailNewSandboxes: Bool,
-        jailerBlockedReason: String? = nil
+        jailerBlockedReason: String? = nil,
+        warmStartEnabled: Bool = true,
+        warmCacheBudgetBytes: Int64? = nil
     ) {
         self.logger = logger
         self.client = client
@@ -169,13 +222,28 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.jailerConfig = jailer
         self.jailNewSandboxes = jailNewSandboxes
         self.jailerBlockedReason = jailerBlockedReason
+        // Unjailed warm start cannot work (see `warmStartActive`); requesting
+        // it on an unjailed runtime silently degrades to cold boots.
+        self.warmStartActive = warmStartEnabled && jailNewSandboxes
+        self.warmCache = WarmSandboxSnapshotCache(rootPath: sandboxStoragePath + "/warm-snapshots")
+        self.warmCacheBudgetBytes = warmCacheBudgetBytes ?? Self.defaultWarmCacheBudgetBytes
+        let attributes = try? FileManager.default.attributesOfItem(atPath: firecrackerBinaryPath)
+        let binarySize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        let binaryMTime = (attributes?[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970) } ?? 0
+        self.firecrackerFingerprint = "\(binarySize)-\(binaryMTime)"
 
+        if warmStartEnabled && !jailNewSandboxes {
+            logger.info(
+                "Sandbox warm start is unavailable on unjailed runtimes (snapshots record absolute paths); sandboxes will cold-boot"
+            )
+        }
         logger.info(
             "Sandbox runtime initialized",
             metadata: [
                 "socketDirectory": .string(socketDirectory),
                 "guestImagePath": .string(guestImagePath),
                 "jailed": .stringConvertible(jailNewSandboxes),
+                "warmStart": .stringConvertible(warmStartActive),
             ])
     }
 
@@ -216,6 +284,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             "Creating sandbox",
             metadata: ["sandboxId": .string(sandboxId), "image": .string(spec.image)])
 
+        // Once per agent life: clear template debris a crash mid-build left
+        // behind (templates are invisible to manifest-driven orphan
+        // recovery). Deliberately NOT gated on `warmStartActive`: a previous
+        // life may have built templates before the operator disabled warm
+        // start — often *because* of a problem — and disabling the feature
+        // must not strand its leftovers.
+        if !warmTemplateSweepDone {
+            warmTemplateSweepDone = true
+            await sweepLeakedWarmTemplates()
+        }
+
         let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
 
         // Materialize the flattened container rootfs (cache-owned, read-only),
@@ -225,13 +304,130 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let materialized = try await imageService.materializeRootfs(
             image: spec.image, imageDigest: spec.imageDigest, credential: registryCredential)
 
-        // Stage the config drive the guest init reads at boot.
+        // Stage the config drive the guest init reads at boot. Every config
+        // drive is padded to one standard capacity so a warm restore (below)
+        // can stage a different sandbox's document at the exact device size
+        // the template snapshot recorded.
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
             guestConfig: materialized.guestConfig, spec: spec)
+        let configData = try configDrive.blockImage(
+            minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
-        // Stage the per-sandbox artifacts. Jailed (issue #425), everything the
+        // Warm start (issue #426): when a template snapshot for this exact
+        // (image, guest, machine shape) exists, provision by restoring it —
+        // the microVM comes up already booted to the held point, and
+        // `bootSandbox` launches the real workload into it. Any failure here
+        // falls back to the cold path; a config document too large for the
+        // standard capacity is cold-only (the device size would not match
+        // the template's).
+        let warmEligible =
+            warmStartActive && configData.count == SandboxConfigDrive.standardBlockImageBytes
+        let warmKey = warmSnapshotKey(
+            imageDigest: materialized.manifestDigest, guestImage: guestImage, spec: spec)
+        var warmMissed = true
+        if warmEligible, let warmEntry = warmCache.lookup(warmKey) {
+            warmMissed = false
+            do {
+                // The meta sidecar carries the template identity the held
+                // guest must echo at boot; an entry without one is unusable.
+                guard let meta = warmCache.loadMeta(warmKey) else {
+                    throw SandboxRuntimeError.warmStartFailed(
+                        "cache entry has no readable meta sidecar")
+                }
+                let vm = try await provisionFromWarmSnapshot(
+                    sandboxId: sandboxId, spec: spec, entry: warmEntry, configData: configData)
+                sandboxes[sandboxId] = Managed(
+                    spec: spec, rootfsPath: vm.rootfsPath, configPath: vm.configPath,
+                    vsockUdsPath: vm.vsockUdsPath, identityNonce: nonce, jail: vm.jail,
+                    registryCredential: registryCredential,
+                    warmHeldIdentity: (meta.templateId, meta.templateNonce),
+                    manager: vm.manager, lastExitCode: nil)
+                logger.info(
+                    "Sandbox created from warm snapshot",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "warmKey": .string(warmKey.directoryName),
+                    ])
+                return
+            } catch {
+                // A stale or corrupt entry (e.g. the Firecracker binary
+                // changed under an unchanged mtime) must not wedge creates:
+                // drop it and cold-boot.
+                logger.warning(
+                    "Warm-start provisioning failed; invalidating the cache entry and cold-booting",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "warmKey": .string(warmKey.directoryName),
+                        "error": .string(error.localizedDescription),
+                    ])
+                warmCache.invalidate(warmKey)
+                warmMissed = true
+            }
+        }
+
+        try await coldProvisionAndRegister(
+            sandboxId: sandboxId, spec: spec, credential: registryCredential,
+            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData)
+
+        // This image had no usable warm template: build one in the background
+        // so the next sandbox for the same (image, machine shape) warm-starts.
+        if warmEligible, warmMissed {
+            maybeStartWarmTemplateBuild(
+                key: warmKey, materialized: materialized, guestImage: guestImage, spec: spec)
+        }
+    }
+
+    /// Provision a cold microVM and register it as this sandbox. Shared by
+    /// the ordinary cold create path and the warm-launch demotion fallback,
+    /// so the two can never drift apart.
+    private func coldProvisionAndRegister(
+        sandboxId: String,
+        spec: SandboxSpec,
+        credential: RegistryCredential?,
+        materialized: MaterializedRootfs,
+        guestImage: SandboxGuestImage,
+        nonce: String,
+        configData: Data
+    ) async throws {
+        let vm = try await provisionColdMicroVM(
+            vmId: sandboxId, spec: spec, rootfsSourcePath: materialized.rootfsPath,
+            configData: configData, guestImage: guestImage)
+        sandboxes[sandboxId] = Managed(
+            spec: spec, rootfsPath: vm.rootfsPath, configPath: vm.configPath,
+            vsockUdsPath: vm.vsockUdsPath, identityNonce: nonce, jail: vm.jail,
+            registryCredential: credential, manager: vm.manager, lastExitCode: nil)
+        logger.info(
+            "Sandbox created",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "jailed": .stringConvertible(vm.jail != nil),
+            ])
+    }
+
+    /// The staged artifacts and live Firecracker session `provision*` hands
+    /// back for registration (or, for a warm template, direct use).
+    private struct ProvisionedMicroVM {
+        let rootfsPath: String
+        let configPath: String
+        let vsockUdsPath: String
+        let jail: SandboxJailPlan?
+        let manager: FirecrackerManager
+    }
+
+    /// Stage a microVM's artifacts and spawn + fully configure its
+    /// Firecracker process, leaving it in `Not started`. The cold-boot
+    /// staging path, shared between sandbox creation and warm-template
+    /// builds; cleans up after itself on failure.
+    private func provisionColdMicroVM(
+        vmId: String,
+        spec: SandboxSpec,
+        rootfsSourcePath: String,
+        configData: Data,
+        guestImage: SandboxGuestImage
+    ) async throws -> ProvisionedMicroVM {
+        // Stage the per-VM artifacts. Jailed (issue #425), everything the
         // microVM touches lives inside its chroot and the Firecracker API is
         // given in-jail paths; unjailed, the historical flat layout is kept.
         // `rootfsPath`/`configPath`/`vsockUdsPath` are always the *host* views.
@@ -245,7 +441,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if jailNewSandboxes {
             let jailer = jailerConfig
             let plan = SandboxJailPlan(
-                sandboxId: sandboxId, config: jailer, firecrackerBinaryPath: firecrackerBinaryPath)
+                sandboxId: vmId, config: jailer, firecrackerBinaryPath: firecrackerBinaryPath)
             jailPlan = plan
             // This id is being created fresh, so anything already under its
             // jail is a stale leftover from a crashed previous life.
@@ -256,9 +452,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
 
             rootfsPath = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
-            try FileManager.default.copyItem(atPath: materialized.rootfsPath, toPath: rootfsPath)
+            try await reflinkCopy(from: rootfsSourcePath, to: rootfsPath)
             configPath = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
-            try configDrive.blockImage().write(to: URL(fileURLWithPath: configPath))
+            try configData.write(to: URL(fileURLWithPath: configPath))
             // Kernel/initramfs are shared read-only artifacts: hard-link when
             // the chroot shares their filesystem, copy otherwise. They stay
             // root-owned (world-readable suffices, and chowning a hard link
@@ -291,28 +487,23 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 vsock: SandboxJailPlan.vsockUDSPathInJail
             )
 
-            let cgroups = jailerCgroups(guestMemoryBytes: spec.memoryBytes)
-            jailOptions = JailerOptions(
-                jailerBinaryPath: jailer.jailerBinaryPath,
-                chrootBaseDir: jailer.chrootBaseDir,
-                uid: plan.uid,
-                gid: plan.gid,
-                netnsPath: plan.netnsPath,
-                cgroupVersion: cgroups.version,
-                cgroups: cgroups.entries)
+            jailOptions = makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes)
         } else {
             jailPlan = nil
-            let dir = sandboxDirectory(sandboxId)
+            let dir = sandboxDirectory(vmId)
             try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
             rootfsPath = dir + "/rootfs.ext4"
+            // Unlink any previous incarnation's rootfs first: `cp --force`
+            // would truncate the existing inode in place, letting a stale
+            // process that still holds it open scribble on the new copy.
             if FileManager.default.fileExists(atPath: rootfsPath) {
                 try FileManager.default.removeItem(atPath: rootfsPath)
             }
-            try FileManager.default.copyItem(atPath: materialized.rootfsPath, toPath: rootfsPath)
+            try await reflinkCopy(from: rootfsSourcePath, to: rootfsPath)
             configPath = dir + "/config.img"
-            try configDrive.blockImage().write(to: URL(fileURLWithPath: configPath))
-            vsockUdsPath = vsockUDSPath(sandboxId)
+            try configData.write(to: URL(fileURLWithPath: configPath))
+            vsockUdsPath = vsockUDSPath(vmId)
             apiPaths = (
                 rootfs: rootfsPath, config: configPath,
                 kernel: guestImage.kernelPath, initrd: guestImage.initramfsPath,
@@ -326,7 +517,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // `vmAlreadyRunning`.
         let manager: FirecrackerManager
         do {
-            manager = try await client.createVM(vmId: sandboxId, jail: jailOptions)
+            manager = try await client.createVM(vmId: vmId, jail: jailOptions)
         } catch {
             if let plan = jailPlan {
                 await removeJailArtifacts(plan)
@@ -359,33 +550,121 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.configureVsock(
                 VsockConfig(guestCid: Self.guestCID, udsPath: apiPaths.vsock))
         } catch {
-            try? await client.destroyVM(vmId: sandboxId)
+            try? await client.destroyVM(vmId: vmId)
             if let plan = jailPlan {
                 await removeJailArtifacts(plan)
             }
             throw error
         }
 
-        sandboxes[sandboxId] = Managed(
-            spec: spec, rootfsPath: rootfsPath, configPath: configPath,
-            vsockUdsPath: vsockUdsPath, identityNonce: nonce, jail: jailPlan,
-            manager: manager, lastExitCode: nil)
+        return ProvisionedMicroVM(
+            rootfsPath: rootfsPath, configPath: configPath, vsockUdsPath: vsockUdsPath,
+            jail: jailPlan, manager: manager)
+    }
 
-        logger.info(
-            "Sandbox created",
-            metadata: [
-                "sandboxId": .string(sandboxId),
-                "jailed": .stringConvertible(jailPlan != nil),
-            ])
+    /// Provision a new sandbox by restoring the warm template snapshot (issue
+    /// #426): stage the jail with clones of the template's rootfs +
+    /// memory/vmstate and this sandbox's *own* config drive, then spawn +
+    /// load without resuming — the microVM lands in `Paused`, which
+    /// `bootSandbox` resumes and launches. Jailed-only by construction (see
+    /// `warmStartActive`): the snapshot's chroot-relative paths are what let
+    /// it load under a different sandbox's jail at all. Cleans up after
+    /// itself on failure so the caller can fall back to a cold provision.
+    private func provisionFromWarmSnapshot(
+        sandboxId: String,
+        spec: SandboxSpec,
+        entry: WarmSnapshotEntry,
+        configData: Data
+    ) async throws -> ProvisionedMicroVM {
+        guard jailNewSandboxes else {
+            throw SandboxRuntimeError.warmStartFailed(
+                "warm restore requires the jailer (snapshots record chroot-relative paths)")
+        }
+        let plan = SandboxJailPlan(
+            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        do {
+            try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+            try FileManager.default.createDirectory(
+                atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
+            // Kernel/initramfs are deliberately absent: a snapshot load
+            // restores guest memory directly and never reads the boot
+            // source (the restore-in-place path established this layout).
+            let rootfsHost = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            try await reflinkCopy(from: entry.rootfsPath, to: rootfsHost)
+            let configHost = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            try configData.write(to: URL(fileURLWithPath: configHost))
+            let snapshotDirHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+            try FileManager.default.createDirectory(
+                atPath: snapshotDirHost, withIntermediateDirectories: true)
+            // Copied (reflink where the filesystem supports it), not
+            // hard-linked: the chown below would chown a link's shared inode
+            // — the cache entry itself — and hard-linking would also bet on
+            // Firecracker never opening the memory backend for write.
+            // Sparse-aware copies keep the cost proportional to the
+            // template's touched pages; revisit as an optimization once
+            // load semantics are pinned down on a KVM host.
+            try await reflinkCopy(
+                from: entry.memoryPath,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail))
+            try await reflinkCopy(
+                from: entry.vmstatePath,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail))
+            for path in [
+                plan.jailRoot, plan.jailRoot + "/run", rootfsHost, configHost, snapshotDirHost,
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+            ] {
+                try chownPath(path, uid: plan.uid, gid: plan.gid)
+            }
+            try await createNetns(plan.netnsName)
+
+            let manager = try await client.restoreVM(
+                vmId: sandboxId, jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
+                snapshot: SnapshotLoadConfig(
+                    snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                    resumeVM: false))
+            return ProvisionedMicroVM(
+                rootfsPath: rootfsHost, configPath: configHost,
+                vsockUdsPath: plan.vsockUDSHostPath, jail: plan, manager: manager)
+        } catch {
+            try? await client.destroyVM(vmId: sandboxId)
+            await removeJailArtifacts(plan)
+            throw error
+        }
+    }
+
+    /// The jailer options for one microVM's jail plan — shared by cold
+    /// provisioning, warm restores, and checkpoint restores so isolation
+    /// settings can never drift between the three spawn paths.
+    private func makeJailerOptions(plan: SandboxJailPlan, guestMemoryBytes: Int64) -> JailerOptions {
+        let cgroups = jailerCgroups(guestMemoryBytes: guestMemoryBytes)
+        return JailerOptions(
+            jailerBinaryPath: jailerConfig.jailerBinaryPath,
+            chrootBaseDir: jailerConfig.chrootBaseDir,
+            uid: plan.uid,
+            gid: plan.gid,
+            netnsPath: plan.netnsPath,
+            cgroupVersion: cgroups.version,
+            cgroups: cgroups.entries)
     }
 
     func bootSandbox(sandboxId: String) async throws {
+        try await bootSandbox(sandboxId: sandboxId, allowWarmLaunch: true)
+    }
+
+    /// `allowWarmLaunch: false` is the post-demotion retry: the freshly
+    /// cold-provisioned guest must answer with its own identity, and a
+    /// mismatch is terminal rather than another warm-launch attempt — a
+    /// structural bound on the demote/boot recursion.
+    private func bootSandbox(sandboxId: String, allowWarmLaunch: Bool) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
+        let bootStarted = Date()
 
         let info = try await managed.manager.getInstanceInfo()
         switch info.state {
@@ -401,23 +680,192 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         // Wait for the guest control agent to answer, so "booted" means the
         // guest is actually up. A miss here is transient — the reconciler
-        // re-drives boot on the next sync.
-        let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
-        guard case .pong(let echoedId, let echoedNonce) = response else {
-            throw SandboxControlError.malformedResponse("expected pong, got \(response)")
+        // re-drives boot on the next sync. `get_status` rather than `ping`:
+        // the workload state matters too, because a guest can be `held`
+        // regardless of which identity it echoes (see below).
+        let response = try await sendControl(.getStatus, udsPath: managed.vsockUdsPath, timeout: 20)
+        guard case .status(let echoedId, let echoedNonce, let guestState, _) = response else {
+            throw SandboxControlError.malformedResponse("expected status, got \(response)")
         }
-        // Confirm it is this sandbox's current generation answering, not a stale
-        // process still bound to the deterministic vsock UDS.
-        guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
-            throw SandboxControlError.identityMismatch(
-                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
+        let identityOK = identityMatches(
+            response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+        let mismatch = SandboxControlError.identityMismatch(
+            expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
+
+        var needsWarmLaunch = false
+        if identityOK {
+            // A held guest already echoing this sandbox's identity is an
+            // interrupted launch (delivered, never completed — e.g. an agent
+            // crash mid-flow with an older guest that swapped identity
+            // early). Without re-launching it here the sandbox would report
+            // `starting` forever while boot kept "succeeding".
+            needsWarmLaunch = guestState == .held
+        } else {
+            // Not this sandbox's identity. One legitimate way that happens: a
+            // warm-provisioned guest still holding the *template's* identity,
+            // waiting for its launch (issue #426). Anything else is the
+            // classic stale-generation problem and must fail the boot.
+            guard allowWarmLaunch, guestState == .held else { throw mismatch }
+            // Bind the held responder to the template this sandbox was
+            // provisioned from, so a workload can never be launched into
+            // some other process answering on the deterministic UDS. For an
+            // adopted sandbox the binding did not survive the restart; the
+            // template id shape is the remaining gate.
+            if let expected = managed.warmHeldIdentity {
+                guard echoedId == expected.templateId, echoedNonce == expected.templateNonce else {
+                    throw SandboxControlError.identityMismatch(
+                        expected: "\(expected.templateId)/\(expected.templateNonce)",
+                        got: "\(echoedId)/\(echoedNonce)")
+                }
+            } else {
+                guard echoedId.hasPrefix("warm-template-") else { throw mismatch }
+            }
+            needsWarmLaunch = true
         }
-        logger.info("Sandbox guest agent healthy", metadata: ["sandboxId": .string(sandboxId)])
+
+        var bootPath = "cold"
+        if needsWarmLaunch {
+            // A demoted (freshly cold-provisioned) guest can never be held;
+            // reaching here without warm launch allowed means the demotion
+            // itself produced a held guest — fail rather than loop.
+            guard allowWarmLaunch else { throw mismatch }
+            do {
+                try await launchWarmHeldGuest(sandboxId: sandboxId, managed: managed)
+                sandboxes[sandboxId]?.warmHeldIdentity = nil
+                bootPath = "warm"
+            } catch {
+                // A warm launch that fails must not wedge convergence on this
+                // sandbox: demote it to a freshly provisioned cold microVM
+                // and boot that once, warm launch disallowed.
+                logger.warning(
+                    "Warm launch failed; demoting the sandbox to a cold boot",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "error": .string(error.localizedDescription),
+                    ])
+                try await demoteWarmSandboxToCold(sandboxId)
+                try await bootSandbox(sandboxId: sandboxId, allowWarmLaunch: false)
+                return
+            }
+        }
+        logger.info(
+            "Sandbox guest agent healthy",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "bootPath": .string(bootPath),
+                "bootMillis": .stringConvertible(Int(Date().timeIntervalSince(bootStarted) * 1000)),
+            ])
 
         // The guest is confirmed up: ship its workload output from here on
         // (resuming from the last seq this host saw, so a pause/resume cycle
         // doesn't drop or duplicate lines).
         startLogFollow(sandboxId: sandboxId)
+    }
+
+    /// Launch the real workload into a warm-held guest (issue #426): resync
+    /// the wall clock (frozen at template-snapshot time), deliver the
+    /// sandbox's identity + process + fresh entropy via `launch`, and verify
+    /// the guest now answers as this sandbox. The launch payload is
+    /// reconstructed from the staged config drive, so the flow survives agent
+    /// restarts between create and boot with no extra persisted state.
+    private func launchWarmHeldGuest(sandboxId: String, managed: Managed) async throws {
+        guard let data = FileManager.default.contents(atPath: managed.configPath),
+            let drive = try? SandboxConfigDrive.decode(fromBlockImage: data),
+            drive.sandboxId == sandboxId
+        else {
+            throw SandboxRuntimeError.warmStartFailed(
+                "staged config drive at \(managed.configPath) is unreadable; cannot reconstruct the launch payload"
+            )
+        }
+
+        // Clock first, launch second: the workload should start with a sane
+        // wall clock. Best-effort, mirroring the restore-in-place flow.
+        await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
+
+        // Fresh randomness so N sandboxes launched from one template do not
+        // share the snapshot's frozen RNG pool (best-effort until #427's
+        // proper reseed).
+        var generator = SystemRandomNumberGenerator()
+        var entropy = Data(capacity: 32)
+        for _ in 0..<4 {
+            withUnsafeBytes(of: generator.next()) { entropy.append(contentsOf: $0) }
+        }
+        let launch = SandboxControlProtocol.LaunchRequest(
+            sandboxId: sandboxId, identityNonce: drive.identityNonce,
+            imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy)
+        let response = try await sendControl(
+            .launch(launch), udsPath: managed.vsockUdsPath, timeout: 20)
+        guard case .launched = response else {
+            throw SandboxControlError.malformedResponse("expected launched, got \(response)")
+        }
+
+        let verify = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 10)
+        guard identityMatches(verify, sandboxId: sandboxId, expectedNonce: drive.identityNonce) else {
+            throw SandboxControlError.identityMismatch(
+                expected: "\(sandboxId)/\(drive.identityNonce)", got: "\(verify)")
+        }
+    }
+
+    /// Replace a warm-provisioned sandbox whose launch failed with a freshly
+    /// cold-provisioned one under the same id and spec.
+    ///
+    /// The `checkpointing` guard makes the multi-await teardown/rebuild
+    /// atomic with respect to the rest of the actor's surface — without it,
+    /// a delete interleaving the awaits would complete against the removed
+    /// entry and the demotion would then resurrect a deleted sandbox. All
+    /// fallible acquisition (guest image, rootfs re-materialization — with
+    /// the create-time credential, since the rootfs cache may have evicted a
+    /// private image by now) happens *before* the old microVM is destroyed,
+    /// so a failure leaves the held guest intact for the next boot retry.
+    private func demoteWarmSandboxToCold(_ sandboxId: String) async throws {
+        guard let managed = sandboxes[sandboxId] else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        checkpointing.insert(sandboxId)
+        defer { checkpointing.remove(sandboxId) }
+
+        let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
+        let materialized = try await imageService.materializeRootfs(
+            image: managed.spec.image, imageDigest: managed.spec.imageDigest,
+            credential: managed.registryCredential)
+        let nonce = UUID().uuidString
+        let configDrive = SandboxConfigDrive(
+            sandboxId: sandboxId, identityNonce: nonce,
+            guestConfig: materialized.guestConfig, spec: managed.spec)
+        let configData = try configDrive.blockImage(
+            minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
+
+        try? await client.destroyVM(vmId: sandboxId)
+        if let plan = managed.jail {
+            await removeJailArtifacts(plan)
+        }
+        removeArtifacts(sandboxId)
+        sandboxes.removeValue(forKey: sandboxId)
+
+        try await coldProvisionAndRegister(
+            sandboxId: sandboxId, spec: managed.spec, credential: managed.registryCredential,
+            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData)
+    }
+
+    /// Best-effort wall-clock resync after a snapshot restore or warm
+    /// launch: the guest's CLOCK_REALTIME froze at snapshot time. Guests
+    /// that predate `sync_clock` answer `error`, which is logged and
+    /// tolerated. Shared by restore-in-place and the warm-launch path.
+    private func resyncGuestClock(sandboxId: String, udsPath: String) async {
+        let unixNanos = Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        do {
+            _ = try await sendControl(.syncClock(unixNanos: unixNanos), udsPath: udsPath, timeout: 5)
+        } catch {
+            logger.warning(
+                "Guest did not accept clock resync (older guest image?)",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     func shutdownSandbox(sandboxId: String) async throws {
@@ -637,6 +1085,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard info.state != .notStarted else {
             throw SandboxRuntimeError.notSnapshottable("the sandbox has never been booted")
         }
+        // A warm-provisioned sandbox that has not launched yet is the same
+        // lifecycle position as never-booted, even though its microVM sits
+        // paused: the guest memory still carries the *template's* identity,
+        // so a checkpoint taken now could never pass restore's identity
+        // check. (The instance-state guard above cannot see this — a
+        // pre-launch warm sandbox is `Paused`, exactly like a stopped one.)
+        guard managed.warmHeldIdentity == nil else {
+            throw SandboxRuntimeError.notSnapshottable(
+                "the sandbox has never been booted (warm-provisioned, awaiting launch)")
+        }
 
         logger.info(
             "Checkpointing sandbox",
@@ -678,34 +1136,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
 
         do {
-            if let plan = managed.jail {
-                // A jailed Firecracker writes inside its chroot: stage the
-                // snapshot files there, then move them out to the archive.
-                let stagingHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
-                try? FileManager.default.removeItem(atPath: stagingHost)
-                try FileManager.default.createDirectory(
-                    atPath: stagingHost, withIntermediateDirectories: true)
-                try chownPath(stagingHost, uid: plan.uid, gid: plan.gid)
-                try await managed.manager.createSnapshot(
-                    SnapshotCreateConfig(
-                        snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
-                        memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                        snapshotType: .full))
-                try moveReplacingItem(
-                    from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
-                    to: archiveMemory)
-                try moveReplacingItem(
-                    from: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
-                    to: archiveVmstate)
-                try? FileManager.default.removeItem(atPath: stagingHost)
-            } else {
-                // Unjailed, Firecracker can write the archive files directly.
-                try await managed.manager.createSnapshot(
-                    SnapshotCreateConfig(
-                        snapshotPath: archiveVmstate,
-                        memFilePath: archiveMemory,
-                        snapshotType: .full))
-            }
+            try await captureSnapshot(
+                manager: managed.manager, jail: managed.jail,
+                memoryTarget: archiveMemory, vmstateTarget: archiveVmstate)
 
             // Copy the rootfs (and the tiny config drive, which a jailed
             // restore re-stages the chroot from) while the guest is still
@@ -817,17 +1250,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // crash-swept host (reused when it exists).
             try await createNetns(plan.netnsName)
 
-            let cgroups = jailerCgroups(guestMemoryBytes: managed.spec.memoryBytes)
-            let jailOptions = JailerOptions(
-                jailerBinaryPath: jailerConfig.jailerBinaryPath,
-                chrootBaseDir: jailerConfig.chrootBaseDir,
-                uid: plan.uid,
-                gid: plan.gid,
-                netnsPath: plan.netnsPath,
-                cgroupVersion: cgroups.version,
-                cgroups: cgroups.entries)
             newManager = try await client.restoreVM(
-                vmId: sandboxId, jail: jailOptions,
+                vmId: sandboxId,
+                jail: makeJailerOptions(plan: plan, guestMemoryBytes: managed.spec.memoryBytes),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
@@ -866,19 +1291,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
 
         // Best-effort clock resync: the restored guest's wall clock froze at
-        // checkpoint time. Guests that predate `sync_clock` answer `error`.
-        let unixNanos = Int64(Date().timeIntervalSince1970 * 1_000_000_000)
-        do {
-            _ = try await sendControl(
-                .syncClock(unixNanos: unixNanos), udsPath: managed.vsockUdsPath, timeout: 5)
-        } catch {
-            logger.warning(
-                "Restored sandbox guest did not accept clock resync (older guest image?)",
-                metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
+        // checkpoint time.
+        await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
 
         startLogFollow(sandboxId: sandboxId)
         logger.info(
@@ -906,6 +1320,285 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Sandbox snapshot deleted",
             metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+    }
+
+    /// Write a paused microVM's memory + vmstate to the given host paths.
+    /// Jailed, Firecracker can only write inside its chroot, so the files are
+    /// staged in the in-jail snapshot directory and moved out; unjailed they
+    /// are written directly. Shared between sandbox checkpoints and warm
+    /// template builds (issue #426).
+    private func captureSnapshot(
+        manager: FirecrackerManager, jail: SandboxJailPlan?,
+        memoryTarget: String, vmstateTarget: String
+    ) async throws {
+        if let plan = jail {
+            let stagingHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+            try? FileManager.default.removeItem(atPath: stagingHost)
+            try FileManager.default.createDirectory(
+                atPath: stagingHost, withIntermediateDirectories: true)
+            try chownPath(stagingHost, uid: plan.uid, gid: plan.gid)
+            try await manager.createSnapshot(
+                SnapshotCreateConfig(
+                    snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                    snapshotType: .full))
+            try moveReplacingItem(
+                from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                to: memoryTarget)
+            try moveReplacingItem(
+                from: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+                to: vmstateTarget)
+            try? FileManager.default.removeItem(atPath: stagingHost)
+        } else {
+            try await manager.createSnapshot(
+                SnapshotCreateConfig(
+                    snapshotPath: vmstateTarget,
+                    memFilePath: memoryTarget,
+                    snapshotType: .full))
+        }
+    }
+
+    // MARK: - Warm start (issue #426)
+
+    /// The warm-snapshot cache key for one (image, guest, machine shape)
+    /// combination on this host. Templates are always built with
+    /// standard-capacity config drives, and only standard-capacity sandboxes
+    /// are warm-eligible, so the capacity component is the constant.
+    private func warmSnapshotKey(
+        imageDigest: String, guestImage: SandboxGuestImage, spec: SandboxSpec
+    ) -> WarmSnapshotKey {
+        WarmSnapshotKey(
+            imageDigest: imageDigest,
+            guestVersion: guestImage.version,
+            arch: guestImage.arch,
+            firecrackerFingerprint: firecrackerFingerprint,
+            vcpus: spec.cpus,
+            memoryMiB: spec.memoryBytes / (1024 * 1024),
+            configCapacityBytes: SandboxConfigDrive.standardBlockImageBytes,
+            jailed: jailNewSandboxes)
+    }
+
+    /// Kick off a background warm-template build for `key`. Skipped — not
+    /// failed — when any build is already running (one at a time host-wide:
+    /// each build boots an unaccounted, guest-memory-sized microVM) or when
+    /// this key failed within the retry interval; a later create re-triggers.
+    private func maybeStartWarmTemplateBuild(
+        key: WarmSnapshotKey, materialized: MaterializedRootfs, guestImage: SandboxGuestImage,
+        spec: SandboxSpec
+    ) {
+        guard warmStartActive, warmBuildsInFlight.isEmpty else { return }
+        let token = key.directoryName
+        if let failedAt = warmBuildFailures[token],
+            Date().timeIntervalSince(failedAt) < Self.warmBuildRetryInterval
+        {
+            return
+        }
+        warmBuildsInFlight.insert(token)
+        Task {
+            await self.buildWarmTemplate(
+                key: key, materialized: materialized, guestImage: guestImage, spec: spec)
+        }
+    }
+
+    /// Boot a throwaway template microVM to the guest's held point, snapshot
+    /// it, and publish the artifacts into the warm cache. The template rides
+    /// the exact cold-provision path a real sandbox would, with `warm_hold`
+    /// set in its config drive so the guest parks instead of launching a
+    /// workload. Failures are logged and remembered, never surfaced — warm
+    /// start is an optimization, and sandboxes keep cold-booting without it.
+    private func buildWarmTemplate(
+        key: WarmSnapshotKey, materialized: MaterializedRootfs, guestImage: SandboxGuestImage,
+        spec: SandboxSpec
+    ) async {
+        defer { warmBuildsInFlight.remove(key.directoryName) }
+        let templateId = "warm-template-" + UUID().uuidString.lowercased()
+        let started = Date()
+        logger.info(
+            "Building warm-start template snapshot",
+            metadata: [
+                "warmKey": .string(key.directoryName),
+                "image": .string(spec.image),
+                "templateId": .string(templateId),
+            ])
+
+        var vm: ProvisionedMicroVM?
+        do {
+            let nonce = UUID().uuidString
+            let configDrive = SandboxConfigDrive(
+                sandboxId: templateId,
+                identityNonce: nonce,
+                imageConfig: SandboxConfigDrive.ImageConfig(
+                    env: materialized.guestConfig.env,
+                    entrypoint: materialized.guestConfig.entrypoint,
+                    cmd: materialized.guestConfig.cmd,
+                    workingDir: materialized.guestConfig.workingDir ?? "",
+                    user: materialized.guestConfig.user ?? ""),
+                overrides: SandboxConfigDrive.ProcessOverrides(
+                    entrypoint: nil, cmd: nil, env: [:], workdir: nil, user: nil),
+                warmHold: true)
+            let configData = try configDrive.blockImage(
+                minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
+            guard configData.count == SandboxConfigDrive.standardBlockImageBytes else {
+                throw SandboxRuntimeError.warmStartFailed(
+                    "the image config exceeds the standard config-drive capacity")
+            }
+
+            let provisioned = try await provisionColdMicroVM(
+                vmId: templateId, spec: spec, rootfsSourcePath: materialized.rootfsPath,
+                configData: configData, guestImage: guestImage)
+            vm = provisioned
+            try await provisioned.manager.start()
+
+            // The guest must actually honor `warm_hold`: an older guest
+            // ignores the unknown field and execs the image's default
+            // command — snapshotting that would capture a running workload
+            // under the template's identity.
+            let status = try await sendControl(
+                .getStatus, udsPath: provisioned.vsockUdsPath, timeout: 30)
+            guard case .status(let id, let echoedNonce, .held, _) = status,
+                id == templateId, echoedNonce == nonce
+            else {
+                throw SandboxRuntimeError.warmStartFailed(
+                    "the guest did not enter the held state (guest image predates warm start?)")
+            }
+
+            try await provisioned.manager.pause()
+
+            let staging = try warmCache.makeStagingDirectory()
+            do {
+                try await captureSnapshot(
+                    manager: provisioned.manager, jail: provisioned.jail,
+                    memoryTarget: staging + "/" + WarmSandboxSnapshotCache.memoryFile,
+                    vmstateTarget: staging + "/" + WarmSandboxSnapshotCache.vmstateFile)
+                // The template's rootfs AS OF the snapshot: the held guest
+                // has it mounted, so restores must clone exactly these bytes
+                // (the pristine image would no longer match the page cache).
+                try await reflinkCopy(
+                    from: provisioned.rootfsPath,
+                    to: staging + "/" + WarmSandboxSnapshotCache.rootfsFile)
+                let info = try await provisioned.manager.getInstanceInfo()
+                let meta = WarmSandboxSnapshotCache.Meta(
+                    templateId: templateId,
+                    templateNonce: nonce,
+                    imageDigest: key.imageDigest,
+                    guestVersion: key.guestVersion,
+                    firecrackerVersion: info.vmlinuxVersion,
+                    createdAtUnixSeconds: Int64(Date().timeIntervalSince1970))
+                try JSONEncoder().encode(meta).write(
+                    to: URL(fileURLWithPath: staging + "/" + WarmSandboxSnapshotCache.metaFile))
+            } catch {
+                try? FileManager.default.removeItem(atPath: staging)
+                throw error
+            }
+            try warmCache.publish(stagingDirectory: staging, for: key)
+
+            await teardownWarmTemplate(templateId: templateId, vm: vm)
+            warmBuildFailures.removeValue(forKey: key.directoryName)
+            // The sweep walks and deletes multi-GB entries; run it off the
+            // actor so it cannot stall sandbox operations. Sweep twice: once
+            // now, and once after DiskCacheLRU's recent-use grace window has
+            // passed — a burst of builds can land the cache over budget with
+            // every entry still grace-protected, and without the re-sweep
+            // nothing would enforce the cap until the next publish.
+            let cache = warmCache
+            let budget = warmCacheBudgetBytes
+            let sweepLogger = logger
+            Task.detached(priority: .utility) {
+                cache.sweep(budgetBytes: budget, logger: sweepLogger)
+                let regraceDelay = DiskCacheLRU.defaultGraceInterval + 60
+                try? await Task.sleep(nanoseconds: UInt64(regraceDelay * 1_000_000_000))
+                cache.sweep(budgetBytes: budget, logger: sweepLogger)
+            }
+            logger.info(
+                "Warm-start template snapshot ready",
+                metadata: [
+                    "warmKey": .string(key.directoryName),
+                    "buildMillis": .stringConvertible(Int(Date().timeIntervalSince(started) * 1000)),
+                ])
+        } catch {
+            warmBuildFailures[key.directoryName] = Date()
+            logger.warning(
+                "Warm-start template build failed; sandboxes for this image cold-boot until a later retry",
+                metadata: [
+                    "warmKey": .string(key.directoryName),
+                    "error": .string(error.localizedDescription),
+                ])
+            await teardownWarmTemplate(templateId: templateId, vm: vm)
+        }
+    }
+
+    /// Remove template debris a crash mid-build left behind: destroy any
+    /// still-running template microVM (best-effort adopt-then-destroy — the
+    /// self-describing `warm-template-` id prefix is what makes this safe
+    /// without manifest bookkeeping), then its jail, storage, and socket
+    /// leftovers. Templates are jailed-only, so only the jail layout is
+    /// probed for live processes.
+    private func sweepLeakedWarmTemplates() async {
+        let fileManager = FileManager.default
+        // Staging directories abandoned by a crash are excluded from the
+        // budget sweep, so this is their only cleanup path — and it must not
+        // age-gate: this call runs synchronously before this method's first
+        // suspension, and the sweep precedes any template build this process
+        // can start (first create, before maybeStartWarmTemplateBuild), so
+        // no staging directory can be live here regardless of age. A restart
+        // shortly after a crash would otherwise skip the debris forever.
+        warmCache.removeAbandonedStaging(olderThan: 0)
+        var leaked: Set<String> = []
+        if let names = try? fileManager.contentsOfDirectory(atPath: sandboxStoragePath) {
+            leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
+        }
+        let jailBase =
+            jailerConfig.chrootBaseDir + "/" + (firecrackerBinaryPath as NSString).lastPathComponent
+        if let names = try? fileManager.contentsOfDirectory(atPath: jailBase) {
+            leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
+        }
+        for templateId in leaked.sorted() {
+            logger.warning(
+                "Sweeping leaked warm-template artifacts from a previous agent life",
+                metadata: ["templateId": .string(templateId)])
+            let plan = SandboxJailPlan(
+                sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+            let socketPath = JailerOptions.socketPath(
+                chrootBaseDir: jailerConfig.chrootBaseDir,
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                vmId: templateId)
+            if fileManager.fileExists(atPath: socketPath),
+                (try? await client.adoptVM(
+                    vmId: templateId,
+                    jail: JailerOptions(
+                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
+                        chrootBaseDir: jailerConfig.chrootBaseDir,
+                        uid: plan.uid, gid: plan.gid))) != nil
+            {
+                try? await client.destroyVM(vmId: templateId)
+            }
+            await teardownWarmTemplate(templateId: templateId, vm: nil)
+        }
+        // The previous life may also have left the cache over budget (its
+        // post-publish sweeps could have been cut short); re-enforce once,
+        // off-actor.
+        let cache = warmCache
+        let budget = warmCacheBudgetBytes
+        let sweepLogger = logger
+        Task.detached(priority: .utility) {
+            cache.sweep(budgetBytes: budget, logger: sweepLogger)
+        }
+    }
+
+    /// Best-effort teardown of a template microVM and its staging artifacts.
+    /// The jail layout is derived from the template id rather than trusting
+    /// `vm`: a provisioning failure leaves `vm` nil with a partially staged
+    /// jail, and — template ids being random, never retried — nothing else
+    /// would ever clean it this agent life (the leak sweep already ran).
+    private func teardownWarmTemplate(templateId: String, vm: ProvisionedMicroVM?) async {
+        try? await client.destroyVM(vmId: templateId)
+        let plan =
+            vm?.jail
+            ?? SandboxJailPlan(
+                sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        await removeJailArtifacts(plan)
+        removeArtifacts(templateId)
+        try? FileManager.default.removeItem(atPath: vsockUDSPath(templateId))
     }
 
     /// `stat(2)` size of a file, 0 when unreadable (sizes are advisory —
@@ -1464,6 +2157,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 }
                 switch state {
                 case .starting:
+                    return .starting
+                case .held:
+                    // A warm-provisioned guest awaiting its launch (issue
+                    // #426): the microVM runs but the workload does not
+                    // exist yet — still converging toward running.
                     return .starting
                 case .running:
                     return .running

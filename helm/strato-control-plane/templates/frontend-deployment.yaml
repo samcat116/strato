@@ -46,6 +46,8 @@ spec:
               value: "3000"
             - name: STRATO_API_URL
               value: {{ .Values.frontend.env.STRATO_API_URL | default (printf "http://%s:%v" (include "strato-control-plane.fullname" .) .Values.service.port) | quote }}
+            - name: STRATO_GRAVATAR_ENABLED
+              value: {{ .Values.frontend.env.STRATO_GRAVATAR_ENABLED | quote }}
           {{- if .Values.frontend.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
