@@ -41,6 +41,22 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     let expiresAt: Date?
 }
 
+/// The answer to a reverse lookup.
+///
+/// Not a bare list, because a list cannot express "everyone" — see
+/// `openToAllAuthenticatedUsers`. Bundling the two makes the caveat impossible
+/// to read past.
+struct WhoCanResult: Content, Sendable {
+    let principals: [WhoCanEntry]
+    /// When true, the action needs no grant on this resource at all: every
+    /// authenticated user can perform it, so `principals` is *not* the whole
+    /// answer.
+    ///
+    /// Reported as a flag rather than by enumerating every user, which would
+    /// be unbounded and would go stale at the next signup.
+    let openToAllAuthenticatedUsers: Bool
+}
+
 /// The reverse index: "who can do action A on resource R?" (issue #478).
 ///
 /// Answered from `role_bindings` plus the resource tree — an ancestor walk and
@@ -61,7 +77,7 @@ enum WhoCanService {
     // MARK: - Reverse lookup
 
     /// Every principal that can perform `action` on `node`, with the reason.
-    static func whoCan(action: String, node: IAMNode, on db: any Database) async throws -> [WhoCanEntry] {
+    static func whoCan(action: String, node: IAMNode, on db: any Database) async throws -> WhoCanResult {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         var entries: [WhoCanEntry] = []
 
@@ -69,7 +85,31 @@ enum WhoCanService {
         entries += try await membershipEntries(action: action, chain: chain, on: db)
         entries += try await systemAdminEntries(on: db)
 
-        return dedupedAndSorted(entries)
+        return WhoCanResult(
+            principals: dedupedAndSorted(entries),
+            openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
+                action: action, node: node, on: db)
+        )
+    }
+
+    /// Whether `action` on `node` is open to every authenticated user with no
+    /// grant of any kind behind it.
+    ///
+    /// Today this is exactly one rule: a global network — a `LogicalNetwork`
+    /// with no project — is readable by anyone, because it is the fallback
+    /// every VM create can land on (`NetworkController.fetchNetworkWithPermission`).
+    /// The rule keys on the *project* alone, matching that handler; a
+    /// site-scoped network still has no project and so is still openly
+    /// readable, even though the tree walk can climb it to an org.
+    ///
+    /// At cutover this becomes an ordinary tier-1 platform `permit` and stops
+    /// being a special case here.
+    static func isOpenToAllAuthenticatedUsers(
+        action: String, node: IAMNode, on db: any Database
+    ) async throws -> Bool {
+        guard node.type == .network, action == "network:read" else { return false }
+        guard let network = try await LogicalNetwork.find(node.id, on: db) else { return false }
+        return network.$project.id == nil
     }
 
     /// Bindings along the chain whose role carries the action, plus the users
@@ -212,6 +252,12 @@ enum WhoCanService {
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {
         if principalType == .user, let user = try await User.find(principalID, on: db), user.isSystemAdmin {
+            return true
+        }
+
+        // Actions that need no grant at all short-circuit before any lookup —
+        // otherwise this reports `false` for a request the API would allow.
+        if try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db) {
             return true
         }
 

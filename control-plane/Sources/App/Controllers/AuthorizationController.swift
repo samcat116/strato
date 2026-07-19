@@ -147,6 +147,10 @@ struct AuthorizationController: RouteCollection {
         /// inherited grant explicable without a second round trip.
         let ancestors: [IAMNode]
         let principals: [WhoCanEntry]
+        /// When true, `principals` is not the whole answer — every
+        /// authenticated user can perform this action here. See
+        /// `WhoCanResult`.
+        let openToAllAuthenticatedUsers: Bool
     }
 
     /// POST /api/authorization/who-can
@@ -167,13 +171,14 @@ struct AuthorizationController: RouteCollection {
         try await Self.requirePolicyRead(on: node, caller: user, req: req)
 
         let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
-        let principals = try await WhoCanService.whoCan(action: payload.action, node: node, on: req.db)
+        let result = try await WhoCanService.whoCan(action: payload.action, node: node, on: req.db)
 
         return WhoCanResponse(
             resource: node,
             action: payload.action,
             ancestors: ancestors,
-            principals: principals
+            principals: result.principals,
+            openToAllAuthenticatedUsers: result.openToAllAuthenticatedUsers
         )
     }
 
