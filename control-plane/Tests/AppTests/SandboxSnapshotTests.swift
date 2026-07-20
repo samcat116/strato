@@ -1084,7 +1084,12 @@ final class SandboxSnapshotTests {
 
                 let snapshot = try await seedExportedSnapshot(
                     app: app, user: user, sandbox: sandbox, agentId: "agent-a")
-                let exportedAt = try #require(snapshot.exportedAt)
+                // Compare stamps that both round-tripped through the
+                // database: the in-memory Date carries sub-second precision
+                // the datetime column truncates, so comparing it against a
+                // later DB read fails spuriously.
+                let seeded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let exportedAt = try #require(seeded.exportedAt)
 
                 // One artifact of a re-export lands, then the run dies. The
                 // snapshot must still be exported: the objects are unchanged

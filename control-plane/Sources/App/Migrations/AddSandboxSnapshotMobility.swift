@@ -16,8 +16,12 @@ struct AddSandboxSnapshotMobility: AsyncMigration {
         try await database.schema(SandboxSnapshot.schema)
             .field("exported_at", .datetime)
             .update()
+        // `.array(of: .json)`, not `.json`: the model property is a Swift
+        // array, and Fluent binds `[T]` as a Postgres array (`jsonb[]`) — a
+        // scalar JSONB column rejects every save (the `agents.hypervisors`
+        // precedent). SQLite stores either shape as JSON text.
         try await database.schema(SandboxSnapshot.schema)
-            .field("exported_artifacts", .json)
+            .field("exported_artifacts", .array(of: .json))
             .update()
         try await database.schema(SandboxSnapshot.schema)
             .field("cpu_template", .string)

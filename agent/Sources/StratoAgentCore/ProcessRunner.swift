@@ -142,6 +142,21 @@ public enum ProcessRunner {
         async let stderrData = drain(fd: stderrFD, deadline: drainDeadline)
 
         let (out, err) = await (stdoutData, stderrData)
+
+        // The timed-out path must not wait unboundedly for the termination
+        // handler. On Linux, corelibs-foundation detects exit through an
+        // internal descriptor the child can pass on: a grandchild that
+        // inherited it holds the handler hostage until *it* exits (observed:
+        // `sh -c "sleep 60"` — sh dies to SIGKILL at once, but its handler
+        // fires only when the orphaned sleep ends). This path throws without
+        // ever reading `terminationStatus`, so it does not need the handler;
+        // the bounded wait just keeps bookkeeping tidy when the kill worked.
+        if expired.isTripped, let timeout {
+            _ = await exited.wait(upTo: exitObservationGrace)
+            throw ProcessTimedOutError(
+                executable: executableURL.lastPathComponent, timeout: timeout)
+        }
+
         await waitForExit(exited)
 
         if expired.isTripped, let timeout {
@@ -245,6 +260,11 @@ public enum ProcessRunner {
     /// Grace between SIGTERM and SIGKILL for a timed-out child.
     private static let signalEscalationGrace: Duration = .seconds(2)
 
+    /// How long the timed-out path waits for the termination handler before
+    /// throwing anyway — bounded because a grandchild can delay the handler
+    /// indefinitely on Linux (see the comment at the call site).
+    private static let exitObservationGrace: Duration = .seconds(3)
+
     /// Extra time the drains get beyond the child's own budget, so a child
     /// killed at its deadline still has its final bytes collected before the
     /// readers give up.
@@ -334,6 +354,18 @@ public enum ProcessRunner {
             lock.lock()
             defer { lock.unlock() }
             return signaled
+        }
+
+        /// Bounded wait for the signal, for the timed-out path only. Polling
+        /// rather than a second continuation: the latch holds exactly one
+        /// waiter, and a raced-and-abandoned continuation would leak.
+        func wait(upTo budget: Duration) async -> Bool {
+            let deadline = ContinuousClock.now + budget
+            while ContinuousClock.now < deadline {
+                if isSignaled { return true }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            return isSignaled
         }
 
         func wait() async {
