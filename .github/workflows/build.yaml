@@ -296,7 +296,7 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-sqlite.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
         # Run even if the SQLite leg failed (but not if the build did) —
@@ -324,7 +324,17 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This leg
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-postgres.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      # Surface the exact failing test (and its message) as a JUnit report,
+      # since the raw job log is dominated by per-request debug output.
+      - name: Upload control-plane test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-test-results
+          path: control-plane/test-results-*.xml
+          if-no-files-found: warn
 
   test-agent-macos:
     name: Build & Test Agent (macOS)
