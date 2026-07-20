@@ -1328,3 +1328,27 @@ export interface WorkloadIdentityOverview {
   /** Non-fatal problem reaching the SPIRE server, if any. */
   warning?: string;
 }
+
+// OAuth device grant (strato CLI) — issue #558
+
+/** A pending device authorization shown on the /activate approval page. */
+export interface PendingDeviceAuthorization {
+  userCode: string;
+  clientName: string;
+  scopes: string[];
+  requestIP?: string;
+  createdAt?: string;
+  expiresAt: string;
+}
+
+/** A CLI login session (access + refresh token pair) listed in Settings. */
+export interface CLISession {
+  id: string;
+  clientName: string;
+  scopes: string[];
+  accessTokenPrefix: string;
+  createdAt?: string;
+  lastUsedAt?: string;
+  lastUsedIP?: string;
+  refreshTokenExpiresAt: string;
+}
