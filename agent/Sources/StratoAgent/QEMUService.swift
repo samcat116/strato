@@ -315,8 +315,19 @@ actor QEMUService: HypervisorService {
 
         logger.info("Shutting down QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Graceful shutdown. Longer budget than the other control calls: the
-        // adopted-VM path polls for up to 30s before forcing termination.
+        // Verified shutdown first: qga's `guest-shutdown` tells the guest OS to
+        // power off directly, and its success confirms the guest actually heard
+        // us — unlike a fire-and-forget ACPI powerdown (issue #563). The QEMU
+        // process still exits when the guest powers off, so the reconciler
+        // observes `.shutdown` the same way. When qga is absent or unresponsive
+        // within its short budget, fall through to the universal ACPI path.
+        if await requestGuestShutdown(vmId: vmId) {
+            logger.info("QEMU VM shutdown initiated via guest agent", metadata: ["vmId": .string(vmId)])
+            return
+        }
+
+        // Graceful ACPI shutdown. Longer budget than the other control calls:
+        // the adopted-VM path polls for up to 30s before forcing termination.
         try await controlled("qmp-shutdown", vmId: vmId, seconds: 60) {
             try await vm.shutdown()
         }
@@ -402,6 +413,10 @@ actor QEMUService: HypervisorService {
         // Clean up the deterministic re-adoption QMP socket
         try? FileManager.default.removeItem(
             atPath: Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
+
+        // Clean up the deterministic guest-agent socket (issue #563)
+        try? FileManager.default.removeItem(
+            atPath: Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
@@ -560,6 +575,110 @@ actor QEMUService: HypervisorService {
     static func adoptionSocketPath(vmStoragePath: String, vmId: String) -> String {
         let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
         return (vmDir as NSString).appendingPathComponent("qmp.sock")
+    }
+
+    // MARK: - QEMU guest agent (qga, issue #563)
+
+    /// The deterministic QEMU-guest-agent socket every VM exposes. Derived only
+    /// from vmStoragePath+vmId, so it works for re-adopted VMs too.
+    static func qgaSocketPath(vmStoragePath: String, vmId: String) -> String {
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        return (vmDir as NSString).appendingPathComponent("qga.sock")
+    }
+
+    /// A `QGAClient` bound to `vmId`'s guest-agent socket, or nil when the
+    /// socket does not exist yet (VM not running, or no qga channel). qga is
+    /// unresponsive whenever the guest is not running the agent, so every call
+    /// through the returned client must be bounded by a `StageBudget`.
+    private func qgaClient(vmId: String) -> QGAClient? {
+        let socketPath = Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
+        let transport = NIOQGATransport(socketPath: socketPath, logger: logger)
+        return QGAClient(transport: transport, logger: logger)
+    }
+
+    /// Asks the guest to power itself off through qga. Returns whether the guest
+    /// agent actually answered (a *verified* shutdown initiation) — `false` when
+    /// qga is absent or unresponsive within its short budget, which tells
+    /// `shutdownVM` to fall back to the universal ACPI path.
+    private func requestGuestShutdown(vmId: String) async -> Bool {
+        guard let client = qgaClient(vmId: vmId) else { return false }
+        do {
+            try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qga-shutdown", onTimeout: .cancelAndWait
+            ) {
+                try await client.requestShutdown()
+            }
+            return true
+        } catch {
+            logger.debug(
+                "Guest agent did not answer shutdown; falling back to ACPI",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            return false
+        }
+    }
+
+    /// Freezes the attached guest's filesystems for an application-consistent
+    /// snapshot. Returns whether a freeze actually took (so the caller knows to
+    /// thaw). Best-effort: a qga-less or unresponsive guest yields `false` and a
+    /// crash-consistent snapshot, which is the pre-#563 behavior.
+    func freezeGuestFilesystems(vmId: String) async -> Bool {
+        guard let client = qgaClient(vmId: vmId) else { return false }
+        do {
+            let count = try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qga-fsfreeze", onTimeout: .cancelAndWait
+            ) {
+                try await client.freezeFilesystems()
+            }
+            logger.info(
+                "Froze guest filesystems for snapshot",
+                metadata: ["vmId": .string(vmId), "frozen": .stringConvertible(count)])
+            return true
+        } catch {
+            logger.warning(
+                "Guest fs-freeze unavailable; snapshot will be crash-consistent",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            return false
+        }
+    }
+
+    /// Thaws the attached guest's filesystems after a snapshot. Safe (and
+    /// intended) to call unconditionally once a freeze succeeded — a frozen
+    /// guest is worse than a crash-consistent snapshot, so a thaw failure is
+    /// logged loudly.
+    func thawGuestFilesystems(vmId: String) async {
+        guard let client = qgaClient(vmId: vmId) else { return }
+        do {
+            let count = try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qga-fsthaw", onTimeout: .cancelAndWait
+            ) {
+                try await client.thawFilesystems()
+            }
+            logger.info(
+                "Thawed guest filesystems after snapshot",
+                metadata: ["vmId": .string(vmId), "thawed": .stringConvertible(count)])
+        } catch {
+            logger.error(
+                "Guest fs-thaw failed; guest filesystems may remain frozen",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    /// Probes the guest agent for hostname and configured network interfaces.
+    /// Returns nil for a VM this service does not manage, one with no qga
+    /// socket, or a guest that did not answer within the short budget — all the
+    /// normal "no usable qga" outcomes, not errors.
+    func guestInfo(vmId: String) async -> GuestInfo? {
+        guard activeVMs[vmId] != nil, let client = qgaClient(vmId: vmId) else { return nil }
+        do {
+            return try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qga-guest-info", onTimeout: .abandon
+            ) {
+                try await client.collectGuestInfo()
+            }
+        } catch {
+            return nil
+        }
     }
 
     /// Re-adopts a VM whose QEMU process survived an agent restart by
@@ -948,6 +1067,19 @@ actor QEMUService: HypervisorService {
             "-device", "virtio-serial-pci,id=virtio-serial0",
             "-chardev", "socket,id=console0,path=\(consoleSocketPath),server=on,wait=off",
             "-device", "virtconsole,chardev=console0,id=virtconsole0",
+        ])
+
+        // QEMU guest agent channel on the same virtio-serial bus (issue #563).
+        // The well-known port name `org.qemu.guest_agent.0` is where qga inside
+        // the guest binds; the host end is a deterministic unix socket the agent
+        // reconnects to for verified shutdown, fs-freeze snapshots, and guest IP
+        // reporting — including for VMs re-adopted after an agent restart, since
+        // the path derives only from vmStoragePath+vmId.
+        let qgaSocketPath = Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        try? FileManager.default.removeItem(atPath: qgaSocketPath)  // stale socket from a dead process
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-chardev", "socket,id=qga0,path=\(qgaSocketPath),server=on,wait=off",
+            "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0",
         ])
 
         // Second QMP monitor at a deterministic path. QEMUManager's own QMP

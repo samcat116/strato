@@ -410,6 +410,14 @@ public struct ObservedVMState: Codable, Sendable {
     /// generation's work item runs) would fail a brand-new operation before
     /// the agent ever attempted it.
     public let failedGeneration: Int64?
+    /// What the QEMU guest agent reported about this VM's guest OS, if the
+    /// agent has a recent successful probe (issue #563). Nil for VMs without
+    /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
+    /// so `Optional` keeps this backward-decodable both ways (an older control
+    /// plane ignores the key; an older agent never sends it, which synthesized
+    /// `Codable` decodes to nil, not a failure). Purely informational: it never
+    /// participates in convergence.
+    public let guestInfo: GuestInfo?
 
     public init(
         vmId: UUID,
@@ -417,7 +425,8 @@ public struct ObservedVMState: Codable, Sendable {
         observedGeneration: Int64,
         convergencePhase: String? = nil,
         lastError: String? = nil,
-        failedGeneration: Int64? = nil
+        failedGeneration: Int64? = nil,
+        guestInfo: GuestInfo? = nil
     ) {
         self.vmId = vmId
         self.status = status
@@ -425,6 +434,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.guestInfo = guestInfo
     }
 }
 

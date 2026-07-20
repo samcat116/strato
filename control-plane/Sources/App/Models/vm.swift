@@ -44,6 +44,16 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    // Observed guest-agent (qga) state (issue #563). Purely informational and
+    // best-effort: nil until the agent's guest-info poll first sees a
+    // responsive qga on this VM. `qgaAvailable` records the positive liveness
+    // signal; `observedHostname` is the guest OS's own hostname.
+    @OptionalField(key: "qga_available")
+    var qgaAvailable: Bool?
+
+    @OptionalField(key: "observed_hostname")
+    var observedHostname: String?
+
     @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
@@ -261,11 +271,30 @@ struct InterfaceAddressResponse: Content {
     }
 }
 
+/// One address the guest actually configured on a NIC, as reported by the QEMU
+/// guest agent (issue #563). Distinct from `InterfaceAddressResponse` (the
+/// allocated address): no gateway, and `prefixLength` is optional since qga
+/// does not always supply one.
+struct ObservedInterfaceAddressResponse: Content {
+    let family: String
+    let address: String
+    let prefixLength: Int?
+
+    init(from address: VMInterfaceObservedAddress) {
+        self.family = address.family
+        self.address = address.address
+        self.prefixLength = address.prefixLength
+    }
+}
+
 struct NetworkInterfaceResponse: Content {
     let id: UUID?
     let network: String
     let macAddress: String
     let addresses: [InterfaceAddressResponse]
+    /// Guest-reported addresses (issue #563), distinct from the allocated
+    /// `addresses`. Empty until a guest agent reports them.
+    let observedAddresses: [ObservedInterfaceAddressResponse]
     let mtu: Int?
     let deviceName: String
     let orderIndex: Int
@@ -278,6 +307,10 @@ struct NetworkInterfaceResponse: Content {
         self.addresses = (nic.$addresses.value ?? [])
             .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
             .map(InterfaceAddressResponse.init)
+        // `.value ?? []` tolerates callers that didn't eager-load the children.
+        self.observedAddresses = (nic.$observedAddresses.value ?? [])
+            .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
+            .map(ObservedInterfaceAddressResponse.init)
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
         self.orderIndex = nic.orderIndex
@@ -300,6 +333,11 @@ struct VMDetailResponse: Content {
     let disk: Int64
     let diskFormatted: String
     let networkInterfaces: [NetworkInterfaceResponse]
+    /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
+    /// agent's slow poll first sees a responsive qga; `observedHostname` is the
+    /// guest OS's own hostname when it reported one.
+    let qgaAvailable: Bool?
+    let observedHostname: String?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -323,6 +361,8 @@ struct VMDetailResponse: Content {
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map(NetworkInterfaceResponse.init)
+        self.qgaAvailable = vm.qgaAvailable
+        self.observedHostname = vm.observedHostname
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
     }

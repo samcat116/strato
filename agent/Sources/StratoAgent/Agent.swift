@@ -168,6 +168,19 @@ actor Agent {
     // report's view with stale observations (issue #516).
     private var observedReportEpoch: UInt64 = 0
 
+    // Last-known QEMU guest-agent info per VM (issue #563), refreshed off the
+    // hot path by a throttled slow poll and read verbatim into each
+    // `ObservedVMState`. Keeping the probe out of `sendObservedStateReport`
+    // means a qga round-trip (which routinely times out for a guest with no
+    // agent) never delays the report itself. Wholesale-replaced each refresh, so
+    // entries for gone or no-longer-running VMs prune themselves.
+    private var guestInfoCache: [String: GuestInfo] = [:]
+    /// When the guest-info cache was last refreshed, to throttle probing to the
+    /// slow-poll cadence regardless of how often reports/heartbeats fire.
+    private var lastGuestInfoRefresh: ContinuousClock.Instant?
+    /// Minimum spacing between guest-info refreshes.
+    private static let guestInfoRefreshInterval: Duration = .seconds(30)
+
     private let networkMode: NetworkMode?
     // Chassis-level OVN settings (ovn-remote/encap external_ids) the network
     // service bootstraps onto the local OVS at connect time.
@@ -1578,6 +1591,13 @@ actor Agent {
         }
         logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
 
+        // Refresh the guest-agent view on the slow-poll cadence before the
+        // report reads it (issue #563). Throttled and bounded, so most
+        // heartbeats skip it and a slow probe can never stall the beat.
+        if controlPlaneSupportsStateSync {
+            await refreshGuestInfoCacheIfDue()
+        }
+
         // On the same cadence, re-assert full observed state to a state-sync
         // control plane. The heartbeat keeps liveness/presence; the report is
         // the periodic correctness backstop for VM state (issue #260).
@@ -1602,6 +1622,60 @@ actor Agent {
             } catch {
                 logger.warning("Observed-state report exceeded its budget; skipping this round")
             }
+        }
+    }
+
+    /// Refreshes the guest-info cache for running QEMU VMs, but only once the
+    /// slow-poll interval has elapsed. Probes run concurrently (each bounded
+    /// inside `QEMUService`), and the whole pass is bounded here so a fleet of
+    /// unresponsive guests can't stall the heartbeat. The cache is replaced
+    /// wholesale, so VMs that stopped running or were deleted drop out.
+    private func refreshGuestInfoCacheIfDue() async {
+        let now = ContinuousClock.now
+        if let last = lastGuestInfoRefresh, now - last < Self.guestInfoRefreshInterval {
+            return
+        }
+        lastGuestInfoRefresh = now
+
+        guard let qemu = hypervisorServices[.qemu] as? QEMUService else { return }
+        let qemuVMIds = managedVMs.compactMap { $0.value.hypervisorType == .qemu ? $0.key : nil }
+        guard !qemuVMIds.isEmpty else {
+            guestInfoCache = [:]
+            return
+        }
+
+        do {
+            guestInfoCache = try await StageBudget.run(
+                seconds: 15, stage: "guest-info-refresh", onTimeout: .abandon
+            ) {
+                await Self.probeGuestInfo(vmIds: qemuVMIds, using: qemu)
+            }
+        } catch {
+            // A whole-pass timeout leaves the previous cache in place; the next
+            // slow poll retries. Individual probes already degrade to nil.
+            logger.debug("Guest-info refresh exceeded its budget; keeping the previous cache")
+        }
+    }
+
+    /// Concurrently probes each VM's guest agent (each probe bounded inside
+    /// `QEMUService`), returning only the VMs that answered. A VM must be
+    /// observed running before we probe — qga on a stopped VM just times out.
+    private static func probeGuestInfo(
+        vmIds: [String], using qemu: QEMUService
+    ) async -> [String: GuestInfo] {
+        await withTaskGroup(of: (String, GuestInfo?).self) { group in
+            for vmId in vmIds {
+                group.addTask {
+                    let status = (try? await qemu.getVMStatus(vmId: vmId)) ?? .unknown
+                    guard status == .running else { return (vmId, nil) }
+                    return (vmId, await qemu.guestInfo(vmId: vmId))
+                }
+            }
+            var result: [String: GuestInfo] = [:]
+            for await (vmId, info) in group where info != nil {
+                result[vmId] = info
+            }
+            return result
         }
     }
 
@@ -3179,28 +3253,75 @@ extension Agent {
             return
         }
 
-        do {
-            let snapshotPath = try await storageBackend.createSnapshot(
-                volumeId: message.volumeId,
-                snapshotId: message.snapshotId,
-                volumePath: message.volumePath
-            )
+        // Application-consistent snapshot when the control plane names the VM
+        // holding the volume and that guest runs a responsive qga (issue #563):
+        // freeze the guest's filesystems around overlay creation, then always
+        // thaw. Best-effort — a detached volume, an older control plane, or a
+        // qga-less/hung guest all fall through to the crash-consistent path.
+        let qemu = hypervisorServices[.qemu] as? QEMUService
+        let freezeVMId = message.attachedVMId
+        var didFreeze = false
+        if let vmId = freezeVMId, let qemu {
+            didFreeze = await qemu.freezeGuestFilesystems(vmId: vmId)
+        }
 
+        let result: Result<String, Error>
+        do {
+            if didFreeze {
+                // Hard-cap the frozen window: a frozen guest is worse than a
+                // crash-consistent snapshot, so on overrun we thaw and proceed.
+                result = .success(
+                    try await StageBudget.run(
+                        seconds: StageBudget.guestFreezeSeconds, stage: "frozen-snapshot",
+                        onTimeout: .cancelAndWait
+                    ) {
+                        try await storageBackend.createSnapshot(
+                            volumeId: message.volumeId,
+                            snapshotId: message.snapshotId,
+                            volumePath: message.volumePath
+                        )
+                    })
+            } else {
+                result = .success(
+                    try await storageBackend.createSnapshot(
+                        volumeId: message.volumeId,
+                        snapshotId: message.snapshotId,
+                        volumePath: message.volumePath
+                    ))
+            }
+        } catch {
+            result = .failure(error)
+        }
+
+        // Unconditional thaw whenever a freeze took, whatever the snapshot's
+        // outcome (the "defer thaw" the freeze contract requires).
+        if didFreeze, let vmId = freezeVMId, let qemu {
+            await qemu.thawGuestFilesystems(vmId: vmId)
+        }
+
+        switch result {
+        case .success(let snapshotPath):
             let response = VolumeStatusResponse(
                 volumeId: message.volumeId,
                 status: "available",
                 storagePath: snapshotPath
             )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
+            do {
+                let data = try AnyCodableValue(response)
+                await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
+            } catch {
+                await sendError(
+                    for: message.requestId, error: "Failed to encode snapshot response: \(error.localizedDescription)")
+            }
             logger.info(
                 "Volume snapshot created successfully",
                 metadata: [
                     "volumeId": .string(message.volumeId),
                     "snapshotId": .string(message.snapshotId),
                     "path": .string(snapshotPath),
+                    "frozen": .stringConvertible(didFreeze),
                 ])
-        } catch {
+        case .failure(let error):
             await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
             logger.error(
                 "Failed to create snapshot",
@@ -3718,7 +3839,10 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
-                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                    failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    // Last-known guest-agent view (issue #563); nil until the
+                    // slow poll first sees a responsive qga on this VM.
+                    guestInfo: guestInfoCache[vmId]
                 ))
             reported.insert(vmId)
         }

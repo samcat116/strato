@@ -37,6 +37,18 @@ public enum StageBudget {
     // waiting and reports its last known view instead. Liveness reporting must
     // not be hostage to hypervisor progress.
     public static let observationSeconds = 5
+    // A QEMU-guest-agent round-trip (issue #563). qga is unresponsive whenever
+    // the guest is not running the agent, so a timeout here is the *normal*
+    // outcome, not the error path — the bound must be short so verified-shutdown
+    // and guest-info probes fall back to their qga-less behavior promptly
+    // instead of stalling the report or the shutdown. A live agent answers a
+    // sync + query in milliseconds.
+    public static let guestAgentSeconds = 5
+    // The hard cap on holding a guest's filesystems frozen for a snapshot
+    // (freeze → overlay create → thaw). A frozen guest is worse than a
+    // crash-consistent snapshot, so if the whole sequence overruns this the
+    // caller thaws and proceeds crash-consistent rather than waiting longer.
+    public static let guestFreezeSeconds = 10
 
     /// What a budget does with an operation that is still running when the
     /// deadline passes. The right answer depends on whether the operation has

@@ -185,6 +185,14 @@ Snapshots are external qcow2 overlays created with the volume as backing
 file. The backing format is detected per volume rather than assumed, so raw
 volumes snapshot correctly.
 
+When the volume is attached to a running VM whose guest runs the QEMU guest
+agent, the snapshot is **application-consistent**: the agent freezes the guest's
+filesystems (`guest-fsfreeze-freeze`) around the overlay creation and always
+thaws afterward, under a hard time cap (issue #563). The control plane names the
+attached VM in `VolumeSnapshotMessage.attachedVMId`; a detached volume, an older
+control plane, or a qga-less/hung guest falls back to the crash-consistent
+snapshot taken before. See [agent](./agent.md#qemu-guest-agent-qga).
+
 ### Volume placement across agents
 
 Volumes are host-local. The control-plane `VolumeService` places volumes on

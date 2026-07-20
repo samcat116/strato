@@ -184,6 +184,15 @@ public struct CloudInitProvisioner {
                 filename: "strato-console-setup.sh",
                 content: consoleSetupScript
             ),
+            // qga install as a script part, not a `packages:` key: a caller
+            // cloud-config's own `packages:` list would replace ours under
+            // cloud-init's dict(replace)+list() merge, silently dropping the
+            // guest agent. A script part always composes (see `qgaSetupScript`).
+            MIMEPart(
+                mimeType: "text/x-shellscript",
+                filename: "strato-qga-setup.sh",
+                content: qgaSetupScript
+            ),
             // Unrecognized payloads (only reachable when something bypassed the
             // control plane's validation) travel as text/plain: cloud-init
             // ignores them with a logged warning instead of misinterpreting.
@@ -233,8 +242,10 @@ public struct CloudInitProvisioner {
     }
 
     /// The single-document `#cloud-config` used when the caller supplied no
-    /// user data. Byte-identical to the pre-user-data agent output so existing
-    /// VMs regenerate the same seed.
+    /// user data. Extends the pre-user-data agent output with the QEMU guest
+    /// agent (issue #563); with no caller part to merge against, cloud-init's
+    /// native `packages:` install and a `runcmd` service-enable are safe here
+    /// (the multipart path can't use them — see `qgaSetupScript`).
     static func legacyCloudConfig(authorizedKeys keys: [String]) -> String {
         var document = """
             #cloud-config
@@ -248,6 +259,11 @@ public struct CloudInitProvisioner {
             chpasswd:
               expire: false
             ssh_pwauth: true
+            # Install the QEMU guest agent so the host can do verified shutdown,
+            # fs-freeze snapshots, and guest IP reporting. Most cloud images
+            # already ship it; this covers those that don't.
+            packages:
+              - qemu-guest-agent
             # Enable serial console output
             bootcmd:
               # Update GRUB to output to serial console
@@ -259,6 +275,8 @@ public struct CloudInitProvisioner {
               - systemctl enable --now serial-getty@ttyS0.service || true
               - systemctl enable --now serial-getty@ttyAMA0.service || true
               - systemctl enable --now serial-getty@hvc0.service || true
+              # Start the guest agent (installed above) without a reboot.
+              - systemctl enable --now qemu-guest-agent 2>/dev/null || systemctl enable --now qemu-ga 2>/dev/null || true
               # Emit a marker so we can verify console output quickly
               - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
               - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
@@ -330,6 +348,33 @@ public struct CloudInitProvisioner {
         echo '[cloud-init] console marker' > /dev/ttyS0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/ttyAMA0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/hvc0 2>/dev/null || true
+        """
+
+    /// Installs and enables the QEMU guest agent as a shell script, run by
+    /// cloud-init's scripts-user stage. Used only in the multipart (caller)
+    /// path, where a `packages:` key would be clobbered by a caller's own list
+    /// (see `systemCloudConfig`); the no-caller path installs it natively via
+    /// `packages:` (see `legacyCloudConfig`). Best-effort across package
+    /// managers and service names, and quiet on images that already ship it.
+    static let qgaSetupScript = """
+        #!/bin/sh
+        # Strato guest-agent setup: install the QEMU guest agent so the host can
+        # do verified shutdown, fs-freeze snapshots, and guest IP reporting
+        # (issue #563). Most cloud images already ship it; this covers those
+        # that don't, without requiring image changes.
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y >/dev/null 2>&1 || true
+            apt-get install -y qemu-guest-agent >/dev/null 2>&1 || true
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y qemu-guest-agent >/dev/null 2>&1 || true
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y qemu-guest-agent >/dev/null 2>&1 || true
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache qemu-guest-agent >/dev/null 2>&1 || true
+        fi
+        # Service name differs across distros (qemu-guest-agent vs qemu-ga).
+        systemctl enable --now qemu-guest-agent 2>/dev/null \
+            || systemctl enable --now qemu-ga 2>/dev/null || true
         """
 
     /// Renders a NoCloud `network-config` (version 2), matched by MAC address:

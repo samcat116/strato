@@ -382,11 +382,14 @@ actor VolumeService {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
-        // The agent owns snapshot placement and reports the path back.
+        // Name the attached VM so the agent can fs-freeze that guest around the
+        // overlay for an application-consistent snapshot (issue #563). Nil when
+        // the volume is detached — the agent then takes a crash-consistent one.
         let message = VolumeSnapshotMessage(
             volumeId: volume.id!.uuidString,
             snapshotId: snapshot.id!.uuidString,
-            volumePath: volumePath
+            volumePath: volumePath,
+            attachedVMId: volume.$vm.id?.uuidString
         )
 
         let status = try await sendVolumeRequest(message, toAgent: hypervisorId, timeout: Self.snapshotTimeout)

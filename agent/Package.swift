@@ -50,6 +50,10 @@ let package = Package(
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOCore", package: "swift-nio"),
+                // Unix-socket client transport for the QEMU guest agent
+                // (QGAClient, issue #563). Already a transitive dependency via
+                // AsyncHTTPClient, so declaring it does not move Package.resolved.
+                .product(name: "NIOPosix", package: "swift-nio"),
                 // Streams download bodies to disk off the cooperative pool.
                 // NonBlockingFileIO is deprecated in favor of this.
                 .product(name: "_NIOFileSystem", package: "swift-nio"),

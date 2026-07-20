@@ -90,6 +90,13 @@ Two planes, deliberately separate:
   (always local to the chassis, even when the NB is shared), and chassis
   bootstrap.
 
+IPAM's allocation is what the control plane *assigned* a NIC (`vm_interface_addresses`).
+What the guest actually *configured* — DHCP leases, IPv6 SLAAC, manual changes —
+is only visible through the QEMU guest agent, reported per-MAC and persisted
+separately (`vm_interface_observed_addresses`) so the API and UI can show
+observed alongside allocated (issue #563). See
+[agent](./agent.md#qemu-guest-agent-qga).
+
 ## The layered model
 
 We build connectivity as four independent layers. Keeping them separate is what

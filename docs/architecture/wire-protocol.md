@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 13), stamped on
+`WireProtocol.swift` holds the protocol version (currently 15), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -63,10 +63,19 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
+| `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
 degrade around — they must upgrade.
+
+Version 15 has no gate either: it added the QEMU guest agent (issue #563).
+Both fields it introduces are optional and nil-tolerant in each direction —
+`ObservedVMState.guestInfo` (the guest's observed hostname and per-MAC
+addresses, agent → control plane) and `VolumeSnapshotMessage.attachedVMId`
+(control plane → agent, so the agent can fs-freeze the right guest around a
+snapshot). A nil from an older peer reads identically to "not known" and can
+never mean a destructive action, so no send-side gate is needed.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
@@ -98,7 +107,7 @@ dual-mode rollout.
 | `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
-| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status |
+| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, and optional per-VM `guestInfo` from qga (issue #563) |
 | `status_update` | Push notification of a VM status change |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |

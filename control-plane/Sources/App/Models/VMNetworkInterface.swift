@@ -25,6 +25,14 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @Children(for: \.$interface)
     var addresses: [VMInterfaceAddress]
 
+    /// The addresses the guest actually configured on this NIC, as reported by
+    /// the QEMU guest agent (issue #563) — distinct from the allocated
+    /// `addresses` above: these include DHCP leases, IPv6 SLAAC, and any manual
+    /// changes the control plane never assigned. Requires eager loading with
+    /// `.with(\.$observedAddresses)`.
+    @Children(for: \.$interface)
+    var observedAddresses: [VMInterfaceObservedAddress]
+
     @OptionalField(key: "mtu")
     var mtu: Int?
 

@@ -181,7 +181,22 @@ public enum WireProtocol {
     /// a pre-v14 agent: the sandbox would boot un-templated while the API
     /// reports a template, so templated creates are gated too; see
     /// `supportsSandboxSnapshotMobility(_:)`).
-    public static let currentVersion = 14
+    ///
+    /// Version 15: QEMU guest agent (qga) integration (issue #563). Purely
+    /// additive and nil-tolerant in both directions, so there is no gate — an
+    /// older peer degrades to today's behavior on its own:
+    /// - `ObservedVMState.guestInfo` (optional `GuestInfo`) carries the guest's
+    ///   observed hostname and per-MAC configured addresses back on the
+    ///   observed-state report. An older control plane ignores the key; an
+    ///   older agent never sends it (a nil an old control plane and a new one
+    ///   read identically), so nothing keys convergence on it.
+    /// - `VolumeSnapshotMessage.attachedVMId` (optional) lets a new control
+    ///   plane tell the agent which VM holds the volume so it can fs-freeze the
+    ///   guest around the overlay. A nil (older control plane, or a detached
+    ///   volume) simply yields the crash-consistent snapshot taken before.
+    /// Neither field can mean a destructive action when absent, which is why
+    /// v15 — unlike v13/v14's shape-breaking changes — needs no send-side gate.
+    public static let currentVersion = 15
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

@@ -20,6 +20,16 @@ struct CloudInitUserDataDocumentTests {
         #expect(!doc.contains("ssh_authorized_keys"))
     }
 
+    @Test("legacy document installs and enables the QEMU guest agent")
+    func legacyInstallsGuestAgent() {
+        let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: nil)
+        // With no caller part to merge against, the native packages: key is safe.
+        #expect(doc.contains("packages:"))
+        #expect(doc.contains("- qemu-guest-agent"))
+        // And the service is brought up without a reboot.
+        #expect(doc.contains("systemctl enable --now qemu-guest-agent"))
+    }
+
     @Test("legacy document authorizes trimmed, non-empty SSH keys")
     func legacyDocumentWithKeys() {
         let doc = CloudInitProvisioner.userDataDocument(
@@ -44,11 +54,31 @@ struct CloudInitUserDataDocumentTests {
         let userIndex = doc.range(of: "filename=\"user-data\"")?.lowerBound
         let systemIndex = doc.range(of: "filename=\"strato-provisioning.cfg\"")?.lowerBound
         let consoleIndex = doc.range(of: "filename=\"strato-console-setup.sh\"")?.lowerBound
-        #expect(userIndex != nil && systemIndex != nil && consoleIndex != nil)
-        if let userIndex, let systemIndex, let consoleIndex {
+        let qgaIndex = doc.range(of: "filename=\"strato-qga-setup.sh\"")?.lowerBound
+        #expect(userIndex != nil && systemIndex != nil && consoleIndex != nil && qgaIndex != nil)
+        if let userIndex, let systemIndex, let consoleIndex, let qgaIndex {
             #expect(systemIndex < consoleIndex)
-            #expect(consoleIndex < userIndex)
+            #expect(consoleIndex < qgaIndex)
+            // All of Strato's parts precede the caller's, which merges last.
+            #expect(qgaIndex < userIndex)
         }
+    }
+
+    @Test("qga install survives a caller that supplies its own packages: list")
+    func multipartGuestAgentSurvivesCallerPackages() {
+        // A caller cloud-config with its own packages: list would replace a
+        // Strato `packages:` key under cloud-init's merge — so qga must ride in
+        // as a script part instead, which always composes.
+        let payload = "#cloud-config\npackages:\n  - nginx\n"
+        let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: payload)
+
+        // The qga install is a shell-script part, not a merged cloud-config key.
+        #expect(doc.contains("filename=\"strato-qga-setup.sh\""))
+        #expect(doc.contains("qemu-guest-agent"))
+        #expect(doc.contains("systemctl enable --now qemu-guest-agent"))
+        // Strato's own cloud-config part carries no packages: key that a caller
+        // could clobber.
+        #expect(!CloudInitProvisioner.systemCloudConfig(authorizedKeys: []).contains("packages"))
     }
 
     @Test("multipart labels the caller part with its detected content type")
@@ -134,8 +164,10 @@ struct CloudInitUserDataDocumentTests {
         let boundary = String(declared[start..<end])
         #expect(boundary != "strato-cloud-init-boundary")
         #expect(!hostile.contains(boundary))
-        // Every part opener and the terminator are framed with the extended boundary.
-        #expect(doc.components(separatedBy: "\n--\(boundary)\n").count == 4)
+        // Every part opener is framed with the extended boundary: four Strato
+        // parts (provisioning cfg, console setup, qga setup, caller payload)
+        // give four openers → five segments.
+        #expect(doc.components(separatedBy: "\n--\(boundary)\n").count == 5)
         #expect(doc.hasSuffix("\n--\(boundary)--\n"))
     }
 

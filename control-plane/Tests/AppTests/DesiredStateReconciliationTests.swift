@@ -592,4 +592,104 @@ final class DesiredStateReconciliationTests {
             #expect(refreshed?.observedGeneration == 0)
         }
     }
+
+    // MARK: - Guest agent (qga) observed info (issue #563)
+
+    @Test("A report's guestInfo persists hostname, availability, and per-MAC observed addresses")
+    func guestInfoPersisted() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+
+            // A NIC to attribute the guest's addresses to, by MAC.
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+            try await nic.save(on: app.db)
+
+            let guestInfo = GuestInfo(
+                qgaAvailable: true,
+                hostname: "web-01",
+                interfaces: [
+                    // Reported with an uppercase MAC to prove case-insensitive matching.
+                    GuestNetworkInterface(
+                        name: "enp0s3",
+                        hardwareAddress: "52:54:00:AB:CD:EF",
+                        addresses: [
+                            GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24),
+                            GuestIPAddress(family: .ipv6, address: "fe80::5054:ff:feab:cdef", prefixLength: 64),
+                        ]),
+                    // An interface with no matching NIC is simply ignored.
+                    GuestNetworkInterface(name: "docker0", hardwareAddress: "02:42:00:00:00:01", addresses: []),
+                ])
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
+            )
+            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.qgaAvailable == true)
+            #expect(refreshed.observedHostname == "web-01")
+
+            let observed = try await VMInterfaceObservedAddress.query(on: app.db)
+                .filter(\.$interface.$id == nic.id!)
+                .all()
+            #expect(observed.count == 2)
+            #expect(
+                observed.contains {
+                    $0.address == "10.0.0.5" && $0.family == IPFamily.ipv4.rawValue && $0.prefixLength == 24
+                })
+            #expect(
+                observed.contains {
+                    $0.address == "fe80::5054:ff:feab:cdef" && $0.family == IPFamily.ipv6.rawValue
+                })
+        }
+    }
+
+    @Test("A later report reconciles observed addresses; a nil guestInfo leaves them intact")
+    func guestInfoReconciledAndPreservedOnNil() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+            try await nic.save(on: app.db)
+
+            func send(_ guestInfo: GuestInfo?) async throws {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
+                )
+                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            }
+
+            // First: the guest has a DHCP address.
+            try await send(
+                GuestInfo(
+                    qgaAvailable: true, hostname: "h1",
+                    interfaces: [
+                        GuestNetworkInterface(
+                            name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
+                            addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24)])
+                    ]))
+            var rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            #expect(rows.map(\.address) == ["10.0.0.5"])
+
+            // The lease changed: the set is reconciled wholesale to the new address.
+            try await send(
+                GuestInfo(
+                    qgaAvailable: true, hostname: "h1",
+                    interfaces: [
+                        GuestNetworkInterface(
+                            name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
+                            addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.9", prefixLength: 24)])
+                    ]))
+            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            #expect(rows.map(\.address) == ["10.0.0.9"])
+
+            // A report without guestInfo (e.g. a transient probe miss) must NOT
+            // wipe the last-known observed addresses.
+            try await send(nil)
+            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            #expect(rows.map(\.address) == ["10.0.0.9"])
+        }
+    }
 }

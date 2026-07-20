@@ -498,6 +498,12 @@ public func configure(_ app: Application) async throws {
     // vm_network_interfaces, which it references.
     app.migrations.add(CreateFloatingIP())
 
+    // QEMU guest agent (issue #563): guest-reported addresses per NIC, and the
+    // observed hostname / qga-availability on the VM. Ordered after
+    // vm_network_interfaces (referenced) and the vms table.
+    app.migrations.add(CreateVMInterfaceObservedAddresses())
+    app.migrations.add(AddGuestInfoToVM())
+
     // FluentKit force-unwraps persisted @Enum raw values on first property
     // access. Normalize casing drift and put a database validation boundary in
     // front of every persisted enum so malformed rows cannot trap the process

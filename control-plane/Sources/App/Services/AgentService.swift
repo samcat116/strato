@@ -2439,6 +2439,13 @@ actor AgentService {
     private func applyObservedVMState(vm: VM, observed: ObservedVMState, on db: Database) async throws {
         let vmID = try vm.requireID()
 
+        // The guest-agent view (issue #563) is orthogonal to convergence and
+        // operation completion, so record it up front — before the converging
+        // early-return below — whenever the agent reported one.
+        if let guestInfo = observed.guestInfo {
+            try await persistGuestInfo(vm: vm, guestInfo: guestInfo, on: db)
+        }
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
@@ -2524,6 +2531,72 @@ actor AgentService {
                 if failedChanged {
                     try await vm.save(on: db)
                 }
+            }
+        }
+    }
+
+    /// Persists a VM's observed guest-agent view (issue #563): the VM-level
+    /// hostname/availability flags and, per NIC (matched by MAC), the addresses
+    /// the guest actually configured. Best-effort and additive — it never
+    /// clears data on a nil report, so a momentary probe miss doesn't wipe the
+    /// last-known view; a NIC's rows are reconciled wholesale only when the
+    /// guest's set actually differs from what's stored, so unchanged reports do
+    /// no writes.
+    private func persistGuestInfo(vm: VM, guestInfo: GuestInfo, on db: Database) async throws {
+        let vmID = try vm.requireID()
+
+        var vmChanged = false
+        if vm.qgaAvailable != guestInfo.qgaAvailable {
+            vm.qgaAvailable = guestInfo.qgaAvailable
+            vmChanged = true
+        }
+        if vm.observedHostname != guestInfo.hostname {
+            vm.observedHostname = guestInfo.hostname
+            vmChanged = true
+        }
+        if vmChanged {
+            try await vm.save(on: db)
+        }
+
+        // Group the guest's addresses by MAC (lowercased for case-insensitive
+        // matching against the stored NIC MAC).
+        var addressesByMAC: [String: [GuestIPAddress]] = [:]
+        for iface in guestInfo.interfaces {
+            guard let mac = iface.hardwareAddress?.lowercased() else { continue }
+            addressesByMAC[mac, default: []].append(contentsOf: iface.addresses)
+        }
+
+        let interfaces = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id == vmID)
+            .with(\.$observedAddresses)
+            .all()
+
+        for nic in interfaces {
+            let nicID = try nic.requireID()
+            // Dedupe by (family, address): a guest can list link-local twice,
+            // and the unique index would reject the duplicate row.
+            var seen: Set<String> = []
+            let desired = (addressesByMAC[nic.macAddress.lowercased()] ?? []).filter {
+                seen.insert("\($0.family.rawValue)|\($0.address)").inserted
+            }
+
+            let storedKeys = Set(
+                nic.observedAddresses.map { "\($0.family)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+            let desiredKeys = Set(
+                desired.map { "\($0.family.rawValue)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+            if storedKeys == desiredKeys { continue }
+
+            // The set changed: replace this NIC's observed rows wholesale.
+            try await VMInterfaceObservedAddress.query(on: db)
+                .filter(\.$interface.$id == nicID)
+                .delete()
+            for address in desired {
+                try await VMInterfaceObservedAddress(
+                    interfaceID: nicID,
+                    family: address.family,
+                    address: address.address,
+                    prefixLength: address.prefixLength
+                ).save(on: db)
             }
         }
     }

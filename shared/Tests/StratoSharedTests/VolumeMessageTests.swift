@@ -100,6 +100,24 @@ struct VolumeMessageTests {
         #expect(decoded.type == .volumeSnapshot)
         #expect(decoded.snapshotId == "snap-1")
         #expect(decoded.snapshotPath == nil)
+        // A detached volume (or older control plane) carries no VM to freeze.
+        #expect(decoded.attachedVMId == nil)
+    }
+
+    /// A new control plane names the attached VM so the agent can fs-freeze its
+    /// guest around the snapshot (issue #563).
+    @Test func volumeSnapshotCarriesAttachedVMId() throws {
+        let decoded = try throughEnvelope(
+            VolumeSnapshotMessage(
+                requestId: Fixtures.requestId,
+                timestamp: Fixtures.timestamp,
+                volumeId: "vol-1",
+                snapshotId: "snap-1",
+                volumePath: "/var/lib/strato/vol-1.qcow2",
+                attachedVMId: "vm-42"
+            )
+        )
+        #expect(decoded.attachedVMId == "vm-42")
     }
 
     /// Older control planes still send the legacy snapshotPath hint.
