@@ -1,0 +1,60 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_7754dde20e33f2::t_ca7683f7a89172 891
+control-plane/Sources/App/configure.swift
+  s_7754dde20e33f2::t_d5406509aa76e4 326
+deploy/compose/spiffe/envoy.yaml
+  s_7754dde20e33f2::t_53658f5bb1d3a1 155-166
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  s_7754dde20e33f2::t_272423bfda52be 5-24,49,63,69-70,72-80,117-138,200-215
+  s_7754dde20e33f2::t_17d7a1d94bb50f 81,83-112,143-144,159,177,179,192,198,219-220
+  s_7754dde20e33f2::t_b01bc1ec980b47 162-169
+  s_7754dde20e33f2::t_a01796f735f7e1 160-161
+  s_7754dde20e33f2::t_ae728ef131b2bb 187
+  s_7754dde20e33f2::t_9fe8db06b316b5 26-48,50-62,64-68,71
+  s_7754dde20e33f2::t_8484495d5c5420 82
+agent/Package.swift
+  s_7754dde20e33f2::t_a81281a53e374f 52-57
+  s_7754dde20e33f2::t_901e60599fe795 112-116
+control-plane/Sources/App/Services/S3ImageObjectStore.swift
+  s_7754dde20e33f2::t_634cdb022a6aca 16-17
+shared/Sources/StratoShared/SandboxModels.swift
+  s_7754dde20e33f2::t_8f77becc668ec0 87-88
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_7754dde20e33f2::t_f79f4ccf69d75e 947-959,961
+  s_7754dde20e33f2::t_a842d10eaeb980 960
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_7754dde20e33f2::t_8445100238ba89 15-16
+control-plane/Sources/App/Services/DecoyKeyService.swift
+  s_7754dde20e33f2::t_64c297ad445cef 21-28
+control-plane/Tests/AppTests/ImageDownloadMTLSTests.swift
+  s_7754dde20e33f2::t_f654dd4cd25e82 220
+  s_7754dde20e33f2::t_25f561db1110c3 137-163,213
+  s_7754dde20e33f2::t_a0c90045c55250 194-196,214-217,219,223,225
+  s_7754dde20e33f2::t_d1462862423f90 197-202,204-205,207,209,212,218,221-222
+docs/architecture/overview.md
+  s_7754dde20e33f2::t_7ce801c515bb7e 48-49
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_7754dde20e33f2::t_dfca812c0cebc4 120-128
+agent/Tests/StratoAgentTests/MTLSArtifactDownloaderTests.swift
+  s_7754dde20e33f2::t_1ecde87b01b2c6 85-90,98-99
+  s_7754dde20e33f2::t_df0f71e83b54eb 223-231,236-244,251-253,257-258
+  s_7754dde20e33f2::t_451917bd0922c6 1-84,91-97,100-222,232-235,245-250,254-256,259-260
+control-plane/Sources/App/Services/AgentService.swift
+  s_7754dde20e33f2::t_bd42c9a55d37be 1915-1916
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "5d53b5b0e8f9d2f790488c996acba55c9924254e",
+  "prompts": {},
+  "sessions": {
+    "s_7754dde20e33f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c70d8b4-a724-446c-ad9a-e40cc0a7f2af",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
