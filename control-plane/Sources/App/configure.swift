@@ -463,6 +463,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGuardrail())
     app.migrations.add(CreatePolicySetVersion())
 
+    // IAM phase 4 (issue #481): the authorization decision log written by
+    // shadow evaluation.
+    app.migrations.add(CreateIAMDecisionLog())
+
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
     // Sandbox fork lineage (issue #427). Must follow snapshots so deployments
@@ -631,6 +635,14 @@ public func configure(_ app: Application) async throws {
     // hourly cluster-singleton sweep prunes audit_events rows older than the
     // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
     app.lifecycle.use(AuditRetentionLifecycleHandler())
+
+    // IAM phase 4 (issue #481): decision-log retention. The shadow evaluation
+    // itself needs no boot step — it hangs off `Request.spicedb`. Resolve the
+    // config once here rather than letting the accessor re-read the
+    // environment on every `Request.spicedb` access. Tests override the stored
+    // value after `configure` to opt into shadowing.
+    app.iamShadowConfig = .fromEnvironment(app.environment)
+    app.lifecycle.use(IAMShadowLifecycleHandler())
 
     // SSF poll delivery (issue #38): periodically drain poll-delivery streams
     // from their transmitters. The handler arms the sweep at boot and cancels
