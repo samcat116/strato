@@ -15,7 +15,9 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ $gwName }}
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gwName }}
       namespace: {{ $gwNamespace }}
       sectionName: {{ .Values.gateway.listeners.web }}
   hostnames:
@@ -45,8 +47,11 @@ spec:
             type: PathPrefix
             value: /ssf
       backendRefs:
-        - name: {{ $fullName }}
+        - group: ""
+          kind: Service
+          name: {{ $fullName }}
           port: {{ $svcPort }}
+          weight: 1
     {{- if .Values.frontend.enabled }}
     # Frontend catch-all.
     - matches:
@@ -54,8 +59,11 @@ spec:
             type: PathPrefix
             value: /
       backendRefs:
-        - name: {{ $fullName }}-frontend
+        - group: ""
+          kind: Service
+          name: {{ $fullName }}-frontend
           port: {{ $frontendPort }}
+          weight: 1
     {{- end }}
 {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
 ---
@@ -69,15 +77,20 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ $gwName }}
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gwName }}
       namespace: {{ $gwNamespace }}
       sectionName: {{ .Values.gateway.listeners.agents }}
   hostnames:
     - {{ include "strato-control-plane.gateway.agentsHost" . | quote }}
   rules:
     - backendRefs:
-        - name: {{ $fullName }}
+        - group: ""
+          kind: Service
+          name: {{ $fullName }}
           port: {{ .Values.spire.envoy.agentPort }}
+          weight: 1
 {{- end }}
 {{- if .Values.spire.enabled }}
 ---
@@ -90,14 +103,19 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ $gwName }}
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gwName }}
       namespace: {{ $gwNamespace }}
       sectionName: {{ .Values.gateway.listeners.spire }}
   hostnames:
     - {{ include "strato-control-plane.gateway.spireHost" . | quote }}
   rules:
     - backendRefs:
-        - name: {{ $fullName }}-spire-server
+        - group: ""
+          kind: Service
+          name: {{ $fullName }}-spire-server
           port: {{ .Values.spire.service.grpcPort }}
+          weight: 1
 {{- end }}
 {{- end }}
