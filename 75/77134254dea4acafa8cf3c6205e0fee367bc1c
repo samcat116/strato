@@ -1,0 +1,109 @@
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_798bec6ed281ff::t_53e6796a6b9099 20-24
+shared/Sources/StratoShared/WireProtocol.swift
+  s_798bec6ed281ff::t_a68d43860994a4 157-170
+docs/architecture/wire-protocol.md
+  s_798bec6ed281ff::t_4f0b7911dfb66d 64-69
+  s_798bec6ed281ff::t_e77592729fa4c5 128-129
+  s_798bec6ed281ff::t_bb5e42cc2e36e2 45
+control-plane/Sources/App/Services/AgentService.swift
+  s_798bec6ed281ff::t_1397526dd6ed39 1707-1709
+  s_798bec6ed281ff::t_6b33c0c6827fc6 1755
+deploy/compose/docker-compose.yml
+  s_798bec6ed281ff::t_c77f20872d53e1 355-359
+agent/Sources/StratoAgent/MTLSArtifactDownloader.swift
+  s_798bec6ed281ff::t_fcebb8bb6e831a 108-109
+  s_798bec6ed281ff::t_0b0d1cf33e9356 1-27,32-107,110-139
+  s_798bec6ed281ff::t_c8c72183f1b87e 28-31
+agent/Sources/StratoAgent/Agent.swift
+  s_798bec6ed281ff::t_099710d7b27d29 60-72
+  s_798bec6ed281ff::t_7bdd5def3e827c 446-450,454-456
+  s_798bec6ed281ff::t_680944f9ce5b7a 1994,2107
+  s_798bec6ed281ff::t_01270bf4d8ff6d 858-904
+docs/architecture/storage.md
+  s_798bec6ed281ff::t_97e7025f59402a 34-36
+control-plane/Tests/AppTests/VMSpecBuilderImageInfoTests.swift
+  s_798bec6ed281ff::t_e3a0142514cfe8 39,48,53-55,57,76,81
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_798bec6ed281ff::t_bedce51e88ea27 228-235,245,247,257,288
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_798bec6ed281ff::t_15ee2a7ecf7adc 77-104,115-122
+control-plane/Tests/AppTests/ImageDownloadMTLSTests.swift
+  s_798bec6ed281ff::t_cd8edbc44626a5 1-181
+agent/Package.swift
+  s_798bec6ed281ff::t_3a8c82fa77162f 18-21
+  s_798bec6ed281ff::t_0247d34a7e40a6 82
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_798bec6ed281ff::t_f53b2b1632af21 57
+control-plane/Sources/App/Models/AppSetting.swift
+  s_798bec6ed281ff::t_ba13b56620781c 33-38
+docs/architecture/overview.md
+  s_798bec6ed281ff::t_7c4a9f50a38e4f 127-128
+  s_798bec6ed281ff::t_b1a78a0d150fd6 187-188
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_798bec6ed281ff::t_764e18a8f2d98c 415-416,419-421
+  s_798bec6ed281ff::t_3e2c49b89a6b19 380-384,402
+control-plane/Sources/App/Services/SPIFFE/AgentMTLSAuthenticator.swift
+  s_798bec6ed281ff::t_6876a9d3304455 1-122
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_798bec6ed281ff::t_707859cb93e02d 54-55
+  s_798bec6ed281ff::t_aae1cc1adb6b4f 120-121
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_798bec6ed281ff::t_6a194a3fbe14bf 1369
+CLAUDE.md
+  s_798bec6ed281ff::t_21e69be37875b6 80
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_798bec6ed281ff::t_357196ec61adeb 946-953,956
+control-plane/Sources/App/configure.swift
+  s_798bec6ed281ff::t_acf2ae8957b285 557-559
+docs/architecture/agent-updates.md
+  s_798bec6ed281ff::t_2d42aff10841db 99-100
+deploy/compose/README.md
+  s_798bec6ed281ff::t_faad6c2deb59c5 111-113
+control-plane/Sources/App/Services/VolumeService.swift
+  s_798bec6ed281ff::t_3eb7b565c3f7fc 207-209,211
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_798bec6ed281ff::t_afa691f12f6812 147-148
+  s_798bec6ed281ff::t_fb67c586d31ac5 161-164
+  s_798bec6ed281ff::t_3befde3698c85b 205-207
+docs/architecture/sandboxes.md
+  s_798bec6ed281ff::t_f6a680d02580ec 151-152
+docs/architecture/control-plane.md
+  s_798bec6ed281ff::t_e415d69eece718 158-160
+  s_798bec6ed281ff::t_c94bce3f7b9fe3 109-110
+agent/Tests/StratoAgentTests/ImageCacheServiceTests.swift
+  s_798bec6ed281ff::t_11d07ebf40d6a9 334-404
+deploy/compose/.env.example
+  s_798bec6ed281ff::t_4b7cb0a254a9f3 24-25
+control-plane/Sources/App/Controllers/UserController.swift
+  s_798bec6ed281ff::t_61850c5069d23f 607,610
+control-plane/Sources/App/Services/DecoyKeyService.swift
+  s_798bec6ed281ff::t_989b34e54acf6e 1-102
+deploy/compose/spiffe/envoy.yaml
+  s_798bec6ed281ff::t_4db3c479c4256b 115-142
+deploy/compose/setup.sh
+  s_798bec6ed281ff::t_43932008faa302 125-126
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_798bec6ed281ff::t_a087e2d00f37fc 456-460
+  s_798bec6ed281ff::t_8aaf4a7bc83f7a 13-16
+  s_798bec6ed281ff::t_a055056f7f5929 369
+  s_798bec6ed281ff::t_38a47f1662064b 416-426
+agent/Package.resolved
+  s_798bec6ed281ff::t_0a53b743b0083c 2,4-12,112-120,228-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7577134254dea4acafa8cf3c6205e0fee367bc1c",
+  "prompts": {},
+  "sessions": {
+    "s_798bec6ed281ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee768de4-ba9d-48d2-89c7-a761a6e1b88b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
