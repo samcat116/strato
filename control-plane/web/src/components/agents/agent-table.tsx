@@ -23,7 +23,7 @@ interface AgentTableProps {
 export function AgentTable({ agents, isLoading }: AgentTableProps) {
   const { organizations } = useOrganization();
 
-  // Agents are dedicated to an org (or an OU within one); resolve names for
+  // Agents are dedicated to an org (or a folder within one); resolve names for
   // orgs the viewer can see, fall back to a shortened id otherwise.
   const ownerLabel = (agent: Agent) => {
     if (agent.organizationId) {
@@ -31,7 +31,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
       return org?.name ?? `${agent.organizationId.slice(0, 8)}…`;
     }
     if (agent.organizationalUnitId) {
-      return `OU ${agent.organizationalUnitId.slice(0, 8)}…`;
+      return `Folder ${agent.organizationalUnitId.slice(0, 8)}…`;
     }
     return "—";
   };

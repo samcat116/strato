@@ -58,7 +58,7 @@ export default function HierarchyPage() {
           Organization Hierarchy
         </h2>
         <p className="text-muted-foreground">
-          Browse organizational units, projects, and resources
+          Browse folders, projects, and resources
         </p>
       </div>
 
@@ -68,7 +68,7 @@ export default function HierarchyPage() {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search units, projects, and VMs..."
+          placeholder="Search folders, projects, and VMs..."
           className="bg-background border-border text-foreground pl-9 pr-9"
         />
         {isSearching && (
@@ -145,7 +145,7 @@ export default function HierarchyPage() {
           {/* Stats */}
           {stats && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Units" value={stats.totalOUs} />
+              <Stat label="Folders" value={stats.totalOUs} />
               <Stat label="Projects" value={stats.totalProjects} />
               <Stat label="VMs" value={stats.totalVMs} />
               <Stat label="Quotas" value={stats.totalQuotas} />

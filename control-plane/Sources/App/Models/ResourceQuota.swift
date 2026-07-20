@@ -395,7 +395,8 @@ extension ResourceQuota {
 
         if parentCount != 1 {
             throw Abort(
-                .badRequest, reason: "Resource quota must belong to exactly one entity (organization, OU, or project)")
+                .badRequest,
+                reason: "Resource quota must belong to exactly one entity (organization, folder, or project)")
         }
 
         // Validate limits are positive

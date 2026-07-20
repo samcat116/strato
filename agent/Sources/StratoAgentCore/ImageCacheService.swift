@@ -155,10 +155,25 @@ public actor ImageCacheService {
         return isValid
     }
 
+    /// Reduce a control-plane-supplied filename to a single, in-directory path
+    /// component. The control plane already validates upload filenames, but this
+    /// privileged daemon must not rely solely on that boundary: a `..`/`/`-laden
+    /// value from a buggy or compromised control plane would otherwise write a
+    /// checksum-valid download outside the cache root. Traversal reduces to a
+    /// fixed placeholder rather than escaping.
+    static func safeComponent(_ raw: String) -> String {
+        let component = (raw as NSString).lastPathComponent
+        if component.isEmpty || component == "." || component == ".." || component.contains("/") {
+            return "_invalid_"
+        }
+        return component
+    }
+
     /// Builds the local cache path for an image's primary disk
     /// Structure: {cachePath}/{projectId}/{imageId}/{filename}
     public func buildCachePath(imageInfo: ImageInfo) -> String {
-        return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(imageInfo.filename)"
+        return
+            "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(Self.safeComponent(imageInfo.filename))"
     }
 
     /// The eviction unit: everything cached for one image lives under
@@ -218,7 +233,8 @@ public actor ImageCacheService {
     /// never overwrite each other.
     /// Structure: {cachePath}/{projectId}/{imageId}/{kind}/{filename}
     public func buildArtifactCachePath(imageInfo: ImageInfo, artifact: ArtifactInfo) -> String {
-        return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(artifact.kind.rawValue)/\(artifact.filename)"
+        return
+            "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(artifact.kind.rawValue)/\(Self.safeComponent(artifact.filename))"
     }
 
     // MARK: - Artifact Operations

@@ -32,6 +32,18 @@ public struct JailerOptions: Sendable {
     /// `--cgroup` entries in the jailer's `<file>=<value>` syntax
     /// (e.g. `memory.max=1207959552`). Empty means no cgroup limits.
     public var cgroups: [String]
+    /// Run the VMM in its own PID namespace (`--new-pid-ns`). A VMM compromised
+    /// after a guest breakout then cannot observe or signal host or peer
+    /// processes — which is what closes the cross-sandbox signalling the shared
+    /// host PID namespace allows when two sandboxes hash to the same jail uid.
+    ///
+    /// This changes the *spawn shape*: the jailer forks the VMM into the new
+    /// namespace, records its pid, and the parent exits immediately, so the
+    /// spawning process's child handle is no longer the VMM. `FirecrackerClient`
+    /// compensates by tracking the forked pid instead of the `Process` handle;
+    /// any other spawner must do the same or it will lose the ability to
+    /// observe and terminate the VM.
+    public var newPidNamespace: Bool
 
     public init(
         jailerBinaryPath: String,
@@ -40,7 +52,8 @@ public struct JailerOptions: Sendable {
         gid: UInt32,
         netnsPath: String? = nil,
         cgroupVersion: Int? = nil,
-        cgroups: [String] = []
+        cgroups: [String] = [],
+        newPidNamespace: Bool = true
     ) {
         self.jailerBinaryPath = jailerBinaryPath
         self.chrootBaseDir = chrootBaseDir
@@ -49,6 +62,7 @@ public struct JailerOptions: Sendable {
         self.netnsPath = netnsPath
         self.cgroupVersion = cgroupVersion
         self.cgroups = cgroups
+        self.newPidNamespace = newPidNamespace
     }
 
     /// The API socket path *inside* the jail. This is Firecracker's own
@@ -109,6 +123,9 @@ public struct JailerOptions: Sendable {
             "--gid", String(gid),
             "--chroot-base-dir", chrootBaseDir,
         ]
+        if newPidNamespace {
+            args.append("--new-pid-ns")
+        }
         if let netnsPath {
             args += ["--netns", netnsPath]
         }

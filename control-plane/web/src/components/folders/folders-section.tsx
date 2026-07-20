@@ -9,24 +9,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useOrganizationalUnits } from "@/lib/hooks";
-import { OuTree } from "./ou-tree";
-import { OuFormDialog, type EditableOU } from "./ou-form-dialog";
+import { useFolders } from "@/lib/hooks";
+import { FolderTree } from "./folder-tree";
+import { FolderFormDialog, type EditableFolder } from "./folder-form-dialog";
 
-interface OrganizationalUnitsSectionProps {
+interface FoldersSectionProps {
   orgId: string;
-  /** Whether the current user can create/edit/delete units (org admin). */
+  /** Whether the current user can create/edit/delete folders (org admin). */
   canManage: boolean;
 }
 
-export function OrganizationalUnitsSection({
+export function FoldersSection({
   orgId,
   canManage,
-}: OrganizationalUnitsSectionProps) {
-  const { data: units = [], isLoading } = useOrganizationalUnits(orgId);
+}: FoldersSectionProps) {
+  const { data: folders = [], isLoading } = useFolders(orgId);
 
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<EditableOU | null>(null);
+  const [editing, setEditing] = useState<EditableFolder | null>(null);
   const [parent, setParent] = useState<{ id: string; name: string } | null>(
     null
   );
@@ -37,8 +37,8 @@ export function OrganizationalUnitsSection({
     setFormOpen(true);
   };
 
-  const handleEdit = (ou: EditableOU) => {
-    setEditing(ou);
+  const handleEdit = (folder: EditableFolder) => {
+    setEditing(folder);
     setParent(null);
     setFormOpen(true);
   };
@@ -54,7 +54,7 @@ export function OrganizationalUnitsSection({
       <Card className="bg-card border-border">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-lg font-semibold text-foreground">
-            Organizational Units
+            Folders
           </CardTitle>
           {canManage && (
             <Button
@@ -63,20 +63,19 @@ export function OrganizationalUnitsSection({
               onClick={handleCreateTopLevel}
             >
               <Plus className="h-4 w-4 mr-2" />
-              Create Unit
+              Create Folder
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {!canManage && (
             <p className="text-sm text-muted-foreground mb-4">
-              You need admin rights to create, edit, or delete organizational
-              units.
+              You need admin rights to create, edit, or delete folders.
             </p>
           )}
-          <OuTree
+          <FolderTree
             orgId={orgId}
-            units={units}
+            folders={folders}
             isLoading={isLoading}
             canManage={canManage}
             onEdit={handleEdit}
@@ -85,11 +84,11 @@ export function OrganizationalUnitsSection({
         </CardContent>
       </Card>
 
-      <OuFormDialog
+      <FolderFormDialog
         orgId={orgId}
         open={formOpen}
         onOpenChange={setFormOpen}
-        ou={editing}
+        folder={editing}
         parent={parent}
       />
     </>

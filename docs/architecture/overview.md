@@ -150,8 +150,10 @@ control (the Zanzibar model); the schema lives in `spicedb/schema.zed`.
 The schema defines a hierarchy — `organization` → `organizational_unit` →
 `project` → resources — plus `user`, `group`, `environment`,
 `virtual_machine`, `sandbox`, `image`, `volume`, and related object types.
+The SpiceDB type `organizational_unit` is the **folder** type; the wire-level
+rename lands with the Cedar migration.
 Permissions inherit down the hierarchy: a `project` attaches to its
-`parent` (an organization or OU), and resource permissions resolve through
+`parent` (an organization or folder), and resource permissions resolve through
 the project. Abridged excerpt:
 
 ```zed
@@ -193,18 +195,18 @@ Integration points:
   consistency, relationship writes, schema writes), authenticated with a
   preshared key.
 - Controllers write ownership relationships automatically on resource
-  creation (`owner` and `project` tuples), so org/OU admins inherit access
+  creation (`owner` and `project` tuples), so org/folder admins inherit access
   transitively, and perform additional per-object checks in handlers.
 - Schema loading: a Helm post-install/upgrade Job runs `zed schema write`;
   local development posts the schema via the HTTP API.
 
 ### Hierarchy, groups, and quotas
 
-Organization → optional nested **organizational units** (materialized
+Organization → optional nested **folders** (materialized
 path/depth) → projects (with environments). **Groups** — optionally
 SCIM-provisioned — grant access. **Resource quotas** (vCPU, memory,
 storage, VM count, sandbox count; optionally per-environment) attach at
-org, OU, or project level and are enforced on VM and sandbox
+org, folder, or project level and are enforced on VM and sandbox
 create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 
 ## Observability
