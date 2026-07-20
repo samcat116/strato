@@ -47,7 +47,7 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
         case .missingOrganizationScope(let agentName):
             return
                 "Agent '\(agentName)' is new but its registration token carries no organization; "
-                + "agents are dedicated capacity and must be minted a token scoped to an organization or OU."
+                + "agents are dedicated capacity and must be minted a token scoped to an organization or folder."
         }
     }
 }

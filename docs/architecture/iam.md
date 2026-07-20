@@ -21,10 +21,11 @@ is built for is one we don't have.
 The concrete failures that motivated the decision were found in the deployed
 `spicedb/schema.zed`:
 
-1. **Nested-OU admins did not inherit downward.** `inherited_admin =
+1. **Nested-folder admins did not inherit downward.** `inherited_admin =
    parent->manage_organization + parent->inherited_admin` never includes the
-   parent OU's direct `admin` relation, so an admin of a parent OU had no
-   rights over child OUs or the projects beneath them.
+   parent folder's direct `admin` relation, so an admin of a parent folder had
+   no rights over child folders or the projects beneath them. (In
+   `spicedb/schema.zed` the folder type is still named `organizational_unit`.)
 2. **Every org member could view every project**, via `inherited_member`
    chaining through `view_organization = admin + member`.
 

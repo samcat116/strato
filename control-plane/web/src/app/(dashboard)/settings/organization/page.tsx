@@ -15,7 +15,7 @@ import { organizationsApi } from "@/lib/api/organizations";
 import { useOrganizationMembers, usePermissions } from "@/lib/hooks";
 import { MembersTable, AddMemberDialog } from "@/components/organization-members";
 import { GroupsSection } from "@/components/organization-groups";
-import { OrganizationalUnitsSection } from "@/components/organizational-units";
+import { FoldersSection } from "@/components/folders";
 import { SCIMTokensSection } from "@/components/scim-tokens";
 import { OIDCProvidersSection } from "@/components/oidc-providers";
 import { SSFStreamsSection } from "@/components/ssf-streams";
@@ -152,10 +152,10 @@ export default function OrganizationSettingsPage() {
             Groups
           </TabsTrigger>
           <TabsTrigger
-            value="organizational-units"
+            value="folders"
             className="data-[state=active]:bg-muted"
           >
-            Organizational Units
+            Folders
           </TabsTrigger>
           <TabsTrigger value="auth" className="data-[state=active]:bg-muted">
             Authentication
@@ -280,9 +280,9 @@ export default function OrganizationSettingsPage() {
           <GroupsSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
 
-        {/* Organizational Units Tab */}
-        <TabsContent value="organizational-units">
-          <OrganizationalUnitsSection orgId={id} canManage={canManageMembers} />
+        {/* Folders Tab */}
+        <TabsContent value="folders">
+          <FoldersSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
 
         {/* Authentication Tab */}

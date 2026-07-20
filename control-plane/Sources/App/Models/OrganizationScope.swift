@@ -99,7 +99,7 @@ enum OrganizationScope: Equatable, Sendable {
             }
         case .organizationalUnit(let id):
             guard try await OrganizationalUnit.find(id, on: db) != nil else {
-                throw Abort(.badRequest, reason: "Organizational unit \(id) does not exist")
+                throw Abort(.badRequest, reason: "Folder \(id) does not exist")
             }
         }
     }

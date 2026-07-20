@@ -79,19 +79,19 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to the organization
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Get counts
@@ -128,12 +128,12 @@ struct OrganizationalUnitController: RouteCollection {
         var parentOU: OrganizationalUnit?
         if let parentOUID = createRequest.parentOuId {
             guard let parent = try await OrganizationalUnit.find(parentOUID, on: req.db) else {
-                throw Abort(.badRequest, reason: "Parent OU not found")
+                throw Abort(.badRequest, reason: "Parent folder not found")
             }
 
             // Verify parent belongs to same organization
             if parent.$organization.id != organizationID {
-                throw Abort(.badRequest, reason: "Parent OU must belong to the same organization")
+                throw Abort(.badRequest, reason: "Parent folder must belong to the same organization")
             }
 
             parentOU = parent
@@ -152,7 +152,7 @@ struct OrganizationalUnitController: RouteCollection {
 
         let existingOU = try await query.first()
         if existingOU != nil {
-            throw Abort(.conflict, reason: "OU name already exists in this scope")
+            throw Abort(.conflict, reason: "Folder name already exists in this scope")
         }
 
         // Calculate depth and path
@@ -187,7 +187,7 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         let updateRequest = try req.content.decode(UpdateOrganizationalUnitRequest.self)
@@ -196,12 +196,12 @@ struct OrganizationalUnitController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to organization
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Update fields
@@ -220,7 +220,7 @@ struct OrganizationalUnitController: RouteCollection {
 
             let existingOU = try await query.first()
             if existingOU != nil {
-                throw Abort(.conflict, reason: "OU name already exists in this scope")
+                throw Abort(.conflict, reason: "Folder name already exists in this scope")
             }
 
             ou.name = name
@@ -256,19 +256,19 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to organization
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Check for dependent resources
@@ -277,7 +277,8 @@ struct OrganizationalUnitController: RouteCollection {
             .count()
 
         if childOUCount > 0 {
-            throw Abort(.conflict, reason: "Cannot delete OU with child OUs. Move or delete child OUs first.")
+            throw Abort(
+                .conflict, reason: "Cannot delete folder with child folders. Move or delete child folders first.")
         }
 
         let projectCount = try await Project.query(on: req.db)
@@ -285,7 +286,7 @@ struct OrganizationalUnitController: RouteCollection {
             .count()
 
         if projectCount > 0 {
-            throw Abort(.conflict, reason: "Cannot delete OU with projects. Move or delete projects first.")
+            throw Abort(.conflict, reason: "Cannot delete folder with projects. Move or delete projects first.")
         }
 
         // Delete the SpiceDB parent tuple too (the OU has no children/projects left,
@@ -313,19 +314,19 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has access
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let rootOU = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to the organization
         if rootOU.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         return try await buildOUTree(ou: rootOU, on: req.db)
@@ -339,7 +340,7 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         let moveRequest = try req.content.decode(MoveOrganizationalUnitRequest.self)
@@ -348,30 +349,30 @@ struct OrganizationalUnitController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to the organization
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Validate new parent
         var newParent: OrganizationalUnit?
         if let newParentID = moveRequest.newParentOuId {
             guard let parent = try await OrganizationalUnit.find(newParentID, on: req.db) else {
-                throw Abort(.badRequest, reason: "New parent OU not found")
+                throw Abort(.badRequest, reason: "New parent folder not found")
             }
 
             // Verify new parent belongs to same organization
             if parent.$organization.id != organizationID {
-                throw Abort(.badRequest, reason: "New parent OU must belong to the same organization")
+                throw Abort(.badRequest, reason: "New parent folder must belong to the same organization")
             }
 
             // Prevent moving to a descendant (circular reference)
             let descendants = try await ou.descendants(on: req.db)
             if descendants.contains(where: { $0.id == newParentID }) {
-                throw Abort(.badRequest, reason: "Cannot move OU to its own descendant")
+                throw Abort(.badRequest, reason: "Cannot move folder to its own descendant")
             }
 
             newParent = parent
@@ -431,19 +432,19 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has access
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let parentOU = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Verify OU belongs to the organization
         if parentOU.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Get sub-OUs
@@ -482,7 +483,7 @@ struct OrganizationalUnitController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let parentOUID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
@@ -492,12 +493,12 @@ struct OrganizationalUnitController: RouteCollection {
 
         // Validate parent OU exists and belongs to organization
         guard let parentOU = try await OrganizationalUnit.find(parentOUID, on: req.db) else {
-            throw Abort(.badRequest, reason: "Parent OU not found")
+            throw Abort(.badRequest, reason: "Parent folder not found")
         }
 
         // Verify parent belongs to same organization
         if parentOU.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Parent OU must belong to the same organization")
+            throw Abort(.badRequest, reason: "Parent folder must belong to the same organization")
         }
 
         // Check for name uniqueness within parent scope
@@ -508,7 +509,7 @@ struct OrganizationalUnitController: RouteCollection {
             .first()
 
         if existingOU != nil {
-            throw Abort(.conflict, reason: "OU name already exists in this scope")
+            throw Abort(.conflict, reason: "Folder name already exists in this scope")
         }
 
         // Calculate depth
