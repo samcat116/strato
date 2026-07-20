@@ -79,7 +79,9 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     var determiningPoliciesJSON: String?
 
     /// The tier that produced Cedar's decision: `platform`, `guardrail`,
-    /// `grant`, or `default-deny`.
+    /// `grant`, or `default-deny` — plus `unknown`, which is unreachable with
+    /// today's policy ids and therefore means a new id prefix arrived without
+    /// `CedarCheckDecision.tier` learning about it.
     @OptionalField(key: "tier")
     var tier: String?
 

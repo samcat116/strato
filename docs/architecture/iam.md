@@ -444,13 +444,32 @@ matter:
   up as a wall of `skipped` rows, not silence.
 - **Burn-down runs off `GET /api/iam/decision-logs`** (`?mismatchesOnly=true`,
   system-admin only) and `/summary`, which buckets decisions by permission,
-  action, both verdicts, and tier. Mismatches also log a warning carrying the
-  full comparison. Two mismatch classes are *expected* and confirm the target
-  semantics rather than refuting them: org members losing implicit project
-  visibility, and nested-folder admin inheritance being fixed.
+  action, both verdicts, and tier over a bounded window (`?sinceHours`, default
+  24 — the log takes a row per check, so an unbounded `GROUP BY` would scan the
+  whole retention window). Mismatches also log a warning carrying the full
+  comparison. Three mismatch classes are *expected* and confirm the target
+  semantics rather than refuting them:
+  1. org members losing implicit project visibility;
+  2. nested-folder admin inheritance being fixed;
+  3. **conditioned bindings**, which the entity slice deliberately does not
+     flatten — the ambient half of the context (`mfa`, `sourceIP`) arrives at
+     cutover, so until then a conditioned grant reads as `spicedb=allow /
+     cedar=deny`. These rows carry a non-zero
+     `skipped_conditioned_bindings`, which is how they are separated from
+     genuine mismatches.
 - Rows are append-only, FK-free (decisions outlive what they describe), and
   pruned by a retention sweep (`IAM_DECISION_LOG_RETENTION_DAYS`, default 30,
-  cluster-singleton via the coordination sweep lock).
+  cluster-singleton via the coordination sweep lock). The sweep is armed even
+  when shadowing is switched off, so the kill switch stops new rows without
+  stranding the ones already written.
+- **Shadowing is bounded, not free.** Each check costs roughly ten sequential
+  queries (the ancestor walk, group and org memberships, bindings) plus the row
+  insert, against a Fluent pool that defaults to one connection per event loop.
+  `IAMShadowGate` caps concurrent evaluations
+  (`IAM_SHADOW_EVAL_MAX_CONCURRENCY`, default 4) and the queue behind them
+  (`IAM_SHADOW_EVAL_MAX_QUEUE_DEPTH`, default 512); overflow is shed and
+  counted in the logs rather than queued without limit, so a saturated gate is
+  a number rather than a latency regression in the request path.
 
 The admin bypass and public-route allowlist still short-circuit *before*
 SpiceDB, so those decisions do not appear yet; they flow through the evaluator

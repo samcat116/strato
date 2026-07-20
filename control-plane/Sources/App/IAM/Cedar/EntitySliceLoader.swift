@@ -76,8 +76,10 @@ struct CedarEntitySlice: Equatable, Sendable {
     }
 
     /// The request context carrying the grants. Ambient conditions (`mfa`,
-    /// `sourceIP`) merge in at check time (#481) — they belong to the request,
-    /// not the slice.
+    /// `sourceIP`) belong to the request rather than the slice and will merge
+    /// in at check time; shadow evaluation (#481) passes this through
+    /// unchanged, so conditioned bindings are skipped and counted until
+    /// cutover (#482) wires the ambient half.
     var baseContextValue: CedarValue {
         .record(["grants": grants.contextValue])
     }

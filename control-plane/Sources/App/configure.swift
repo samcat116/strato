@@ -637,7 +637,11 @@ public func configure(_ app: Application) async throws {
     app.lifecycle.use(AuditRetentionLifecycleHandler())
 
     // IAM phase 4 (issue #481): decision-log retention. The shadow evaluation
-    // itself needs no boot step — it hangs off `Request.spicedb`.
+    // itself needs no boot step — it hangs off `Request.spicedb`. Resolve the
+    // config once here rather than letting the accessor re-read the
+    // environment on every `Request.spicedb` access. Tests override the stored
+    // value after `configure` to opt into shadowing.
+    app.iamShadowConfig = .fromEnvironment(app.environment)
     app.lifecycle.use(IAMShadowLifecycleHandler())
 
     // SSF poll delivery (issue #38): periodically drain poll-delivery streams

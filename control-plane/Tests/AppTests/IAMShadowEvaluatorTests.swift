@@ -249,6 +249,38 @@ final class IAMShadowEvaluatorTests {
         }
     }
 
+    /// The gate is what keeps shadowing off the connection pool: each check is
+    /// ~10 sequential queries plus an insert, against a Fluent pool that
+    /// defaults to one connection per event loop.
+    @Test("The gate admits up to its ceiling, queues to its depth, then sheds")
+    func gateBoundsConcurrency() async throws {
+        let gate = IAMShadowGate(maxConcurrent: 2, maxQueueDepth: 1)
+
+        #expect(await gate.acquire() == .admitted)
+        #expect(await gate.acquire() == .admitted)
+
+        // The third has no slot but the queue has room, so it parks. Run it
+        // detached — awaiting it here would deadlock by design.
+        let queued = Task { await gate.acquire() }
+        var spins = 0
+        while await gate.stats.queued < 1, spins < 200 {
+            try await Task.sleep(for: .milliseconds(5))
+            spins += 1
+        }
+        #expect(await gate.stats.queued == 1)
+
+        // The fourth finds the queue full and is shed with a running count,
+        // rather than growing the line without limit.
+        #expect(await gate.acquire() == .shed(total: 1))
+        #expect(await gate.acquire() == .shed(total: 2))
+
+        // Releasing hands the slot straight to the waiter.
+        await gate.release()
+        #expect(await queued.value == .admitted)
+        #expect(await gate.stats.queued == 0)
+        #expect(await gate.stats.inFlight == 2)
+    }
+
     @Test("The retention sweep prunes rows older than the window")
     func retentionSweep() async throws {
         try await withApp { app in
