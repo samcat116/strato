@@ -85,7 +85,7 @@ enum IAMRoleRegistry {
         .editor: [
             "vm:create", "vm:update", "vm:delete", "vm:viewConsole",
             "sandbox:create", "sandbox:update", "sandbox:delete",
-            "sandbox:snapshot", "sandbox:restore",
+            "sandbox:snapshot", "sandbox:restore", "sandbox:export",
             "volume:create", "volume:update", "volume:delete",
             "volume:attach", "volume:detach",
             "volume:snapshot", "volume:clone", "volume:restore",

@@ -143,6 +143,85 @@ public struct MTLSArtifactDownloader: Sendable {
         }
     }
 
+    /// `SnapshotArtifactTransfer.FileDownloader` adapter: stream `url` to
+    /// `destinationPath`. The transfer layer stages, checksum-verifies, and
+    /// publishes, so partial bytes on failure are its concern; failures
+    /// surface as `DownloadFailure` with the transient flag intact.
+    @Sendable
+    public func downloadSnapshotArtifact(url: URL, to destinationPath: String) async throws {
+        try await stream(url: url, to: destinationPath)
+    }
+
+    /// `SnapshotArtifactTransfer.FileUploader` adapter (issue #428): one mTLS
+    /// PUT streaming the file at `sourcePath` as the request body in bounded
+    /// memory — snapshot memory files are guest-RAM-sized and must never pass
+    /// through agent memory whole. Same per-call client construction as
+    /// downloads, for the same SVID-rotation reason.
+    @Sendable
+    public func uploadFile(url: URL, fromFile sourcePath: String) async throws {
+        var configuration = HTTPClient.Configuration()
+        do {
+            configuration.tlsConfiguration = try await tlsConfigurationProvider()
+        } catch {
+            throw DownloadFailure(
+                reason: "no SVID available for mTLS upload: \(error)", isTransient: false)
+        }
+        configuration.timeout.connect = timeouts.connect
+        configuration.timeout.read = timeouts.read
+        configuration.connectionPool.retryConnectionEstablishment = false
+
+        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
+        do {
+            try await uploadWithClient(client, url: url, sourcePath: sourcePath)
+        } catch {
+            try? await client.shutdown()
+            throw error
+        }
+        try await client.shutdown()
+    }
+
+    private func uploadWithClient(_ client: HTTPClient, url: URL, sourcePath: String) async throws {
+        let size: Int64
+        do {
+            guard let info = try await FileSystem.shared.info(forFileAt: FilePath(sourcePath)) else {
+                throw DownloadFailure(reason: "no file at \(sourcePath)", isTransient: false)
+            }
+            size = info.size
+        } catch let failure as DownloadFailure {
+            throw failure
+        } catch {
+            throw DownloadFailure(reason: "could not stat \(sourcePath): \(error)", isTransient: false)
+        }
+
+        do {
+            try await FileSystem.shared.withFileHandle(forReadingAt: FilePath(sourcePath)) { handle in
+                var request = HTTPClientRequest(url: url.absoluteString)
+                request.method = .PUT
+                request.headers.add(name: "Content-Type", value: "application/octet-stream")
+                request.body = .stream(handle.readChunks(), length: .known(size))
+
+                let response: HTTPClientResponse
+                do {
+                    response = try await client.execute(
+                        request, deadline: .now() + timeouts.request, logger: logger)
+                } catch {
+                    throw DownloadFailure(reason: "upload request failed: \(error)", isTransient: true)
+                }
+                guard (200..<300).contains(response.status.code) else {
+                    let transient =
+                        response.status.code >= 500 || response.status.code == 408
+                        || response.status.code == 429
+                    throw DownloadFailure(
+                        reason: "upload rejected: HTTP \(response.status.code)", isTransient: transient)
+                }
+            }
+        } catch let failure as DownloadFailure {
+            throw failure
+        } catch {
+            throw DownloadFailure(reason: "upload stream failed: \(error)", isTransient: true)
+        }
+    }
+
     /// The core download: one mTLS GET streamed to `destinationPath` in
     /// bounded memory. The destination holds partial bytes on failure — every
     /// caller stages into a private path and verifies a checksum before

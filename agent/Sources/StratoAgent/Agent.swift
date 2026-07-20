@@ -576,6 +576,21 @@ actor Agent {
                 }
 
                 logger.info("Initializing sandbox runtime (Linux only)")
+                // Snapshot mobility (issue #428): exported artifacts move
+                // through the control plane's transfer routes over SVID mTLS,
+                // like image downloads. The downloader resolves the TLS
+                // config per call, so building this before the SVID manager
+                // exists is fine — no transfer can start before registration.
+                let snapshotDownloader = makeMTLSArtifactDownloader()
+                let snapshotTransfer = SnapshotArtifactTransfer(
+                    controlPlaneBaseURL: controlPlaneHTTPBase,
+                    downloadFile: { url, destination in
+                        try await snapshotDownloader.downloadSnapshotArtifact(url: url, to: destination)
+                    },
+                    uploadFile: { url, source in
+                        try await snapshotDownloader.uploadFile(url: url, fromFile: source)
+                    }
+                )
                 sandboxRuntime = FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
@@ -592,7 +607,8 @@ actor Agent {
                     jailNewSandboxes: jailNewSandboxes,
                     jailerBlockedReason: sandboxJailerBlockedReason,
                     warmStartEnabled: sandboxWarmStart,
-                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes
+                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes,
+                    snapshotTransfer: snapshotTransfer
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
@@ -938,11 +954,18 @@ actor Agent {
         } else {
             let preflight = runHostPreflight()
             logHostPreflight(preflight)
-            hypervisors = preflight.gate(
+            let probed = preflight.gate(
                 HypervisorProbe.probeAll(
                     qemuBinaryPath: qemuBinaryPath,
                     firecrackerBinaryPath: firecrackerBinaryPath
                 ))
+            // Firecracker's binary version rides the registration (issue
+            // #428): snapshot mobility keys cross-agent restore placement on
+            // version equality, so the control plane needs to know what each
+            // host would load snapshots with.
+            hypervisors = HypervisorProbe.stampingFirecrackerVersion(
+                probed,
+                version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
         }
         let networkCapability = currentNetworkCapability()
         var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
@@ -1835,6 +1858,9 @@ extension Agent {
             case .sandboxRestore:
                 let message = try envelope.decode(as: SandboxRestoreMessage.self)
                 await handleSandboxRestore(message)
+            case .sandboxSnapshotExport:
+                let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
+                await handleSandboxSnapshotExport(message)
             // Volume operations
             case .volumeCreate:
                 let message = try envelope.decode(as: VolumeCreateMessage.self)
@@ -2648,7 +2674,8 @@ extension Agent {
                 firecrackerVersion: result.firecrackerVersion,
                 architecture: CPUArchitecture.current,
                 guestControlProtocolVersion: result.guestControlProtocolVersion,
-                forkLayoutVersion: result.forkLayoutVersion)
+                forkLayoutVersion: result.forkLayoutVersion,
+                cpuTemplate: result.cpuTemplate)
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
         } catch {
@@ -2704,7 +2731,8 @@ extension Agent {
 
         do {
             try await runtime.restoreSandbox(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
+                artifacts: message.artifacts)
             await sendSuccess(for: message.requestId, message: "Sandbox restored from snapshot")
         } catch {
             await sendError(
@@ -2712,6 +2740,38 @@ extension Agent {
                 error: "Failed to restore sandbox: \(error.localizedDescription)")
             logger.error(
                 "Failed to restore sandbox from snapshot",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleSandboxSnapshotExport(_ message: SandboxSnapshotExportMessage) async {
+        logger.info(
+            "Sandbox snapshot export request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.exportSandboxSnapshot(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
+                uploads: message.uploads)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot exported")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to export sandbox snapshot: \(error.localizedDescription)")
+            logger.error(
+                "Failed to export sandbox snapshot",
                 metadata: [
                     "sandboxId": .string(message.sandboxId),
                     "snapshotId": .string(message.snapshotId),

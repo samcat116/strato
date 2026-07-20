@@ -476,6 +476,115 @@ final class SandboxTests {
         }
     }
 
+    @Test("Fork of an exported snapshot survives losing its owning agent")
+    func createFromExportedSnapshotWithoutAgent() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            // No agent at all: the snapshot's export record is the only
+            // viable restore source (issue #428). The create is accepted;
+            // background placement then fails because no schedulable agent
+            // exists, which is the scheduling contract, not the gate's.
+            let snapshot = SandboxSnapshot(
+                name: "durable-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: nil,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+                SandboxSnapshotExportedArtifact(
+                    kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
+            }
+            snapshot.exportedAt = Date()
+            try await snapshot.save(on: app.db)
+
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "durable-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let accepted = try #require(operation)
+            let fork = try #require(await Sandbox.find(accepted.resourceId, on: app.db))
+            #expect(fork.restoredFromSnapshotId == snapshot.id)
+        }
+    }
+
+    @Test("Fork with neither an owning agent nor an export is refused")
+    func createFromSnapshotRefusedWithoutAgentOrExport() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let snapshot = SandboxSnapshot(
+                name: "stranded-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: nil,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+            try await snapshot.save(on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "stranded-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("export"))
+            }
+        }
+    }
+
+    @Test("Create validates the CPU template and persists the normalized value")
+    func createValidatesCPUTemplate() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "bogus-template",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                    "cpuTemplate": "SUPERFAST",
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("cpuTemplate"))
+            }
+
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "templated",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                    "cpuTemplate": "t2",
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let accepted = try #require(operation)
+            let created = try #require(await Sandbox.find(accepted.resourceId, on: app.db))
+            #expect(created.cpuTemplate == "T2")
+
+            // The template travels on the wire spec (issue #428).
+            #expect(created.buildSpec().cpuTemplate == "T2")
+        }
+    }
+
     @Test("Fork transaction rechecks destructive source transitions")
     func createFromSnapshotRechecksLineage() async throws {
         try await withSandboxTestApp { app, user, project, source, token in

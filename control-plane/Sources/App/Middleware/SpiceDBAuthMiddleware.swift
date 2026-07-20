@@ -21,7 +21,16 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         // over mTLS, not a session; the controller authenticates the forwarded
         // client certificate (or a user session) itself.
         let isAgentDownload = path.hasPrefix("/api/projects/") && path.hasSuffix("/download")
-        if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) }) || isAgentDownload {
+        // Snapshot artifact transfer (issue #428): agents stream exported
+        // snapshot artifacts up and down with their SPIFFE SVID over mTLS;
+        // the handler authenticates the forwarded client certificate before
+        // touching any bytes.
+        let isAgentSnapshotArtifact =
+            path.hasPrefix("/api/sandboxes/") && path.contains("/snapshots/")
+            && path.contains("/artifacts/")
+        if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
+            || isAgentDownload || isAgentSnapshotArtifact
+        {
             return try await next.respond(to: request)
         }
 

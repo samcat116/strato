@@ -611,6 +611,12 @@ export interface UpdateVMRequest {
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an
 // Operation record, which the client polls until it reaches a terminal state.
+/// Mirrors `VMOperationKind` in shared/Sources/StratoShared/OperationModels.swift.
+/// Adding a case here is what forces the matching entry in the `verbs` map in
+/// components/vms/operation-watcher.tsx (a `Record<OperationKind, …>`, so the
+/// compiler catches the omission). Forgetting to add it *here* is the silent
+/// failure: the watcher then throws on an unknown kind and the user never sees
+/// a terminal toast.
 export type OperationKind =
   | "create"
   | "boot"
@@ -622,7 +628,9 @@ export type OperationKind =
   // Sandbox checkpoint/restore (backend issue #426).
   | "snapshot"
   | "snapshot_delete"
-  | "restore";
+  | "restore"
+  // Snapshot mobility: off-node export (backend issue #428).
+  | "snapshot_export";
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
@@ -706,6 +714,11 @@ export interface CreateSandboxRequest {
   env?: Record<string, string>;
   workingDir?: string;
   ttlSeconds?: number;
+  /**
+   * Firecracker CPU template (issue #428). Decided at create time; makes the
+   * sandbox's snapshots restorable across same-arch hosts.
+   */
+  cpuTemplate?: string;
 }
 
 export type SandboxSnapshotStatus =
@@ -726,6 +739,10 @@ export interface SandboxSnapshot {
   architecture?: string | null;
   guestControlProtocolVersion?: number | null;
   forkLayoutVersion?: number | null;
+  cpuTemplate?: string | null;
+  // When the snapshot was last fully exported to object storage (issue
+  // #428); null means agent-local only.
+  exportedAt?: string | null;
   errorMessage?: string | null;
   createdById?: string | null;
   createdAt?: string | null;

@@ -474,6 +474,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddSandboxRestoreLineage())
     app.migrations.add(AddSandboxSnapshotGuestControlVersion())
     app.migrations.add(AddSandboxSnapshotForkLayoutVersion())
+    // Snapshot mobility (issue #428): the export record + cross-agent
+    // compatibility constraints, and the sandbox's create-time CPU template.
+    app.migrations.add(AddSandboxSnapshotMobility())
 
     // Give the seeded "default" network resolvers so guests can resolve names
     // out of the box (issue #518). Runs late: it must follow the migration that
@@ -501,6 +504,12 @@ public func configure(_ app: Application) async throws {
     // (issue #527). This stays last because it covers tables added throughout
     // the full migration history.
     app.migrations.add(EnforcePersistedEnumValues())
+
+    // Snapshot export (issue #428) added a `resource_operations.kind` value;
+    // deployments whose enum constraints were installed before it must have
+    // the constraint re-installed with the extended list. Idempotent on
+    // fresh databases. Ordered after EnforcePersistedEnumValues.
+    app.migrations.add(AddSnapshotExportOperationKind())
 
     try await app.autoMigrate()
 

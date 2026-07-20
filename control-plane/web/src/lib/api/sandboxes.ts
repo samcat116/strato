@@ -67,6 +67,15 @@ export const sandboxesApi = {
     return api.get<SandboxSnapshot[]>(`/api/sandboxes/${id}/snapshots`);
   },
 
+  // Copies a snapshot's artifacts into control-plane object storage (issue
+  // #428), making it durable against agent loss and eligible for cross-agent
+  // restore/fork. 202 + operation, like the other snapshot mutations.
+  exportSnapshot(id: string, snapshotId: string): Promise<Operation> {
+    return api.post<Operation>(
+      `/api/sandboxes/${id}/snapshots/${snapshotId}/export`
+    );
+  },
+
   // Creates a pending exec session (201). Attach to the returned
   // `websocketPath` before `expiresAt` to actually start the process.
   exec(id: string, body: SandboxExecRequest): Promise<SandboxExecSession> {

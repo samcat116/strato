@@ -194,6 +194,13 @@ extension SandboxController {
                     current.architecture = report.architecture?.rawValue
                     current.guestControlProtocolVersion = report.guestControlProtocolVersion
                     current.forkLayoutVersion = report.forkLayoutVersion
+                    // Mobility constraints (issue #428): the template the
+                    // guest actually booted with (agent-authoritative), and
+                    // the source host's CPU model — the identity check an
+                    // un-templated snapshot needs to move at all.
+                    current.cpuTemplate = report.cpuTemplate
+                    current.sourceCPUModel =
+                        (await app.agentService.getAgentInfo(agentId))?.hostInfo?.cpuModel
                     try await current.save(on: app.db)
                 }
 
@@ -333,6 +340,9 @@ extension SandboxController {
                         sandboxId: sandboxID, snapshotId: snapshotId,
                         agentId: agentId, app: app)
                 }
+                // The exported copy goes with the snapshot (issue #428);
+                // best-effort, like the SpiceDB tuples below.
+                await snapshot.deleteExportedObjects(app: app)
                 let sandboxRef = snapshot.$sandbox.id
                 let projectRef = snapshot.$project.id
                 let ownerRef = snapshot.$createdBy.id
@@ -411,18 +421,37 @@ extension SandboxController {
         guard let agentId = sandbox.hypervisorId else {
             throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
         }
-        // v1: artifacts live only on the agent that took the snapshot.
-        if let snapshotAgent = snapshot.agentId, snapshotAgent != agentId {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Snapshot was taken on agent '\(snapshotAgent)' but the sandbox now lives on '\(agentId)'; cross-agent restore is not supported yet"
-            )
-        }
         do {
             try await SandboxSnapshotService.requireCapableAgent(agentId, app: req.application)
         } catch let error as SandboxSnapshotServiceError {
             throw Abort(.conflict, reason: error.localizedDescription)
+        }
+        // Cross-agent restore (issue #428): when the sandbox no longer lives
+        // on the agent that took the snapshot, the restore rides the exported
+        // copy — which must exist, and the target must satisfy the recorded
+        // compatibility constraints (Firecracker version, architecture, CPU
+        // template or identical CPU).
+        var transferArtifacts: [SandboxSnapshotArtifactDescriptor]?
+        if let snapshotAgent = snapshot.agentId, snapshotAgent != agentId {
+            guard snapshot.isExported else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Snapshot was taken on agent '\(snapshotAgent)' but the sandbox now lives on '\(agentId)'; export the snapshot first to enable cross-agent restore"
+                )
+            }
+            guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
+                throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
+            }
+            if let blocker = SandboxSnapshotCompatibility.restoreBlocker(
+                snapshot: snapshot, target: targetAgent)
+            {
+                throw Abort(.conflict, reason: blocker)
+            }
+            transferArtifacts = try snapshot.exportedArtifactDescriptors()
+            guard transferArtifacts != nil else {
+                throw Abort(.conflict, reason: "Snapshot's exported copy is incomplete; re-export it")
+            }
         }
 
         // The restored guest resumes running; desired state must agree or
@@ -448,7 +477,8 @@ extension SandboxController {
         }
 
         Self.runSnapshotRestore(
-            operation, snapshotID: snapshotID, agentId: agentId, app: req.application)
+            operation, snapshotID: snapshotID, agentId: agentId,
+            artifacts: transferArtifacts, app: req.application)
 
         req.logger.info(
             "Sandbox restore accepted",
@@ -459,11 +489,14 @@ extension SandboxController {
         return try Self.accepted(operation)
     }
 
-    /// Background half of `restoreSnapshot`.
+    /// Background half of `restoreSnapshot`. `artifacts` is non-nil for a
+    /// cross-agent restore: the target agent stages the exported archive from
+    /// object storage before loading it (issue #428).
     private static func runSnapshotRestore(
         _ operation: ResourceOperation,
         snapshotID: UUID,
         agentId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil,
         app: Application
     ) {
         guard let operationId = operation.id else { return }
@@ -472,7 +505,8 @@ extension SandboxController {
         app.backgroundTasks.spawn {
             do {
                 try await SandboxSnapshotService.requestRestore(
-                    sandboxId: sandboxID, snapshotId: snapshotID, agentId: agentId, app: app)
+                    sandboxId: sandboxID, snapshotId: snapshotID, agentId: agentId,
+                    artifacts: artifacts, app: app)
                 // The agent confirmed the guest answered post-restore; the
                 // periodic observed report re-confirms.
                 await completeOperation(
@@ -505,6 +539,22 @@ extension SandboxController {
             try await sql.raw(
                 "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sandbox-snapshot-lineage:\(snapshotID.uuidString)")))"
             ).run()
+        }
+    }
+
+    /// Removes the exported object-store copies of every snapshot belonging
+    /// to `sandboxID` (issue #428). Called on the sandbox-row deletion paths
+    /// *before* the delete, because the snapshot rows cascade with the
+    /// sandbox and take the export records with them. Best-effort by the
+    /// same rationale as `deleteExportedObjects`.
+    static func cleanUpExportedSnapshotObjects(for sandboxID: UUID, app: Application) async {
+        guard
+            let snapshots = try? await SandboxSnapshot.query(on: app.db)
+                .filter(\.$sandbox.$id == sandboxID)
+                .all()
+        else { return }
+        for snapshot in snapshots {
+            await snapshot.deleteExportedObjects(app: app)
         }
     }
 
@@ -562,8 +612,9 @@ extension SandboxController {
     }
 
     /// Fetch the :snapshotID snapshot and confirm it belongs to `sandbox`
-    /// (the route nests snapshots under their sandbox).
-    private func fetchSnapshot(req: Request, sandbox: Sandbox) async throws -> SandboxSnapshot {
+    /// (the route nests snapshots under their sandbox). Internal because the
+    /// mobility handlers in SandboxSnapshotTransferController.swift share it.
+    func fetchSnapshot(req: Request, sandbox: Sandbox) async throws -> SandboxSnapshot {
         guard let snapshotID = req.parameters.get("snapshotID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid snapshot ID")
         }
