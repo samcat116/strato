@@ -5,6 +5,7 @@ import GRPCProtobuf
 import Logging
 import NIOCore
 import NIOSSL
+import SPIFFEVerification
 import SwiftProtobuf
 import X509
 
@@ -778,9 +779,9 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
     /// Replacement server-certificate verification for the mTLS admin path:
     /// chain-verify the presented certificates against the trust bundle and
     /// require the leaf to carry exactly the pinned SPIRE server SPIFFE ID as
-    /// a URI SAN. Runs instead of BoringSSL's verification (NIOSSL custom
-    /// callbacks replace it entirely), which is why the chain walk is done
-    /// here with swift-certificates.
+    /// a URI SAN. The chain walk + URI SAN check live in the shared
+    /// `SPIFFEPeerVerifier` (the agent pins the control plane's identity the
+    /// same way — issue #552).
     static func verifySPIREServerChain(
         _ presented: [NIOSSLCertificate],
         roots: [Certificate],
@@ -788,58 +789,14 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         logger: Logger,
         promise: EventLoopPromise<NIOSSLVerificationResultWithMetadata>
     ) {
-        let fail: (String) -> Void = { reason in
-            logger.warning(
-                "Rejected SPIRE server certificate",
-                metadata: ["reason": .string(reason)])
-            promise.succeed(.failed)
-        }
-
-        let leaf: Certificate
-        let intermediates: [Certificate]
-        do {
-            let chain = try presented.map { try Certificate(derEncoded: $0.toDERBytes()) }
-            guard let first = chain.first else {
-                fail("server presented no certificate")
-                return
-            }
-            leaf = first
-            intermediates = Array(chain.dropFirst())
-        } catch {
-            fail("failed to parse presented certificate chain: \(error)")
-            return
-        }
-
-        // The identity check is what stops any other bundle-signed workload
-        // from impersonating the server.
-        let uriSANs =
-            (try? leaf.extensions.subjectAlternativeNames)?
-            .flatMap { names in
-                names.compactMap { name -> String? in
-                    if case .uniformResourceIdentifier(let uri) = name { return uri }
-                    return nil
-                }
-            } ?? []
-        guard uriSANs.contains(expectedSPIFFEID) else {
-            fail("leaf SPIFFE ID \(uriSANs) does not match pinned \(expectedSPIFFEID)")
-            return
-        }
-
-        // Chain verification is async (swift-certificates); bridge it onto
-        // the promise the TLS handshake is waiting on.
-        Task {
-            var verifier = Verifier(rootCertificates: CertificateStore(roots)) {
-                RFC5280Policy()
-            }
-            let result = await verifier.validate(
-                leaf: leaf, intermediates: CertificateStore(intermediates))
-            switch result {
-            case .validCertificate:
-                promise.succeed(.certificateVerified(VerificationMetadata(nil)))
-            case .couldNotValidate(let failures):
-                fail("certificate does not chain to the trust bundle: \(failures)")
-            }
-        }
+        SPIFFEPeerVerifier.verifyPeerChain(
+            presented,
+            roots: roots,
+            expectedSPIFFEID: expectedSPIFFEID,
+            peerDescription: "SPIRE server",
+            logger: logger,
+            promise: promise
+        )
     }
 
     /// Split `spiffe://<trust-domain>/<path>` into the API's structured form.

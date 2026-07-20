@@ -38,9 +38,12 @@ public enum SPIFFETLSConfig {
         config.certificateChain = certificates.map { .certificate($0) }
         config.privateKey = .privateKey(privateKey)
         config.trustRoots = trustRoots
-        // For SPIFFE mTLS, we verify the certificate chain but not hostname
-        // since SPIFFE uses URI SANs (spiffe://...) not DNS SANs
-        // The SPIFFE ID in the URI SAN is verified separately by the application
+        // SPIFFE peers present URI SANs (spiffe://...), not DNS SANs, so
+        // hostname verification cannot apply. Server identity is enforced
+        // instead by the pinned-SPIFFE-ID verification callback that
+        // SPIFFEWebSocketConnector installs on the connection (issue #552) —
+        // this configuration alone only checks that the chain reaches the
+        // trust bundle, which any workload in the trust domain satisfies.
         config.certificateVerification = verifyPeer ? .noHostnameVerification : .none
 
         return config

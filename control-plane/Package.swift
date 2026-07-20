@@ -79,6 +79,7 @@ let package = Package(
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "SPIFFEVerification", package: "shared"),
             ],
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
