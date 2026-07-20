@@ -504,6 +504,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVMInterfaceObservedAddresses())
     app.migrations.add(AddGuestInfoToVM())
 
+    // OAuth device grant for the strato CLI (issue #558): pending device
+    // authorizations plus the access/refresh token sessions they mint.
+    app.migrations.add(CreateDeviceAuthorization())
+    app.migrations.add(CreateCLISession())
+
     // FluentKit force-unwraps persisted @Enum raw values on first property
     // access. Normalize casing drift and put a database validation boundary in
     // front of every persisted enum so malformed rows cannot trap the process

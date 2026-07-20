@@ -13,6 +13,7 @@ export { agentsApi } from "./agents";
 export { imagesApi } from "./images";
 export { projectsApi } from "./projects";
 export { apiKeysApi } from "./api-keys";
+export { oauthApi } from "./oauth";
 export { scimTokensApi } from "./scim-tokens";
 export { oidcProvidersApi } from "./oidc-providers";
 export { ssfStreamsApi } from "./ssf-streams";

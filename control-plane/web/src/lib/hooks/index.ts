@@ -48,6 +48,13 @@ export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
 export { useSandboxLogs, useInvalidateSandboxLogs } from "./use-sandbox-logs";
 export { useAPIKeys, useCreateAPIKey, useRevokeAPIKey } from "./use-api-keys";
 export {
+  useCLISessions,
+  useRevokeCLISession,
+  usePendingDeviceAuthorization,
+  useApproveDevice,
+  useDenyDevice,
+} from "./use-cli-sessions";
+export {
   useUsers,
   useUpdateUser,
   useDeleteUser,
