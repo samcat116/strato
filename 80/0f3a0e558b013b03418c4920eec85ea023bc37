@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/SCIMProvisioningIntegrationTests.swift
+  s_3348a74699f0cd::t_9e3a16deba0cf2 1-183
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_3348a74699f0cd::t_9b4d4c217426b5 31-43,45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "800f3a0e558b013b03418c4920eec85ea023bc37",
+  "prompts": {},
+  "sessions": {
+    "s_3348a74699f0cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67cd39e3-33a7-4cb0-afaa-26796eafe7f2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
