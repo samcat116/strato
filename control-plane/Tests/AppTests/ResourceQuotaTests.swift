@@ -451,4 +451,75 @@ final class ResourceQuotaTests {
             }
         }
     }
+
+    // Pins the issue #482 pre-cutover audit decision: a quota row with no
+    // scope FK (corrupt data — every create path sets exactly one) is not a
+    // shared resource. Before the fix, the scope-dispatch `if/else if` chains
+    // fell through and allowed, so any authenticated user could read and
+    // mutate such a row. Now only system admins can, for repair.
+    @Test("Scopeless quota denies non-admin reads and writes, admits system admins")
+    func testScopelessQuotaRequiresSystemAdmin() async throws {
+        try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let quota = ResourceQuota(
+                name: "Corrupt Scopeless Quota",
+                organizationID: nil,
+                organizationalUnitID: nil,
+                projectID: nil,
+                maxVCPUs: 10,
+                maxMemory: Int64(20.0 * 1024 * 1024 * 1024),
+                maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
+                maxVMs: 5
+            )
+            try await quota.save(on: app.db)
+
+            // The org-admin (but not system-admin) caller is denied everywhere.
+            try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: "Hijacked",
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // A system admin can still inspect and remove the corrupt row.
+            let admin = User(
+                username: "quotasysadmin",
+                email: "quotasysadmin@example.com",
+                displayName: "Quota Sysadmin",
+                isSystemAdmin: true
+            )
+            try await admin.save(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+        }
+    }
 }

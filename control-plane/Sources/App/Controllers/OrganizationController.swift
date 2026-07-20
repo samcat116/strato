@@ -81,17 +81,18 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Check if user belongs to this organization
+        // Authorization goes through SpiceDB (issue #482 pre-cutover audit:
+        // inline relational reads were allow decisions invisible to shadow
+        // evaluation). The membership row survives only to display the
+        // caller's role — nil for a system admin who isn't a member.
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
+
         let userOrg = try await UserOrganization.query(on: req.db)
             .filter(\.$user.$id == user.id!)
             .filter(\.$organization.$id == organizationID)
             .first()
 
-        guard let userOrganization = userOrg else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
-
-        return OrganizationResponse(from: organization, userRole: userOrganization.role)
+        return OrganizationResponse(from: organization, userRole: userOrg?.role)
     }
 
     func create(req: Request) async throws -> OrganizationResponse {
@@ -192,7 +193,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func update(req: Request) async throws -> OrganizationResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -204,16 +205,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Check if user is admin of this organization
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Only organization admins can update organization")
-        }
+        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
+        // maps to `org:update` at the Cedar cutover.
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         let updateRequest = try req.content.decode(UpdateOrganizationRequest.self)
 
@@ -241,7 +235,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -253,16 +247,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Check if user is admin of this organization
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Only organization admins can delete organization")
-        }
+        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
+        // maps to `org:delete` at the Cedar cutover.
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Check if this is the default organization
         if organization.name == "Default Organization" {
@@ -322,15 +309,10 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Check if user belongs to this organization
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
+        // Membership check through SpiceDB (issue #482 pre-cutover audit).
+        // System admins may switch to any organization — the same bypass the
+        // rest of the API applies.
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         user.currentOrganizationId = organizationID
         try await user.save(on: req.db)
@@ -341,7 +323,7 @@ struct OrganizationController: RouteCollection {
     // MARK: - Member Management
 
     func getMembers(req: Request) async throws -> [OrganizationMemberResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -349,15 +331,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Check if user belongs to this organization
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
+        // Membership check through SpiceDB (issue #482 pre-cutover audit);
+        // the member list stays member-visible, mapping to `org:read`.
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let members = try await UserOrganization.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
@@ -385,16 +361,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Check if current user is admin of this organization
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == currentUser.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Only organization admins can add members")
-        }
+        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
+        // `manage_members` maps to `org:update` at the Cedar cutover.
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         struct AddMemberRequest: Content {
             let userEmail: String
@@ -428,7 +397,7 @@ struct OrganizationController: RouteCollection {
         )
         // IAM dual-write (issue #477): org admins get an admin binding on the
         // org node; bare membership maps to no binding.
-        let actorID = req.auth.get(User.self)?.id
+        let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
             if let bindingRole = IAMRole.fromOrganizationRole(addRequest.role) {
@@ -456,7 +425,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
-        guard let currentUser = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -468,16 +437,8 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Check if current user is admin of this organization
-        let currentUserOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == currentUser.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard currentUserOrg != nil else {
-            throw Abort(.forbidden, reason: "Only organization admins can remove members")
-        }
+        // Org-admin check through SpiceDB (issue #482 pre-cutover audit).
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard
             let membership = try await UserOrganization.query(on: req.db)
@@ -537,16 +498,8 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Check if current user is admin of this organization
-        let currentUserOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == currentUser.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard currentUserOrg != nil else {
-            throw Abort(.forbidden, reason: "Only organization admins can update member roles")
-        }
+        // Org-admin check through SpiceDB (issue #482 pre-cutover audit).
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         struct UpdateRoleRequest: Content {
             let role: String
@@ -577,7 +530,7 @@ struct OrganizationController: RouteCollection {
 
         let previousRole = membership.role
         membership.role = updateRequest.role
-        let actorID = req.auth.get(User.self)?.id
+        let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
             // IAM dual-write: swap the role's binding atomically with the

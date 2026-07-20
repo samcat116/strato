@@ -14,8 +14,9 @@ import Fluent
 /// `view_project` / `manage_project` permissions, which resolve org/OU inheritance
 /// (and, once granted, project-level roles) through the schema.
 ///
-/// - Note: `OIDCController` deliberately keeps its own request-based variants: they
-///   use different error messages and semantics, so they are not interchangeable.
+/// - Note: `OIDCController` keeps its own request-based variants for their distinct
+///   error messages, but since the issue #482 pre-cutover audit they authorize through
+///   the same `req.can` path as these helpers.
 struct OrganizationAccessService {
     /// Throws `.forbidden` unless the current user can view the organization.
     static func requireMember(organizationID: UUID, on req: Request) async throws {

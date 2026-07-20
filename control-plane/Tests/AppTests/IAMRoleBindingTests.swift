@@ -175,6 +175,8 @@ final class IAMRoleBindingTests {
         try await withApp { app in
             let vmID = UUID()
             let volumeID = UUID()
+            let floatingIPID = UUID()
+            let sandboxSnapshotID = UUID()
             let owner = UUID()
             let editor = UUID()
             let viewer = UUID()
@@ -195,6 +197,14 @@ final class IAMRoleBindingTests {
                 RelationshipTuple(
                     entity: "volume", entityId: volumeID.uuidString,
                     relation: "owner", subject: "project", subjectId: UUID().uuidString),
+                // Owner-only types whose omission from the export would lose
+                // pre-dual-write grants at cutover (issue #482 audit).
+                RelationshipTuple(
+                    entity: "floating_ip", entityId: floatingIPID.uuidString,
+                    relation: "owner", subject: "user", subjectId: owner.uuidString),
+                RelationshipTuple(
+                    entity: "sandbox_snapshot", entityId: sandboxSnapshotID.uuidString,
+                    relation: "owner", subject: "user", subjectId: owner.uuidString),
             ]
 
             try await RoleBindingBackfill.backfillFromSpiceDB(app)
@@ -212,6 +222,17 @@ final class IAMRoleBindingTests {
             let volumeBindings = try await bindings(on: app.db, nodeType: .volume, nodeID: volumeID)
             #expect(volumeBindings.count == 1)
             #expect(volumeBindings.first?.principalID == owner)
+
+            let floatingIPBindings = try await bindings(on: app.db, nodeType: .floatingIP, nodeID: floatingIPID)
+            #expect(floatingIPBindings.count == 1)
+            #expect(floatingIPBindings.first?.principalID == owner)
+            #expect(floatingIPBindings.first?.role == IAMRole.admin.rawValue)
+
+            let snapshotBindings = try await bindings(
+                on: app.db, nodeType: .sandboxSnapshot, nodeID: sandboxSnapshotID)
+            #expect(snapshotBindings.count == 1)
+            #expect(snapshotBindings.first?.principalID == owner)
+            #expect(snapshotBindings.first?.role == IAMRole.admin.rawValue)
         }
     }
 

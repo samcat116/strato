@@ -12,6 +12,7 @@ enum RoleBindingBackfill {
     /// in SpiceDB (no relational mirror) and must be exported before cutover.
     static let exportedResourceTypes: [IAMNodeType] = [
         .virtualMachine, .sandbox, .image, .network, .volume, .volumeSnapshot,
+        .floatingIP, .sandboxSnapshot,
     ]
     static let exportedRelations = ["owner", "editor", "viewer"]
 
@@ -86,8 +87,9 @@ enum RoleBindingBackfill {
 
         for nodeType in exportedResourceTypes {
             for relation in exportedRelations {
-                // Not every exported type defines every role relation: `network`
-                // and `volume_snapshot` carry only `owner`. SpiceDB rejects a
+                // Not every exported type defines every role relation: `network`,
+                // `volume_snapshot`, `floating_ip`, and `sandbox_snapshot`
+                // carry only `owner`. SpiceDB rejects a
                 // filter naming a relation its schema does not define with a
                 // 400, so skip those pairs rather than fail. This runs at boot
                 // behind a fatal error, so treating it as fatal made the control
