@@ -51,7 +51,9 @@ struct OpenAPISpecDriftTests {
 
     private static func isDocumentedSurface(_ path: String) -> Bool {
         // Image routes are nested under /api/projects/{projectID}/images.
-        if path.contains("/images") { return true }
+        // Match `/images` as a whole path segment so a future sibling such as
+        // `/images-export` is not swept in.
+        if path.hasSuffix("/images") || path.contains("/images/") { return true }
         return documentedPrefixes.contains { path.hasPrefix($0) }
     }
 
@@ -83,7 +85,10 @@ struct OpenAPISpecDriftTests {
 
     /// Extract `METHOD /normalized/path` keys from the raw YAML by scanning the
     /// `paths:` block. Deliberately dependency-free (no YAML library in the test
-    /// target); relies on the document's 2-space indentation.
+    /// target); relies on the document's 2-space indentation (paths at 2 spaces,
+    /// operations at 4). This is a hard invariant of openapi.yaml — reflowing to
+    /// a different indent would break parsing, but fail-loud: a misparse yields a
+    /// drift-test failure, never a silently missed route.
     private static func specOperationKeys(from yaml: String) -> Set<String> {
         let httpMethods: Set<String> = [
             "get", "put", "post", "delete", "patch", "options", "head", "trace",
