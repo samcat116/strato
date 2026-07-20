@@ -72,6 +72,14 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "restored_from_snapshot_id")
     var restoredFromSnapshotId: UUID?
 
+    /// Firecracker CPU template the microVM boots with, decided at create
+    /// time (issue #428) because it is baked into every checkpoint's guest
+    /// state: a templated snapshot restores on any same-arch host whose
+    /// Firecracker honours the template, while a nil (passthrough) snapshot
+    /// only restores on identical CPU models. Immutable after create.
+    @OptionalField(key: "cpu_template")
+    var cpuTemplate: String?
+
     /// The sandbox's NICs (single-NIC in v1), allocated at create time by the
     /// same IPAM as VMs (issue #416). Requires eager loading with
     /// `.with(\.$networkInterfaces)`.
@@ -126,7 +134,8 @@ final class Sandbox: Model, @unchecked Sendable {
         env: [String: String] = [:],
         workingDir: String? = nil,
         ttlSeconds: Int? = nil,
-        restoredFromSnapshotId: UUID? = nil
+        restoredFromSnapshotId: UUID? = nil,
+        cpuTemplate: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -141,6 +150,7 @@ final class Sandbox: Model, @unchecked Sendable {
         self.workingDir = workingDir
         self.ttlSeconds = ttlSeconds
         self.restoredFromSnapshotId = restoredFromSnapshotId
+        self.cpuTemplate = cpuTemplate
         // A fresh sandbox exists but is not running, mirroring VM creation:
         // the create operation materializes it agent-side, and the user
         // starts it explicitly. `.stopped` here means "not yet confirmed by
@@ -252,7 +262,8 @@ extension Sandbox {
             env: env,
             workingDir: workingDir,
             network: network,
-            restoreFrom: restoreFrom
+            restoreFrom: restoreFrom,
+            cpuTemplate: cpuTemplate
         )
     }
 }
@@ -278,6 +289,7 @@ struct SandboxDetailResponse: Content {
     let expiresAt: Date?
     let hypervisorId: String?
     let restoredFromSnapshotId: UUID?
+    let cpuTemplate: String?
     let status: SandboxStatus
     let exitCode: Int?
     let createdAt: Date?
@@ -300,6 +312,7 @@ struct SandboxDetailResponse: Content {
         self.expiresAt = sandbox.expiresAt
         self.hypervisorId = sandbox.hypervisorId
         self.restoredFromSnapshotId = sandbox.restoredFromSnapshotId
+        self.cpuTemplate = sandbox.cpuTemplate
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode
         self.createdAt = sandbox.createdAt

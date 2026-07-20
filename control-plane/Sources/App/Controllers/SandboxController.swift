@@ -30,6 +30,13 @@ struct SandboxController: RouteCollection {
             sandbox.group("snapshots", ":snapshotID") { snapshot in
                 snapshot.delete(use: deleteSnapshot)
                 snapshot.post("restore", use: restoreSnapshot)
+                // Snapshot mobility (issue #428); handlers live in
+                // SandboxSnapshotTransferController.swift. The artifact
+                // routes are signed agent routes (streamed bodies, no
+                // session — see the SpiceDBAuthMiddleware carve-out).
+                snapshot.post("export", use: exportSnapshot)
+                snapshot.on(.PUT, "artifacts", ":artifactKind", body: .stream, use: uploadSnapshotArtifact)
+                snapshot.get("artifacts", ":artifactKind", use: downloadSnapshotArtifact)
             }
         }
     }
@@ -262,6 +269,11 @@ struct SandboxController: RouteCollection {
             let env: [String: String]?
             let workingDir: String?
             let ttlSeconds: Int?
+            /// Firecracker CPU template (issue #428), decided here — at
+            /// create time — because it is baked into every checkpoint's
+            /// guest state: templated snapshots restore on any same-arch
+            /// host, un-templated ones only on identical CPU models.
+            let cpuTemplate: String?
         }
 
         let createRequest = try req.content.decode(CreateSandboxRequest.self)
@@ -276,7 +288,7 @@ struct SandboxController: RouteCollection {
         if let snapshotID = createRequest.restoreFrom {
             guard createRequest.image == nil, createRequest.cpus == nil, createRequest.memory == nil,
                 createRequest.entrypoint == nil, createRequest.cmd == nil, createRequest.env == nil,
-                createRequest.workingDir == nil
+                createRequest.workingDir == nil, createRequest.cpuTemplate == nil
             else {
                 throw Abort(
                     .badRequest,
@@ -303,17 +315,31 @@ struct SandboxController: RouteCollection {
             guard let source = try await Sandbox.find(snapshot.$sandbox.id, on: req.db) else {
                 throw Abort(.conflict, reason: "Snapshot source sandbox no longer exists")
             }
-            guard let pinnedAgentID = snapshot.agentId,
-                let pinnedAgentUUID = UUID(uuidString: pinnedAgentID),
-                let pinnedAgent = try await Agent.find(pinnedAgentUUID, on: req.db)
-            else {
-                throw Abort(.conflict, reason: "Snapshot has no available owning agent")
+            // The fork must have at least one place to land: the snapshot's
+            // own agent (local artifacts) or, once exported, any compatible
+            // agent (issue #428). The scheduler applies the per-agent
+            // compatibility filters at placement; this gate only rejects
+            // forks that could never place anywhere.
+            let pinnedAgent: Agent?
+            if let pinnedAgentID = snapshot.agentId, let pinnedAgentUUID = UUID(uuidString: pinnedAgentID) {
+                pinnedAgent = try await Agent.find(pinnedAgentUUID, on: req.db)
+            } else {
+                pinnedAgent = nil
             }
-            guard WireProtocol.supportsSandboxFork(pinnedAgent.wireProtocolVersion ?? 0) else {
+            let pinnedAgentForkCapable =
+                pinnedAgent.map { WireProtocol.supportsSandboxFork($0.wireProtocolVersion ?? 0) } ?? false
+            guard pinnedAgentForkCapable || snapshot.isExported else {
+                if let pinnedAgent {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion)) and the snapshot is not exported"
+                    )
+                }
                 throw Abort(
                     .conflict,
                     reason:
-                        "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion))"
+                        "Snapshot has no available owning agent and no exported copy; export snapshots before their agent goes away to keep them forkable"
                 )
             }
             guard SandboxSnapshotForkLayout.supportsFork(snapshot.forkLayoutVersion) else {
@@ -414,6 +440,27 @@ struct SandboxController: RouteCollection {
             throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
         }
 
+        // CPU template (issue #428): admission-validated against the known
+        // static templates; the agent's Firecracker still rejects templates
+        // its host cannot honour. A fork inherits the snapshot's recorded
+        // template — the checkpointed guest state is already baked with it.
+        let cpuTemplate: String?
+        if let requested = createRequest.cpuTemplate?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !requested.isEmpty
+        {
+            let normalized = requested.uppercased()
+            guard SandboxCPUTemplate.known.contains(normalized) else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Unknown cpuTemplate '\(requested)'. Known templates: \(SandboxCPUTemplate.known.sorted().joined(separator: ", "))"
+                )
+            }
+            cpuTemplate = normalized
+        } else {
+            cpuTemplate = restoreSnapshot?.cpuTemplate
+        }
+
         let sandbox = Sandbox(
             name: requestedName,
             projectID: projectId,
@@ -426,7 +473,8 @@ struct SandboxController: RouteCollection {
             env: restoreSource?.env ?? createRequest.env ?? [:],
             workingDir: restoreSource?.workingDir ?? createRequest.workingDir,
             ttlSeconds: createRequest.ttlSeconds,
-            restoredFromSnapshotId: restoreSnapshot?.id
+            restoredFromSnapshotId: restoreSnapshot?.id,
+            cpuTemplate: cpuTemplate
         )
         sandbox.imageDigest = restoreSource?.imageDigest
 
@@ -876,6 +924,10 @@ struct SandboxController: RouteCollection {
                 guard let current = try await ResourceOperation.find(operationId, on: app.db),
                     current.status == .pending
                 else { return }
+
+                // Exported snapshot objects first: the snapshot rows cascade
+                // with the sandbox row below (issue #428).
+                await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
                 try await app.db.transaction { db in
                     try await sandbox.delete(on: db)

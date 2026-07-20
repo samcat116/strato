@@ -96,18 +96,27 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// Feature capabilities of this hypervisor
     public let capabilities: HypervisorCapabilities
 
+    /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
+    /// from `firecracker --version`). Optional/additive: nil from agents that
+    /// predate version probing, or when the probe failed. Snapshot mobility
+    /// (issue #428) keys cross-agent restore placement on Firecracker version
+    /// equality, and treats nil as incompatible rather than guessing.
+    public let version: String?
+
     public init(
         type: HypervisorType,
         available: Bool,
         accelerated: Bool,
         unavailabilityReason: String? = nil,
-        capabilities: HypervisorCapabilities
+        capabilities: HypervisorCapabilities,
+        version: String? = nil
     ) {
         self.type = type
         self.available = available
         self.accelerated = accelerated
         self.unavailabilityReason = unavailabilityReason
         self.capabilities = capabilities
+        self.version = version
     }
 }
 

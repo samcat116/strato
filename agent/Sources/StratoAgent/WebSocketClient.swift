@@ -5,6 +5,7 @@ import NIOPosix
 import NIOSSL
 import NIOHTTP1
 import Logging
+import StratoAgentSPIFFE
 import StratoShared
 
 // Thread-safe boolean wrapper for continuation resume tracking
@@ -56,6 +57,12 @@ actor WebSocketClient {
     // TLS configuration for mTLS (optional, nil for unencrypted connections)
     private var tlsConfiguration: TLSConfiguration?
 
+    // Pinned control-plane SPIFFE identity, verified on every wss:// TLS
+    // handshake. Required whenever TLS is configured: chaining to the trust
+    // bundle alone would accept any workload in the trust domain as the
+    // control plane (issue #552).
+    private var spiffePinning: SPIFFEPeerPinning?
+
     // WebSocket state managed via thread-safe wrapper to avoid EventLoop affinity issues
     private let wsHolder: LockedWebSocket
     private var isConnected = false
@@ -74,20 +81,24 @@ actor WebSocketClient {
 
     init(
         url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil,
+        spiffePinning: SPIFFEPeerPinning? = nil,
         inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
     ) {
         self.url = url
         self.agent = agent
         self.logger = logger
         self.tlsConfiguration = tlsConfiguration
+        self.spiffePinning = spiffePinning
         self.inboundContinuation = inboundContinuation
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.wsHolder = LockedWebSocket()
     }
 
-    /// Update TLS configuration (for SVID rotation)
-    func updateTLSConfiguration(_ tlsConfig: TLSConfiguration?) {
+    /// Update TLS configuration and the pinned control-plane identity (for
+    /// SVID rotation — the trust bundle can rotate along with the SVID).
+    func updateTLSConfiguration(_ tlsConfig: TLSConfiguration?, spiffePinning: SPIFFEPeerPinning?) {
         self.tlsConfiguration = tlsConfig
+        self.spiffePinning = spiffePinning
         logger.info("TLS configuration updated")
     }
 
@@ -123,19 +134,13 @@ actor WebSocketClient {
         // Create connection and wait for it to be established
         let eventLoop = eventLoopGroup.next()
 
-        // Build WebSocket client configuration with optional TLS
-        var wsConfig = WebSocketKit.WebSocketClient.Configuration()
-        if let tlsConfig = tlsConfiguration {
-            wsConfig.tlsConfiguration = tlsConfig
-        }
-
         // The control plane's desired-state sync is a single frame carrying every
         // VM placed on this agent, so it grows with placement count; the 16 KiB
         // websocket-kit default is crossed at roughly 7 VMs, and an oversized
         // frame kills the connection — permanently, since the full sync is
         // re-pushed on every reconnect. Must match the control plane's limit on
         // /agent/ws.
-        wsConfig.maxFrameSize = 1 << 24
+        let maxFrameSize = 1 << 24
 
         // The agent authenticates with its SPIFFE X.509 SVID over mTLS; the
         // upgrade request carries no credential headers.
@@ -147,15 +152,11 @@ actor WebSocketClient {
             let loggerRef = self.logger
             let inboundRef = self.inboundContinuation
 
-            // Create connection - this returns immediately, callback fires when connected.
-            // Capture self weakly so the onClose handler can hop back to the actor without
+            // Fires once the connection is established (and, for wss://, the
+            // control plane's pinned SPIFFE identity verified). Capture self
+            // weakly so the onClose handler can hop back to the actor without
             // forming a self -> wsHolder -> ws -> onClose -> self retain cycle.
-            WebSocket.connect(
-                to: url,
-                headers: headers,
-                configuration: wsConfig,
-                on: eventLoop
-            ) { [weak self] ws in
+            let onWebSocketReady: @Sendable (WebSocket) -> Void = { [weak self] ws in
                 // Immutable, Sendable weak reference to this actor for use in the
                 // nested close handler (avoids capturing the mutable `self` binding).
                 let clientRef = self
@@ -234,11 +235,49 @@ actor WebSocketClient {
                 if !resumed.testAndSet(true) {
                     continuation.resume()
                 }
-            }.whenFailure { error in
+            }
+
+            // Establish the connection — this returns immediately; the ready
+            // callback fires when connected.
+            let connectFuture: EventLoopFuture<Void>
+            if scheme == "wss" {
+                // The pinned-identity connector is the only wss:// path: TLS
+                // without the SPIFFE ID check would accept any workload in
+                // the trust domain as the control plane (issue #552).
+                guard let tlsConfig = tlsConfiguration, let pinning = spiffePinning else {
+                    if !resumed.testAndSet(true) {
+                        continuation.resume(
+                            throwing: WebSocketClientError.connectionFailed(
+                                "wss:// requires SPIFFE mTLS with a pinned control-plane identity"))
+                    }
+                    return
+                }
+                connectFuture = SPIFFEWebSocketConnector.connect(
+                    to: url,
+                    headers: headers,
+                    tlsConfiguration: tlsConfig,
+                    pinning: pinning,
+                    maxFrameSize: maxFrameSize,
+                    on: eventLoop,
+                    logger: loggerRef,
+                    onUpgrade: onWebSocketReady
+                )
+            } else {
+                var wsConfig = WebSocketKit.WebSocketClient.Configuration()
+                wsConfig.maxFrameSize = maxFrameSize
+                connectFuture = WebSocket.connect(
+                    to: url,
+                    headers: headers,
+                    configuration: wsConfig,
+                    on: eventLoop,
+                    onUpgrade: onWebSocketReady
+                )
+            }
+            connectFuture.whenFailure { error in
                 if !resumed.testAndSet(true) {
                     continuation.resume(
                         throwing: WebSocketClientError.connectionFailed(
-                            "Failed to connect: \(error.localizedDescription)"))
+                            "Failed to connect: \(error)"))
                 }
             }
         }

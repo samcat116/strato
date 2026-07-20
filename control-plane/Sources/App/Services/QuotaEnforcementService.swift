@@ -119,6 +119,25 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Admission for a snapshot *export* (issue #428). The exported copy is a
+    /// second physical copy of the same archive, so it draws its own `size`
+    /// from the storage pool — without this, export was the one path that
+    /// wrote unbounded bytes with no quota at all. Call inside the same
+    /// transaction that opens the export operation.
+    static func reserveSandboxSnapshotExport(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateSnapshotStorage(size)
+            guard check.allowed else { return check }
+            try quota.reserveSnapshotStorage(size)
+            return check
+        }
+    }
+
     /// Post-completion validation for sandbox snapshots (issue #426):
     /// admission reserved an *estimate*, so once the agent reports actual
     /// sizes the caller re-checks the pool. Resyncs every applicable quota to

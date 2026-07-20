@@ -74,6 +74,10 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxSnapshotCreate = "sandbox_snapshot_create"
     case sandboxSnapshotDelete = "sandbox_snapshot_delete"
     case sandboxRestore = "sandbox_restore"
+
+    // Snapshot mobility (protocol version >= 14, issue #428): export a
+    // checkpoint's artifacts off-node to control-plane object storage.
+    case sandboxSnapshotExport = "sandbox_snapshot_export"
 }
 
 // MARK: - Base Message Protocol

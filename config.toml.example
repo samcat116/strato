@@ -287,6 +287,14 @@ workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
 # private_key_path = "/var/run/spire/certs/svid_key.pem"
 # trust_bundle_path = "/var/run/spire/certs/bundle.pem"
 
+# SPIFFE ID the control plane must present on its TLS certificate. The agent
+# pins this exact identity: a server whose SVID merely chains to the trust
+# bundle (any workload in the trust domain) is refused. Optional — defaults to
+# "spiffe://<trust_domain>/control-plane", which is what deploy/compose and the
+# Helm chart provision. Set it only if your deployment issues the control
+# plane's Envoy a different SVID.
+# control_plane_spiffe_id = "spiffe://strato.local/control-plane"
+
 # ---------------------------------------------------------------------------
 # Simulation ("dummy agent") mode — for scale-testing a control plane.
 #

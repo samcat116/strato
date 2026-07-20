@@ -140,6 +140,33 @@ static_resources:
                                         - authenticated:
                                             principal_name:
                                               prefix: "spiffe://strato.local/agent/"
+                        # Sandbox snapshot artifact transfer (issue #428):
+                        # agents PUT exported checkpoint artifacts up during
+                        # an export and GET them back for cross-agent
+                        # restore/fork, authenticated by their SVID exactly
+                        # like image downloads. Timeout 0: memory files are
+                        # guest-RAM-sized and stream for longer than any
+                        # fixed budget.
+                        - match:
+                            safe_regex:
+                              regex: "^/api/sandboxes/[^/]+/snapshots/[^/]+/artifacts/[^/]+$"
+                          route:
+                            cluster: control_plane_upstream
+                            timeout: 0s
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    agents-only:
+                                      permissions:
+                                        - any: true
+                                      principals:
+                                        - authenticated:
+                                            principal_name:
+                                              prefix: "spiffe://strato.local/agent/"
                         - match:
                             prefix: "/agent/"
                           route:
