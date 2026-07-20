@@ -1,7 +1,13 @@
 # ================================
 # Build stage
 # ================================
-FROM oven/bun:1.2.17-alpine AS builder
+# Use the glibc (Debian) bun image, NOT the -alpine (musl) variant. Bun's
+# musl/JavaScriptCore builds segfault during `next build` on arm64 (the x64
+# musl image builds fine, arm64 crashes) — see the arm64 frontend digest
+# failures on main. The glibc image is the path CI's setup-bun jobs already
+# build this frontend with successfully on both arches. This is only the build
+# stage; the runtime image below stays on node:22-alpine.
+FROM oven/bun:1.3.14 AS builder
 
 WORKDIR /app
 
