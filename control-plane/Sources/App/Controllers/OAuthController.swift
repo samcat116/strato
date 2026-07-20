@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
 /// OAuth 2.0 Device Authorization Grant (RFC 8628) provider endpoints for the
@@ -199,6 +200,7 @@ struct OAuthController: RouteCollection {
         guard let userID = authorization.$user.id else {
             throw OAuthError.invalidGrant("Approval is missing a user")
         }
+        let authorizationID = try authorization.requireID()
 
         let accessToken = CLISession.generateAccessToken()
         let refreshToken = CLISession.generateRefreshToken()
@@ -213,11 +215,26 @@ struct OAuthController: RouteCollection {
             refreshTokenExpiresAt: Date().addingTimeInterval(CLISession.refreshTokenLifetime)
         )
 
-        // Single redemption: flip the code to redeemed in the same transaction
-        // that creates the session.
-        authorization.status = DeviceAuthorization.Status.redeemed.rawValue
+        // Single redemption: consume the approval and create the session in
+        // one transaction, guarded against a concurrent poll racing us — the
+        // status check above was unguarded, so re-verify with a conditional
+        // UPDATE (same consume pattern as the account-claim flow). 0 rows
+        // means the other poll won and this one must not mint a session.
         try await req.db.transaction { db in
-            try await authorization.save(on: db)
+            guard let sql = db as? SQLDatabase else {
+                throw Abort(.internalServerError, reason: "Unsupported database")
+            }
+            let consumed = try await sql.raw(
+                """
+                UPDATE oauth_device_authorizations
+                SET status = \(bind: DeviceAuthorization.Status.redeemed.rawValue)
+                WHERE id = \(bind: authorizationID) AND status = \(bind: DeviceAuthorization.Status.approved.rawValue)
+                RETURNING id
+                """
+            ).all()
+            guard !consumed.isEmpty else {
+                throw OAuthError.invalidGrant("Device code already used")
+            }
             try await session.save(on: db)
         }
 
