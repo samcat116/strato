@@ -1,0 +1,19 @@
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_7754dde20e33f2::t_8db7747672c89a 960
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "832275cf2aa69079c39dd01a3a3cff0362095454",
+  "prompts": {},
+  "sessions": {
+    "s_7754dde20e33f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c70d8b4-a724-446c-ad9a-e40cc0a7f2af",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
