@@ -73,26 +73,35 @@ public enum SPIFFEWebSocketConnector {
         let path = parsed.path.isEmpty ? "/" : parsed.path
         let query = parsed.query
 
+        // Built once per connection attempt rather than inside the channel
+        // initializer: a bad TLS configuration then fails before the TCP
+        // connect instead of after it.
+        let sslContext: NIOSSLContext
+        do {
+            sslContext = try NIOSSLContext(configuration: tlsConfiguration)
+        } catch {
+            return eventLoop.makeFailedFuture(error)
+        }
+
+        // NIOSSL custom verification callbacks replace BoringSSL's
+        // verification entirely: the verifier chain-walks against the trust
+        // bundle AND requires the pinned SPIFFE ID as a URI SAN on the leaf.
+        let verification: NIOSSLCustomVerificationCallbackWithMetadata = { certificates, promise in
+            SPIFFEPeerVerifier.verifyPeerChain(
+                certificates,
+                roots: pinning.trustRoots,
+                expectedSPIFFEID: pinning.expectedSPIFFEID,
+                peerDescription: "control plane",
+                logger: logger,
+                promise: promise
+            )
+        }
+
         let upgradePromise = eventLoop.makePromise(of: Void.self)
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
             .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
             .channelInitializer { channel in
                 do {
-                    let sslContext = try NIOSSLContext(configuration: tlsConfiguration)
-                    // NIOSSL custom verification callbacks replace BoringSSL's
-                    // verification entirely: the verifier chain-walks against
-                    // the trust bundle AND requires the pinned SPIFFE ID as a
-                    // URI SAN on the leaf.
-                    let verification: NIOSSLCustomVerificationCallbackWithMetadata = { certificates, promise in
-                        SPIFFEPeerVerifier.verifyPeerChain(
-                            certificates,
-                            roots: pinning.trustRoots,
-                            expectedSPIFFEID: pinning.expectedSPIFFEID,
-                            peerDescription: "control plane",
-                            logger: logger,
-                            promise: promise
-                        )
-                    }
                     let tlsHandler: NIOSSLClientHandler
                     do {
                         tlsHandler = try NIOSSLClientHandler(
@@ -145,6 +154,7 @@ public enum SPIFFEWebSocketConnector {
 public enum SPIFFEWebSocketError: Error, CustomStringConvertible, Sendable {
     case invalidURL(String)
     case invalidResponseStatus(HTTPResponseHead)
+    case closedBeforeUpgrade
 
     public var description: String {
         switch self {
@@ -152,15 +162,18 @@ public enum SPIFFEWebSocketError: Error, CustomStringConvertible, Sendable {
             return "invalid wss:// URL: \(url)"
         case .invalidResponseStatus(let head):
             return "WebSocket upgrade refused: \(head.status)"
+        case .closedBeforeUpgrade:
+            return "connection closed before the WebSocket upgrade completed"
         }
     }
 }
 
 // MARK: - Upgrade request handler
 
-/// Sends the HTTP GET upgrade request once the TLS handshake completes and
-/// surfaces a non-upgrade response as an error. Mirrors websocket-kit's
-/// internal `HTTPUpgradeRequestHandler`, which is not public.
+/// Sends the HTTP GET upgrade request on channel activation — the
+/// `NIOSSLClientHandler` below it buffers the write until the TLS handshake
+/// completes — and surfaces a non-upgrade response as an error. Mirrors
+/// websocket-kit's internal `HTTPUpgradeRequestHandler`, which is not public.
 final class WebSocketUpgradeRequestHandler: ChannelInboundHandler, RemovableChannelHandler {
     typealias InboundIn = HTTPClientResponsePart
     typealias OutboundOut = HTTPClientRequestPart
@@ -232,6 +245,16 @@ final class WebSocketUpgradeRequestHandler: ChannelInboundHandler, RemovableChan
         case .end:
             context.close(promise: nil)
         }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        // A peer that closes cleanly without responding — a TCP FIN with no
+        // HTTP response and no error — would otherwise leave the upgrade
+        // promise uncompleted and the agent's connect() awaiting forever,
+        // which also means its reconnect loop never fires. Failing here is
+        // the only thing that turns that into a retryable error.
+        self.upgradePromise.fail(SPIFFEWebSocketError.closedBeforeUpgrade)
+        context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: any Error) {

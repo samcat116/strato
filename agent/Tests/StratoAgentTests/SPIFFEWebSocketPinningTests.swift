@@ -104,6 +104,22 @@ struct SPIFFEWebSocketPinningTests {
         try? await group.shutdownGracefully()
     }
 
+    @Test(
+        "Fails rather than hangs when the server closes before upgrading",
+        .timeLimit(.minutes(1)))
+    func failsWhenServerClosesBeforeUpgrade() async throws {
+        // A peer that completes the TLS handshake and then closes cleanly
+        // sends no HTTP response and raises no error, so nothing but
+        // channelInactive can complete the upgrade promise. Without that the
+        // agent's connect() awaits forever and its reconnect loop never runs.
+        let pki = try PinningTestPKI()
+        try await withClosingTLSServer(serverSVID: pki.controlPlaneSVID) { port in
+            await #expect(throws: (any Error).self) {
+                _ = try await connectAndEcho(port: port, pki: pki)
+            }
+        }
+    }
+
     // MARK: - Client plumbing
 
     /// Connect to the in-process server with the agent's SVID and pinned
@@ -168,6 +184,62 @@ struct SPIFFEWebSocketPinningTests {
 
     // MARK: - In-process TLS WebSocket server
 
+    /// Run `body` with the loopback port of a TLS server that completes the
+    /// handshake and then closes cleanly without answering the HTTP upgrade —
+    /// a FIN with no response and no error.
+    private func withClosingTLSServer(
+        serverSVID: X509SVID,
+        _ body: (Int) async throws -> Void
+    ) async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let sslContext = try NIOSSLContext(configuration: Self.serverTLSConfiguration(svid: serverSVID))
+
+        let serverChannel = try await ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                do {
+                    try channel.pipeline.syncOperations.addHandler(
+                        NIOSSLServerHandler(context: sslContext))
+                    try channel.pipeline.syncOperations.addHandler(CloseOnFirstReadHandler())
+                    return channel.eventLoop.makeSucceededVoidFuture()
+                } catch {
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+
+        do {
+            let port = try #require(serverChannel.localAddress?.port)
+            try await body(port)
+        } catch {
+            try? await serverChannel.close()
+            try? await group.shutdownGracefully()
+            throw error
+        }
+        try? await serverChannel.close()
+        try? await group.shutdownGracefully()
+    }
+
+    /// Server-side mTLS material, built by hand rather than via
+    /// SPIFFETLSConfig.makeServerConfiguration: that helper's
+    /// `.fullVerification` hostname-matches the *client* certificate, which an
+    /// SVID (URI SAN only) can never satisfy. The real deployment's server
+    /// side is Envoy with SPIFFE SAN matchers; here it's enough to require a
+    /// client certificate that chains to the trust bundle.
+    private static func serverTLSConfiguration(svid: X509SVID) throws -> TLSConfiguration {
+        var serverTLS = TLSConfiguration.makeServerConfiguration(
+            certificateChain: try svid.certificateChain.map {
+                .certificate(try NIOSSLCertificate(bytes: [UInt8]($0.utf8), format: .pem))
+            },
+            privateKey: .privateKey(try NIOSSLPrivateKey(bytes: [UInt8](svid.privateKey.utf8), format: .pem))
+        )
+        serverTLS.trustRoots = .certificates(
+            try svid.trustBundle.map { try NIOSSLCertificate(bytes: [UInt8]($0.utf8), format: .pem) })
+        serverTLS.certificateVerification = .noHostnameVerification
+        return serverTLS
+    }
+
     /// Run `body` with the loopback port of a TLS WebSocket echo server
     /// presenting `serverSVID` and requiring a client certificate chained to
     /// that SVID's trust bundle — the shape of the control plane's Envoy
@@ -177,22 +249,7 @@ struct SPIFFEWebSocketPinningTests {
         _ body: (Int) async throws -> Void
     ) async throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        // Built by hand rather than via SPIFFETLSConfig.makeServerConfiguration:
-        // that helper's `.fullVerification` hostname-matches the *client*
-        // certificate, which an SVID (URI SAN only) can never satisfy. The
-        // real deployment's server side is Envoy with SPIFFE SAN matchers;
-        // here it's enough to require a client certificate that chains to the
-        // trust bundle.
-        var serverTLS = TLSConfiguration.makeServerConfiguration(
-            certificateChain: try serverSVID.certificateChain.map {
-                .certificate(try NIOSSLCertificate(bytes: [UInt8]($0.utf8), format: .pem))
-            },
-            privateKey: .privateKey(try NIOSSLPrivateKey(bytes: [UInt8](serverSVID.privateKey.utf8), format: .pem))
-        )
-        serverTLS.trustRoots = .certificates(
-            try serverSVID.trustBundle.map { try NIOSSLCertificate(bytes: [UInt8]($0.utf8), format: .pem) })
-        serverTLS.certificateVerification = .noHostnameVerification
-        let sslContext = try NIOSSLContext(configuration: serverTLS)
+        let sslContext = try NIOSSLContext(configuration: Self.serverTLSConfiguration(svid: serverSVID))
 
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: 1 << 24,
@@ -236,6 +293,17 @@ struct SPIFFEWebSocketPinningTests {
         }
         try? await serverChannel.close()
         try? await group.shutdownGracefully()
+    }
+}
+
+/// Closes the connection as soon as the client's first plaintext bytes arrive
+/// (the HTTP upgrade request), producing a clean close_notify + FIN with no
+/// HTTP response and no error.
+private final class CloseOnFirstReadHandler: ChannelInboundHandler {
+    typealias InboundIn = ByteBuffer
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        context.close(promise: nil)
     }
 }
 

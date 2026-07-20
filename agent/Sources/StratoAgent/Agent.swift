@@ -867,7 +867,13 @@ actor Agent {
         logger.info("SVID rotated, updating WebSocket TLS configuration")
 
         do {
-            guard let spiffe = spiffeConfig else { return }
+            guard let spiffe = spiffeConfig else {
+                // Unreachable while SPIFFE is mandatory at startup; log rather
+                // than return silently so a future refactor that loosens that
+                // shows up as a rotation that stopped happening.
+                logger.error("SVID rotated but no SPIFFE configuration is present; pinning not updated")
+                return
+            }
             let newTLSConfig = try await svidManager?.getTLSConfiguration()
             let newPinning = try await makeControlPlanePinning(spiffe: spiffe)
             if let client = websocketClient {

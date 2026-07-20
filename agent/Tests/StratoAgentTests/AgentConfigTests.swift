@@ -214,6 +214,38 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("An empty trust_domain is rejected rather than deriving a malformed pinned ID")
+    func emptyTrustDomainRejected() throws {
+        // Without an explicit control_plane_spiffe_id the pinned identity is
+        // derived, so validating only the override would let this through and
+        // surface as every handshake failing with a pin mismatch.
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "wss://cp.example:8443/agent/ws"
+                [spiffe]
+                enabled = true
+                trust_domain = ""
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
+    @Test(
+        "isWellFormedSPIFFEID accepts full SPIFFE IDs",
+        arguments: [
+            "spiffe://strato.local/control-plane",
+            "spiffe://prod.example.com/cp/primary",
+            "spiffe://td/a",
+        ])
+    func wellFormedSPIFFEIDAccepted(id: String) {
+        #expect(SPIFFEConfig.isWellFormedSPIFFEID(id))
+    }
+
     // MARK: - Image cache settings
 
     @Test("Load image cache settings")
