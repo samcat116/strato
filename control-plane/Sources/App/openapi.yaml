@@ -624,6 +624,77 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/snapshots/{snapshotID}/export:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+      - $ref: "#/components/parameters/SandboxSnapshotID"
+    post:
+      operationId: exportSandboxSnapshot
+      summary: Export a sandbox snapshot to project storage
+      description: >-
+        Copies the snapshot's artifacts into durable project storage so it can
+        be moved between agents (snapshot mobility). Asynchronous — poll the
+        returned operation.
+      tags: [Sandbox Snapshots]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/snapshots/{snapshotID}/artifacts/{artifactKind}:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+      - $ref: "#/components/parameters/SandboxSnapshotID"
+      - name: artifactKind
+        in: path
+        required: true
+        description: Which snapshot artifact to transfer.
+        schema:
+          $ref: "#/components/schemas/SandboxSnapshotArtifactKind"
+    get:
+      operationId: downloadSnapshotArtifact
+      summary: Download a snapshot artifact
+      description: >-
+        Streams the raw artifact bytes for an exported snapshot. Used by agents
+        importing a snapshot onto another host; authenticated by a forwarded
+        SPIFFE SVID client certificate over mTLS (the handler verifies the cert
+        before serving bytes).
+      tags: [Sandbox Snapshots]
+      responses:
+        "200":
+          description: The artifact bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: uploadSnapshotArtifact
+      summary: Upload a snapshot artifact
+      description: >-
+        Streams the raw artifact bytes for an exported snapshot (used by agents
+        exporting a snapshot); authenticated by a forwarded SPIFFE SVID client
+        certificate over mTLS.
+      tags: [Sandbox Snapshots]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The artifact was stored.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/projects/{projectID}/images:
     parameters:
@@ -1643,6 +1714,7 @@ components:
         - snapshot
         - snapshot_delete
         - restore
+        - snapshot_export
     OperationStatus:
       type: string
       description: The state of an operation. `pending` is the only non-terminal value.
@@ -1963,6 +2035,11 @@ components:
           type: integer
         forkLayoutVersion:
           type: integer
+        cpuTemplate:
+          type: string
+        exportedAt:
+          type: string
+          format: date-time
         errorMessage:
           type: string
         createdById:
@@ -1974,6 +2051,10 @@ components:
     SandboxSnapshotStatus:
       type: string
       enum: [creating, ready, deleting, error]
+    SandboxSnapshotArtifactKind:
+      type: string
+      description: A component of an exported sandbox snapshot.
+      enum: [memory, vmstate, rootfs, config]
 
     CreateImageRequest:
       type: object
