@@ -14,45 +14,45 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  useCreateOrganizationalUnit,
-  useUpdateOrganizationalUnit,
-  ouErrorMessage,
+  useCreateFolder,
+  useUpdateFolder,
+  folderErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
 
-/** Minimal shape needed to edit an OU (works for both list and tree nodes). */
-export interface EditableOU {
+/** Minimal shape needed to edit a folder (works for both list and tree nodes). */
+export interface EditableFolder {
   id: string;
   name: string;
   description: string;
 }
 
-interface OuFormDialogProps {
+interface FolderFormDialogProps {
   orgId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** When provided, the dialog edits this OU instead of creating one. */
-  ou?: EditableOU | null;
-  /** When creating a sub-unit, the parent OU's id and name (for context). */
+  /** When provided, the dialog edits this folder instead of creating one. */
+  folder?: EditableFolder | null;
+  /** When creating a subfolder, the parent folder's id and name (for context). */
   parent?: { id: string; name: string } | null;
 }
 
-export function OuFormDialog({
+export function FolderFormDialog({
   orgId,
   open,
   onOpenChange,
-  ou,
+  folder,
   parent,
-}: OuFormDialogProps) {
+}: FolderFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-card border-border text-foreground">
-        {/* Keyed so the form's initial state resets whenever the target OU
+        {/* Keyed so the form's initial state resets whenever the target folder
             or parent (create vs. edit vs. add-sub) changes. */}
-        <OuForm
-          key={ou?.id ?? `new:${parent?.id ?? "root"}`}
+        <FolderForm
+          key={folder?.id ?? `new:${parent?.id ?? "root"}`}
           orgId={orgId}
-          ou={ou ?? null}
+          folder={folder ?? null}
           parent={parent ?? null}
           onClose={() => onOpenChange(false)}
         />
@@ -61,43 +61,43 @@ export function OuFormDialog({
   );
 }
 
-function OuForm({
+function FolderForm({
   orgId,
-  ou,
+  folder,
   parent,
   onClose,
 }: {
   orgId: string;
-  ou: EditableOU | null;
+  folder: EditableFolder | null;
   parent: { id: string; name: string } | null;
   onClose: () => void;
 }) {
-  const isEdit = !!ou;
-  const createOU = useCreateOrganizationalUnit(orgId);
-  const updateOU = useUpdateOrganizationalUnit(orgId);
-  const isPending = createOU.isPending || updateOU.isPending;
+  const isEdit = !!folder;
+  const createFolder = useCreateFolder(orgId);
+  const updateFolder = useUpdateFolder(orgId);
+  const isPending = createFolder.isPending || updateFolder.isPending;
 
-  const [name, setName] = useState(ou?.name ?? "");
-  const [description, setDescription] = useState(ou?.description ?? "");
+  const [name, setName] = useState(folder?.name ?? "");
+  const [description, setDescription] = useState(folder?.description ?? "");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const trimmedName = name.trim();
     if (!trimmedName) {
-      toast.error("Unit name is required");
+      toast.error("Folder name is required");
       return;
     }
 
     try {
-      if (isEdit && ou) {
-        await updateOU.mutateAsync({
-          ouId: ou.id,
+      if (isEdit && folder) {
+        await updateFolder.mutateAsync({
+          ouId: folder.id,
           data: { name: trimmedName, description: description.trim() },
         });
         toast.success(`Updated ${trimmedName}`);
       } else {
-        await createOU.mutateAsync({
+        await createFolder.mutateAsync({
           name: trimmedName,
           description: description.trim(),
           parentOuId: parent?.id,
@@ -107,21 +107,21 @@ function OuForm({
       onClose();
     } catch (error) {
       toast.error(
-        ouErrorMessage(
+        folderErrorMessage(
           error,
           isEdit
-            ? "Failed to update organizational unit"
-            : "Failed to create organizational unit"
+            ? "Failed to update folder"
+            : "Failed to create folder"
         )
       );
     }
   };
 
   const title = isEdit
-    ? "Edit Organizational Unit"
+    ? "Edit Folder"
     : parent
-      ? `Add Sub-Unit to ${parent.name}`
-      : "Create Organizational Unit";
+      ? `Add subfolder to ${parent.name}`
+      : "Create Folder";
 
   return (
     <>
@@ -129,19 +129,19 @@ function OuForm({
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription className="text-muted-foreground">
           {isEdit
-            ? "Update this unit's name and description."
-            : "Organizational units group projects into a hierarchy within your organization."}
+            ? "Update this folder's name and description."
+            : "Folders group projects into a hierarchy within your organization."}
         </DialogDescription>
       </DialogHeader>
 
       <form onSubmit={handleSubmit}>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="ouName" className="text-foreground">
+            <Label htmlFor="folderName" className="text-foreground">
               Name
             </Label>
             <Input
-              id="ouName"
+              id="folderName"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Platform"
@@ -152,14 +152,14 @@ function OuForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="ouDescription" className="text-foreground">
+            <Label htmlFor="folderDescription" className="text-foreground">
               Description
             </Label>
             <Input
-              id="ouDescription"
+              id="folderDescription"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="A short description of the unit"
+              placeholder="A short description of the folder"
               className="bg-background border-border text-foreground"
               disabled={isPending}
             />
@@ -189,7 +189,7 @@ function OuForm({
             ) : isEdit ? (
               "Save Changes"
             ) : (
-              "Create Unit"
+              "Create Folder"
             )}
           </Button>
         </DialogFooter>

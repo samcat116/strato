@@ -371,7 +371,7 @@ struct ProjectController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has access to organization
@@ -382,7 +382,7 @@ struct ProjectController: RouteCollection {
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
             ou.$organization.id == organizationID
         else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Get projects in OU
@@ -413,7 +413,7 @@ struct ProjectController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         let createRequest = try req.content.decode(CreateProjectRequest.self)
@@ -423,11 +423,11 @@ struct ProjectController: RouteCollection {
 
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Check name uniqueness within OU
@@ -661,10 +661,10 @@ struct ProjectController: RouteCollection {
         let destinationOrganizationID: UUID?
         if let destOuID = transferRequest.organizationalUnitId {
             guard let destOU = try await OrganizationalUnit.find(destOuID, on: req.db) else {
-                throw Abort(.notFound, reason: "Destination OU not found")
+                throw Abort(.notFound, reason: "Destination folder not found")
             }
             if let destOrgID = transferRequest.organizationId, destOU.$organization.id != destOrgID {
-                throw Abort(.badRequest, reason: "OU does not belong to specified organization")
+                throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
             }
             destinationOrganizationID = destOU.$organization.id
         } else {
@@ -672,7 +672,7 @@ struct ProjectController: RouteCollection {
         }
 
         guard let destinationOrganizationID else {
-            throw Abort(.badRequest, reason: "Transfer must specify a destination organization or organizational unit")
+            throw Abort(.badRequest, reason: "Transfer must specify a destination organization or folder")
         }
 
         // Moving a project requires admin on the destination organization, not

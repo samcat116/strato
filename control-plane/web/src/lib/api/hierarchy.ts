@@ -1,4 +1,4 @@
-// Hierarchy (org -> OU -> project -> resources) API endpoints
+// Hierarchy (org -> folder -> project -> resources) API endpoints
 
 import { api } from "./client";
 import type {

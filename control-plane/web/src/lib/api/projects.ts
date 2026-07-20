@@ -72,7 +72,7 @@ export const projectsApi = {
     return api.delete(`/api/projects/${projectId}`);
   },
 
-  // Transfer a project to a different organization or OU
+  // Transfer a project to a different organization or folder
   transfer(projectId: string, data: TransferProjectData): Promise<Project> {
     return api.post<Project>(`/api/projects/${projectId}/transfer`, data);
   },
