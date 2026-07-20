@@ -1,0 +1,65 @@
+agent/Sources/StratoAgentSPIFFE/SPIFFEWebSocketConnect.swift
+  s_841c8aa9b101c2::t_18ce5ba8bc5301 1-241
+deploy/agent/install.sh
+  s_841c8aa9b101c2::t_33d53570b67742 838-844,850-852,858
+  s_841c8aa9b101c2::t_467f1155798a68 59-63
+  s_841c8aa9b101c2::t_683bf543e6bca8 133
+docs/deployment/agents.md
+  s_841c8aa9b101c2::t_c5a28e153c15f9 326-336
+agent/Sources/StratoAgent/Agent.swift
+  s_841c8aa9b101c2::t_d9eef7adff127e 664
+  s_841c8aa9b101c2::t_f753b9d8dae1ee 852-865,870,872,874
+  s_841c8aa9b101c2::t_efda3d8c5ec2c3 623,629,637-640,642
+control-plane/Package.swift
+  s_841c8aa9b101c2::t_e3b213c80dce9f 79
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_841c8aa9b101c2::t_aad96734b88d28 142-216
+agent/Sources/StratoAgentSPIFFE/SPIFFETLSConfig.swift
+  s_841c8aa9b101c2::t_389756140dafe1 41-46
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_841c8aa9b101c2::t_ba5f434a60e149 113-121,130,140-141,150-156
+  s_841c8aa9b101c2::t_8947590ebcf6bd 581-597,605-606
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_841c8aa9b101c2::t_355c37db6531ac 782-784,792-799
+  s_841c8aa9b101c2::t_8e485548c158c2 8
+agent/Tests/StratoAgentTests/SPIFFEWebSocketPinningTests.swift
+  s_841c8aa9b101c2::t_16a1ba50ad7900 1-103,105-179,195-360
+  s_841c8aa9b101c2::t_ba82e3d089ae56 180-194
+  s_841c8aa9b101c2::t_52246a4605a624 104
+agent/Package.swift
+  s_841c8aa9b101c2::t_5b93b252d0219e 58-61,63,70
+  s_841c8aa9b101c2::t_1e0508779ad3b7 114-119
+config.toml.example
+  s_841c8aa9b101c2::t_e9213e10057299 290-297
+shared/Package.swift
+  s_841c8aa9b101c2::t_0dd1193f431ea4 40-56
+  s_841c8aa9b101c2::t_d3088c902d1386 15-18,23-26
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_841c8aa9b101c2::t_c4bce6c04d4ff7 84,91,97-99,101
+  s_841c8aa9b101c2::t_0c218b22dcc1b9 238-276,280
+  s_841c8aa9b101c2::t_8ffbdb38e5c294 8
+  s_841c8aa9b101c2::t_1195601e89a8bf 60-65
+  s_841c8aa9b101c2::t_1a3d794f424c4e 143,155-157,159
+docs/architecture/agent.md
+  s_841c8aa9b101c2::t_030ec708c19dde 54-65
+shared/Sources/SPIFFEVerification/SPIFFEPeerVerifier.swift
+  s_841c8aa9b101c2::t_fe83fcfbb70233 1-98
+shared/Package.resolved
+  s_841c8aa9b101c2::t_04ea4c156cd0fa 2,4-12,22-30,40-57,67-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "169e91d17cfd350e17cb5f32c3b636e7870f0997",
+  "prompts": {},
+  "sessions": {
+    "s_841c8aa9b101c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdd71cab-51a5-4cf0-8005-36ed0b6253eb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
