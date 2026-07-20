@@ -56,6 +56,8 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   snapshot: null,
   snapshot_delete: null,
   restore: null,
+  // Sandbox-only, but the map stays total over OperationKind.
+  snapshot_export: null,
 };
 
 export function VMActions({ vm, onActionComplete }: VMActionsProps) {

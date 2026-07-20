@@ -1590,6 +1590,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// that).
     private var snapshotImportsInFlight: [String: Task<Void, any Error>] = [:]
 
+    /// Bytes the in-flight imports above are still expecting to write. The
+    /// sweep reserves against this *plus* the incoming archive, because each
+    /// import used to size its reservation from its own descriptors alone —
+    /// leaving the budget blind to every other download racing it (issue #428
+    /// review).
+    private var snapshotImportBytesInFlight: Int64 = 0
+
+    /// Ceiling on simultaneous imports of *distinct* snapshots. Deduplication
+    /// only collapses forks of the same snapshot; without this, a scheduler
+    /// burst placing forks of many snapshots on one host opens that many
+    /// parallel multi-gigabyte downloads. Excess imports are refused rather
+    /// than queued — restore is reconciler-driven, so the next pass retries.
+    private static let maxConcurrentSnapshotImports = 2
+
     func exportSandboxSnapshot(
         sandboxId: String, snapshotId: String,
         uploads: [SandboxSnapshotArtifactUploadTarget]
@@ -1672,10 +1686,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             return importDir
         }
 
+        guard snapshotImportsInFlight.count < Self.maxConcurrentSnapshotImports else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "\(snapshotImportsInFlight.count) snapshot imports are already in flight on this host; retry once one completes"
+            )
+        }
+
         // Make room before pulling multi-gigabyte files in; the fresh entry
-        // itself is protected by the sweep's grace window afterwards.
+        // itself is protected by the sweep's grace window afterwards. The
+        // reservation covers every concurrent import, not just this one.
         let incoming = artifacts.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        sweepSnapshotImports(incomingBytes: incoming)
+        sweepSnapshotImports(incomingBytes: incoming + snapshotImportBytesInFlight)
+        snapshotImportBytesInFlight += incoming
 
         let downloadLogger = logger
         let task = Task {
@@ -1695,26 +1717,50 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             }
         }
         snapshotImportsInFlight[snapshotId] = task
-        defer { snapshotImportsInFlight[snapshotId] = nil }
+        defer {
+            snapshotImportsInFlight[snapshotId] = nil
+            snapshotImportBytesInFlight -= incoming
+        }
         do {
             try await task.value
         } catch let error as SandboxRuntimeError {
+            discardPartialImport(importDir)
             throw error
         } catch {
+            discardPartialImport(importDir)
             throw SandboxRuntimeError.snapshotIOFailed(error.localizedDescription)
         }
         return importDir
     }
 
+    /// Drop a partially downloaded import. Without this the artifacts that
+    /// did land stay forever: nothing else removes them, and they are only
+    /// reclaimed if some *later* import happens to pick them as an LRU victim
+    /// — so a host that takes one failed cross-agent restore and no more
+    /// imports strands those bytes permanently (issue #428 review). Safe
+    /// because this only runs once the download task has finished failing,
+    /// and a concurrent fork of the same snapshot awaits that same task.
+    private func discardPartialImport(_ importDir: String) {
+        try? FileManager.default.removeItem(atPath: importDir)
+    }
+
     /// LRU sweep of the import cache, sharing the warm cache's byte budget:
     /// both hold re-creatable snapshot bytes, and neither is accounted
     /// against control-plane storage quota.
+    ///
+    /// "Sharing" has to mean net of what the warm cache already occupies. The
+    /// two live under different roots, and sweeping each against the full
+    /// `warmCacheBudgetBytes` independently made the real steady-state ceiling
+    /// twice the configured number (issue #428 review). Warm templates take
+    /// priority within the shared budget — rebuilding one costs a full cold
+    /// boot, while an evicted import only costs a re-download.
     private func sweepSnapshotImports(incomingBytes: Int64) {
         let root = snapshotImportRoot
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else { return }
+        let warmBytes = DiskCacheLRU.directorySize(atPath: warmCache.rootPath)
         DiskCacheLRU.sweep(
             entryDirectories: names.map { root + "/" + $0 },
-            budgetBytes: warmCacheBudgetBytes,
+            budgetBytes: max(0, warmCacheBudgetBytes - warmBytes),
             incomingBytes: incomingBytes,
             logger: logger)
     }

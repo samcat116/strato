@@ -16,6 +16,17 @@ enum SandboxSnapshotService {
     static let snapshotTimeout: Duration = .seconds(570)
     static let deleteTimeout: Duration = .seconds(60)
 
+    /// Off-node transfers (issue #428) — export, and any restore that has to
+    /// stage the archive from object storage first — move the same bytes as a
+    /// local checkpoint but over the network, through the control plane, one
+    /// artifact at a time. Sizing them like a local copy meant the RPC always
+    /// expired first on anything but a small archive, and an export that
+    /// expires mid-flight leaves the snapshot permanently un-exported (the
+    /// agent keeps uploading, but nothing is left to stamp `exportedAt`).
+    /// Kept just under the matching `.snapshotExport` operation budget so the
+    /// RPC verdict still decides the operation.
+    static let transferTimeout: Duration = .seconds(3570)
+
     /// Preflight an agent for the sandbox-snapshot message set: it must be
     /// known, online, and advertise the capability. The message types
     /// postdate protocol version 8, so an older agent can't even decode the
@@ -91,12 +102,16 @@ enum SandboxSnapshotService {
         let message = SandboxRestoreMessage(
             sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString,
             artifacts: artifacts)
-        _ = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
+        // A local restore is a file copy; one carrying descriptors downloads
+        // the whole archive first and needs the transfer budget.
+        let timeout = artifacts == nil ? Self.snapshotTimeout : Self.transferTimeout
+        _ = try await send(message, toAgent: agentId, timeout: timeout, app: app)
     }
 
     /// Ask the agent holding a snapshot's artifacts to stream them to the
-    /// pre-signed object-storage upload targets (issue #428). Same timeout
-    /// class as snapshot creation: the export moves the same bytes.
+    /// pre-signed object-storage upload targets (issue #428). Bounded by the
+    /// transfer budget, not the local-checkpoint one: these bytes cross the
+    /// network through the control plane.
     static func requestSnapshotExport(
         sandboxId: UUID,
         snapshotId: UUID,
@@ -106,7 +121,7 @@ enum SandboxSnapshotService {
     ) async throws {
         let message = SandboxSnapshotExportMessage(
             sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString, uploads: uploads)
-        _ = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
+        _ = try await send(message, toAgent: agentId, timeout: Self.transferTimeout, app: app)
     }
 
     /// Send one message and await the correlated success/error response,

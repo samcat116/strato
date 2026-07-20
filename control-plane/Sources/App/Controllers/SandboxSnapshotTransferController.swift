@@ -38,12 +38,16 @@ extension SandboxController {
         let snapshotID = try snapshot.requireID()
         let sandboxID = try sandbox.requireID()
 
-        let canRead = try await req.spicedb.checkPermission(
+        // `export`, not `read`: this copies the whole archive into project
+        // storage and occupies the snapshot's agent for the duration, so it
+        // is a mutation, not a view. Gating it on `read` let any project
+        // viewer trigger unbounded writes (issue #428 review).
+        let canExport = try await req.spicedb.checkPermission(
             subject: try user.requireID().uuidString,
-            permission: "read",
+            permission: "export",
             resource: "sandbox_snapshot",
             resourceId: snapshotID.uuidString)
-        guard canRead else {
+        guard canExport else {
             throw Abort(.forbidden, reason: "You don't have permission to export this snapshot")
         }
 
@@ -92,6 +96,19 @@ extension SandboxController {
             else {
                 throw Abort(.conflict, reason: "Snapshot is no longer exportable")
             }
+            // The exported copy is a second copy of the same bytes and draws
+            // its own storage from the project's pool (issue #428). Reserve it
+            // here, in the operation's transaction, so a doomed export is
+            // rejected before it occupies an agent — but skip it when a
+            // complete copy already exists, since re-exporting overwrites the
+            // same keys and adds nothing.
+            guard !current.isExported else { return }
+            guard let project = try await Project.find(current.$project.id, on: db) else {
+                throw Abort(.conflict, reason: "Snapshot's project no longer exists")
+            }
+            try await QuotaEnforcementService.reserveSandboxSnapshotExport(
+                for: project, environment: current.environment,
+                size: current.size ?? 0, on: db)
         }
 
         Self.runSnapshotExport(
@@ -156,17 +173,24 @@ extension SandboxController {
         }
     }
 
-    // MARK: - Artifact transfer (signed agent routes)
+    // MARK: - Artifact transfer (agent mTLS routes)
 
     /// PUT /api/sandboxes/:sandboxID/snapshots/:snapshotID/artifacts/:artifactKind
     ///
     /// One exported artifact's bytes, streamed as the raw request body into
     /// object storage. Size and SHA-256 are computed here, from the bytes
     /// actually stored — never agent-supplied — and recorded on the snapshot
-    /// row for later download verification. Landing a fresh artifact clears
-    /// `exportedAt`: the previous export record no longer describes the
-    /// objects, and the running export operation re-stamps it once every
-    /// artifact has arrived.
+    /// row for later download verification. The running export operation
+    /// stamps `exportedAt` once every artifact has arrived.
+    ///
+    /// A re-upload deliberately leaves an existing `exportedAt` alone.
+    /// Snapshot artifacts are immutable once `.ready` and every key is
+    /// deterministic, so a re-export replaces each object with identical bytes
+    /// and the previous export record keeps describing what is actually
+    /// stored. Clearing it per-PUT meant a re-export that died partway (agent
+    /// crash, expired budget) permanently demoted a snapshot that still had a
+    /// complete, valid copy — and the only documented recovery was another
+    /// re-export, which could fail the same way (issue #428 review).
     func uploadSnapshotArtifact(req: Request) async throws -> HTTPStatus {
         let (snapshot, kind) = try await authenticatedSnapshotArtifactRequest(req: req)
         let snapshotID = try snapshot.requireID()
@@ -220,7 +244,6 @@ extension SandboxController {
         artifacts.append(
             SandboxSnapshotExportedArtifact(kind: kind, sizeBytes: size, sha256: sha256))
         current.exportedArtifacts = artifacts
-        current.exportedAt = nil
         try await current.save(on: req.db)
 
         req.logger.info(

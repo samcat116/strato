@@ -109,17 +109,28 @@ public enum HypervisorProbe {
         )
     }
 
+    /// How long the version probe waits for the binary to answer. This runs
+    /// inline on the registration path, which has no other escape hatch, so a
+    /// `firecracker_binary_path` pointing at something that blocks (a wrapper
+    /// script waiting on a lock, a stalled network mount) must not be able to
+    /// wedge the agent's registration and every subsequent reconnect. Printing
+    /// a version string is sub-millisecond work; seconds is already generous.
+    public static let versionProbeTimeout: Duration = .seconds(5)
+
     /// The Firecracker binary's version, from `firecracker --version` output
     /// like "Firecracker v1.7.0" — normalized without the cosmetic "v" so it
     /// compares equal to the `vmm_version` recorded on snapshots. Snapshot
     /// mobility (issue #428) keys cross-agent restore placement on this;
-    /// nil (probe failed, unparseable output) just keeps this host ineligible
-    /// as a cross-agent restore target.
-    public static func firecrackerVersion(binaryPath: String) async -> String? {
+    /// nil (probe failed, timed out, unparseable output) just keeps this host
+    /// ineligible as a cross-agent restore target.
+    public static func firecrackerVersion(
+        binaryPath: String, timeout: Duration = versionProbeTimeout
+    ) async -> String? {
         guard FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
         guard
             let result = try? await ProcessRunner.run(
-                executableURL: URL(fileURLWithPath: binaryPath), arguments: ["--version"]),
+                executableURL: URL(fileURLWithPath: binaryPath), arguments: ["--version"],
+                timeout: timeout),
             result.terminationStatus == 0,
             let output = String(data: result.standardOutput, encoding: .utf8)
         else { return nil }
