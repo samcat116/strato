@@ -323,7 +323,7 @@ public func configure(_ app: Application) async throws {
     // Cloud-init user data column. Same ordering constraint as above.
     app.migrations.add(AddUserDataToVM())
 
-    // App settings migration (for signing keys, etc.)
+    // App settings migration (the WebAuthn decoy credential key, etc.)
     app.migrations.add(CreateAppSetting())
 
     // Volume management migrations
@@ -558,8 +558,9 @@ public func configure(_ app: Application) async throws {
         try await RoleBindingBackfill.backfillFromSpiceDB(app)
     }
 
-    // Initialize the image download signing key (generates if not exists)
-    _ = try await URLSigningService.getSigningKeyAsync(from: app)
+    // Initialize the WebAuthn decoy credential key (generates if not exists),
+    // so the first login begin doesn't pay the generate-and-store round trip.
+    _ = try await DecoyKeyService.getKey(from: app)
 
     // Configure scheduler service
     // Default strategy can be configured via environment variable

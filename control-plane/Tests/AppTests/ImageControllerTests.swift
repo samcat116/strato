@@ -1366,12 +1366,7 @@ final class ImageControllerTests {
 
             let image = try #require(try await Image.find(imageID, on: app.db))
             try await image.$artifacts.load(on: app.db)
-            let info = try VMSpecBuilder.buildImageInfo(
-                from: image,
-                controlPlaneURL: "http://localhost:8080",
-                agentName: "agent-1",
-                signingKey: String(repeating: "a", count: 64)
-            )
+            let info = try VMSpecBuilder.buildImageInfo(from: image)
             // Only the two ready artifacts are offered; the pending disk-image is withheld.
             #expect(info.artifacts.count == 2)
             #expect(!info.artifacts.contains { $0.kind == .diskImage })

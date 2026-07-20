@@ -122,9 +122,8 @@ STRATO_HOSTNAME=${HOSTNAME_ARG}
 # listener); embedded in the bootstrap commands the UI generates. This is the
 # agent-facing endpoint, not the browser proxy.
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
-# Full origin agents fetch signed image-download URLs from. Routes to the
-# control plane through the published proxy, so it must be the browser origin
-# (not the in-container :8080).
+# Published proxy origin (the browser URL). Only used as the BASE_URL default
+# below; agents fetch images through the mTLS listener, not this origin.
 CONTROL_PLANE_URL=${ORIGIN}
 # Public origin used to build OIDC redirect URIs (SSO login callback and
 # post-logout redirect). Must be the exact browser origin; OIDC login fails

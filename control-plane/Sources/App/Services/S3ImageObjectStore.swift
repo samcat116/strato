@@ -13,8 +13,8 @@ import Vapor
 ///
 /// Bytes still reach agents through the control plane's `/download` route
 /// rather than a presigned URL. That keeps a single, swappable authentication
-/// point on the fetch path (see issue #493, which replaces the signed URL with
-/// agent SVID mTLS), keeps bucket credentials inside the control plane, and
+/// point on the fetch path (agent SVID mTLS since issue #493), keeps bucket
+/// credentials inside the control plane, and
 /// means agents need no network route to the object store.
 struct S3ImageObjectStore: ImageObjectStore {
     let s3: S3

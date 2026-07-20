@@ -96,8 +96,8 @@ where another stopped:
   platform artifact actually resolves.
 - The assignment (`update_desired_version`) rides the agent's periodic
   desired-state sync as `desiredAgentUpdate`, with the artifact URL and
-  checksum re-resolved on every assembly — the same freshness rule as signed
-  image URLs.
+  checksum re-resolved on every assembly so a long-desired update never
+  carries a stale link.
 - The next agent is assigned only after the previous one **re-registers at
   the target version**. Outcomes per assigned agent:
   - **Converged** — re-registered at the target (or updated by hand):

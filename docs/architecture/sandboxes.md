@@ -148,8 +148,8 @@ secrets and never echoed back by the API.
 
 `DesiredSandboxState` carries an optional `RegistryCredential` (registry host,
 username, password/token, expiry, bearer flag) that the control plane mints
-**fresh at every sync assembly** — the same slot where signed image URLs are
-refreshed — so a long-lived desired entry never holds an expired secret. The
+**fresh at every sync assembly**, so a long-lived desired entry never holds an
+expired secret. The
 control plane speaks the distribution auth flow (`DistributionRegistryClient`:
 challenge probe → token endpoint → manifest; Docker Hub, GHCR, and any
 distribution-spec registry): when the registry has a token service it mints a

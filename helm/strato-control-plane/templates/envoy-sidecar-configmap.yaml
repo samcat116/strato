@@ -74,6 +74,34 @@ data:
                         - name: control_plane
                           domains: ["*"]
                           routes:
+                            # Image/artifact downloads (issue #493): agents
+                            # fetch base-image bytes with their SVID as the
+                            # client cert; the control plane re-verifies the
+                            # forwarded identity (XFCC). The per-route RBAC
+                            # restricts these to agent identities — mTLS alone
+                            # only proves trust-domain membership. Timeout 0:
+                            # image bodies stream for longer than any fixed
+                            # budget.
+                            - match:
+                                safe_regex:
+                                  regex: "^/api/projects/[^/]+/images/[^/]+/download$"
+                              route:
+                                cluster: control_plane_local
+                                timeout: 0s
+                              typed_per_filter_config:
+                                envoy.filters.http.rbac:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                                  rbac:
+                                    rules:
+                                      action: ALLOW
+                                      policies:
+                                        agents-only:
+                                          permissions:
+                                            - any: true
+                                          principals:
+                                            - authenticated:
+                                                principal_name:
+                                                  prefix: "spiffe://{{ .Values.spire.trustDomain }}/agent/"
                             - match:
                                 prefix: "/agent/"
                               route:
@@ -84,6 +112,23 @@ data:
                               route:
                                 cluster: control_plane_local
                     http_filters:
+                      # No listener-level rules: everything is allowed unless a
+                      # route overrides via typed_per_filter_config (the image
+                      # download route above). Control-plane routes keep their
+                      # existing model — the control plane re-verifies the
+                      # forwarded client cert (XFCC) itself.
+                      #
+                      # Note the shape: because the catch-all "/" route carries
+                      # no RBAC, a path that misses a guarded route's matcher is
+                      # allowed through, not denied. For the image download that
+                      # is deliberate but not load-bearing — the control plane
+                      # independently re-verifies the XFCC identity and requires
+                      # an agent SVID before serving bytes, so this RBAC is
+                      # defense in depth, not the gate. Do not remove the
+                      # in-handler check on the strength of this config.
+                      - name: envoy.filters.http.rbac
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
                       - name: envoy.filters.http.router
                         typed_config:
                           "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

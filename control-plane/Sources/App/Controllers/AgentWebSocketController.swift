@@ -144,8 +144,8 @@ struct AgentWebSocketController: RouteCollection {
         // injects the verified client identity, and then dials the control plane over
         // loopback (127.0.0.1). A request carrying XFCC from any other peer never
         // passed through Envoy's certificate verification and is a spoofing attempt.
-        if req.headers.contains(name: "X-Forwarded-Client-Cert") {
-            guard requestArrivedViaLocalSidecar(req) else {
+        if AgentMTLSAuthenticator.hasClientCertificate(req) {
+            guard AgentMTLSAuthenticator.requestArrivedViaLocalSidecar(req) else {
                 req.logger.warning(
                     "Rejecting X-Forwarded-Client-Cert from non-loopback peer (possible mTLS spoofing)",
                     metadata: [
@@ -158,7 +158,10 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
-            guard let spiffeID = await extractVerifiedSPIFFEID(req: req, spireService: spireService) else {
+            guard
+                let spiffeID = await AgentMTLSAuthenticator.extractVerifiedSPIFFEID(
+                    req: req, spireService: spireService)
+            else {
                 // extractVerifiedSPIFFEID already logged the specific failure
                 sendErrorResponse(
                     ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
@@ -199,72 +202,9 @@ struct AgentWebSocketController: RouteCollection {
         Task { try? await ws.close(code: .unacceptableData) }
     }
 
-    /// Whether the request arrived over the pod-local loopback interface, i.e. from
-    /// the co-located Envoy sidecar that terminates mTLS, rather than directly over
-    /// the pod network. Envoy forwards to the control plane on 127.0.0.1, so only
-    /// loopback peers may be trusted to have passed through certificate verification.
-    private func requestArrivedViaLocalSidecar(_ req: Request) -> Bool {
-        guard let ip = req.remoteAddress?.ipAddress else { return false }
-        return ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1"
-    }
-
-    // MARK: - XFCC Header Parsing
-
-    /// Extract the client's SPIFFE ID from the X-Forwarded-Client-Cert header and,
-    /// when Envoy also forwarded the certificate itself (`Cert=`/`Chain=`),
-    /// independently re-verify that certificate against the SPIRE trust bundle and
-    /// require its SAN URI to match the `URI=` field. This means a compromised or
-    /// misconfigured proxy cannot assert an identity it does not hold a
-    /// SPIRE-issued certificate for. Returns nil (after logging why) on any failure.
-    private func extractVerifiedSPIFFEID(req: Request, spireService: SPIREService) async -> SPIFFEIdentity? {
-        guard let xfcc = req.headers.first(name: "X-Forwarded-Client-Cert") else {
-            return nil
-        }
-
-        guard let element = XFCCElement.parseNearestHop(header: xfcc) else {
-            req.logger.warning("XFCC header present but unparseable", metadata: ["xfcc": .string(xfcc)])
-            return nil
-        }
-
-        guard let uriString = element.uri, let claimedID = SPIFFEIdentity(uri: uriString) else {
-            req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
-            return nil
-        }
-
-        // Chain= includes the leaf (leaf first); Cert= is the leaf alone.
-        if let certificatePEM = element.chainPEM ?? element.certPEM {
-            guard await spireService.hasTrustBundle else {
-                // No bundle to verify against: accept Envoy's verification alone,
-                // as before cert forwarding was enabled. Deployments that configure
-                // a trust bundle get the stronger check automatically.
-                req.logger.warning(
-                    "XFCC forwarded a client certificate but no SPIRE trust bundle is configured; relying on Envoy's verification only"
-                )
-                return claimedID
-            }
-
-            do {
-                let verifiedID = try await spireService.validateCertificate(certificatePEM)
-                guard verifiedID == claimedID else {
-                    req.logger.error(
-                        "XFCC URI does not match the SAN URI of the forwarded client certificate",
-                        metadata: [
-                            "claimed": .string(claimedID.uri),
-                            "verified": .string(verifiedID.uri),
-                        ])
-                    return nil
-                }
-            } catch {
-                req.logger.error(
-                    "Forwarded client certificate failed verification against the SPIRE trust bundle: \(error)",
-                    metadata: ["claimed": .string(claimedID.uri)])
-                return nil
-            }
-        }
-
-        req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(claimedID.uri)])
-        return claimedID
-    }
+    // The loopback-provenance check and XFCC extraction/verification live in
+    // AgentMTLSAuthenticator, shared with the mTLS-authenticated artifact
+    // download route (issue #493).
 
     private func handleWebSocketMessage(
         req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState

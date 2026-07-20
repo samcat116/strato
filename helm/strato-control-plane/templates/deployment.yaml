@@ -230,11 +230,6 @@ spec:
             # so the two can never disagree unless explicitly overridden.
             - name: BASE_URL
               value: "{{ .Values.strato.baseUrl | default (include "strato-control-plane.webauthnOrigin" .) }}"
-            # URL agents use to fetch signed image-download links. The code
-            # default (http://localhost:8080) is unreachable from agents, so
-            # default to the public origin agents can actually resolve.
-            - name: CONTROL_PLANE_URL
-              value: "{{ .Values.strato.controlPlaneUrl | default (include "strato-control-plane.webauthnOrigin" .) }}"
             {{- with .Values.strato.oidc }}
             {{- if .discoveryAllowedHosts }}
             - name: OIDC_DISCOVERY_ALLOWED_HOSTS
