@@ -13,6 +13,7 @@ import {
   Globe,
   HardDrive,
   Key,
+  TerminalSquare,
   Layers,
   LayoutGrid,
   MapPin,
@@ -75,6 +76,7 @@ export const navTree: NavItem[] = [
       { label: "Quotas", href: "/quotas", icon: Gauge },
       { label: "Users", href: "/admin/users", icon: Users, adminOnly: true },
       { label: "API Keys", href: "/settings/api-keys", icon: Key },
+      { label: "CLI Sessions", href: "/settings/cli-sessions", icon: TerminalSquare },
       {
         label: "Workload Identity",
         href: "/workload-identity",

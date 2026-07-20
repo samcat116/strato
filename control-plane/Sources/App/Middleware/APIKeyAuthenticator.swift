@@ -69,9 +69,12 @@ extension Request {
 
 struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        // Check for Authorization header with Bearer token
+        // Check for Authorization header with Bearer token. Each authenticator
+        // guards on its own token prefix (`sk_` API keys, `st_` CLI access
+        // tokens), so both can run unconditionally.
         if let authorization = request.headers.bearerAuthorization {
             try await APIKeyAuthenticator().authenticate(bearer: authorization, for: request)
+            try await OAuthTokenAuthenticator().authenticate(bearer: authorization, for: request)
         }
 
         return try await next.respond(to: request)
@@ -93,15 +96,21 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
 /// no credentials at all) carry no `request.apiKey` and pass through untouched.
 struct APIKeyScopeMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        guard let apiKey = request.apiKey else {
-            return try await next.respond(to: request)
-        }
-
         let required = APIKeyScope.required(for: request.method)
-        guard apiKey.grants(required) else {
+
+        if let apiKey = request.apiKey, !apiKey.grants(required) {
             throw Abort(
                 .forbidden,
                 reason: "API key lacks the required '\(required.rawValue)' scope for this operation"
+            )
+        }
+
+        // CLI access tokens carry the scopes the user approved at login and
+        // are enforced identically.
+        if let cliSession = request.cliSession, !cliSession.grants(required) {
+            throw Abort(
+                .forbidden,
+                reason: "CLI session lacks the required '\(required.rawValue)' scope for this operation"
             )
         }
 

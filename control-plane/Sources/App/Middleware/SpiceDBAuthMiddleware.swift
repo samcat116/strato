@@ -14,8 +14,12 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         // authenticate with a per-stream bearer token checked in-handler.
         // `/api/public/` serves the login page (SSO provider discovery), so it
         // must be reachable without a session.
+        // `/oauth/` is the RFC 8628 device-grant surface: the polling CLI has
+        // no credentials yet. The approval/management endpoints live under
+        // `/api/oauth/` and stay session-gated.
         let publicPrefixes = [
             "/health", "/auth", "/api/users/register", "/agent/ws", "/ssf/events/", "/api/public/",
+            "/oauth/",
         ]
         // Image-download URLs: agents fetch base images with their SPIFFE SVID
         // over mTLS, not a session; the controller authenticates the forwarded

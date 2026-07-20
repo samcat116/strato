@@ -16,6 +16,8 @@ func routes(_ app: Application) throws {
     // IAM shadow-evaluation decision logs (issue #481)
     try app.register(collection: IAMDecisionLogController())
     try app.register(collection: APIKeyController())
+    // OAuth device grant + CLI session management (issue #558)
+    try app.register(collection: OAuthController())
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
 
