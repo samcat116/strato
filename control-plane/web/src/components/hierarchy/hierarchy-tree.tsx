@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type {
   OrganizationNode,
-  OrganizationalUnitNode,
+  FolderNode,
   ProjectNode,
   VMSummaryNode,
 } from "@/types/api";
@@ -147,26 +147,26 @@ function ProjectRow({
   );
 }
 
-function OURow({ ou, depth }: { ou: OrganizationalUnitNode; depth: number }) {
+function FolderRow({ folder, depth }: { folder: FolderNode; depth: number }) {
   const [expanded, setExpanded] = useState(true);
-  const hasChildren = ou.childOUs.length > 0 || ou.projects.length > 0;
+  const hasChildren = folder.childOUs.length > 0 || folder.projects.length > 0;
   return (
     <div>
       <TreeRow
         depth={depth}
         icon={<FolderTree className="h-4 w-4 text-purple-600" />}
-        label={ou.name}
+        label={folder.name}
         expandable={hasChildren}
         expanded={expanded}
         onToggle={() => setExpanded((v) => !v)}
-        meta={quotaBadge(ou.quotas.length)}
+        meta={quotaBadge(folder.quotas.length)}
       />
       {expanded && (
         <>
-          {ou.childOUs.map((child) => (
-            <OURow key={child.id} ou={child} depth={depth + 1} />
+          {folder.childOUs.map((child) => (
+            <FolderRow key={child.id} folder={child} depth={depth + 1} />
           ))}
-          {ou.projects.map((project) => (
+          {folder.projects.map((project) => (
             <ProjectRow key={project.id} project={project} depth={depth + 1} />
           ))}
         </>
@@ -184,8 +184,8 @@ export function HierarchyTree({ org }: { org: OrganizationNode }) {
         label={<span className="font-medium">{org.name}</span>}
         meta={quotaBadge(org.quotas.length)}
       />
-      {org.organizationalUnits.map((ou) => (
-        <OURow key={ou.id} ou={ou} depth={1} />
+      {org.organizationalUnits.map((folder) => (
+        <FolderRow key={folder.id} folder={folder} depth={1} />
       ))}
       {org.projects.map((project) => (
         <ProjectRow key={project.id} project={project} depth={1} />
@@ -193,7 +193,7 @@ export function HierarchyTree({ org }: { org: OrganizationNode }) {
       {org.organizationalUnits.length === 0 &&
         org.projects.length === 0 && (
           <p className="pl-6 py-2 text-sm text-muted-foreground">
-            This organization has no units or projects yet.
+            This organization has no folders or projects yet.
           </p>
         )}
     </div>

@@ -209,11 +209,11 @@ extension Project {
     func validate() throws {
         // Ensure project belongs to either org or OU, but not both
         if self.$organization.id != nil && self.$organizationalUnit.id != nil {
-            throw Abort(.badRequest, reason: "Project cannot belong to both an organization and an organizational unit")
+            throw Abort(.badRequest, reason: "Project cannot belong to both an organization and a folder")
         }
 
         if self.$organization.id == nil && self.$organizationalUnit.id == nil {
-            throw Abort(.badRequest, reason: "Project must belong to either an organization or an organizational unit")
+            throw Abort(.badRequest, reason: "Project must belong to either an organization or a folder")
         }
 
         // Ensure default environment exists in environments list

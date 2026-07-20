@@ -4,7 +4,7 @@ import { useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  FolderTree,
+  FolderTree as FolderTreeIcon,
   Loader2,
   Pencil,
   Plus,
@@ -13,27 +13,27 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  useOrganizationalUnitTree,
-  useDeleteOrganizationalUnit,
-  ouErrorMessage,
+  useFolderTree,
+  useDeleteFolder,
+  folderErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
-import type { OrganizationalUnit, OrganizationalUnitTree } from "@/types/api";
-import type { EditableOU } from "./ou-form-dialog";
+import type { Folder, FolderTreeNode } from "@/types/api";
+import type { EditableFolder } from "./folder-form-dialog";
 
-interface OuActionHandlers {
+interface FolderActionHandlers {
   orgId: string;
   canManage: boolean;
-  onEdit: (ou: EditableOU) => void;
+  onEdit: (folder: EditableFolder) => void;
   onAddSub: (parent: { id: string; name: string }) => void;
 }
 
-interface OuTreeProps extends OuActionHandlers {
-  units: OrganizationalUnit[];
+interface FolderTreeProps extends FolderActionHandlers {
+  folders: Folder[];
   isLoading?: boolean;
 }
 
-export function OuTree({ units, isLoading, ...handlers }: OuTreeProps) {
+export function FolderTree({ folders, isLoading, ...handlers }: FolderTreeProps) {
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -44,44 +44,44 @@ export function OuTree({ units, isLoading, ...handlers }: OuTreeProps) {
     );
   }
 
-  if (units.length === 0) {
+  if (folders.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        No organizational units yet.
+        No folders yet.
       </div>
     );
   }
 
   return (
     <ul className="space-y-1">
-      {units.map((unit) => (
-        <OuTopNode key={unit.id} unit={unit} {...handlers} />
+      {folders.map((folder) => (
+        <FolderTopNode key={folder.id} folder={folder} {...handlers} />
       ))}
     </ul>
   );
 }
 
-/** A top-level OU. Its subtree is fetched lazily the first time it expands. */
-function OuTopNode({
-  unit,
+/** A top-level folder. Its subtree is fetched lazily the first time it expands. */
+function FolderTopNode({
+  folder,
   ...handlers
-}: { unit: OrganizationalUnit } & OuActionHandlers) {
+}: { folder: Folder } & FolderActionHandlers) {
   const [expanded, setExpanded] = useState(false);
-  const hasChildren = (unit.childOuCount ?? 0) > 0;
-  const { data: tree, isLoading } = useOrganizationalUnitTree(
+  const hasChildren = (folder.childOuCount ?? 0) > 0;
+  const { data: tree, isLoading } = useFolderTree(
     handlers.orgId,
-    expanded && hasChildren ? unit.id : undefined
+    expanded && hasChildren ? folder.id : undefined
   );
 
   return (
     <li>
-      <OuRow
-        id={unit.id}
-        name={unit.name}
-        description={unit.description}
+      <FolderRow
+        id={folder.id}
+        name={folder.name}
+        description={folder.description}
         depth={0}
-        projectCount={unit.projectCount ?? 0}
-        childCount={unit.childOuCount ?? 0}
+        projectCount={folder.projectCount ?? 0}
+        childCount={folder.childOuCount ?? 0}
         expanded={expanded}
         onToggle={hasChildren ? () => setExpanded((v) => !v) : undefined}
         {...handlers}
@@ -94,7 +94,7 @@ function OuTopNode({
             </li>
           )}
           {tree?.children.map((child) => (
-            <OuTreeNode key={child.id} node={child} {...handlers} />
+            <FolderNode key={child.id} node={child} {...handlers} />
           ))}
         </ul>
       )}
@@ -102,17 +102,17 @@ function OuTopNode({
   );
 }
 
-/** A descendant OU from an already-loaded subtree. */
-function OuTreeNode({
+/** A descendant folder from an already-loaded subtree. */
+function FolderNode({
   node,
   ...handlers
-}: { node: OrganizationalUnitTree } & OuActionHandlers) {
+}: { node: FolderTreeNode } & FolderActionHandlers) {
   const [expanded, setExpanded] = useState(false);
   const hasChildren = node.children.length > 0;
 
   return (
     <li>
-      <OuRow
+      <FolderRow
         id={node.id}
         name={node.name}
         description={node.description}
@@ -126,7 +126,7 @@ function OuTreeNode({
       {expanded && hasChildren && (
         <ul className="space-y-1 mt-1">
           {node.children.map((child) => (
-            <OuTreeNode key={child.id} node={child} {...handlers} />
+            <FolderNode key={child.id} node={child} {...handlers} />
           ))}
         </ul>
       )}
@@ -134,7 +134,7 @@ function OuTreeNode({
   );
 }
 
-interface OuRowProps extends OuActionHandlers {
+interface FolderRowProps extends FolderActionHandlers {
   id: string;
   name: string;
   description: string;
@@ -145,7 +145,7 @@ interface OuRowProps extends OuActionHandlers {
   onToggle?: () => void;
 }
 
-function OuRow({
+function FolderRow({
   id,
   name,
   description,
@@ -158,33 +158,33 @@ function OuRow({
   canManage,
   onEdit,
   onAddSub,
-}: OuRowProps) {
-  const deleteOU = useDeleteOrganizationalUnit(orgId);
+}: FolderRowProps) {
+  const deleteFolder = useDeleteFolder(orgId);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
     if (childCount > 0) {
       toast.error(
-        `"${name}" has sub-units. Move or delete them before deleting this unit.`
+        `"${name}" has subfolders. Move or delete them before deleting this folder.`
       );
       return;
     }
     if (projectCount > 0) {
       toast.error(
-        `"${name}" has projects. Move or delete them before deleting this unit.`
+        `"${name}" has projects. Move or delete them before deleting this folder.`
       );
       return;
     }
-    if (!window.confirm(`Delete the organizational unit "${name}"?`)) {
+    if (!window.confirm(`Delete the folder "${name}"?`)) {
       return;
     }
 
     setIsDeleting(true);
     try {
-      await deleteOU.mutateAsync(id);
+      await deleteFolder.mutateAsync(id);
       toast.success(`Deleted ${name}`);
     } catch (error) {
-      toast.error(ouErrorMessage(error, "Failed to delete organizational unit"));
+      toast.error(folderErrorMessage(error, "Failed to delete folder"));
     } finally {
       setIsDeleting(false);
     }
@@ -212,13 +212,13 @@ function OuRow({
         <span className="w-4" />
       )}
 
-      <FolderTree className="h-4 w-4 text-muted-foreground shrink-0" />
+      <FolderTreeIcon className="h-4 w-4 text-muted-foreground shrink-0" />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-foreground truncate">{name}</span>
           <span className="text-xs text-muted-foreground shrink-0">
-            {childCount} {childCount === 1 ? "unit" : "units"} · {projectCount}{" "}
+            {childCount} {childCount === 1 ? "folder" : "folders"} · {projectCount}{" "}
             {projectCount === 1 ? "project" : "projects"}
           </span>
         </div>
@@ -234,7 +234,7 @@ function OuRow({
             variant="ghost"
             className="text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => onAddSub({ id, name })}
-            aria-label={`Add sub-unit to ${name}`}
+            aria-label={`Add subfolder to ${name}`}
           >
             <Plus className="h-4 w-4" />
           </Button>

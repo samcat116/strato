@@ -17,7 +17,7 @@ export { scimTokensApi } from "./scim-tokens";
 export { oidcProvidersApi } from "./oidc-providers";
 export { ssfStreamsApi } from "./ssf-streams";
 export { groupsApi } from "./groups";
-export { organizationalUnitsApi } from "./organizational-units";
+export { foldersApi } from "./folders";
 export { quotasApi } from "./quotas";
 export { hierarchyApi } from "./hierarchy";
 export { networksApi } from "./networks";

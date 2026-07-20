@@ -97,13 +97,13 @@ export {
   groupErrorMessage,
 } from "./use-groups";
 export {
-  useOrganizationalUnits,
-  useOrganizationalUnitTree,
-  useCreateOrganizationalUnit,
-  useUpdateOrganizationalUnit,
-  useDeleteOrganizationalUnit,
-  ouErrorMessage,
-} from "./use-organizational-units";
+  useFolders,
+  useFolderTree,
+  useCreateFolder,
+  useUpdateFolder,
+  useDeleteFolder,
+  folderErrorMessage,
+} from "./use-folders";
 export {
   useOrganizationQuotas,
   useProjectQuotas,

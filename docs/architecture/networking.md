@@ -362,7 +362,7 @@ geneve verification on real multi-node hardware (recipe in
 **As built (issue #344):**
 
 - **Control plane:** `FloatingIPPool` rows (external IPv4 CIDR, optional
-  gateway exclusion, optional site pin, org/OU-scoped like sites) and
+  gateway exclusion, optional site pin, org/folder-scoped like sites) and
   `FloatingIP` rows (pool + address + project, optional FK to a
   `VMNetworkInterface`; `SET NULL` on NIC delete, so removing a VM *detaches*
   rather than releases). `IPAMService.allocateFloatingIP` reuses the

@@ -27,7 +27,7 @@ entitling the node's `strato-agent` to its SPIFFE ID — and returns a
 
 - `GET /api/agents/enrollments` lists enrollments; `DELETE
   /api/agents/enrollments/:id` revokes one, removing its SPIRE entries.
-- Every enrollment names the organization (or organizational unit) whose
+- Every enrollment names the organization (or folder) whose
   dedicated capacity the agent becomes, via
   `organizationId`/`organizationalUnitId`; an enrollment with no
   organization is rejected. `siteId` pins the node to a

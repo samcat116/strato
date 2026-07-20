@@ -82,8 +82,8 @@ The important ones to know when navigating `Services/`:
   `FloatingIPPool` ranges (issue #344).
 - **`SpiceDBService`** — authorization checks and relationship writes;
   mock-backed under `.testing`.
-- **`QuotaEnforcementService`** — reserve/release quota against project, OU,
-  and org at VM/sandbox create/delete.
+- **`QuotaEnforcementService`** — reserve/release quota against project,
+  folder, and org at VM/sandbox create/delete.
 - **`VMSpecBuilder` / `SandboxSpecBuilder`** — assemble the
   hypervisor-neutral specs sent to agents.
 - **`VolumeService`**, **`ImageFetchService`/`ImageValidationService`**,

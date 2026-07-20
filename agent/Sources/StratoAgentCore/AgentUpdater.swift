@@ -164,8 +164,12 @@ public struct AgentUpdater: Sendable {
         if case .container(let marker) = installMode {
             throw AgentUpdateError.managedExternally(marker: marker)
         }
+        // https (the wire contract) or file:// for air-gapped installs only.
+        // Plaintext http is rejected: the integrity checksum is delivered over
+        // the same fetch, so a network MITM that can rewrite an http response
+        // could supply a matching malicious (binary, sha256) pair and defeat it.
         guard let url = URL(string: artifactURL), let scheme = url.scheme,
-            ["https", "http", "file"].contains(scheme.lowercased())
+            ["https", "file"].contains(scheme.lowercased())
         else {
             // Redacted: the error travels into logs on both sides, and the
             // URL's query string may be a presigned credential.

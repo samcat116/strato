@@ -205,6 +205,31 @@ public actor OCIRegistryClient {
             throw OCIError.blobUnavailable(digest: descriptor.digest, status: status)
         }
 
+        // Enforce the declared blob size against what was actually written.
+        // Without this, a manifest can declare a tiny `size` (so the caller's
+        // free-space precheck, computed from declared sizes, passes) while the
+        // registry serves a multi-GB blob whose digest still matches — a
+        // disk-exhaustion vector. A blob whose length disagrees with its
+        // descriptor is rejected. (A hard mid-stream download cap is a follow-up
+        // that requires a streaming transport delegate.)
+        //
+        // A non-positive declared size is rejected outright rather than waved
+        // through: `size` is required and positive per the OCI spec, and the
+        // free-space precheck sums these same values, so treating `size: 0` as
+        // "nothing to check" would hand back the exact bypass this closes.
+        guard descriptor.size > 0 else {
+            throw OCIError.malformedResponse(
+                detail: "blob \(descriptor.digest) declares a non-positive size (\(descriptor.size))")
+        }
+        let writtenSize =
+            ((try? FileManager.default.attributesOfItem(atPath: stagingPath)[.size]) as? Int64) ?? -1
+        guard writtenSize == descriptor.size else {
+            throw OCIError.malformedResponse(
+                detail:
+                    "blob \(descriptor.digest) size mismatch: declared \(descriptor.size), received \(writtenSize)"
+            )
+        }
+
         let actual = "sha256:" + (try Self.sha256Hex(ofFileAt: stagingPath))
         guard actual == descriptor.digest else {
             throw OCIError.digestMismatch(expected: descriptor.digest, actual: actual)
