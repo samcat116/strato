@@ -739,69 +739,82 @@ final class SandboxSnapshotTests {
         }
     }
 
-    @Test("Signed artifact upload records integrity and download streams the bytes back")
-    func signedArtifactUploadAndDownloadRoundTrip() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, token in
+    @Test("Agent mTLS artifact upload records integrity and download streams the bytes back")
+    func artifactUploadAndDownloadRoundTripOverAgentMTLS() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, _ in
             let storeRoot = NSTemporaryDirectory() + "snapshot-transfer-\(UUID().uuidString)"
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
             defer { try? FileManager.default.removeItem(atPath: storeRoot) }
 
-            let snapshot = SandboxSnapshot(
-                name: "transfer",
-                sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
-                environment: sandbox.environment,
-                agentId: "agent-a",
-                createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.size = 1 << 20
-            try await snapshot.save(on: app.db)
+            // XFCC trust requires loopback provenance, which Vapor's in-memory
+            // test harness cannot provide — bind a real ephemeral port (the
+            // ImageDownloadMTLSTests pattern) and rely on the XFCC URI alone
+            // (no trust bundle configured).
+            app.spireService = SPIREService(
+                config: SPIREServiceConfig(enabled: true, trustDomain: "strato.local"),
+                logger: app.logger, httpClient: app.client)
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let outcome: Result<Void, any Error>
+            do {
+                let port = try #require(
+                    app.http.server.shared.localAddress?.port,
+                    "HTTP server did not report a bound port")
 
-            let signingKey = try await URLSigningService.getSigningKeyAsync(from: app)
-            let payload = "checkpointed guest memory bytes"
+                let snapshot = SandboxSnapshot(
+                    name: "transfer",
+                    sandboxID: sandbox.id!,
+                    projectID: sandbox.$project.id,
+                    environment: sandbox.environment,
+                    agentId: "agent-a",
+                    createdByID: user.id!)
+                snapshot.status = .ready
+                snapshot.size = 1 << 20
+                try await snapshot.save(on: app.db)
 
-            let uploadURL = URLSigningService.signSandboxSnapshotArtifactURL(
-                method: "PUT",
-                sandboxId: sandbox.id!,
-                snapshotId: snapshot.id!,
-                kind: .memory,
-                agentName: "agent-a",
-                baseURL: "",
-                signingKey: signingKey)
-            try await app.test(.PUT, uploadURL) { req in
-                req.body = ByteBuffer(string: payload)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
+                let payload = "checkpointed guest memory bytes"
+                let path = SandboxSnapshot.artifactTransferPath(
+                    sandboxId: sandbox.id!, snapshotId: snapshot.id!, kind: .memory)
+                let uri = URI(string: "http://127.0.0.1:\(port)\(path)")
+                let xfcc = ("X-Forwarded-Client-Cert", "URI=spiffe://strato.local/agent/transfer-agent")
+
+                let uploadResponse = try await app.client.put(uri) { req in
+                    req.headers.add(name: xfcc.0, value: xfcc.1)
+                    req.body = ByteBuffer(string: payload)
+                }
+                #expect(uploadResponse.status == .ok)
+
+                let uploaded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let recorded = try #require(uploaded.exportedArtifact(for: .memory))
+                #expect(recorded.sizeBytes == Int64(payload.utf8.count))
+                #expect(recorded.sha256.count == 64)
+                // A landed artifact invalidates any prior completion stamp
+                // until the export operation re-verifies the full set.
+                #expect(uploaded.exportedAt == nil)
+
+                let downloadResponse = try await app.client.get(uri) { req in
+                    req.headers.add(name: xfcc.0, value: xfcc.1)
+                }
+                #expect(downloadResponse.status == .ok)
+                let body = downloadResponse.body.map { String(buffer: $0) } ?? ""
+                #expect(body == payload)
+
+                // No forwarded certificate at all: refused, with no session
+                // fallback — these routes exist only for agents.
+                let anonymous = try await app.client.get(uri)
+                #expect(anonymous.status == .unauthorized)
+
+                // A non-agent SPIFFE identity is refused too.
+                let nonAgent = try await app.client.get(uri) { req in
+                    req.headers.add(
+                        name: xfcc.0, value: "URI=spiffe://strato.local/control-plane")
+                }
+                #expect(nonAgent.status == .forbidden)
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
             }
-
-            let uploaded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
-            let recorded = try #require(uploaded.exportedArtifact(for: .memory))
-            #expect(recorded.sizeBytes == Int64(payload.utf8.count))
-            #expect(recorded.sha256.count == 64)
-            // A landed artifact invalidates any prior completion stamp until
-            // the export operation re-verifies the full set.
-            #expect(uploaded.exportedAt == nil)
-
-            let downloadURL = URLSigningService.signSandboxSnapshotArtifactURL(
-                method: "GET",
-                sandboxId: sandbox.id!,
-                snapshotId: snapshot.id!,
-                kind: .memory,
-                agentName: "agent-b",
-                baseURL: "",
-                signingKey: signingKey)
-            try await app.test(.GET, downloadURL) { _ in
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-                #expect(res.body.string == payload)
-            }
-
-            // A tampered signature (or the wrong direction) is refused.
-            try await app.test(.PUT, downloadURL) { req in
-                req.body = ByteBuffer(string: "evil bytes")
-            } afterResponse: { res in
-                #expect(res.status == .forbidden)
-            }
+            await app.server.shutdown()
+            try outcome.get()
         }
     }
 

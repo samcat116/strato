@@ -37,7 +37,7 @@ export const quotasApi = {
     );
   },
 
-  listForOU(organizationId: string, ouId: string): Promise<ResourceQuota[]> {
+  listForFolder(organizationId: string, ouId: string): Promise<ResourceQuota[]> {
     return api.get<ResourceQuota[]>(
       `/api/organizations/${organizationId}/ous/${ouId}/quotas`
     );

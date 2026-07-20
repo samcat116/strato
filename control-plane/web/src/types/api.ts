@@ -183,8 +183,9 @@ export interface UpdateGroupRequest {
   description?: string;
 }
 
-// Organizational Units
-export interface OrganizationalUnit {
+// Folders (named "organizational unit" on the wire; fields keep their `ou`
+// spellings until the Cedar cutover renames the API).
+export interface Folder {
   id: string;
   name: string;
   description: string;
@@ -197,24 +198,24 @@ export interface OrganizationalUnit {
   projectCount?: number;
 }
 
-/** Recursive tree node returned by the OU `tree` endpoint. */
-export interface OrganizationalUnitTree {
+/** Recursive tree node returned by the folder `tree` endpoint. */
+export interface FolderTreeNode {
   id: string;
   name: string;
   description: string;
   path: string;
   depth: number;
   projectCount: number;
-  children: OrganizationalUnitTree[];
+  children: FolderTreeNode[];
 }
 
-export interface CreateOrganizationalUnitRequest {
+export interface CreateFolderRequest {
   name: string;
   description: string;
   parentOuId?: string;
 }
 
-export interface UpdateOrganizationalUnitRequest {
+export interface UpdateFolderRequest {
   name?: string;
   description?: string;
 }
@@ -1111,13 +1112,13 @@ export interface ProjectNode {
   quotas: ResourceQuota[];
 }
 
-export interface OrganizationalUnitNode {
+export interface FolderNode {
   id: string;
   name: string;
   description: string;
   path: string;
   depth: number;
-  childOUs: OrganizationalUnitNode[];
+  childOUs: FolderNode[];
   projects: ProjectNode[];
   quotas: ResourceQuota[];
 }
@@ -1126,7 +1127,7 @@ export interface OrganizationNode {
   id: string;
   name: string;
   description: string;
-  organizationalUnits: OrganizationalUnitNode[];
+  organizationalUnits: FolderNode[];
   projects: ProjectNode[];
   quotas: ResourceQuota[];
 }

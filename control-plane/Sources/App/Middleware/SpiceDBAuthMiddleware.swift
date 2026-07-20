@@ -17,17 +17,19 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         let publicPrefixes = [
             "/health", "/auth", "/api/users/register", "/agent/ws", "/ssf/events/", "/api/public/",
         ]
-        // Signed image-download URLs: agents fetch base images with an HMAC
-        // signature, not a session; the controller verifies the signature.
-        let isSignedDownload = path.hasPrefix("/api/projects/") && path.hasSuffix("/download")
-        // Signed snapshot artifact transfer (issue #428): agents stream
-        // exported snapshot artifacts up and down with method-bound HMAC
-        // signatures; the handler verifies before touching any bytes.
-        let isSignedSnapshotArtifact =
+        // Image-download URLs: agents fetch base images with their SPIFFE SVID
+        // over mTLS, not a session; the controller authenticates the forwarded
+        // client certificate (or a user session) itself.
+        let isAgentDownload = path.hasPrefix("/api/projects/") && path.hasSuffix("/download")
+        // Snapshot artifact transfer (issue #428): agents stream exported
+        // snapshot artifacts up and down with their SPIFFE SVID over mTLS;
+        // the handler authenticates the forwarded client certificate before
+        // touching any bytes.
+        let isAgentSnapshotArtifact =
             path.hasPrefix("/api/sandboxes/") && path.contains("/snapshots/")
             && path.contains("/artifacts/")
         if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
-            || isSignedDownload || isSignedSnapshotArtifact
+            || isAgentDownload || isAgentSnapshotArtifact
         {
             return try await next.respond(to: request)
         }

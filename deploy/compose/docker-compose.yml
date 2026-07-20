@@ -350,15 +350,13 @@ services:
       # terminator in front of nginx (the HTTPS topology). setup.sh sets it from
       # the origin scheme; too low buckets every client behind the outer proxy.
       RATE_LIMIT_TRUSTED_PROXY_HOPS: ${RATE_LIMIT_TRUSTED_PROXY_HOPS:-1}
-      # Base URL agents use to fetch signed image-download links. Must route to
-      # the control plane from the agent's network — i.e. the published proxy
-      # origin, NOT the in-container :8080 (which only exists on the internal
-      # network). Set to the browser origin by setup.sh.
-      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
       # Public browser origin used to build OIDC redirect URIs (SSO login
       # callback, post-logout redirect). OIDC login refuses to start without it
-      # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL, which is
-      # also the browser origin in this topology.
+      # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL (the
+      # published proxy origin from .env), which is also the browser origin in
+      # this topology. Agents no longer need a URL from the control plane at
+      # all — image downloads are relative paths fetched over the SPIFFE mTLS
+      # listener the agent already dials (issue #493).
       BASE_URL: ${BASE_URL:-${CONTROL_PLANE_URL}}
       # Where the control plane keeps image bytes. `filesystem` (the default)
       # writes to IMAGE_STORAGE_PATH, backed by the image_storage volume and

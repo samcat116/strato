@@ -87,34 +87,33 @@ enum SandboxSnapshotCompatibility {
 }
 
 extension SandboxSnapshot {
-    /// Signed download descriptors for this snapshot's exported artifacts,
-    /// minted fresh for `agentName` (the signed-image-URL pattern: descriptors
-    /// are rebuilt at every sync assembly / restore dispatch, never stored).
-    /// Returns nil unless the export is complete.
-    func exportedArtifactDescriptors(
-        agentName: String, app: Application, expiresIn: TimeInterval = URLSigningService.defaultExpiration
-    ) throws -> [SandboxSnapshotArtifactDescriptor]? {
+    /// The control-plane-relative transfer path for one artifact — the same
+    /// route serves agent uploads (PUT, during export) and downloads (GET,
+    /// during cross-agent restore/fork), both authenticated by the agent's
+    /// SVID over mTLS (the v13 image-download model, issue #493).
+    static func artifactTransferPath(
+        sandboxId: UUID, snapshotId: UUID, kind: SandboxSnapshotArtifactKind
+    ) -> String {
+        "/api/sandboxes/\(sandboxId.uuidString)/snapshots/\(snapshotId.uuidString)/artifacts/\(kind.rawValue)"
+    }
+
+    /// Download descriptors for this snapshot's exported artifacts:
+    /// control-plane-relative paths plus the integrity material recorded when
+    /// the export streamed through the control plane. Nothing here expires or
+    /// is signed — the fetching agent authenticates with its SVID — so the
+    /// descriptors are stable across syncs. Returns nil unless the export is
+    /// complete.
+    func exportedArtifactDescriptors() throws -> [SandboxSnapshotArtifactDescriptor]? {
         guard isExported, let exportedArtifacts else { return nil }
         let sandboxID = self.$sandbox.id
         let snapshotID = try requireID()
-        let baseURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-        let signingKey = try URLSigningService.getSigningKey(from: app)
-        let expiresAt = Date().addingTimeInterval(expiresIn)
         return exportedArtifacts.map { artifact in
             SandboxSnapshotArtifactDescriptor(
                 kind: artifact.kind,
-                downloadURL: URLSigningService.signSandboxSnapshotArtifactURL(
-                    method: "GET",
-                    sandboxId: sandboxID,
-                    snapshotId: snapshotID,
-                    kind: artifact.kind,
-                    agentName: agentName,
-                    baseURL: baseURL,
-                    expiresIn: expiresIn,
-                    signingKey: signingKey),
+                downloadURL: Self.artifactTransferPath(
+                    sandboxId: sandboxID, snapshotId: snapshotID, kind: artifact.kind),
                 sizeBytes: artifact.sizeBytes,
-                sha256: artifact.sha256,
-                expiresAt: expiresAt)
+                sha256: artifact.sha256)
         }
     }
 

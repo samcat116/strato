@@ -225,21 +225,14 @@ struct VMSpecBuilder {
         return specs
     }
 
-    /// Builds ImageInfo for agent to download and cache the image
-    /// - Parameters:
-    ///   - image: The image to build info for
-    ///   - controlPlaneURL: Base URL of the control plane
-    ///   - agentName: Name of the agent that will download the image
-    ///   - signingKey: Secret key for signing the download URL
-    ///   - expiresIn: Time until the URL expires (default: 1 hour)
-    /// - Returns: ImageInfo with a signed download URL
-    static func buildImageInfo(
-        from image: Image,
-        controlPlaneURL: String,
-        agentName: String,
-        signingKey: String,
-        expiresIn: TimeInterval = URLSigningService.defaultExpiration
-    ) throws -> ImageInfo {
+    /// Builds ImageInfo for the agent to download and cache the image.
+    ///
+    /// Download URLs are control-plane-relative paths (issue #493): the agent
+    /// resolves them against the base URL it already dials — the Envoy mTLS
+    /// listener — and authenticates the fetch with its SPIFFE SVID. No
+    /// signature, no expiry, and no dependency on a control-plane-side notion
+    /// of its own externally reachable URL.
+    static func buildImageInfo(from image: Image) throws -> ImageInfo {
         guard let imageId = image.id else {
             throw Abort(.internalServerError, reason: "Image ID is required")
         }
@@ -249,21 +242,9 @@ struct VMSpecBuilder {
         }
 
         let projectId = image.$project.id
-        let expiresAt = Date().addingTimeInterval(expiresIn)
+        let downloadPath = "/api/projects/\(projectId)/images/\(imageId)/download"
 
-        func sign(_ kind: ArtifactKind?) -> String {
-            URLSigningService.signImageDownloadURL(
-                imageId: imageId,
-                projectId: projectId,
-                agentName: agentName,
-                baseURL: controlPlaneURL,
-                expiresIn: expiresIn,
-                signingKey: signingKey,
-                artifactKind: kind
-            )
-        }
-
-        // One signed download descriptor per typed artifact. Exclude any artifact
+        // One download descriptor per typed artifact. Exclude any artifact
         // that isn't fully materialized — a pending/downloading URL fetch has no
         // real checksum or bytes yet and must never reach an agent.
         let artifacts = (image.$artifacts.value ?? []).filter { $0.status == .ready }.map { artifact in
@@ -273,8 +254,7 @@ struct VMSpecBuilder {
                 filename: artifact.filename,
                 checksum: artifact.checksum,
                 size: artifact.size,
-                downloadURL: sign(artifact.kind),
-                expiresAt: expiresAt
+                downloadURL: "\(downloadPath)?artifact=\(artifact.kind.rawValue)"
             )
         }
 
@@ -290,7 +270,6 @@ struct VMSpecBuilder {
                 checksum: primary.checksum,
                 size: primary.size,
                 downloadURL: primary.downloadURL,
-                expiresAt: expiresAt,
                 architecture: image.architecture,
                 artifacts: artifacts
             )
@@ -306,8 +285,7 @@ struct VMSpecBuilder {
             filename: image.filename,
             checksum: checksum,
             size: image.size,
-            downloadURL: sign(nil),
-            expiresAt: expiresAt,
+            downloadURL: downloadPath,
             architecture: image.architecture,
             artifacts: []
         )

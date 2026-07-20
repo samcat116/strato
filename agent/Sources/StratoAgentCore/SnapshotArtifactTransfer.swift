@@ -3,19 +3,23 @@ import Foundation
 import Logging
 import StratoShared
 
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
-
 /// Streams sandbox snapshot artifacts between agent disk and the control
-/// plane's signed transfer routes (issue #428).
+/// plane's transfer routes (issue #428).
 ///
-/// Uploads use file-backed `URLSession` upload tasks so a multi-gigabyte
-/// memory file never sits in agent memory; downloads land in a `.partial`
+/// Descriptors and upload targets carry control-plane-relative paths; they
+/// resolve against the base URL the agent already dials — the Envoy mTLS
+/// listener — and the actual byte movement goes through the injected
+/// transport, which presents the agent's SVID (`MTLSArtifactDownloader` in
+/// production, plain closures in tests). Downloads land in a `.partial`
 /// staging sibling, are verified against the control-plane-recorded size and
 /// SHA-256, and only then publish via atomic rename — the destination path
 /// never holds unverified bytes, mirroring `ImageCacheService`'s discipline.
-public enum SnapshotArtifactTransfer {
+public struct SnapshotArtifactTransfer: Sendable {
+    /// Fetches `url` and streams the body to the destination path.
+    public typealias FileDownloader = @Sendable (URL, String) async throws -> Void
+    /// PUTs the file at the source path to `url` as a streaming body.
+    public typealias FileUploader = @Sendable (URL, String) async throws -> Void
+
     public enum TransferError: Error, LocalizedError {
         case invalidURL(String)
         case fileNotFound(String)
@@ -42,80 +46,73 @@ public enum SnapshotArtifactTransfer {
         }
     }
 
+    /// The control plane's HTTP(S) base, derived from the dialed WebSocket
+    /// URL, that relative transfer paths resolve against.
+    let controlPlaneBaseURL: String
+    let downloadFile: FileDownloader
+    let uploadFile: FileUploader
+
+    public init(
+        controlPlaneBaseURL: String,
+        downloadFile: @escaping FileDownloader,
+        uploadFile: @escaping FileUploader
+    ) {
+        self.controlPlaneBaseURL = controlPlaneBaseURL
+        self.downloadFile = downloadFile
+        self.uploadFile = uploadFile
+    }
+
     /// Uploads one artifact file with a streaming PUT. The control plane
     /// hashes what it stores, so no client-side digest is sent.
-    public static func upload(
+    public func upload(
         filePath: String, to uploadURL: String, kind: SandboxSnapshotArtifactKind
     ) async throws {
         guard FileManager.default.fileExists(atPath: filePath) else {
             throw TransferError.fileNotFound(filePath)
         }
-        guard let url = URL(string: uploadURL) else {
-            throw TransferError.invalidURL(uploadURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-
-        let response: URLResponse
+        let url = try resolve(uploadURL)
         do {
-            (_, response) = try await uploadTask(
-                request: request, fromFile: URL(fileURLWithPath: filePath))
+            try await uploadFile(url, filePath)
+        } catch let error as TransferError {
+            throw error
         } catch {
             throw TransferError.uploadFailed(kind: kind.rawValue, reason: "\(error)")
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw TransferError.uploadFailed(kind: kind.rawValue, reason: "non-HTTP response")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            throw TransferError.uploadFailed(kind: kind.rawValue, reason: "HTTP \(http.statusCode)")
         }
     }
 
     /// Downloads one artifact described by `descriptor` to `destinationPath`,
     /// verifying size and SHA-256 before the atomic publish. Idempotent: a
     /// destination that already verifies is kept as-is without a download.
-    public static func download(
+    public func download(
         _ descriptor: SandboxSnapshotArtifactDescriptor, to destinationPath: String
     ) async throws {
         if FileManager.default.fileExists(atPath: destinationPath),
-            fileSize(destinationPath) == descriptor.sizeBytes,
-            (try? sha256Hex(of: destinationPath))?.lowercased() == descriptor.sha256.lowercased()
+            Self.fileSize(destinationPath) == descriptor.sizeBytes,
+            (try? Self.sha256Hex(of: destinationPath))?.lowercased() == descriptor.sha256.lowercased()
         {
             return
         }
-        guard let url = URL(string: descriptor.downloadURL) else {
-            throw TransferError.invalidURL(descriptor.downloadURL)
-        }
+        let url = try resolve(descriptor.downloadURL)
 
         let directory = (destinationPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
 
         let kind = descriptor.kind.rawValue
-        let tempURL: URL
-        let response: URLResponse
-        do {
-            (tempURL, response) = try await URLSession.shared.download(from: url)
-        } catch {
-            throw TransferError.downloadFailed(kind: kind, reason: "\(error)")
-        }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            try? FileManager.default.removeItem(at: tempURL)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw TransferError.downloadFailed(kind: kind, reason: "HTTP \(status)")
-        }
-
-        // Stage beside the destination so the final rename is atomic even
-        // when the system temp directory is a different filesystem.
+        // Stage beside the destination so the final rename is atomic even on
+        // hosts where the temp directory is a different filesystem.
         let stagingPath = destinationPath + ".partial." + UUID().uuidString
         do {
-            try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: stagingPath))
-            let actualSize = fileSize(stagingPath)
+            do {
+                try await downloadFile(url, stagingPath)
+            } catch {
+                throw TransferError.downloadFailed(kind: kind, reason: "\(error)")
+            }
+            let actualSize = Self.fileSize(stagingPath)
             guard actualSize == descriptor.sizeBytes else {
                 throw TransferError.sizeMismatch(
                     kind: kind, expected: descriptor.sizeBytes, actual: actualSize)
             }
-            let actualChecksum = try sha256Hex(of: stagingPath)
+            let actualChecksum = try Self.sha256Hex(of: stagingPath)
             guard actualChecksum.lowercased() == descriptor.sha256.lowercased() else {
                 throw TransferError.checksumMismatch(
                     kind: kind, expected: descriptor.sha256, actual: actualChecksum)
@@ -129,9 +126,15 @@ public enum SnapshotArtifactTransfer {
             }
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
-            try? FileManager.default.removeItem(at: tempURL)
             throw error
         }
+    }
+
+    func resolve(_ relativePath: String) throws -> URL {
+        guard let url = URL(string: controlPlaneBaseURL + relativePath) else {
+            throw TransferError.invalidURL(controlPlaneBaseURL + relativePath)
+        }
+        return url
     }
 
     static func sha256Hex(of filePath: String) throws -> String {
@@ -150,30 +153,5 @@ public enum SnapshotArtifactTransfer {
 
     private static func fileSize(_ path: String) -> Int64 {
         (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64 ?? 0) ?? 0
-    }
-
-    /// File-backed upload with an async facade. The callback-based
-    /// `uploadTask(with:fromFile:)` exists on both Darwin and
-    /// swift-corelibs-foundation, unlike the async convenience overloads.
-    private static func uploadTask(
-        request: URLRequest, fromFile fileURL: URL
-    ) async throws -> (Data, URLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
-            let task = URLSession.shared.uploadTask(with: request, fromFile: fileURL) {
-                data, response, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                guard let response else {
-                    continuation.resume(
-                        throwing: TransferError.uploadFailed(
-                            kind: "unknown", reason: "no response"))
-                    return
-                }
-                continuation.resume(returning: (data ?? Data(), response))
-            }
-            task.resume()
-        }
     }
 }

@@ -46,6 +46,17 @@ public actor SandboxImageService {
     /// intermediates, and compressed layers typically expand ~3x.
     private static let spaceFactorOverCompressedSize: Int64 = 4
 
+    /// Upper bound on how far one layer may decompress, derived from its
+    /// *compressed* size (never an attacker-declared decompressed size). 200x is
+    /// far above any real layer (~2–10x) yet stops a decompression bomb; the
+    /// 1 GiB floor keeps small legitimate layers working.
+    static func decompressionCeiling(compressedBytes: Int64) -> Int {
+        let floor = 1 << 30  // 1 GiB
+        let compressed = max(compressedBytes, 0)
+        guard compressed <= Int64(Int.max / 200) else { return Int.max }
+        return max(floor, Int(compressed) * 200)
+    }
+
     private let logger: Logger
     private let client: OCIRegistryClient
     private let cache: OCIRootfsCache
@@ -208,9 +219,16 @@ public actor SandboxImageService {
         for (index, layer) in resolved.manifest.layers.enumerated() {
             let blobPath = workDir + "/layer-\(index).blob"
             try await client.fetchBlob(layer, from: ref, credential: credential, to: blobPath)
+            // Cap the decompressed size so a digest-valid but hostile layer
+            // (a decompression bomb) can't expand to fill the host disk. The
+            // ceiling is generous relative to the compressed size — real layers
+            // rarely exceed ~10x, bombs are 1000x+ — with a floor so small
+            // legit layers still decompress. Derived from the compressed size,
+            // never from an attacker-declared decompressed size.
             let tarPath = try await decompressor.decompressedTarPath(
                 blobPath: blobPath, compression: layerCompressions[index],
-                outputPath: workDir + "/layer-\(index).tar")
+                outputPath: workDir + "/layer-\(index).tar",
+                maxDecompressedBytes: Self.decompressionCeiling(compressedBytes: layer.size))
             do {
                 try flattener.apply(layerTarPath: tarPath)
             } catch let error as TarArchiveReader.TarError {

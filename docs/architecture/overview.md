@@ -45,7 +45,8 @@ The control plane is declarative, not imperative:
   `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
   Each desired record carries a monotonic **generation** counter guarding
   against reordering; syncs are level-triggered and safe to drop or replay.
-  Signed image URLs are refreshed at sync-assembly time.
+  Image download URLs are control-plane-relative paths the agent fetches
+  over SVID mTLS, so nothing in a sync expires.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence
@@ -124,7 +125,8 @@ design proposal is [distributed-storage](./distributed-storage.md).
 Images have an architecture and a set of typed artifacts (`diskImage` for
 QEMU; `rootfs`/`kernel`/`initramfs` for Firecracker/direct boot), each
 with format, checksum, and size. Agents filter artifacts by supported
-backend and host architecture, and image downloads use HMAC-signed URLs.
+backend and host architecture, and download them over the Envoy mTLS
+listener authenticated by their SPIFFE SVID (issue #493).
 
 ## Identity: authentication, authorization, and the org hierarchy
 
@@ -150,8 +152,10 @@ control (the Zanzibar model); the schema lives in `spicedb/schema.zed`.
 The schema defines a hierarchy — `organization` → `organizational_unit` →
 `project` → resources — plus `user`, `group`, `environment`,
 `virtual_machine`, `sandbox`, `image`, `volume`, and related object types.
+The SpiceDB type `organizational_unit` is the **folder** type; the wire-level
+rename lands with the Cedar migration.
 Permissions inherit down the hierarchy: a `project` attaches to its
-`parent` (an organization or OU), and resource permissions resolve through
+`parent` (an organization or folder), and resource permissions resolve through
 the project. Abridged excerpt:
 
 ```zed
@@ -183,7 +187,8 @@ Integration points:
 
 - `SpiceDBAuthMiddleware` (registered globally, including in tests)
   intercepts all HTTP requests: it skips a public allowlist (health
-  checks, `/auth/*`, the agent WebSocket, signed download URLs), requires
+  checks, `/auth/*`, the agent WebSocket, image download URLs — which
+  authenticate the agent's SVID or a user session in-handler), requires
   an authenticated user for everything else, lets system admins bypass
   permission checks, and for the prefix-guarded resource APIs maps HTTP
   method + path to a permission (`read`, `create`, `update`, `delete`,
@@ -193,18 +198,18 @@ Integration points:
   consistency, relationship writes, schema writes), authenticated with a
   preshared key.
 - Controllers write ownership relationships automatically on resource
-  creation (`owner` and `project` tuples), so org/OU admins inherit access
+  creation (`owner` and `project` tuples), so org/folder admins inherit access
   transitively, and perform additional per-object checks in handlers.
 - Schema loading: a Helm post-install/upgrade Job runs `zed schema write`;
   local development posts the schema via the HTTP API.
 
 ### Hierarchy, groups, and quotas
 
-Organization → optional nested **organizational units** (materialized
+Organization → optional nested **folders** (materialized
 path/depth) → projects (with environments). **Groups** — optionally
 SCIM-provisioned — grant access. **Resource quotas** (vCPU, memory,
 storage, VM count, sandbox count; optionally per-environment) attach at
-org, OU, or project level and are enforced on VM and sandbox
+org, folder, or project level and are enforced on VM and sandbox
 create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 
 ## Observability

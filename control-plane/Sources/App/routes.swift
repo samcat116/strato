@@ -13,6 +13,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: AuthorizationController())
     // IAM tier-2 guardrails + policy-set versioning (issue #479)
     try app.register(collection: GuardrailController())
+    // IAM shadow-evaluation decision logs (issue #481)
+    try app.register(collection: IAMDecisionLogController())
     try app.register(collection: APIKeyController())
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())

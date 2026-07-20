@@ -148,8 +148,8 @@ secrets and never echoed back by the API.
 
 `DesiredSandboxState` carries an optional `RegistryCredential` (registry host,
 username, password/token, expiry, bearer flag) that the control plane mints
-**fresh at every sync assembly** — the same slot where signed image URLs are
-refreshed — so a long-lived desired entry never holds an expired secret. The
+**fresh at every sync assembly**, so a long-lived desired entry never holds an
+expired secret. The
 control plane speaks the distribution auth flow (`DistributionRegistryClient`:
 challenge probe → token endpoint → manifest; Docker Hub, GHCR, and any
 distribution-spec registry): when the registry has a token service it mints a
@@ -665,23 +665,26 @@ The target retains the opaque lineage UUID for audit/display.
 
 Export makes a checkpoint durable and portable:
 `POST /api/sandboxes/:id/snapshots/:snapshotId/export` (202 + operation,
-kind `snapshot_export`, wire protocol **version 13**) asks the snapshot's
-agent to stream all four artifacts to pre-signed upload URLs. Bytes flow
-through the control plane into the image object store (`ImageObjectStore`,
-filesystem or S3) under `sandbox-snapshots/{projectId}/{snapshotId}/...` —
-agents never talk to the store directly, mirroring image downloads. The
-upload route hashes and sizes each stream as it lands (integrity material is
-never agent-supplied) and records per-artifact entries on the snapshot row;
-the export operation stamps `exported_at` only once every artifact is
-recorded. Transfer URLs are HMAC-signed with the method bound into the
-payload, so an upload URL cannot be replayed as a download. Deleting the
-snapshot (or cascading its sandbox) deletes the exported prefix.
+kind `snapshot_export`, wire protocol **version 14**) asks the snapshot's
+agent to stream all four artifacts to control-plane-relative upload paths.
+Bytes flow through the control plane into the image object store
+(`ImageObjectStore`, filesystem or S3) under
+`sandbox-snapshots/{projectId}/{snapshotId}/...` — agents never talk to the
+store directly, mirroring image downloads. The transfer routes authenticate
+the agent's SPIFFE SVID forwarded by the Envoy mTLS sidecar
+(`AgentMTLSAuthenticator`, the v13 image-download model; both Envoy configs
+add an agents-only RBAC route for them), with deliberately no user-session
+fallback. The upload route hashes and sizes each stream as it lands
+(integrity material is never agent-supplied) and records per-artifact
+entries on the snapshot row; the export operation stamps `exported_at` only
+once every artifact is recorded. Deleting the snapshot (or cascading its
+sandbox) deletes the exported prefix.
 
 An exported snapshot unlocks:
 
 - **Cross-agent restore** — `.../restore` no longer requires the sandbox to
   sit on the snapshot's agent. The target must satisfy the recorded compat
-  constraints (`SandboxSnapshotCompatibility`): wire v13, same architecture,
+  constraints (`SandboxSnapshotCompatibility`): wire v14, same architecture,
   the **same Firecracker version** (probed from `firecracker --version` at
   registration and carried on `HypervisorSupport.version`), and a matching
   guest CPU surface — either the snapshot records a CPU template, or the
@@ -689,20 +692,21 @@ An exported snapshot unlocks:
   is always incompatible.
 - **Cross-agent fork** — fork placement widens from the pinned agent to
   every compatible agent, and survives losing the snapshot's home agent
-  entirely. Sync assembly injects signed, checksummed download descriptors
-  into `restoreFrom` (re-minted every sync, like image URLs); the restore
-  RPC carries the same descriptors. The target agent stages the archive
-  into an LRU-swept import cache (`<sandbox storage>/snapshot-imports/`,
-  sharing the warm-cache byte budget), verifying each artifact's size and
-  SHA-256 before the atomic publish; concurrent forks of one snapshot on a
-  host share a single download.
+  entirely. Sync assembly injects checksummed download descriptors into
+  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the
+  restore RPC carries the same descriptors. The target agent stages the
+  archive into an LRU-swept import cache
+  (`<sandbox storage>/snapshot-imports/`, sharing the warm-cache byte
+  budget), verifying each artifact's size and SHA-256 before the atomic
+  publish; concurrent forks of one snapshot on a host share a single
+  download.
 
 **CPU templates** are the mobility keystone: `POST /api/sandboxes` accepts
 `cpuTemplate` (validated against Firecracker's static templates — C3/T2/
 T2S/T2CL/T2A on x86_64, V1N1 on aarch64), applied at boot and thereby baked
 into every checkpoint. The decision is deliberately create-time-only — a
 template can never be applied at restore time, and an un-templated snapshot
-only restores on identical CPU models. Templated creates are gated on v13
+only restores on identical CPU models. Templated creates are gated on v14
 agents (an older agent would silently boot passthrough); the template is
 part of the warm-snapshot cache key.
 

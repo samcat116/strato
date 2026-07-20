@@ -323,7 +323,7 @@ public func configure(_ app: Application) async throws {
     // Cloud-init user data column. Same ordering constraint as above.
     app.migrations.add(AddUserDataToVM())
 
-    // App settings migration (for signing keys, etc.)
+    // App settings migration (the WebAuthn decoy credential key, etc.)
     app.migrations.add(CreateAppSetting())
 
     // Volume management migrations
@@ -463,6 +463,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGuardrail())
     app.migrations.add(CreatePolicySetVersion())
 
+    // IAM phase 4 (issue #481): the authorization decision log written by
+    // shadow evaluation.
+    app.migrations.add(CreateIAMDecisionLog())
+
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
     // Sandbox fork lineage (issue #427). Must follow snapshots so deployments
@@ -563,8 +567,9 @@ public func configure(_ app: Application) async throws {
         try await RoleBindingBackfill.backfillFromSpiceDB(app)
     }
 
-    // Initialize the image download signing key (generates if not exists)
-    _ = try await URLSigningService.getSigningKeyAsync(from: app)
+    // Initialize the WebAuthn decoy credential key (generates if not exists),
+    // so the first login begin doesn't pay the generate-and-store round trip.
+    _ = try await DecoyKeyService.getKey(from: app)
 
     // Configure scheduler service
     // Default strategy can be configured via environment variable
@@ -640,6 +645,14 @@ public func configure(_ app: Application) async throws {
     // hourly cluster-singleton sweep prunes audit_events rows older than the
     // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
     app.lifecycle.use(AuditRetentionLifecycleHandler())
+
+    // IAM phase 4 (issue #481): decision-log retention. The shadow evaluation
+    // itself needs no boot step — it hangs off `Request.spicedb`. Resolve the
+    // config once here rather than letting the accessor re-read the
+    // environment on every `Request.spicedb` access. Tests override the stored
+    // value after `configure` to opt into shadowing.
+    app.iamShadowConfig = .fromEnvironment(app.environment)
+    app.lifecycle.use(IAMShadowLifecycleHandler())
 
     // SSF poll delivery (issue #38): periodically drain poll-delivery streams
     // from their transmitters. The handler arms the sweep at boot and cancels

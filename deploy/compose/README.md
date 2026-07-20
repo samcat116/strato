@@ -108,8 +108,9 @@ origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
   images are written to the `image_storage` volume (`IMAGE_STORAGE_PATH`). A
   one-shot `image-storage-init` service chowns the volume to the non-root
   control-plane user on each `up` so imports can write to it. Agents fetch
-  images via `CONTROL_PLANE_URL`, which setup.sh points at the proxy origin.
-  To keep images in an S3-compatible bucket instead, set
+  images through the Envoy mTLS listener (`:8443`) they already dial,
+  authenticated by their SPIFFE SVID — no separate download origin to
+  configure. To keep images in an S3-compatible bucket instead, set
   `IMAGE_STORAGE_BACKEND=s3` and the `IMAGE_S3_*` variables in your `.env` (no
   object store is bundled — you supply the bucket). Agents still fetch through
   the control plane either way. See `docs/architecture/storage.md`.

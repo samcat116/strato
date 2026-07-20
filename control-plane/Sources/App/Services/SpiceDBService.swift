@@ -942,7 +942,22 @@ extension Application {
 }
 
 extension Request {
+    /// The SpiceDB service, wrapped so every permission check is also
+    /// shadow-evaluated through Cedar (IAM phase 4, issue #481). Request-level
+    /// on purpose: every middleware and handler check site reaches SpiceDB
+    /// through this accessor, so shadow coverage is total by construction —
+    /// including check sites added after this shipped.
     var spicedb: SpiceDBServiceProtocol {
-        get throws { try self.application.spicedb }
+        get throws {
+            let inner = try self.application.spicedb
+            guard self.application.iamShadowConfig.enabled else { return inner }
+            return ShadowingSpiceDBService(
+                inner: inner,
+                shadow: self.application.iamShadow,
+                path: self.url.path,
+                method: self.method.rawValue,
+                requestID: self.id
+            )
+        }
     }
 }

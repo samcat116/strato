@@ -55,6 +55,11 @@ struct CedarRoleGrants: Equatable, Sendable {
 struct CedarEntitySlice: Equatable, Sendable {
     let principal: CedarEntityUID
     let resource: CedarEntityUID
+    /// The resource's ancestor chain, leaf first — the same walk the entity
+    /// parent edges encode, kept in tree vocabulary so callers (the shadow
+    /// evaluator's decision log) can name the containing organization without
+    /// re-walking the tree.
+    let chain: [IAMNode]
     /// The entity store for this check, sorted by (type, id).
     let entities: [CedarEntity]
     let grants: CedarRoleGrants
@@ -71,8 +76,10 @@ struct CedarEntitySlice: Equatable, Sendable {
     }
 
     /// The request context carrying the grants. Ambient conditions (`mfa`,
-    /// `sourceIP`) merge in at check time (#481) — they belong to the request,
-    /// not the slice.
+    /// `sourceIP`) belong to the request rather than the slice and will merge
+    /// in at check time; shadow evaluation (#481) passes this through
+    /// unchanged, so conditioned bindings are skipped and counted until
+    /// cutover (#482) wires the ambient half.
     var baseContextValue: CedarValue {
         .record(["grants": grants.contextValue])
     }
@@ -196,6 +203,7 @@ enum EntitySliceLoader {
         return CedarEntitySlice(
             principal: principalUID,
             resource: node.cedarUID,
+            chain: chain,
             entities: entities,
             grants: grants,
             skippedConditionedBindings: skippedConditionedBindings

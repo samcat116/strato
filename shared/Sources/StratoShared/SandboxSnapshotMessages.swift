@@ -33,7 +33,7 @@ public enum SandboxSnapshotForkLayout {
     }
 }
 
-// MARK: - Snapshot artifact transfer (protocol version >= 13, issue #428)
+// MARK: - Snapshot artifact transfer (protocol version >= 14, issue #428)
 
 /// The artifacts that make up one checkpoint archive. Raw values are stable
 /// wire/object-key identifiers; `filename` is the canonical name inside a
@@ -55,41 +55,43 @@ public enum SandboxSnapshotArtifactKind: String, Codable, CaseIterable, Sendable
 }
 
 /// Where an agent fetches one exported snapshot artifact and what the bytes
-/// must verify to. The URL is HMAC-signed and short-lived (minted fresh per
-/// restore request / sync assembly, the signed-image-URL pattern); the size
-/// and SHA-256 were recorded by the control plane while the export streamed
-/// through it, so a corrupt or truncated download can never be restored.
+/// must verify to. `downloadURL` is a control-plane-relative path the agent
+/// resolves against the base URL it already dials — the Envoy mTLS listener —
+/// and fetches with its SVID-backed TLS client (the v13 image-download
+/// model; issue #493). The size and SHA-256 were recorded by the control
+/// plane while the export streamed through it, so a corrupt or truncated
+/// download can never be restored.
 public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
     public let kind: SandboxSnapshotArtifactKind
+    /// Control-plane-relative download path
+    /// (`/api/sandboxes/.../snapshots/.../artifacts/<kind>`).
     public let downloadURL: String
     public let sizeBytes: Int64
     /// Lowercase hex SHA-256 of the artifact bytes.
     public let sha256: String
-    /// When the signed URL stops working, for agent awareness (skip a doomed
-    /// download and surface the need for a fresh sync instead).
-    public let expiresAt: Date?
 
     public init(
         kind: SandboxSnapshotArtifactKind,
         downloadURL: String,
         sizeBytes: Int64,
-        sha256: String,
-        expiresAt: Date? = nil
+        sha256: String
     ) {
         self.kind = kind
         self.downloadURL = downloadURL
         self.sizeBytes = sizeBytes
         self.sha256 = sha256
-        self.expiresAt = expiresAt
     }
 }
 
-/// One signed upload slot for a snapshot export: the agent streams the named
-/// artifact's bytes to `uploadURL` with a plain HTTP PUT. The control plane
-/// hashes and sizes the stream itself as it lands in object storage — the
-/// recorded integrity material is never agent-supplied.
+/// One upload slot for a snapshot export: the agent streams the named
+/// artifact's bytes to the control-plane-relative `uploadURL` with an mTLS
+/// HTTP PUT, presenting its SVID. The control plane hashes and sizes the
+/// stream itself as it lands in object storage — the recorded integrity
+/// material is never agent-supplied.
 public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable {
     public let kind: SandboxSnapshotArtifactKind
+    /// Control-plane-relative upload path (same route as the download,
+    /// method PUT).
     public let uploadURL: String
 
     public init(kind: SandboxSnapshotArtifactKind, uploadURL: String) {

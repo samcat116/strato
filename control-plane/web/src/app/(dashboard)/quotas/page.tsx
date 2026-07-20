@@ -25,7 +25,7 @@ import {
 import { useOrganization } from "@/providers";
 import type {
   OrganizationHierarchy,
-  OrganizationalUnitNode,
+  FolderNode,
   ResourceQuota,
 } from "@/types/api";
 import { toast } from "sonner";
@@ -42,7 +42,7 @@ interface QuotaScope {
 }
 
 // Flatten the hierarchy tree into a top-down, ordered list of scopes that can
-// own quotas: organization -> OUs (depth-first) -> projects.
+// own quotas: organization -> folders (depth-first) -> projects.
 function collectScopes(
   hierarchy: OrganizationHierarchy,
   organizationId: string
@@ -76,21 +76,21 @@ function collectScopes(
     });
   };
 
-  const walkOU = (ou: OrganizationalUnitNode, depth: number) => {
+  const walkFolder = (folder: FolderNode, depth: number) => {
     scopes.push({
-      key: `ou-${ou.id}`,
+      key: `folder-${folder.id}`,
       icon: <FolderTree className="h-4 w-4 text-purple-600" />,
-      label: ou.name,
-      sublabel: "Organizational Unit",
+      label: folder.name,
+      sublabel: "Folder",
       depth,
-      quotas: ou.quotas,
-      target: { scope: "ou", organizationId, ouId: ou.id },
+      quotas: folder.quotas,
+      target: { scope: "ou", organizationId, ouId: folder.id },
     });
-    ou.projects.forEach((p) => addProject(p, depth + 1));
-    ou.childOUs.forEach((child) => walkOU(child, depth + 1));
+    folder.projects.forEach((p) => addProject(p, depth + 1));
+    folder.childOUs.forEach((child) => walkFolder(child, depth + 1));
   };
 
-  org.organizationalUnits.forEach((ou) => walkOU(ou, 1));
+  org.organizationalUnits.forEach((folder) => walkFolder(folder, 1));
   org.projects.forEach((p) => addProject(p, 1));
 
   return scopes;
@@ -168,8 +168,8 @@ export default function QuotasPage() {
           Resource Quotas
         </h2>
         <p className="text-muted-foreground">
-          Set and monitor resource limits across your organization, units, and
-          projects
+          Set and monitor resource limits across your organization, folders,
+          and projects
         </p>
       </div>
 

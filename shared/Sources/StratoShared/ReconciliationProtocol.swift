@@ -51,8 +51,8 @@ public struct DesiredVMState: Codable, Sendable {
     /// backward.
     public let generation: Int64
     /// Download info for the VM's boot image, so an agent that does not yet
-    /// have the VM can materialize it. Signed URLs are re-issued on every sync
-    /// assembly, so a long-lived desired entry never carries an expired link.
+    /// have the VM can materialize it. Download URLs are control-plane-relative
+    /// paths fetched over SVID mTLS — no signature, so nothing here expires.
     public let imageInfo: ImageInfo?
 
     public init(
@@ -117,8 +117,8 @@ public struct DesiredSandboxState: Codable, Sendable {
 /// The agent build the control plane wants this agent to be running, carried
 /// on the desired-state sync (issue #434) — the declarative complement to the
 /// imperative `AgentUpdateMessage`. Artifact URL and checksum are resolved
-/// fresh at sync assembly, like signed image URLs, so a long-desired update
-/// never carries a stale link.
+/// fresh at sync assembly, so a long-desired update never carries a stale
+/// link.
 ///
 /// Level-triggered and idempotent: an agent already running `targetVersion`
 /// diffs this to nothing, and absence of the field means "no opinion" — never

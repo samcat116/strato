@@ -1704,8 +1704,9 @@ actor AgentService {
     }
 
     /// The full authoritative VM set for an agent, straight from Postgres —
-    /// no in-memory VM-to-agent map involved. Signed image URLs are re-issued
-    /// on every assembly so long-desired VMs never carry expired links.
+    /// no in-memory VM-to-agent map involved. Image download URLs are
+    /// mTLS-authenticated relative paths (issue #493), so nothing in the
+    /// assembly expires or needs re-signing.
     /// Internal rather than private so tests can assert assembly contents.
     func assembleDesiredState(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
@@ -1751,13 +1752,7 @@ actor AgentService {
             var imageInfo: ImageInfo?
             if let image, image.status == .ready {
                 do {
-                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-                    imageInfo = try VMSpecBuilder.buildImageInfo(
-                        from: image,
-                        controlPlaneURL: controlPlaneURL,
-                        agentName: agentId,
-                        signingKey: URLSigningService.getSigningKey(from: app)
-                    )
+                    imageInfo = try VMSpecBuilder.buildImageInfo(from: image)
                 } catch {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
@@ -1873,14 +1868,15 @@ actor AgentService {
             let restoreFrom = sandbox.restoredFromSnapshotId.flatMap { snapshotID -> SandboxSnapshotRef? in
                 guard let snapshot = restoreSnapshots[snapshotID] else { return nil }
                 // A fork placed off the snapshot's agent restores from the
-                // exported copy: signed download descriptors, minted fresh at
-                // every assembly like image URLs (issue #428). Placement
-                // guaranteed the export exists; if it has since been
-                // invalidated (re-export in flight), the descriptors are nil
-                // and the agent reports the miss instead of mis-converging.
+                // exported copy: relative download paths + the recorded
+                // integrity material, fetched by the agent over SVID mTLS
+                // (issue #428). Placement guaranteed the export exists; if it
+                // has since been invalidated (re-export in flight), the
+                // descriptors are nil and the agent reports the miss instead
+                // of mis-converging.
                 var artifacts: [SandboxSnapshotArtifactDescriptor]?
                 if snapshot.agentId != agentId {
-                    artifacts = try? snapshot.exportedArtifactDescriptors(agentName: agentId, app: app)
+                    artifacts = try? snapshot.exportedArtifactDescriptors()
                     if artifacts == nil {
                         app.logger.warning(
                             "Fork is placed off its snapshot's agent but the exported copy is unavailable",
@@ -1935,8 +1931,8 @@ actor AgentService {
 
     /// The agent self-update this sync should carry (issue #434): the rollout
     /// sweep's assignment on the agent row, with its artifact re-resolved on
-    /// every assembly — mirroring signed image URLs, so a long-assigned update
-    /// never carries a stale (possibly presigned) link. Nil whenever there is
+    /// every assembly, so a long-assigned update never carries a stale
+    /// (possibly presigned) link. Nil whenever there is
     /// nothing actionable: not enrolled, not assigned, already converged, an
     /// agent too old to act on the field (a pre-v7 agent would wait out the
     /// rollout's health budget against silence), or an artifact that cannot

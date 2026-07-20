@@ -57,6 +57,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// delete — keeps working, since none of it spawns a new jailer. Without
     /// this, jailed orphans would outlive their deletion unmanaged.
     private let jailerBlockedReason: String?
+    /// Moves exported snapshot artifacts between this host and control-plane
+    /// object storage over SVID mTLS (issue #428). Nil when SPIFFE is not
+    /// configured — snapshot export and cross-agent restore/fork then fail
+    /// with a clear error while everything agent-local keeps working.
+    private let snapshotTransfer: SnapshotArtifactTransfer?
     /// Logged once: hosts without a usable cgroup-v2 memory controller get no
     /// jailer memory ceiling.
     private var warnedNoMemoryCeiling = false
@@ -214,7 +219,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         jailNewSandboxes: Bool,
         jailerBlockedReason: String? = nil,
         warmStartEnabled: Bool = true,
-        warmCacheBudgetBytes: Int64? = nil
+        warmCacheBudgetBytes: Int64? = nil,
+        snapshotTransfer: SnapshotArtifactTransfer? = nil
     ) {
         self.logger = logger
         self.client = client
@@ -226,6 +232,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.jailerConfig = jailer
         self.jailNewSandboxes = jailNewSandboxes
         self.jailerBlockedReason = jailerBlockedReason
+        self.snapshotTransfer = snapshotTransfer
         // Unjailed warm start cannot work (see `warmStartActive`); requesting
         // it on an unjailed runtime silently degrades to cold boots.
         self.warmStartActive = warmStartEnabled && jailNewSandboxes
@@ -1596,6 +1603,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
             }
         }
+        guard let transfer = snapshotTransfer else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "snapshot export requires the SPIFFE mTLS transfer client, which this agent does not have"
+            )
+        }
         // Sequential by contract: the control plane records each artifact's
         // integrity entry with a read-modify-write on the snapshot row, so
         // concurrent PUTs could drop entries and fail the export closed.
@@ -1605,7 +1617,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     "export request is missing an upload target for artifact '\(kind.rawValue)'")
             }
             do {
-                try await SnapshotArtifactTransfer.upload(
+                try await transfer.upload(
                     filePath: archiveDir + "/" + kind.filename, to: target.uploadURL, kind: kind)
             } catch {
                 throw SandboxRuntimeError.snapshotIOFailed(error.localizedDescription)
@@ -1645,6 +1657,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.snapshotNotFound(
                 sandboxId: sourceSandboxId, snapshotId: snapshotId)
         }
+        guard let transfer = snapshotTransfer else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "restoring an exported snapshot requires the SPIFFE mTLS transfer client, which this agent does not have"
+            )
+        }
 
         if let inFlight = snapshotImportsInFlight[snapshotId] {
             try await inFlight.value
@@ -1674,8 +1691,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                         "kind": .string(kind.rawValue),
                         "sizeBytes": .stringConvertible(descriptor.sizeBytes),
                     ])
-                try await SnapshotArtifactTransfer.download(
-                    descriptor, to: importDir + "/" + kind.filename)
+                try await transfer.download(descriptor, to: importDir + "/" + kind.filename)
             }
         }
         snapshotImportsInFlight[snapshotId] = task

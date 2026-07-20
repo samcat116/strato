@@ -313,7 +313,7 @@ struct ResourceQuotaController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         // Verify user has access to organization
@@ -325,7 +325,7 @@ struct ResourceQuotaController: RouteCollection {
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
             ou.$organization.id == organizationID
         else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         // Get all quotas for the OU
@@ -345,7 +345,7 @@ struct ResourceQuotaController: RouteCollection {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let ouID = req.parameters.get("ouID", as: UUID.self)
         else {
-            throw Abort(.badRequest, reason: "Invalid organization or OU ID")
+            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
@@ -355,11 +355,11 @@ struct ResourceQuotaController: RouteCollection {
 
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Organizational unit not found")
+            throw Abort(.notFound, reason: "Folder not found")
         }
 
         if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         // Check for duplicate quota name within OU
@@ -489,7 +489,7 @@ struct ResourceQuotaController: RouteCollection {
             try await OrganizationAccessService.requireMember(organizationID: orgID, on: req)
         } else if let ouID = quota.$organizationalUnit.id {
             guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-                throw Abort(.notFound, reason: "Organizational unit not found")
+                throw Abort(.notFound, reason: "Folder not found")
             }
             try await OrganizationAccessService.requireMember(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {
@@ -505,7 +505,7 @@ struct ResourceQuotaController: RouteCollection {
             try await OrganizationAccessService.requireAdmin(organizationID: orgID, on: req)
         } else if let ouID = quota.$organizationalUnit.id {
             guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-                throw Abort(.notFound, reason: "Organizational unit not found")
+                throw Abort(.notFound, reason: "Folder not found")
             }
             try await OrganizationAccessService.requireAdmin(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {

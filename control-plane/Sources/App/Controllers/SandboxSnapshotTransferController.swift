@@ -5,16 +5,19 @@ import StratoShared
 import Vapor
 
 /// Snapshot mobility handlers (issue #428), registered by
-/// `SandboxController.boot`: the user-facing export endpoint, and the signed
+/// `SandboxController.boot`: the user-facing export endpoint, and the
 /// artifact-transfer routes agents stream through.
 ///
-/// Transfer routes are agent routes, not user routes: they authenticate with
-/// an HMAC-signed URL (the signed-image-download pattern — see the
-/// `SpiceDBAuthMiddleware` carve-out) whose payload binds the HTTP method, so
-/// an upload URL can never be replayed as a download. Bytes flow through the
-/// control plane into `imageObjectStore` — agents never talk to the store
-/// directly, which is what lets the route's authentication change
-/// independently of where the bytes live (issue #493).
+/// Transfer routes are agent routes, not user routes: like image downloads
+/// (issue #493) they authenticate the SPIFFE SVID forwarded by the Envoy
+/// mTLS sidecar (`AgentMTLSAuthenticator`; see the `SpiceDBAuthMiddleware`
+/// carve-out), and there is deliberately no user-session fallback — a
+/// browser has no business streaming raw snapshot artifacts. Authorization
+/// is the same coarse model as image downloads: any enrolled agent identity
+/// may transfer any snapshot's artifacts, on the accepted premise that an
+/// enrolled agent is a trusted hypervisor node (narrowing to assignment-
+/// scoped access is issue #562's territory). Bytes flow through the control
+/// plane into `imageObjectStore` — agents never talk to the store directly.
 extension SandboxController {
 
     // MARK: - Export
@@ -59,7 +62,7 @@ extension SandboxController {
         } catch let error as SandboxSnapshotServiceError {
             throw Abort(.conflict, reason: error.localizedDescription)
         }
-        // The export message postdates wire v12: a pre-v13 agent cannot even
+        // The export message postdates wire v13: a pre-v14 agent cannot even
         // decode the envelope, so refuse up front instead of timing out.
         guard let agent = await req.application.agentService.getAgentInfo(agentId),
             WireProtocol.supportsSandboxSnapshotMobility(agent.wireProtocolVersion ?? 0)
@@ -71,22 +74,14 @@ extension SandboxController {
             )
         }
 
-        // One pre-signed upload slot per artifact, minted for the owning
-        // agent. The signature binds method + path, so these URLs authorize
-        // exactly these four PUTs and nothing else.
-        let baseURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-        let signingKey = try URLSigningService.getSigningKey(from: req.application)
+        // One upload slot per artifact: control-plane-relative paths the
+        // agent resolves against the Envoy mTLS listener it already dials
+        // and PUTs with its SVID as the credential.
         let uploads = SandboxSnapshotArtifactKind.allCases.map { kind in
             SandboxSnapshotArtifactUploadTarget(
                 kind: kind,
-                uploadURL: URLSigningService.signSandboxSnapshotArtifactURL(
-                    method: "PUT",
-                    sandboxId: sandboxID,
-                    snapshotId: snapshotID,
-                    kind: kind,
-                    agentName: agentId,
-                    baseURL: baseURL,
-                    signingKey: signingKey))
+                uploadURL: SandboxSnapshot.artifactTransferPath(
+                    sandboxId: sandboxID, snapshotId: snapshotID, kind: kind))
         }
 
         let operation = try await beginOperation(
@@ -173,7 +168,7 @@ extension SandboxController {
     /// objects, and the running export operation re-stamps it once every
     /// artifact has arrived.
     func uploadSnapshotArtifact(req: Request) async throws -> HTTPStatus {
-        let (snapshot, kind) = try await verifiedSnapshotArtifactRequest(req: req, method: "PUT")
+        let (snapshot, kind) = try await authenticatedSnapshotArtifactRequest(req: req)
         let snapshotID = try snapshot.requireID()
         let key = SandboxSnapshotObjectKey.artifact(
             projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
@@ -243,7 +238,7 @@ extension SandboxController {
     /// Streams one exported artifact back to an importing agent, range-aware
     /// via the object store.
     func downloadSnapshotArtifact(req: Request) async throws -> Response {
-        let (snapshot, kind) = try await verifiedSnapshotArtifactRequest(req: req, method: "GET")
+        let (snapshot, kind) = try await authenticatedSnapshotArtifactRequest(req: req)
         let snapshotID = try snapshot.requireID()
         guard snapshot.exportedArtifact(for: kind) != nil else {
             throw Abort(.notFound, reason: "Artifact '\(kind.rawValue)' has not been exported")
@@ -254,13 +249,22 @@ extension SandboxController {
             key: key, filename: kind.filename, on: req)
     }
 
-    /// Shared preflight for both transfer directions: parse the path, verify
-    /// the HMAC signature over (method, exact path, agent, expiry), and load
-    /// the snapshot row. Signature first — an unauthenticated caller learns
-    /// nothing about which snapshot IDs exist.
-    private func verifiedSnapshotArtifactRequest(
-        req: Request, method: String
+    /// Shared preflight for both transfer directions: authenticate the
+    /// caller's SVID from the forwarded client certificate, then parse the
+    /// path and load the snapshot row. Authentication first — an
+    /// unauthenticated caller learns nothing about which snapshot IDs exist.
+    /// There is deliberately no session fallback, unlike image downloads:
+    /// these routes exist only for agents.
+    private func authenticatedSnapshotArtifactRequest(
+        req: Request
     ) async throws -> (SandboxSnapshot, SandboxSnapshotArtifactKind) {
+        guard AgentMTLSAuthenticator.hasClientCertificate(req) else {
+            throw Abort(
+                .unauthorized,
+                reason: "Snapshot artifact transfer requires agent mTLS authentication")
+        }
+        let agentName = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self),
             let snapshotID = req.parameters.get("snapshotID", as: UUID.self),
             let kindRaw = req.parameters.get("artifactKind"),
@@ -268,35 +272,19 @@ extension SandboxController {
         else {
             throw Abort(.badRequest, reason: "Invalid snapshot artifact path")
         }
-        guard let agentName = req.query[String.self, at: "agent"],
-            let expires = req.query[Int.self, at: "expires"],
-            let signature = req.query[String.self, at: "sig"]
-        else {
-            throw Abort(.forbidden, reason: "Missing signed transfer parameters")
-        }
-        let signingKey = try URLSigningService.getSigningKey(from: req.application)
-        guard
-            URLSigningService.verifySandboxSnapshotArtifactSignature(
-                method: method,
-                path: req.url.path,
-                agentName: agentName,
-                expires: expires,
-                signature: signature,
-                signingKey: signingKey)
-        else {
-            req.logger.warning(
-                "Invalid or expired snapshot artifact transfer signature",
-                metadata: [
-                    "snapshot_id": .string(snapshotID.uuidString),
-                    "agent": .string(agentName),
-                ])
-            throw Abort(.forbidden, reason: "Invalid or expired transfer signature")
-        }
         guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
             snapshot.$sandbox.id == sandboxID
         else {
             throw Abort(.notFound, reason: "Snapshot not found")
         }
+        req.logger.info(
+            "Agent snapshot artifact transfer authenticated",
+            metadata: [
+                "agent": .string(agentName),
+                "snapshot_id": .string(snapshotID.uuidString),
+                "kind": .string(kind.rawValue),
+                "method": .string(req.method.rawValue),
+            ])
         return (snapshot, kind)
     }
 }

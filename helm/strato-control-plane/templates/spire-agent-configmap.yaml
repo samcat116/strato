@@ -58,12 +58,12 @@ data:
         WorkloadAttestor "k8s" {
             plugin_data {
                 skip_kubelet_verification = true
-            }
-        }
-
-        WorkloadAttestor "unix" {
-            plugin_data {
-                discover_workload_path = true
+                {{- /*
+                Connect to the kubelet via the node IP, not the node name:
+                on DOKS (and other cloud-init images) /etc/hosts maps the
+                hostname to 127.0.1.1, where the kubelet does not listen.
+                */}}
+                node_name_env = "MY_HOST_IP"
             }
         }
     }

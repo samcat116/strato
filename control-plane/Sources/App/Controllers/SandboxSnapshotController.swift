@@ -448,8 +448,7 @@ extension SandboxController {
             {
                 throw Abort(.conflict, reason: blocker)
             }
-            transferArtifacts = try snapshot.exportedArtifactDescriptors(
-                agentName: agentId, app: req.application)
+            transferArtifacts = try snapshot.exportedArtifactDescriptors()
             guard transferArtifacts != nil else {
                 throw Abort(.conflict, reason: "Snapshot's exported copy is incomplete; re-export it")
             }

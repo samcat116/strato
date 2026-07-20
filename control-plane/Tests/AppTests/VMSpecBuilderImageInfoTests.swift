@@ -5,8 +5,6 @@ import StratoShared
 
 @Suite("VMSpecBuilder.buildImageInfo — artifact set")
 struct VMSpecBuilderImageInfoTests {
-    private let key = "test-signing-key-of-sufficient-length-1234567890"
-
     private func readyImage(architecture: CPUArchitecture) -> Image {
         let image = Image(
             name: "img",
@@ -38,7 +36,7 @@ struct VMSpecBuilderImageInfoTests {
         )
     }
 
-    @Test("Emits one signed artifact per artifact, with the disk image as primary")
+    @Test("Emits one download descriptor per artifact, with the disk image as primary")
     func emitsArtifactSet() throws {
         let image = readyImage(architecture: .x86_64)
         image.$artifacts.value = [
@@ -47,14 +45,16 @@ struct VMSpecBuilderImageInfoTests {
             artifact(.rootfs, format: .raw, checksum: "r"),
         ]
 
-        let info = try VMSpecBuilder.buildImageInfo(
-            from: image, controlPlaneURL: "http://cp", agentName: "agent-1", signingKey: key)
+        let info = try VMSpecBuilder.buildImageInfo(from: image)
 
         #expect(info.architecture == .x86_64)
         #expect(info.artifacts.count == 3)
 
-        // Each artifact URL selects its own kind.
+        // Each artifact URL is a control-plane-relative path selecting its own
+        // kind — the agent resolves it against the base it dials and
+        // authenticates with its SVID, so there is no signature to carry.
         for artifact in info.artifacts {
+            #expect(artifact.downloadURL.hasPrefix("/api/projects/"))
             #expect(artifact.downloadURL.contains("artifact=\(artifact.kind.rawValue)"))
         }
 
@@ -73,12 +73,12 @@ struct VMSpecBuilderImageInfoTests {
         let image = readyImage(architecture: .arm64)
         image.$artifacts.value = []
 
-        let info = try VMSpecBuilder.buildImageInfo(
-            from: image, controlPlaneURL: "http://cp", agentName: "agent-1", signingKey: key)
+        let info = try VMSpecBuilder.buildImageInfo(from: image)
 
         #expect(info.artifacts.isEmpty)
         #expect(info.architecture == .arm64)
         #expect(info.checksum == "diskchk")
+        #expect(info.downloadURL.hasPrefix("/api/projects/"))
         #expect(!info.downloadURL.contains("artifact="))
     }
 }

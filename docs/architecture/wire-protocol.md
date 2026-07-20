@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 11), stamped on
+`WireProtocol.swift` holds the protocol version (currently 13), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -61,6 +61,12 @@ ad-hoc checks scattered through the code:
 | `supportsDesiredAgentUpdate` | 7 | Declarative agent update in the sync |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
 | `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
+| `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
+| `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
+
+Version 13 has no gate: it switched image downloads from signed URLs to
+relative paths fetched over SVID mTLS (issue #493), which older agents cannot
+degrade around — they must upgrade.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
@@ -119,7 +125,8 @@ design; the short version:
   the observed set.
 - `DesiredVMState`: the VM's ID, pinned `hypervisorType`, full `VMSpec`,
   desired status, a **generation** counter, and optional `imageInfo` whose
-  signed URLs are re-issued at every sync assembly.
+  download URLs are control-plane-relative paths the agent fetches over
+  SVID mTLS (issue #493) — nothing in them expires.
 - `DesiredSandboxState` mirrors it for sandboxes (with an optional registry
   credential); `DesiredNetworkState` reconciles OVN logical networks
   (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP, and an

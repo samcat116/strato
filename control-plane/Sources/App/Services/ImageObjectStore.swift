@@ -12,8 +12,8 @@ import Vapor
 ///
 /// Agents never talk to a store directly. They fetch through the control
 /// plane's `/download` route, which is what lets that route's authentication
-/// change independently of where the bytes live (signed URLs today, agent SVID
-/// mTLS under issue #493).
+/// change independently of where the bytes live (agent SVID mTLS since issue
+/// #493, HMAC-signed URLs before it).
 protocol ImageObjectStore: Sendable {
     /// Opens a streaming writer. Callers must `finish()` on success or
     /// `abort()` on failure; an unfinished write leaves no visible object.

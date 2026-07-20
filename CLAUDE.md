@@ -77,7 +77,7 @@ Strato is a distributed private cloud platform. The **Control Plane** (Vapor 4 +
 The control plane is declarative, not imperative:
 
 - The database stores each VM's **desired state** (`running`, `shutdown`, `paused`, `absent`) alongside observed status. API mutations update desired state; agents converge on it.
-- The control plane periodically sends each agent a full, authoritative `DesiredStateMessage` (see `shared/Sources/StratoShared/ReconciliationProtocol.swift`). Each `DesiredVMState` carries a monotonic `generation` counter guarding against reordering; syncs are level-triggered and safe to drop/replay. Signed image URLs are refreshed at sync-assembly time.
+- The control plane periodically sends each agent a full, authoritative `DesiredStateMessage` (see `shared/Sources/StratoShared/ReconciliationProtocol.swift`). Each `DesiredVMState` carries a monotonic `generation` counter guarding against reordering; syncs are level-triggered and safe to drop/replay. Image download URLs are control-plane-relative paths the agent fetches over SVID mTLS, so nothing in a sync expires.
 - The agent-side reconciler (`agent/Sources/StratoAgentCore/Reconciliation.swift`) diffs observed vs desired and converges via per-VM serial lanes, and reports observed state back.
 
 ### Async resource operations
@@ -125,7 +125,7 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 
 - **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
 - **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
-- Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, OU, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
+- Hierarchy: Organization → optional nested **Folders** (materialized `path`/`depth`) → Projects (with environments). Folders are still named `OrganizationalUnit` on the wire and in the database (models, routes, SpiceDB types); the user-facing term is "folder" and the wire rename lands with the Cedar cutover. **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, folder, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 - Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane — the only agent authentication path. Config lives in `deploy/compose/spiffe/` (SPIRE server, Envoy, bootstrap) and is wired into the compose stack by default.
 
 ### Observability

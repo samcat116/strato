@@ -371,11 +371,6 @@ strato:
     discoveryAllowedHosts: []
     discoveryAllowedSuffixes: []
 
-  # URL agents use to fetch signed image-download links. Leave empty to use
-  # the resolved WebAuthn origin; set explicitly when agents reach the control
-  # plane at a different address than browsers do (e.g. an internal LB).
-  controlPlaneUrl: ""
-
   # Loki base URL for VM console-log queries in the UI (e.g.
   # "http://loki.observability:3100"). Empty disables Loki-backed log viewing;
   # the chart does not deploy Loki itself.

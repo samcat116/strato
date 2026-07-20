@@ -55,6 +55,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # Kubelet address for the k8s workload attestor (node_name_env).
+            # The kubelet only listens on the node IP, and the node hostname
+            # resolves to 127.0.1.1 inside hostNetwork pods.
+            - name: MY_HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
           livenessProbe:
             httpGet:
               path: /live
