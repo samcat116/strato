@@ -129,6 +129,28 @@ jobs:
         working-directory: control-plane/web
         run: bun run build
 
+  openapi-validate:
+    name: OpenAPI Spec Validation
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true'
+    # Lightweight validity check of the spec-first OpenAPI document (issue
+    # #557). The swift-openapi-generator build plugin is the authoritative
+    # validator (it fails the Swift build on an invalid spec); this job gives
+    # fast feedback without the multi-minute Swift build. Runs on a
+    # GitHub-hosted runner to keep the Swift runner pool free.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Lint OpenAPI document
+        run: bunx @redocly/cli@1 lint control-plane/Sources/App/openapi.yaml
+
   # The three Swift test jobs below run concurrently on the ARC scale set —
   # the wall-clock win that used to be impossible when everything shared one
   # job. Each keeps its own scratch dir under RUNNER_TOOL_CACHE (see the

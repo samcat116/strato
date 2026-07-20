@@ -1,30 +1,2595 @@
 openapi: 3.0.3
 info:
   title: Strato Control Plane API
-  version: 0.1.0
-  description: Generated with swift-openapi-generator (spec-first). Minimal stub.
+  version: 1.0.0
+  license:
+    name: FSL-1.1-MIT
+    url: https://github.com/samcat116/strato/blob/main/LICENSE
+  description: |
+    The Strato control plane owns the JSON API, database, scheduler, and
+    authorization for the Strato private cloud platform. This document is the
+    spec-first source of truth for that API (swift-openapi-generator, issue
+    #557).
+
+    ## Authentication
+
+    Every operation requires authentication unless it declares `security: []`.
+    Two schemes are accepted interchangeably:
+
+    - `bearerAuth` — an API key (`Authorization: Bearer <key>`) minted via
+      `POST /api/api-keys`. Keys carry scopes (`read`, `write`) enforced per
+      request.
+    - `cookieAuth` — the `vapor-session` cookie set after a WebAuthn/passkey
+      login.
+
+    Per-object access is additionally enforced by relationship-based
+    authorization (SpiceDB); a caller who is authenticated but not authorized
+    receives `403`.
+
+    ## Asynchronous mutations
+
+    VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
+    pause/resume, sandbox snapshot/restore) are **asynchronous**. They persist a
+    desired-state change plus a `ResourceOperation` row in one transaction and
+    return `202 Accepted` with that operation. Clients poll
+    `GET /api/operations/{operationID}` (or the per-resource operations list)
+    until `status` is terminal (`succeeded` or `failed`). A second mutation on a
+    resource that already has a pending operation is rejected with `409`.
+
+    Image and volume mutations are synchronous at the API layer: they return the
+    resource immediately (often in a transitional `status` such as `pending` or
+    `creating`) and converge in the background.
+
+    ## Errors
+
+    Errors use Vapor's standard envelope: a JSON object with a boolean `error`
+    flag and a human-readable `reason` (see the `Error` schema).
+
+    ## Out of scope
+
+    WebSocket and streaming endpoints are intentionally **not** modeled as
+    OpenAPI operations. They are documented here as prose:
+
+    - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
+    - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
+    - `POST /api/sandboxes/{sandboxID}/exec` + `GET
+      /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — sandbox exec
+      (WebSocket attach).
+    - `GET /api/vms/{vmID}/logs`, `GET /api/sandboxes/{sandboxID}/logs` — log
+      queries proxied from Loki (deferred to a later spec phase).
+
+    Large sections of the API (IAM/org hierarchy, groups, quotas, agents,
+    users, API keys, OIDC/SCIM/SSF, audit) are described incrementally; see the
+    issue-#557 phasing. A route-drift test keeps the documented controllers
+    honest.
 servers:
-  - url: http://localhost:8080
+  - url: /
+    description: Same origin as the control plane
+
+tags:
+  - name: Health
+    description: Liveness and readiness probes.
+  - name: Documentation
+    description: The served OpenAPI document and its viewer.
+  - name: Virtual Machines
+    description: VM lifecycle. Mutations are asynchronous (202 + operation).
+  - name: Operations
+    description: Poll the status of asynchronous resource operations.
+  - name: Sandboxes
+    description: OCI-image Firecracker microVMs. Mutations are asynchronous.
+  - name: Sandbox Snapshots
+    description: Sandbox checkpoint/restore.
+  - name: Images
+    description: VM/sandbox base images and their per-hypervisor artifacts.
+  - name: Volumes
+    description: Persistent block volumes and their snapshots.
+  - name: Networks
+    description: Logical (SDN) networks.
+  - name: Floating IPs
+    description: External address pools and VM NIC attachments.
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
 paths:
   /health:
     get:
-      summary: Health check
       operationId: health
+      summary: Health check
+      description: Overall control-plane health, including build identity.
+      tags: [Health]
+      security: []
       responses:
         "200":
-          description: OK
+          description: The service is healthy.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
+                $ref: "#/components/schemas/HealthStatus"
+  /health/ready:
+    get:
+      operationId: readiness
+      summary: Readiness probe
+      description: Whether the service is ready to accept traffic (dependencies reachable).
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: The service is ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: The service is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /health/live:
+    get:
+      operationId: liveness
+      summary: Liveness probe
+      description: Whether the process is alive.
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /api/openapi.yaml:
+    get:
+      operationId: openapiDocument
+      summary: This OpenAPI document
+      description: Serves this specification as YAML.
+      tags: [Documentation]
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /api/docs:
+    get:
+      operationId: apiDocsViewer
+      summary: API documentation viewer
+      description: An HTML page that renders this specification with Swagger UI.
+      tags: [Documentation]
+      security: []
+      responses:
+        "200":
+          description: The documentation viewer page.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /api/vms:
+    get:
+      operationId: listVMs
+      summary: List virtual machines
+      description: Returns VMs the caller can read, optionally scoped to one organization.
+      tags: [Virtual Machines]
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdQuery"
+      responses:
+        "200":
+          description: The visible virtual machines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VMDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createVM
+      summary: Create a virtual machine
+      description: Records the VM and a pending `create` operation, returning the operation to poll.
+      tags: [Virtual Machines]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVMRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: getVM
+      summary: Get a virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: The virtual machine.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateVM
+      summary: Update a virtual machine
+      description: Only `name` and `description` are mutable.
+      tags: [Virtual Machines]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVMRequest"
+      responses:
+        "200":
+          description: The updated virtual machine.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteVM
+      summary: Delete a virtual machine
+      description: Sets desired state to absent and returns a pending `delete` operation.
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/start:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: startVM
+      summary: Start a virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/stop:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: stopVM
+      summary: Stop a virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/restart:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: restartVM
+      summary: Restart a virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/pause:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: pauseVM
+      summary: Pause a virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/resume:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: resumeVM
+      summary: Resume a paused virtual machine
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/status:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: getVMStatus
+      summary: Get a virtual machine's observed status
+      description: Returns the last observed state from the database (no agent round-trip).
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: The virtual machine.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/operations:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - $ref: "#/components/parameters/LimitQuery"
+    get:
+      operationId: listVMOperations
+      summary: List a virtual machine's operations
+      description: Newest first.
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: The virtual machine's operations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ResourceOperation"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/operations/{operationID}:
+    parameters:
+      - $ref: "#/components/parameters/OperationID"
+    get:
+      operationId: getOperation
+      summary: Get an operation
+      description: Poll this until `status` is terminal (`succeeded` or `failed`).
+      tags: [Operations]
+      responses:
+        "200":
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceOperation"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/sandboxes:
+    get:
+      operationId: listSandboxes
+      summary: List sandboxes
+      tags: [Sandboxes]
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdQuery"
+      responses:
+        "200":
+          description: The visible sandboxes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SandboxDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createSandbox
+      summary: Create a sandbox
+      tags: [Sandboxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSandboxRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    get:
+      operationId: getSandbox
+      summary: Get a sandbox
+      tags: [Sandboxes]
+      responses:
+        "200":
+          description: The sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateSandbox
+      summary: Update a sandbox
+      description: Only `name` and `ttlSeconds` are mutable.
+      tags: [Sandboxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSandboxRequest"
+      responses:
+        "200":
+          description: The updated sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteSandbox
+      summary: Delete a sandbox
+      tags: [Sandboxes]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/start:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    post:
+      operationId: startSandbox
+      summary: Start a sandbox
+      tags: [Sandboxes]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/stop:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    post:
+      operationId: stopSandbox
+      summary: Stop a sandbox
+      tags: [Sandboxes]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/restart:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    post:
+      operationId: restartSandbox
+      summary: Restart a sandbox
+      tags: [Sandboxes]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/status:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    get:
+      operationId: getSandboxStatus
+      summary: Get a sandbox's observed status
+      tags: [Sandboxes]
+      responses:
+        "200":
+          description: The sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/sandboxes/{sandboxID}/operations:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+      - $ref: "#/components/parameters/LimitQuery"
+    get:
+      operationId: listSandboxOperations
+      summary: List a sandbox's operations
+      tags: [Sandboxes]
+      responses:
+        "200":
+          description: The sandbox's operations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ResourceOperation"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/sandboxes/{sandboxID}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    get:
+      operationId: listSandboxSnapshots
+      summary: List a sandbox's snapshots
+      tags: [Sandbox Snapshots]
+      responses:
+        "200":
+          description: The sandbox's snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SandboxSnapshot"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createSandboxSnapshot
+      summary: Create a sandbox snapshot
+      description: The request body is optional; an empty body snapshots without stopping.
+      tags: [Sandbox Snapshots]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSandboxSnapshotRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/snapshots/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+      - $ref: "#/components/parameters/SandboxSnapshotID"
+    delete:
+      operationId: deleteSandboxSnapshot
+      summary: Delete a sandbox snapshot
+      tags: [Sandbox Snapshots]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/snapshots/{snapshotID}/restore:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+      - $ref: "#/components/parameters/SandboxSnapshotID"
+    post:
+      operationId: restoreSandboxSnapshot
+      summary: Restore a sandbox from a snapshot
+      tags: [Sandbox Snapshots]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/projects/{projectID}/images:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: listImages
+      summary: List a project's images
+      tags: [Images]
+      responses:
+        "200":
+          description: The project's images.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Image"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createImage
+      summary: Create an image
+      description: |
+        Accepts either a JSON body describing an image to import by URL (or an
+        empty metadata shell) or a `multipart/form-data` upload of the image
+        bytes. Uploads are capped at 4 GiB.
+      tags: [Images]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImageRequest"
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ImageUploadForm"
+      responses:
+        "200":
+          description: The created image.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+  /api/projects/{projectID}/images/{imageID}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+    get:
+      operationId: getImage
+      summary: Get an image
+      tags: [Images]
+      responses:
+        "200":
+          description: The image.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateImage
+      summary: Update an image's metadata
+      tags: [Images]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateImageRequest"
+      responses:
+        "200":
+          description: The updated image.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteImage
+      summary: Delete an image
+      tags: [Images]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/projects/{projectID}/images/{imageID}/download:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+      - name: artifact
+        in: query
+        required: false
+        description: Which artifact to download. Omit for the legacy whole-image disk.
+        schema:
+          $ref: "#/components/schemas/ArtifactKind"
+    get:
+      operationId: downloadImage
+      summary: Download image (or artifact) bytes
+      description: |
+        Streams raw bytes. Authenticated either by a user session or, for
+        agents, a forwarded SPIFFE SVID client certificate over mTLS.
+      tags: [Images]
+      responses:
+        "200":
+          description: The image bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/projects/{projectID}/images/{imageID}/status:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+    get:
+      operationId: getImageStatus
+      summary: Get an image's materialization status
+      tags: [Images]
+      responses:
+        "200":
+          description: The image status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageStatusResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/projects/{projectID}/images/{imageID}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+    post:
+      operationId: uploadImageArtifact
+      summary: Upload an image artifact
+      description: Streams a `multipart/form-data` file (capped at 4 GiB) as a typed artifact.
+      tags: [Images]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Artifact kind. Required unless supplied as a `kind` form field.
+          schema:
+            $ref: "#/components/schemas/ArtifactKind"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ArtifactUploadForm"
+      responses:
+        "200":
+          description: The image with the new artifact.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+  /api/projects/{projectID}/images/{imageID}/artifacts/fetch:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+    post:
+      operationId: fetchImageArtifact
+      summary: Fetch an image artifact from a URL
+      description: Registers an artifact and downloads it in the background.
+      tags: [Images]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactFetchRequest"
+      responses:
+        "200":
+          description: The image with the pending artifact.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/projects/{projectID}/images/{imageID}/artifacts/{kind}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/ImageID"
+      - name: kind
+        in: path
+        required: true
+        description: The artifact kind to delete.
+        schema:
+          $ref: "#/components/schemas/ArtifactKind"
+    delete:
+      operationId: deleteImageArtifact
+      summary: Delete an image artifact
+      tags: [Images]
+      responses:
+        "200":
+          description: The image without the deleted artifact.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/volumes:
+    get:
+      operationId: listVolumes
+      summary: List volumes
+      tags: [Volumes]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/VolumeStatus"
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/VolumeType"
+      responses:
+        "200":
+          description: The visible volumes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createVolume
+      summary: Create a volume
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeRequest"
+      responses:
+        "200":
+          description: The created volume (provisioning in the background).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/volumes/{volumeId}:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    get:
+      operationId: getVolume
+      summary: Get a volume
+      tags: [Volumes]
+      responses:
+        "200":
+          description: The volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateVolume
+      summary: Update a volume's metadata
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVolumeRequest"
+      responses:
+        "200":
+          description: The updated volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteVolume
+      summary: Delete a volume
+      tags: [Volumes]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/attach:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: attachVolume
+      summary: Attach a volume to a VM
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachVolumeRequest"
+      responses:
+        "200":
+          description: The attached volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/detach:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: detachVolume
+      summary: Detach a volume from its VM
+      tags: [Volumes]
+      responses:
+        "200":
+          description: The detached volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/resize:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: resizeVolume
+      summary: Resize a volume
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResizeVolumeRequest"
+      responses:
+        "200":
+          description: The resized volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/snapshot:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: createVolumeSnapshot
+      summary: Snapshot a volume
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeSnapshotRequest"
+      responses:
+        "200":
+          description: The created snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeSnapshot"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/clone:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: cloneVolume
+      summary: Clone a volume
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneVolumeRequest"
+      responses:
+        "200":
+          description: The new volume (cloning in the background).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    get:
+      operationId: listVolumeSnapshots
+      summary: List a volume's snapshots
+      tags: [Volumes]
+      responses:
+        "200":
+          description: The volume's snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VolumeSnapshot"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/volumes/{volumeId}/snapshots/{snapshotId}:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+      - $ref: "#/components/parameters/VolumeSnapshotID"
+    delete:
+      operationId: deleteVolumeSnapshot
+      summary: Delete a volume snapshot
+      tags: [Volumes]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/networks:
+    get:
+      operationId: listNetworks
+      summary: List logical networks
+      tags: [Networks]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+      responses:
+        "200":
+          description: The visible networks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Network"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createNetwork
+      summary: Create a logical network
+      tags: [Networks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNetworkRequest"
+      responses:
+        "200":
+          description: The created network.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/networks/{networkId}:
+    parameters:
+      - $ref: "#/components/parameters/NetworkID"
+    get:
+      operationId: getNetwork
+      summary: Get a logical network
+      tags: [Networks]
+      responses:
+        "200":
+          description: The network.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateNetwork
+      summary: Update a logical network
+      tags: [Networks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNetworkRequest"
+      responses:
+        "200":
+          description: The updated network.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteNetwork
+      summary: Delete a logical network
+      tags: [Networks]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/floating-ip-pools:
+    get:
+      operationId: listFloatingIPPools
+      summary: List floating IP pools
+      tags: [Floating IPs]
+      responses:
+        "200":
+          description: The visible pools.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FloatingIPPool"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createFloatingIPPool
+      summary: Create a floating IP pool
+      tags: [Floating IPs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFloatingIPPoolRequest"
+      responses:
+        "200":
+          description: The created pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIPPool"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/floating-ip-pools/{poolId}:
+    parameters:
+      - $ref: "#/components/parameters/PoolID"
+    get:
+      operationId: getFloatingIPPool
+      summary: Get a floating IP pool
+      tags: [Floating IPs]
+      responses:
+        "200":
+          description: The pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIPPool"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateFloatingIPPool
+      summary: Update a floating IP pool
+      tags: [Floating IPs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFloatingIPPoolRequest"
+      responses:
+        "200":
+          description: The updated pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIPPool"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteFloatingIPPool
+      summary: Delete a floating IP pool
+      tags: [Floating IPs]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/floating-ips:
+    get:
+      operationId: listFloatingIPs
+      summary: List floating IPs
+      tags: [Floating IPs]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+      responses:
+        "200":
+          description: The visible floating IPs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FloatingIP"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: allocateFloatingIP
+      summary: Allocate a floating IP
+      tags: [Floating IPs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFloatingIPRequest"
+      responses:
+        "200":
+          description: The allocated floating IP.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIP"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/floating-ips/{floatingIpId}:
+    parameters:
+      - $ref: "#/components/parameters/FloatingIPID"
+    get:
+      operationId: getFloatingIP
+      summary: Get a floating IP
+      tags: [Floating IPs]
+      responses:
+        "200":
+          description: The floating IP.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIP"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: releaseFloatingIP
+      summary: Release a floating IP
+      tags: [Floating IPs]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/floating-ips/{floatingIpId}/attach:
+    parameters:
+      - $ref: "#/components/parameters/FloatingIPID"
+    post:
+      operationId: attachFloatingIP
+      summary: Attach a floating IP to a VM NIC
+      tags: [Floating IPs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachFloatingIPRequest"
+      responses:
+        "200":
+          description: The attached floating IP.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIP"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/floating-ips/{floatingIpId}/detach:
+    parameters:
+      - $ref: "#/components/parameters/FloatingIPID"
+    post:
+      operationId: detachFloatingIP
+      summary: Detach a floating IP from its VM NIC
+      tags: [Floating IPs]
+      responses:
+        "200":
+          description: The detached floating IP.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloatingIP"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-security:
-  - bearerAuth: []
+      description: >-
+        An API key minted via `POST /api/api-keys`, sent as
+        `Authorization: Bearer <key>`.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: vapor-session
+      description: The session cookie set after a WebAuthn/passkey login.
+
+  parameters:
+    VMID:
+      name: vmID
+      in: path
+      required: true
+      description: The virtual machine's id.
+      schema:
+        type: string
+        format: uuid
+    SandboxID:
+      name: sandboxID
+      in: path
+      required: true
+      description: The sandbox's id.
+      schema:
+        type: string
+        format: uuid
+    SandboxSnapshotID:
+      name: snapshotID
+      in: path
+      required: true
+      description: The sandbox snapshot's id.
+      schema:
+        type: string
+        format: uuid
+    OperationID:
+      name: operationID
+      in: path
+      required: true
+      description: The operation's id.
+      schema:
+        type: string
+        format: uuid
+    ProjectID:
+      name: projectID
+      in: path
+      required: true
+      description: The project's id.
+      schema:
+        type: string
+        format: uuid
+    ImageID:
+      name: imageID
+      in: path
+      required: true
+      description: The image's id.
+      schema:
+        type: string
+        format: uuid
+    VolumeID:
+      name: volumeId
+      in: path
+      required: true
+      description: The volume's id.
+      schema:
+        type: string
+        format: uuid
+    VolumeSnapshotID:
+      name: snapshotId
+      in: path
+      required: true
+      description: The volume snapshot's id.
+      schema:
+        type: string
+        format: uuid
+    NetworkID:
+      name: networkId
+      in: path
+      required: true
+      description: The network's id.
+      schema:
+        type: string
+        format: uuid
+    PoolID:
+      name: poolId
+      in: path
+      required: true
+      description: The floating IP pool's id.
+      schema:
+        type: string
+        format: uuid
+    FloatingIPID:
+      name: floatingIpId
+      in: path
+      required: true
+      description: The floating IP's id.
+      schema:
+        type: string
+        format: uuid
+    OrganizationIdQuery:
+      name: organization_id
+      in: query
+      required: false
+      description: Scope results to one organization.
+      schema:
+        type: string
+        format: uuid
+    ProjectIdQuery:
+      name: project_id
+      in: query
+      required: false
+      description: Scope results to one project.
+      schema:
+        type: string
+        format: uuid
+    LimitQuery:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return (1–100).
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    NoContent:
+      description: Success with no response body.
+    BadRequest:
+      description: The request was malformed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Authentication is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The caller is authenticated but not authorized.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The resource does not exist or is not visible.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The request conflicts with current state (e.g. a pending operation).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: The uploaded body exceeded the size limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AcceptedOperation:
+      description: The mutation was accepted; poll the returned operation to completion.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResourceOperation"
+
+  schemas:
+    Error:
+      type: object
+      description: The standard error envelope.
+      required: [error, reason]
+      properties:
+        error:
+          type: boolean
+          description: Always true on an error response.
+        reason:
+          type: string
+          description: A human-readable explanation.
+
+    HealthStatus:
+      type: object
+      description: A health/readiness/liveness report.
+      required: [status]
+      properties:
+        status:
+          type: string
+      additionalProperties: true
+
+    ResourceOperation:
+      type: object
+      description: >-
+        A durable record of one asynchronous resource lifecycle mutation. Poll
+        it until `status` is terminal.
+      required: [vmId, resourceKind, resourceId, kind, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        vmId:
+          type: string
+          format: uuid
+          description: >-
+            Legacy field equal to `resourceId`; retained for existing clients.
+            New clients should read `resourceKind`/`resourceId`.
+        resourceKind:
+          $ref: "#/components/schemas/OperationResourceKind"
+        resourceId:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/OperationKind"
+        status:
+          $ref: "#/components/schemas/OperationStatus"
+        error:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+
+    OperationResourceKind:
+      type: string
+      description: Which kind of resource an operation acts on.
+      enum: [virtual_machine, sandbox]
+    OperationKind:
+      type: string
+      description: The lifecycle mutation an operation performs.
+      enum:
+        - create
+        - boot
+        - shutdown
+        - reboot
+        - pause
+        - resume
+        - delete
+        - snapshot
+        - snapshot_delete
+        - restore
+    OperationStatus:
+      type: string
+      description: The state of an operation. `pending` is the only non-terminal value.
+      enum: [pending, succeeded, failed]
+
+    HypervisorType:
+      type: string
+      enum: [qemu, firecracker]
+    CPUArchitecture:
+      type: string
+      enum: [x86_64, arm64]
+
+    CreateVMRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        imageId:
+          type: string
+          format: uuid
+          description: Required in practice; the source image to boot from.
+        projectId:
+          type: string
+          format: uuid
+        environment:
+          type: string
+        cpu:
+          type: integer
+        memory:
+          type: integer
+          format: int64
+          description: Memory in bytes.
+        disk:
+          type: integer
+          format: int64
+          description: Disk in bytes.
+        cmdline:
+          type: string
+        networkId:
+          type: string
+          format: uuid
+          description: Mutually exclusive with `networkName`.
+        networkName:
+          type: string
+        sshPublicKey:
+          type: string
+        userData:
+          type: string
+          description: cloud-init user data.
+        hypervisorType:
+          $ref: "#/components/schemas/HypervisorType"
+    UpdateVMRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    VMDetail:
+      type: object
+      required:
+        - name
+        - description
+        - image
+        - status
+        - cpu
+        - maxCpu
+        - memory
+        - memoryFormatted
+        - disk
+        - diskFormatted
+        - networkInterfaces
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        image:
+          type: string
+        imageId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/VMStatus"
+        hypervisorId:
+          type: string
+        cpu:
+          type: integer
+        maxCpu:
+          type: integer
+        memory:
+          type: integer
+          format: int64
+        memoryFormatted:
+          type: string
+        disk:
+          type: integer
+          format: int64
+        diskFormatted:
+          type: string
+        networkInterfaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkInterface"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    VMStatus:
+      type: string
+      description: The observed VM state (tolerant decoding; unknown values map to Unknown).
+      enum:
+        - Created
+        - Running
+        - Shutdown
+        - Paused
+        - Starting
+        - Stopping
+        - Error
+        - Unknown
+    NetworkInterface:
+      type: object
+      required: [network, macAddress, addresses, deviceName, orderIndex]
+      properties:
+        id:
+          type: string
+          format: uuid
+        network:
+          type: string
+        macAddress:
+          type: string
+        addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/InterfaceAddress"
+        mtu:
+          type: integer
+        deviceName:
+          type: string
+          description: Stable device name (e.g. net0).
+        orderIndex:
+          type: integer
+    InterfaceAddress:
+      type: object
+      required: [family, address, prefixLength]
+      properties:
+        family:
+          type: string
+          enum: [ipv4, ipv6]
+        address:
+          type: string
+        prefixLength:
+          type: integer
+        gateway:
+          type: string
+
+    CreateSandboxRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        image:
+          type: string
+          description: OCI image reference.
+        restoreFrom:
+          type: string
+          format: uuid
+          description: Snapshot id to fork from; mutually exclusive with image/cpus/memory.
+        projectId:
+          type: string
+          format: uuid
+        environment:
+          type: string
+        cpus:
+          type: integer
+        memory:
+          type: integer
+          format: int64
+          description: Guest memory in bytes.
+        entrypoint:
+          type: array
+          items:
+            type: string
+        cmd:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        workingDir:
+          type: string
+        ttlSeconds:
+          type: integer
+    UpdateSandboxRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        ttlSeconds:
+          type: integer
+    SandboxDetail:
+      type: object
+      required:
+        - name
+        - environment
+        - image
+        - cpus
+        - memory
+        - env
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        environment:
+          type: string
+        image:
+          type: string
+        imageDigest:
+          type: string
+        cpus:
+          type: integer
+        memory:
+          type: integer
+          format: int64
+        entrypoint:
+          type: array
+          items:
+            type: string
+        cmd:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        workingDir:
+          type: string
+        ttlSeconds:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+        hypervisorId:
+          type: string
+        restoredFromSnapshotId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/SandboxStatus"
+        exitCode:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SandboxStatus:
+      type: string
+      enum: [Stopped, Running, Exited, Starting, Stopping, Error, Unknown]
+
+    CreateSandboxSnapshotRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        stop:
+          type: boolean
+          description: When true, checkpoint and stop; defaults to false.
+    SandboxSnapshot:
+      type: object
+      required: [name, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        sandboxId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/SandboxSnapshotStatus"
+        size:
+          type: integer
+          format: int64
+        agentId:
+          type: string
+        firecrackerVersion:
+          type: string
+        architecture:
+          type: string
+        guestControlProtocolVersion:
+          type: integer
+        forkLayoutVersion:
+          type: integer
+        errorMessage:
+          type: string
+        createdById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    SandboxSnapshotStatus:
+      type: string
+      enum: [creating, ready, deleting, error]
+
+    CreateImageRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        sourceURL:
+          type: string
+        architecture:
+          $ref: "#/components/schemas/CPUArchitecture"
+        checksum:
+          type: string
+          description: 64-hex SHA-256.
+        defaultCpu:
+          type: integer
+        defaultMemory:
+          type: integer
+          format: int64
+        defaultDisk:
+          type: integer
+          format: int64
+        defaultCmdline:
+          type: string
+    UpdateImageRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        architecture:
+          $ref: "#/components/schemas/CPUArchitecture"
+        defaultCpu:
+          type: integer
+        defaultMemory:
+          type: integer
+          format: int64
+        defaultDisk:
+          type: integer
+          format: int64
+        defaultCmdline:
+          type: string
+    ImageUploadForm:
+      type: object
+      description: Multipart upload of image bytes plus optional metadata fields.
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+        name:
+          type: string
+        description:
+          type: string
+        architecture:
+          type: string
+        format:
+          type: string
+        defaultCpu:
+          type: integer
+        defaultMemory:
+          type: integer
+          format: int64
+        defaultDisk:
+          type: integer
+          format: int64
+        defaultCmdline:
+          type: string
+    ArtifactUploadForm:
+      type: object
+      description: Multipart upload of one typed artifact.
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+        kind:
+          type: string
+          description: Artifact kind; required here unless supplied as the `kind` query parameter.
+    ArtifactFetchRequest:
+      type: object
+      required: [kind, sourceURL]
+      properties:
+        kind:
+          type: string
+          description: Artifact kind (see ArtifactKind).
+        sourceURL:
+          type: string
+    Image:
+      type: object
+      required:
+        - name
+        - description
+        - filename
+        - size
+        - sizeFormatted
+        - format
+        - architecture
+        - status
+        - artifacts
+        - compatibleHypervisors
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        size:
+          type: integer
+          format: int64
+        sizeFormatted:
+          type: string
+        format:
+          $ref: "#/components/schemas/ImageFormat"
+        architecture:
+          $ref: "#/components/schemas/CPUArchitecture"
+        checksum:
+          type: string
+        status:
+          $ref: "#/components/schemas/ImageStatus"
+        sourceURL:
+          type: string
+        downloadProgress:
+          type: integer
+        errorMessage:
+          type: string
+        defaultCpu:
+          type: integer
+        defaultMemory:
+          type: integer
+          format: int64
+        defaultDisk:
+          type: integer
+          format: int64
+        defaultCmdline:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageArtifact"
+        compatibleHypervisors:
+          type: array
+          items:
+            $ref: "#/components/schemas/HypervisorType"
+        uploadedById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ImageArtifact:
+      type: object
+      required: [kind, architecture, filename, size, checksum, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/ArtifactKind"
+        format:
+          $ref: "#/components/schemas/ImageFormat"
+        architecture:
+          $ref: "#/components/schemas/CPUArchitecture"
+        filename:
+          type: string
+        size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        status:
+          $ref: "#/components/schemas/ArtifactStatus"
+        sourceURL:
+          type: string
+        downloadProgress:
+          type: integer
+        errorMessage:
+          type: string
+    ImageStatusResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/ImageStatus"
+        downloadProgress:
+          type: integer
+        errorMessage:
+          type: string
+        size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+    ImageFormat:
+      type: string
+      enum: [qcow2, raw, vmdk, vhd, vhdx]
+    ImageStatus:
+      type: string
+      enum: [pending, uploading, downloading, validating, ready, error]
+    ArtifactKind:
+      type: string
+      enum: [disk-image, kernel, initramfs, rootfs]
+    ArtifactStatus:
+      type: string
+      enum: [pending, downloading, ready, error]
+
+    CreateVolumeRequest:
+      type: object
+      required: [name, sizeGB]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        sizeGB:
+          type: integer
+        format:
+          $ref: "#/components/schemas/VolumeFormat"
+        volumeType:
+          $ref: "#/components/schemas/VolumeType"
+        sourceImageId:
+          type: string
+          format: uuid
+    UpdateVolumeRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    AttachVolumeRequest:
+      type: object
+      required: [vmId]
+      properties:
+        vmId:
+          type: string
+          format: uuid
+        deviceName:
+          type: string
+        bootOrder:
+          type: integer
+        readonly:
+          type: boolean
+    ResizeVolumeRequest:
+      type: object
+      required: [sizeGB]
+      properties:
+        sizeGB:
+          type: integer
+    CloneVolumeRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    CreateVolumeSnapshotRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    Volume:
+      type: object
+      required:
+        - name
+        - description
+        - size
+        - sizeFormatted
+        - format
+        - volumeType
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        size:
+          type: integer
+          format: int64
+        sizeFormatted:
+          type: string
+        format:
+          $ref: "#/components/schemas/VolumeFormat"
+        volumeType:
+          $ref: "#/components/schemas/VolumeType"
+        status:
+          $ref: "#/components/schemas/VolumeStatus"
+        errorMessage:
+          type: string
+        poolId:
+          type: string
+          format: uuid
+        attachedAgentId:
+          type: string
+        hypervisorId:
+          type: string
+        vmId:
+          type: string
+          format: uuid
+        deviceName:
+          type: string
+        bootOrder:
+          type: integer
+        sourceImageId:
+          type: string
+          format: uuid
+        sourceVolumeId:
+          type: string
+          format: uuid
+        createdById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    VolumeSnapshot:
+      type: object
+      required: [name, description, size, sizeFormatted, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        volumeId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        size:
+          type: integer
+          format: int64
+        sizeFormatted:
+          type: string
+        status:
+          $ref: "#/components/schemas/VolumeSnapshotStatus"
+        errorMessage:
+          type: string
+        createdById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    VolumeFormat:
+      type: string
+      enum: [qcow2, raw]
+    VolumeType:
+      type: string
+      enum: [boot, data]
+    VolumeStatus:
+      type: string
+      enum:
+        - creating
+        - available
+        - attaching
+        - attached
+        - detaching
+        - resizing
+        - snapshotting
+        - cloning
+        - deleting
+        - error
+    VolumeSnapshotStatus:
+      type: string
+      enum: [creating, available, restoring, deleting, error]
+
+    CreateNetworkRequest:
+      type: object
+      required: [name, subnet]
+      properties:
+        name:
+          type: string
+        subnet:
+          type: string
+        gateway:
+          type: string
+        subnet6:
+          type: string
+        gateway6:
+          type: string
+        ipv6Enabled:
+          type: boolean
+        projectId:
+          type: string
+          format: uuid
+        dhcpEnabled:
+          type: boolean
+        dnsServers:
+          type: array
+          items:
+            type: string
+        domainName:
+          type: string
+        leaseTime:
+          type: integer
+        externalAccess:
+          type: boolean
+        siteId:
+          type: string
+          format: uuid
+    UpdateNetworkRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        subnet:
+          type: string
+        gateway:
+          type: string
+        subnet6:
+          type: string
+        gateway6:
+          type: string
+        ipv6Enabled:
+          type: boolean
+        dhcpEnabled:
+          type: boolean
+        dnsServers:
+          type: array
+          items:
+            type: string
+        domainName:
+          type: string
+        leaseTime:
+          type: integer
+        externalAccess:
+          type: boolean
+    Network:
+      type: object
+      required:
+        - name
+        - subnet
+        - isDefault
+        - attachedInterfaceCount
+        - dhcpEnabled
+        - dnsServers
+        - externalAccess
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        subnet:
+          type: string
+        gateway:
+          type: string
+        subnet6:
+          type: string
+        gateway6:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        isDefault:
+          type: boolean
+        attachedInterfaceCount:
+          type: integer
+        dhcpEnabled:
+          type: boolean
+        dnsServers:
+          type: array
+          items:
+            type: string
+        domainName:
+          type: string
+        leaseTime:
+          type: integer
+        externalAccess:
+          type: boolean
+        siteId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateFloatingIPPoolRequest:
+      type: object
+      description: Exactly one of organizationId / organizationalUnitId must be present.
+      required: [name, cidr]
+      properties:
+        name:
+          type: string
+        cidr:
+          type: string
+        gateway:
+          type: string
+        siteId:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        organizationalUnitId:
+          type: string
+          format: uuid
+    UpdateFloatingIPPoolRequest:
+      type: object
+      properties:
+        gateway:
+          type: string
+        siteId:
+          type: string
+          format: uuid
+    FloatingIPPool:
+      type: object
+      required: [id, name, cidr, allocatedCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        cidr:
+          type: string
+        gateway:
+          type: string
+        siteId:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        organizationalUnitId:
+          type: string
+          format: uuid
+        allocatedCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    CreateFloatingIPRequest:
+      type: object
+      required: [poolId]
+      properties:
+        poolId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+    AttachFloatingIPRequest:
+      type: object
+      required: [vmId]
+      properties:
+        vmId:
+          type: string
+          format: uuid
+        interfaceId:
+          type: string
+          format: uuid
+    FloatingIP:
+      type: object
+      required: [id, address, poolId, projectId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        poolId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        interfaceId:
+          type: string
+          format: uuid
+        vmId:
+          type: string
+          format: uuid
+        fixedIP:
+          type: string
+        networkName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time

@@ -14,6 +14,7 @@ export default defineConfig({
       { text: 'Home', link: '/' },
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Architecture', link: '/architecture/overview' },
+      { text: 'API', link: '/api-reference' },
       { text: 'Deployment', link: '/deployment/overview' }
     ],
 
@@ -42,6 +43,12 @@ export default defineConfig({
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
           { text: 'IAM', link: '/architecture/iam' },
           { text: 'Agent Updates', link: '/architecture/agent-updates' }
+        ]
+      },
+      {
+        text: 'API',
+        items: [
+          { text: 'API Reference', link: '/api-reference' }
         ]
       },
       {
