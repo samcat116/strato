@@ -33,6 +33,99 @@ public enum SandboxSnapshotForkLayout {
     }
 }
 
+// MARK: - Snapshot artifact transfer (protocol version >= 13, issue #428)
+
+/// The artifacts that make up one checkpoint archive. Raw values are stable
+/// wire/object-key identifiers; `filename` is the canonical name inside a
+/// snapshot directory and under an exported object prefix.
+public enum SandboxSnapshotArtifactKind: String, Codable, CaseIterable, Sendable {
+    case memory
+    case vmstate
+    case rootfs
+    case config
+
+    public var filename: String {
+        switch self {
+        case .memory: return "memory.snap"
+        case .vmstate: return "vmstate.snap"
+        case .rootfs: return "rootfs.ext4"
+        case .config: return "config.img"
+        }
+    }
+}
+
+/// Where an agent fetches one exported snapshot artifact and what the bytes
+/// must verify to. The URL is HMAC-signed and short-lived (minted fresh per
+/// restore request / sync assembly, the signed-image-URL pattern); the size
+/// and SHA-256 were recorded by the control plane while the export streamed
+/// through it, so a corrupt or truncated download can never be restored.
+public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
+    public let kind: SandboxSnapshotArtifactKind
+    public let downloadURL: String
+    public let sizeBytes: Int64
+    /// Lowercase hex SHA-256 of the artifact bytes.
+    public let sha256: String
+    /// When the signed URL stops working, for agent awareness (skip a doomed
+    /// download and surface the need for a fresh sync instead).
+    public let expiresAt: Date?
+
+    public init(
+        kind: SandboxSnapshotArtifactKind,
+        downloadURL: String,
+        sizeBytes: Int64,
+        sha256: String,
+        expiresAt: Date? = nil
+    ) {
+        self.kind = kind
+        self.downloadURL = downloadURL
+        self.sizeBytes = sizeBytes
+        self.sha256 = sha256
+        self.expiresAt = expiresAt
+    }
+}
+
+/// One signed upload slot for a snapshot export: the agent streams the named
+/// artifact's bytes to `uploadURL` with a plain HTTP PUT. The control plane
+/// hashes and sizes the stream itself as it lands in object storage — the
+/// recorded integrity material is never agent-supplied.
+public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable {
+    public let kind: SandboxSnapshotArtifactKind
+    public let uploadURL: String
+
+    public init(kind: SandboxSnapshotArtifactKind, uploadURL: String) {
+        self.kind = kind
+        self.uploadURL = uploadURL
+    }
+}
+
+/// Ask the agent holding a snapshot's artifacts to export them to the control
+/// plane's object storage (issue #428): one sequential streaming PUT per
+/// artifact to the pre-signed upload targets. Uploads are idempotent — each
+/// PUT replaces the object at its deterministic key — so a retried export
+/// after a lost response converges on the same bytes.
+public struct SandboxSnapshotExportMessage: WebSocketMessage {
+    public var type: MessageType { .sandboxSnapshotExport }
+    public let requestId: String
+    public let timestamp: Date
+    public let sandboxId: String
+    public let snapshotId: String
+    public let uploads: [SandboxSnapshotArtifactUploadTarget]
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        sandboxId: String,
+        snapshotId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget]
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.sandboxId = sandboxId
+        self.snapshotId = snapshotId
+        self.uploads = uploads
+    }
+}
+
 /// Ask an agent to checkpoint a sandbox: drain host↔guest connections, pause
 /// the microVM, capture guest memory + vmstate, copy the rootfs, then resume
 /// or stay stopped per `mode`. The agent owns snapshot artifact layout and
@@ -87,25 +180,33 @@ public struct SandboxSnapshotDeleteMessage: WebSocketMessage {
 
 /// Ask an agent to restore a sandbox in place from one of its snapshots:
 /// tear down the current microVM, load the checkpointed memory + rootfs, and
-/// resume. Same agent, same identity — the sandbox keeps its ID, NIC, and
-/// addresses (v1 restores only on the agent holding the snapshot).
+/// resume. Same sandbox, same identity — it keeps its ID, NIC, and addresses.
+/// When the sandbox no longer lives on the agent that took the snapshot,
+/// `artifacts` carries signed download descriptors for the exported copy and
+/// the agent stages the archive from object storage first (issue #428).
 public struct SandboxRestoreMessage: WebSocketMessage {
     public var type: MessageType { .sandboxRestore }
     public let requestId: String
     public let timestamp: Date
     public let sandboxId: String
     public let snapshotId: String
+    /// Download descriptors for an exported snapshot, present only when this
+    /// agent does not hold the local artifacts. Additive: absent decodes to
+    /// nil, preserving the v9 local-restore contract.
+    public let artifacts: [SandboxSnapshotArtifactDescriptor]?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sandboxId: String,
-        snapshotId: String
+        snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.sandboxId = sandboxId
         self.snapshotId = snapshotId
+        self.artifacts = artifacts
     }
 }
 
@@ -135,6 +236,11 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
     /// Version of the fork-safe artifact layout, or nil for legacy/unjailed
     /// checkpoints that remain eligible for in-place restore only.
     public let forkLayoutVersion: Int?
+    /// Firecracker CPU template the checkpointed guest booted with (issue
+    /// #428) — the agent-authoritative record of what the guest state was
+    /// actually captured under. Nil means no template: the snapshot only
+    /// restores on hosts with an identical CPU model.
+    public let cpuTemplate: String?
 
     public init(
         snapshotId: String,
@@ -146,7 +252,8 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         firecrackerVersion: String,
         architecture: CPUArchitecture?,
         guestControlProtocolVersion: Int? = nil,
-        forkLayoutVersion: Int? = nil
+        forkLayoutVersion: Int? = nil,
+        cpuTemplate: String? = nil
     ) {
         self.snapshotId = snapshotId
         self.sizeBytes = sizeBytes
@@ -158,5 +265,6 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         self.architecture = architecture
         self.guestControlProtocolVersion = guestControlProtocolVersion
         self.forkLayoutVersion = forkLayoutVersion
+        self.cpuTemplate = cpuTemplate
     }
 }

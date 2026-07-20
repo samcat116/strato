@@ -52,6 +52,7 @@ struct MessageTypeTests {
         case .sandboxSnapshotCreate: return "sandbox_snapshot_create"
         case .sandboxSnapshotDelete: return "sandbox_snapshot_delete"
         case .sandboxRestore: return "sandbox_restore"
+        case .sandboxSnapshotExport: return "sandbox_snapshot_export"
         }
     }
 
@@ -67,7 +68,7 @@ struct MessageTypeTests {
         .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
         .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,
-        .sandboxSnapshotCreate, .sandboxSnapshotDelete, .sandboxRestore,
+        .sandboxSnapshotCreate, .sandboxSnapshotDelete, .sandboxRestore, .sandboxSnapshotExport,
     ]
 
     @Test("every case keeps its wire string", arguments: allTypes)

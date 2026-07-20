@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { GitFork, Loader2 } from "lucide-react";
+import { CloudUpload, GitFork, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,10 +32,34 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const [selected, setSelected] = useState<SandboxSnapshot | null>(null);
   const [name, setName] = useState("");
   const [isForking, setIsForking] = useState(false);
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   const beginFork = (snapshot: SandboxSnapshot) => {
     setSelected(snapshot);
     setName(`${sandbox.name}-fork`);
+  };
+
+  // Export copies the snapshot's artifacts into control-plane object storage
+  // (issue #428): the checkpoint survives agent loss and becomes eligible for
+  // cross-agent restore and fork.
+  const exportSnapshot = async (snapshot: SandboxSnapshot) => {
+    setExportingId(snapshot.id);
+    try {
+      const operation = await sandboxesApi.exportSnapshot(
+        sandbox.id,
+        snapshot.id
+      );
+      watch(operation, `${snapshot.name} export`);
+      toast.success(`Exporting snapshot "${snapshot.name}"`);
+    } catch (exportError) {
+      toast.error(
+        exportError instanceof Error
+          ? exportError.message
+          : "Failed to export snapshot"
+      );
+    } finally {
+      setExportingId(null);
+    }
   };
 
   const submitFork = async (event: React.FormEvent) => {
@@ -97,6 +121,9 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
                       >
                         {snapshot.status}
                       </Badge>
+                      {snapshot.exportedAt && (
+                        <Badge variant="outline">exported</Badge>
+                      )}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {snapshot.size != null
@@ -105,17 +132,39 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
                       {snapshot.createdAt
                         ? ` · ${new Date(snapshot.createdAt).toLocaleString()}`
                         : ""}
+                      {snapshot.cpuTemplate
+                        ? ` · ${snapshot.cpuTemplate} template`
+                        : ""}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={snapshot.status !== "ready"}
-                    onClick={() => beginFork(snapshot)}
-                  >
-                    <GitFork className="h-4 w-4 mr-2" />
-                    Fork
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        snapshot.status !== "ready" ||
+                        exportingId === snapshot.id
+                      }
+                      onClick={() => exportSnapshot(snapshot)}
+                      title="Copy this snapshot to object storage so it survives agent loss and can restore or fork on other agents"
+                    >
+                      {exportingId === snapshot.id ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <CloudUpload className="h-4 w-4 mr-2" />
+                      )}
+                      Export
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={snapshot.status !== "ready"}
+                      onClick={() => beginFork(snapshot)}
+                    >
+                      <GitFork className="h-4 w-4 mr-2" />
+                      Fork
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -150,7 +199,9 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
                 autoFocus
               />
               <p className="text-xs text-muted-foreground">
-                The fork is restored on the agent that stores this snapshot.
+                {selected?.exportedAt
+                  ? "The fork can restore on any compatible agent (the snapshot is exported)."
+                  : "The fork is restored on the agent that stores this snapshot; export the snapshot to fan out across agents."}{" "}
                 Open TCP connections from the source are not portable.
               </p>
             </div>

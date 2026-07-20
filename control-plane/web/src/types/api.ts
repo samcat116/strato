@@ -705,6 +705,11 @@ export interface CreateSandboxRequest {
   env?: Record<string, string>;
   workingDir?: string;
   ttlSeconds?: number;
+  /**
+   * Firecracker CPU template (issue #428). Decided at create time; makes the
+   * sandbox's snapshots restorable across same-arch hosts.
+   */
+  cpuTemplate?: string;
 }
 
 export type SandboxSnapshotStatus =
@@ -725,6 +730,10 @@ export interface SandboxSnapshot {
   architecture?: string | null;
   guestControlProtocolVersion?: number | null;
   forkLayoutVersion?: number | null;
+  cpuTemplate?: string | null;
+  // When the snapshot was last fully exported to object storage (issue
+  // #428); null means agent-local only.
+  exportedAt?: string | null;
   errorMessage?: string | null;
   createdById?: string | null;
   createdAt?: string | null;

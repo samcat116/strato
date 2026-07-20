@@ -1,0 +1,302 @@
+import Crypto
+import Fluent
+import Foundation
+import StratoShared
+import Vapor
+
+/// Snapshot mobility handlers (issue #428), registered by
+/// `SandboxController.boot`: the user-facing export endpoint, and the signed
+/// artifact-transfer routes agents stream through.
+///
+/// Transfer routes are agent routes, not user routes: they authenticate with
+/// an HMAC-signed URL (the signed-image-download pattern — see the
+/// `SpiceDBAuthMiddleware` carve-out) whose payload binds the HTTP method, so
+/// an upload URL can never be replayed as a download. Bytes flow through the
+/// control plane into `imageObjectStore` — agents never talk to the store
+/// directly, which is what lets the route's authentication change
+/// independently of where the bytes live (issue #493).
+extension SandboxController {
+
+    // MARK: - Export
+
+    /// POST /api/sandboxes/:sandboxID/snapshots/:snapshotID/export
+    ///
+    /// Copies a ready snapshot's artifacts off its agent into control-plane
+    /// object storage, making the checkpoint durable against agent loss and
+    /// eligible for cross-agent restore and fork. 202 + operation; the agent
+    /// streams each artifact to a pre-signed upload URL, the upload route
+    /// records size + SHA-256 as the bytes land, and the operation stamps
+    /// `exportedAt` once all four artifacts are recorded. Re-exporting is
+    /// idempotent: uploads replace the objects at their deterministic keys.
+    func exportSnapshot(req: Request) async throws -> Response {
+        let user = try req.auth.require(User.self)
+        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let snapshot = try await fetchSnapshot(req: req, sandbox: sandbox)
+        let snapshotID = try snapshot.requireID()
+        let sandboxID = try sandbox.requireID()
+
+        let canRead = try await req.spicedb.checkPermission(
+            subject: try user.requireID().uuidString,
+            permission: "read",
+            resource: "sandbox_snapshot",
+            resourceId: snapshotID.uuidString)
+        guard canRead else {
+            throw Abort(.forbidden, reason: "You don't have permission to export this snapshot")
+        }
+
+        guard snapshot.isReady else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot cannot be exported in status '\(snapshot.status.rawValue)'")
+        }
+        guard let agentId = snapshot.agentId else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot has no owning agent; its artifacts are unreachable")
+        }
+        do {
+            try await SandboxSnapshotService.requireCapableAgent(agentId, app: req.application)
+        } catch let error as SandboxSnapshotServiceError {
+            throw Abort(.conflict, reason: error.localizedDescription)
+        }
+        // The export message postdates wire v12: a pre-v13 agent cannot even
+        // decode the envelope, so refuse up front instead of timing out.
+        guard let agent = await req.application.agentService.getAgentInfo(agentId),
+            WireProtocol.supportsSandboxSnapshotMobility(agent.wireProtocolVersion ?? 0)
+        else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "The snapshot's agent is too old for snapshot export (need wire protocol >= \(WireProtocol.sandboxSnapshotMobilityMinimumVersion)). Upgrade the agent."
+            )
+        }
+
+        // One pre-signed upload slot per artifact, minted for the owning
+        // agent. The signature binds method + path, so these URLs authorize
+        // exactly these four PUTs and nothing else.
+        let baseURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
+        let signingKey = try URLSigningService.getSigningKey(from: req.application)
+        let uploads = SandboxSnapshotArtifactKind.allCases.map { kind in
+            SandboxSnapshotArtifactUploadTarget(
+                kind: kind,
+                uploadURL: URLSigningService.signSandboxSnapshotArtifactURL(
+                    method: "PUT",
+                    sandboxId: sandboxID,
+                    snapshotId: snapshotID,
+                    kind: kind,
+                    agentName: agentId,
+                    baseURL: baseURL,
+                    signingKey: signingKey))
+        }
+
+        let operation = try await beginOperation(
+            .snapshotExport, sandbox: sandbox, user: user, on: req.db
+        ) { db in
+            try await Self.lockSnapshotLineage([snapshotID], on: db)
+            guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.isReady
+            else {
+                throw Abort(.conflict, reason: "Snapshot is no longer exportable")
+            }
+        }
+
+        Self.runSnapshotExport(
+            operation, snapshotID: snapshotID, agentId: agentId, uploads: uploads,
+            app: req.application)
+
+        req.logger.info(
+            "Sandbox snapshot export accepted",
+            metadata: [
+                "sandbox_id": .string(sandboxID.uuidString),
+                "snapshot_id": .string(snapshotID.uuidString),
+                "agent_id": .string(agentId),
+            ])
+        return try Self.accepted(operation)
+    }
+
+    /// Background half of `exportSnapshot`: the agent RPC, then the
+    /// completeness check over what the upload route actually recorded. The
+    /// agent's success alone is deliberately not trusted to stamp
+    /// `exportedAt` — the integrity entries written as each stream landed
+    /// are the ground truth.
+    private static func runSnapshotExport(
+        _ operation: ResourceOperation,
+        snapshotID: UUID,
+        agentId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget],
+        app: Application
+    ) {
+        guard let operationId = operation.id else { return }
+        let sandboxID = operation.resourceID
+
+        app.backgroundTasks.spawn {
+            do {
+                try await SandboxSnapshotService.requestSnapshotExport(
+                    sandboxId: sandboxID, snapshotId: snapshotID, uploads: uploads,
+                    agentId: agentId, app: app)
+
+                guard let current = try await SandboxSnapshot.find(snapshotID, on: app.db) else {
+                    throw Abort(.conflict, reason: "Snapshot was deleted while its export ran")
+                }
+                let recorded = Set((current.exportedArtifacts ?? []).map(\.kind))
+                let missing = SandboxSnapshotArtifactKind.allCases.filter { !recorded.contains($0) }
+                guard missing.isEmpty else {
+                    throw Abort(
+                        .internalServerError,
+                        reason:
+                            "Agent reported the export complete but artifacts [\(missing.map(\.rawValue).joined(separator: ", "))] never arrived"
+                    )
+                }
+                current.exportedAt = Date()
+                try await current.save(on: app.db)
+
+                await completeOperation(
+                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
+                    settingSandboxStatus: nil, app: app)
+            } catch {
+                await completeOperation(
+                    operationId, sandboxID: sandboxID, as: .failed,
+                    error: error.localizedDescription,
+                    settingSandboxStatus: nil, app: app)
+            }
+        }
+    }
+
+    // MARK: - Artifact transfer (signed agent routes)
+
+    /// PUT /api/sandboxes/:sandboxID/snapshots/:snapshotID/artifacts/:artifactKind
+    ///
+    /// One exported artifact's bytes, streamed as the raw request body into
+    /// object storage. Size and SHA-256 are computed here, from the bytes
+    /// actually stored — never agent-supplied — and recorded on the snapshot
+    /// row for later download verification. Landing a fresh artifact clears
+    /// `exportedAt`: the previous export record no longer describes the
+    /// objects, and the running export operation re-stamps it once every
+    /// artifact has arrived.
+    func uploadSnapshotArtifact(req: Request) async throws -> HTTPStatus {
+        let (snapshot, kind) = try await verifiedSnapshotArtifactRequest(req: req, method: "PUT")
+        let snapshotID = try snapshot.requireID()
+        let key = SandboxSnapshotObjectKey.artifact(
+            projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
+
+        // No single artifact can legitimately exceed the recorded archive
+        // footprint; double it for filesystem rounding, with a floor for
+        // rows whose size estimate was small.
+        let maxBytes = max((snapshot.size ?? 0) * 2, Int64(1) << 30)
+
+        let store = req.application.imageObjectStore
+        let writer = try await store.openWriter(key: key)
+        var hasher = SHA256()
+        var size: Int64 = 0
+        do {
+            for try await chunk in req.body {
+                try Task.checkCancellation()
+                size += Int64(chunk.readableBytes)
+                guard size <= maxBytes else {
+                    throw Abort(
+                        .payloadTooLarge,
+                        reason: "Artifact exceeds the maximum allowed size of \(maxBytes) bytes")
+                }
+                let readable = chunk
+                if let bytes = readable.getBytes(at: readable.readerIndex, length: readable.readableBytes) {
+                    hasher.update(data: bytes)
+                }
+                try await writer.write(chunk)
+            }
+            guard size > 0 else {
+                throw Abort(.badRequest, reason: "Artifact upload carried no bytes")
+            }
+            try await writer.finish()
+        } catch {
+            await writer.abort()
+            throw error
+        }
+
+        let sha256 = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+
+        // Record the integrity entry. Agents upload sequentially, so this
+        // read-modify-write never races itself; a lost entry only means the
+        // export completeness check fails closed.
+        guard let current = try await SandboxSnapshot.find(snapshotID, on: req.db) else {
+            try? await store.delete(key: key)
+            throw Abort(.notFound, reason: "Snapshot no longer exists")
+        }
+        var artifacts = current.exportedArtifacts ?? []
+        artifacts.removeAll { $0.kind == kind }
+        artifacts.append(
+            SandboxSnapshotExportedArtifact(kind: kind, sizeBytes: size, sha256: sha256))
+        current.exportedArtifacts = artifacts
+        current.exportedAt = nil
+        try await current.save(on: req.db)
+
+        req.logger.info(
+            "Sandbox snapshot artifact stored",
+            metadata: [
+                "snapshot_id": .string(snapshotID.uuidString),
+                "kind": .string(kind.rawValue),
+                "size": .stringConvertible(size),
+            ])
+        return .ok
+    }
+
+    /// GET /api/sandboxes/:sandboxID/snapshots/:snapshotID/artifacts/:artifactKind
+    ///
+    /// Streams one exported artifact back to an importing agent, range-aware
+    /// via the object store.
+    func downloadSnapshotArtifact(req: Request) async throws -> Response {
+        let (snapshot, kind) = try await verifiedSnapshotArtifactRequest(req: req, method: "GET")
+        let snapshotID = try snapshot.requireID()
+        guard snapshot.exportedArtifact(for: kind) != nil else {
+            throw Abort(.notFound, reason: "Artifact '\(kind.rawValue)' has not been exported")
+        }
+        let key = SandboxSnapshotObjectKey.artifact(
+            projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
+        return try await req.application.imageObjectStore.stream(
+            key: key, filename: kind.filename, on: req)
+    }
+
+    /// Shared preflight for both transfer directions: parse the path, verify
+    /// the HMAC signature over (method, exact path, agent, expiry), and load
+    /// the snapshot row. Signature first — an unauthenticated caller learns
+    /// nothing about which snapshot IDs exist.
+    private func verifiedSnapshotArtifactRequest(
+        req: Request, method: String
+    ) async throws -> (SandboxSnapshot, SandboxSnapshotArtifactKind) {
+        guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self),
+            let snapshotID = req.parameters.get("snapshotID", as: UUID.self),
+            let kindRaw = req.parameters.get("artifactKind"),
+            let kind = SandboxSnapshotArtifactKind(rawValue: kindRaw)
+        else {
+            throw Abort(.badRequest, reason: "Invalid snapshot artifact path")
+        }
+        guard let agentName = req.query[String.self, at: "agent"],
+            let expires = req.query[Int.self, at: "expires"],
+            let signature = req.query[String.self, at: "sig"]
+        else {
+            throw Abort(.forbidden, reason: "Missing signed transfer parameters")
+        }
+        let signingKey = try URLSigningService.getSigningKey(from: req.application)
+        guard
+            URLSigningService.verifySandboxSnapshotArtifactSignature(
+                method: method,
+                path: req.url.path,
+                agentName: agentName,
+                expires: expires,
+                signature: signature,
+                signingKey: signingKey)
+        else {
+            req.logger.warning(
+                "Invalid or expired snapshot artifact transfer signature",
+                metadata: [
+                    "snapshot_id": .string(snapshotID.uuidString),
+                    "agent": .string(agentName),
+                ])
+            throw Abort(.forbidden, reason: "Invalid or expired transfer signature")
+        }
+        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
+            snapshot.$sandbox.id == sandboxID
+        else {
+            throw Abort(.notFound, reason: "Snapshot not found")
+        }
+        return (snapshot, kind)
+    }
+}

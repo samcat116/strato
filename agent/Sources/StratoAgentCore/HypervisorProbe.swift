@@ -108,4 +108,47 @@ public enum HypervisorProbe {
             capabilities: .firecracker
         )
     }
+
+    /// The Firecracker binary's version, from `firecracker --version` output
+    /// like "Firecracker v1.7.0" — normalized without the cosmetic "v" so it
+    /// compares equal to the `vmm_version` recorded on snapshots. Snapshot
+    /// mobility (issue #428) keys cross-agent restore placement on this;
+    /// nil (probe failed, unparseable output) just keeps this host ineligible
+    /// as a cross-agent restore target.
+    public static func firecrackerVersion(binaryPath: String) async -> String? {
+        guard FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
+        guard
+            let result = try? await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: binaryPath), arguments: ["--version"]),
+            result.terminationStatus == 0,
+            let output = String(data: result.standardOutput, encoding: .utf8)
+        else { return nil }
+        // First line: "Firecracker v1.7.0"; take the last whitespace-separated
+        // token and strip the prefix.
+        guard let firstLine = output.split(separator: "\n").first,
+            let token = firstLine.split(separator: " ").last
+        else { return nil }
+        let version = token.hasPrefix("v") ? String(token.dropFirst()) : String(token)
+        return version.isEmpty ? nil : version
+    }
+
+    /// Returns `hypervisors` with `version` stamped onto the Firecracker
+    /// entry. Separate from `probeAll` because reading the version spawns a
+    /// subprocess (async), while the availability probes are synchronous.
+    public static func stampingFirecrackerVersion(
+        _ hypervisors: [HypervisorSupport], version: String?
+    ) -> [HypervisorSupport] {
+        guard let version else { return hypervisors }
+        return hypervisors.map { support in
+            guard support.type == .firecracker else { return support }
+            return HypervisorSupport(
+                type: support.type,
+                available: support.available,
+                accelerated: support.accelerated,
+                unavailabilityReason: support.unavailabilityReason,
+                capabilities: support.capabilities,
+                version: version
+            )
+        }
+    }
 }

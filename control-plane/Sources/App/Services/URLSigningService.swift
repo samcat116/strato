@@ -137,6 +137,59 @@ struct URLSigningService {
         return result == 0
     }
 
+    // MARK: - Sandbox snapshot artifact transfer (issue #428)
+
+    /// Signs a sandbox-snapshot artifact transfer URL. The same route serves
+    /// both directions — agents PUT exports and GET imports — so the HTTP
+    /// method is part of the signed payload: an upload URL can never be
+    /// replayed as a download or vice versa.
+    static func signSandboxSnapshotArtifactURL(
+        method: String,
+        sandboxId: UUID,
+        snapshotId: UUID,
+        kind: SandboxSnapshotArtifactKind,
+        agentName: String,
+        baseURL: String,
+        expiresIn: TimeInterval = defaultExpiration,
+        signingKey: String
+    ) -> String {
+        let expires = Int(Date().timeIntervalSince1970 + expiresIn)
+        let path =
+            "/api/sandboxes/\(sandboxId.uuidString)/snapshots/\(snapshotId.uuidString)/artifacts/\(kind.rawValue)"
+        let signature = sandboxSnapshotSignature(
+            method: method, path: path, agentName: agentName, expires: expires, signingKey: signingKey)
+        let encodedAgentName =
+            agentName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? agentName
+        return "\(baseURL)\(path)?agent=\(encodedAgentName)&expires=\(expires)&sig=\(signature)"
+    }
+
+    /// Verifies a sandbox-snapshot artifact transfer signature against the
+    /// request's method and exact path.
+    static func verifySandboxSnapshotArtifactSignature(
+        method: String,
+        path: String,
+        agentName: String,
+        expires: Int,
+        signature: String,
+        signingKey: String
+    ) -> Bool {
+        guard expires > Int(Date().timeIntervalSince1970) else {
+            return false
+        }
+        let expected = sandboxSnapshotSignature(
+            method: method, path: path, agentName: agentName, expires: expires, signingKey: signingKey)
+        return constantTimeCompare(signature.lowercased(), expected.lowercased())
+    }
+
+    private static func sandboxSnapshotSignature(
+        method: String, path: String, agentName: String, expires: Int, signingKey: String
+    ) -> String {
+        let dataToSign = "\(method.uppercased()):\(path):\(agentName):\(expires)"
+        let key = SymmetricKey(data: Data(signingKey.utf8))
+        let signature = HMAC<SHA256>.authenticationCode(for: Data(dataToSign.utf8), using: key)
+        return signature.map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Gets the signing key, checking sources in order:
     /// 1. Environment variable (IMAGE_DOWNLOAD_SIGNING_KEY)
     /// 2. In-memory cache

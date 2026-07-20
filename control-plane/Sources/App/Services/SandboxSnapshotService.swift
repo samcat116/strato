@@ -78,15 +78,34 @@ enum SandboxSnapshotService {
     }
 
     /// Ask the agent to restore the sandbox in place from a snapshot and
-    /// await the guest's post-restore health confirmation.
+    /// await the guest's post-restore health confirmation. `artifacts`
+    /// carries signed download descriptors when the agent must stage the
+    /// archive from object storage first (cross-agent restore, issue #428).
     static func requestRestore(
         sandboxId: UUID,
         snapshotId: UUID,
         agentId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil,
         app: Application
     ) async throws {
         let message = SandboxRestoreMessage(
-            sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString)
+            sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString,
+            artifacts: artifacts)
+        _ = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
+    }
+
+    /// Ask the agent holding a snapshot's artifacts to stream them to the
+    /// pre-signed object-storage upload targets (issue #428). Same timeout
+    /// class as snapshot creation: the export moves the same bytes.
+    static func requestSnapshotExport(
+        sandboxId: UUID,
+        snapshotId: UUID,
+        uploads: [SandboxSnapshotArtifactUploadTarget],
+        agentId: String,
+        app: Application
+    ) async throws {
+        let message = SandboxSnapshotExportMessage(
+            sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString, uploads: uploads)
         _ = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
     }
 

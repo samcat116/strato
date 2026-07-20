@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 import Vapor
 
 /// Lifecycle of a sandbox snapshot (issue #426). `creating` is the only
@@ -84,6 +85,33 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     @OptionalField(key: "fork_layout_version")
     var forkLayoutVersion: Int?
 
+    /// Firecracker CPU template the checkpointed guest booted with (issue
+    /// #428), agent-reported at creation. Nil means passthrough: the snapshot
+    /// only restores on hosts whose CPU model equals `sourceCPUModel`.
+    @OptionalField(key: "cpu_template")
+    var cpuTemplate: String?
+
+    /// CPU model string of the host the snapshot was taken on (from the
+    /// agent's registration host info), recorded so an un-templated snapshot
+    /// can be matched against a restore target's identical CPU. Nil when the
+    /// source agent never reported host info — then only a templated snapshot
+    /// is mobile.
+    @OptionalField(key: "source_cpu_model")
+    var sourceCPUModel: String?
+
+    /// When the artifacts were last fully exported to control-plane object
+    /// storage (issue #428). Nil means agent-local only: restore and fork
+    /// stay pinned to `agentId`.
+    @Timestamp(key: "exported_at", on: .none)
+    var exportedAt: Date?
+
+    /// Integrity record of the exported copy, one entry per artifact kind,
+    /// written by the artifact upload route as each stream lands (sizes and
+    /// SHA-256 are computed control-plane-side, never agent-supplied). The
+    /// export operation only stamps `exportedAt` once every kind is present.
+    @OptionalField(key: "exported_artifacts")
+    var exportedArtifacts: [SandboxSnapshotExportedArtifact]?
+
     @OptionalField(key: "error_message")
     var errorMessage: String?
 
@@ -120,6 +148,15 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
 
 extension SandboxSnapshot: Content {}
 
+/// One artifact of the exported copy in object storage: what landed under the
+/// snapshot's object prefix and what any later download must verify to.
+struct SandboxSnapshotExportedArtifact: Codable, Equatable, Sendable {
+    let kind: SandboxSnapshotArtifactKind
+    let sizeBytes: Int64
+    /// Lowercase hex SHA-256 of the stored bytes.
+    let sha256: String
+}
+
 extension SandboxSnapshot {
     var isReady: Bool { status == .ready }
 
@@ -128,6 +165,19 @@ extension SandboxSnapshot {
     /// `.creating` is deliberately not deletable — its create operation is
     /// still pending and owns the row's resolution.
     var canDelete: Bool { status == .ready || status == .error || status == .deleting }
+
+    /// Whether a complete exported copy exists in object storage: the export
+    /// completed (`exportedAt`) and every artifact kind has an integrity
+    /// record to hand to a downloading agent.
+    var isExported: Bool {
+        guard exportedAt != nil, let exportedArtifacts else { return false }
+        let kinds = Set(exportedArtifacts.map(\.kind))
+        return SandboxSnapshotArtifactKind.allCases.allSatisfy { kinds.contains($0) }
+    }
+
+    func exportedArtifact(for kind: SandboxSnapshotArtifactKind) -> SandboxSnapshotExportedArtifact? {
+        exportedArtifacts?.first { $0.kind == kind }
+    }
 }
 
 // MARK: - Request/Response DTOs
@@ -151,6 +201,10 @@ struct SandboxSnapshotResponse: Content {
     let architecture: String?
     let guestControlProtocolVersion: Int?
     let forkLayoutVersion: Int?
+    let cpuTemplate: String?
+    /// When the artifacts were last fully exported to object storage; nil for
+    /// an agent-local snapshot (issue #428).
+    let exportedAt: Date?
     let errorMessage: String?
     let createdById: UUID?
     let createdAt: Date?
@@ -167,6 +221,8 @@ struct SandboxSnapshotResponse: Content {
         self.architecture = snapshot.architecture
         self.guestControlProtocolVersion = snapshot.guestControlProtocolVersion
         self.forkLayoutVersion = snapshot.forkLayoutVersion
+        self.cpuTemplate = snapshot.cpuTemplate
+        self.exportedAt = snapshot.exportedAt
         self.errorMessage = snapshot.errorMessage
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt

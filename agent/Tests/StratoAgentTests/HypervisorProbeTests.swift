@@ -100,4 +100,41 @@ struct HypervisorProbeTests {
         #expect(firecracker.unavailabilityReason != nil)
         #endif
     }
+
+    // MARK: - Firecracker version (issue #428)
+
+    @Test("firecrackerVersion parses and normalizes `firecracker --version` output")
+    func firecrackerVersionParsesOutput() async throws {
+        // A stand-in binary printing Firecracker's version banner.
+        let scriptPath = NSTemporaryDirectory() + "fake-firecracker-\(UUID().uuidString)"
+        try "#!/bin/sh\necho \"Firecracker v1.7.0\"\n".write(
+            toFile: scriptPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: scriptPath)
+        defer { try? FileManager.default.removeItem(atPath: scriptPath) }
+
+        let version = await HypervisorProbe.firecrackerVersion(binaryPath: scriptPath)
+        #expect(version == "1.7.0")
+    }
+
+    @Test("firecrackerVersion is nil for a missing binary")
+    func firecrackerVersionMissingBinary() async {
+        let version = await HypervisorProbe.firecrackerVersion(binaryPath: missingBinary)
+        #expect(version == nil)
+    }
+
+    @Test("stampingFirecrackerVersion only touches the Firecracker entry")
+    func stampingTargetsFirecrackerOnly() throws {
+        let reports = HypervisorProbe.probeAll(
+            qemuBinaryPath: executableBinary,
+            firecrackerBinaryPath: executableBinary
+        )
+        let stamped = HypervisorProbe.stampingFirecrackerVersion(reports, version: "1.7.0")
+        let firecracker = try #require(stamped.first { $0.type == .firecracker })
+        let qemu = try #require(stamped.first { $0.type == .qemu })
+        #expect(firecracker.version == "1.7.0")
+        #expect(qemu.version == nil)
+        // Nil leaves the reports untouched.
+        #expect(HypervisorProbe.stampingFirecrackerVersion(reports, version: nil) == reports)
+    }
 }

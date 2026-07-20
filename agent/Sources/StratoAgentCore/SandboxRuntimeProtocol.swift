@@ -58,7 +58,21 @@ public protocol SandboxRuntimeService: Sendable {
     /// fresh Firecracker, load the snapshot, resume, and confirm the guest
     /// answers. Same identity — the vsock wiring and (future) NIC devices come
     /// back under their original names from the snapshotted device topology.
-    func restoreSandbox(sandboxId: String, snapshotId: String) async throws
+    /// `artifacts` is non-nil when the archive is not on this host: the
+    /// runtime stages it from the signed, checksummed download descriptors
+    /// before loading (cross-agent restore, issue #428).
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?
+    ) async throws
+
+    /// Stream a snapshot's artifacts to the pre-signed upload targets, one
+    /// sequential PUT per artifact (off-node export, issue #428). Idempotent:
+    /// each PUT replaces the object at its deterministic key.
+    func exportSandboxSnapshot(
+        sandboxId: String, snapshotId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget]
+    ) async throws
 
     /// Remove a snapshot's artifacts from this host. Idempotent: deleting a
     /// snapshot that left no files (or was already deleted) succeeds.
@@ -129,6 +143,10 @@ public struct SandboxSnapshotResult: Sendable {
     /// Fork-safe artifact layout advertised by the runtime. Nil means the
     /// snapshot was captured unjailed or by a runtime predating this signal.
     public let forkLayoutVersion: Int?
+    /// Firecracker CPU template the checkpointed guest booted with (issue
+    /// #428); nil for a passthrough guest, which only restores on identical
+    /// CPU models.
+    public let cpuTemplate: String?
 
     public var totalSizeBytes: Int64 { memorySizeBytes + vmstateSizeBytes + rootfsSizeBytes }
 
@@ -139,7 +157,8 @@ public struct SandboxSnapshotResult: Sendable {
         storagePath: String,
         firecrackerVersion: String,
         guestControlProtocolVersion: Int? = nil,
-        forkLayoutVersion: Int? = nil
+        forkLayoutVersion: Int? = nil,
+        cpuTemplate: String? = nil
     ) {
         self.memorySizeBytes = memorySizeBytes
         self.vmstateSizeBytes = vmstateSizeBytes
@@ -148,6 +167,7 @@ public struct SandboxSnapshotResult: Sendable {
         self.firecrackerVersion = firecrackerVersion
         self.guestControlProtocolVersion = guestControlProtocolVersion
         self.forkLayoutVersion = forkLayoutVersion
+        self.cpuTemplate = cpuTemplate
     }
 }
 

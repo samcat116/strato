@@ -20,7 +20,15 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         // Signed image-download URLs: agents fetch base images with an HMAC
         // signature, not a session; the controller verifies the signature.
         let isSignedDownload = path.hasPrefix("/api/projects/") && path.hasSuffix("/download")
-        if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) }) || isSignedDownload {
+        // Signed snapshot artifact transfer (issue #428): agents stream
+        // exported snapshot artifacts up and down with method-bound HMAC
+        // signatures; the handler verifies before touching any bytes.
+        let isSignedSnapshotArtifact =
+            path.hasPrefix("/api/sandboxes/") && path.contains("/snapshots/")
+            && path.contains("/artifacts/")
+        if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
+            || isSignedDownload || isSignedSnapshotArtifact
+        {
             return try await next.respond(to: request)
         }
 

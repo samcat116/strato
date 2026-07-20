@@ -44,7 +44,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 return 300
             case .shutdown, .reboot, .pause, .resume:
                 return 120
-            case .snapshot, .snapshotDelete, .restore:
+            case .snapshot, .snapshotDelete, .restore, .snapshotExport:
                 // Unreachable for VMs (no endpoint issues them — snapshots
                 // are a sandbox operation, issue #426) but the budget
                 // function stays total.
@@ -65,6 +65,10 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
             case .snapshot, .restore:
                 // Checkpoint/restore copy the guest memory file plus a full
                 // rootfs on filesystems without reflink support (issue #426).
+                return 600
+            case .snapshotExport:
+                // Export streams the whole archive (guest memory + rootfs)
+                // through the control plane into object storage (issue #428).
                 return 600
             case .snapshotDelete:
                 return 120

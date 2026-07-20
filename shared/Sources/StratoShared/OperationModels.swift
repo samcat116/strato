@@ -17,6 +17,9 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     case snapshot
     case snapshotDelete = "snapshot_delete"
     case restore
+    /// Off-node export of a sandbox snapshot's artifacts to control-plane
+    /// object storage (issue #428).
+    case snapshotExport = "snapshot_export"
 }
 
 /// Terminal-or-not state of an asynchronous VM operation. `pending` is the only
