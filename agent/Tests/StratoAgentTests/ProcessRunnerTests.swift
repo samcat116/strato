@@ -35,4 +35,33 @@ struct ProcessRunnerTests {
         let result = try await task.value
         #expect(result.terminationStatus == 7)
     }
+
+    @Test("A child that outlives its timeout is terminated and reported")
+    func timeoutTerminatesAndThrows() async throws {
+        // `waitForExit` deliberately ignores cancellation, so without the
+        // watchdog this call would park for the full 60s and no caller could
+        // escape it (issue #428 review).
+        let started = Date()
+        await #expect(throws: ProcessTimedOutError.self) {
+            try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "sleep 60"],
+                timeout: .milliseconds(200)
+            )
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(elapsed < 10)
+    }
+
+    @Test("A child that finishes inside its timeout is unaffected")
+    func timeoutDoesNotDisturbFastChildren() async throws {
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf ok; exit 0"],
+            timeout: .seconds(30)
+        )
+        #expect(result.terminationStatus == 0)
+        let stdout = String(data: result.standardOutput, encoding: .utf8)
+        #expect(stdout == "ok")
+    }
 }

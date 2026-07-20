@@ -13,35 +13,58 @@ import Vapor
 
 /// The seam where the Cedar engine plugs in.
 ///
-/// The Swift↔Cedar binding (samcat116/swift-cedar, wrapping the cedar-policy
-/// crate via UniFFI) cannot be a package dependency yet: its binary artifact
-/// is unpublished and its packaging is Apple-only, while the control plane
-/// builds and deploys on Linux. Everything the evaluator needs — schema,
-/// policy text, entity slices, invalidation — is produced and cached behind
-/// this protocol, so #481 (shadow evaluation) swaps the real engine in
-/// without touching assembly or invalidation.
+/// The production engine is `SwiftCedarEngine` (samcat116/swift-cedar,
+/// wrapping the cedar-policy crate via UniFFI, with prebuilt binaries for
+/// Linux and Apple since v0.1.0). The protocol remains so tests can inject
+/// failing or canned engines without touching assembly or invalidation.
 protocol CedarEngine: Sendable {
     /// Parse and validate the schema and policy set into an evaluatable
     /// artifact. Throwing keeps the cache on its previous set.
-    func compile(schemaText: String, policyText: String) throws -> any CedarCompiledPolicySet
+    func compile(schemaText: String, policies: [CedarPolicySource]) throws -> any CedarCompiledPolicySet
 }
 
-/// An opaque compiled artifact — with the real engine, parsed `Schema` +
-/// `PolicySet` handles ready for `isAuthorized`.
-protocol CedarCompiledPolicySet: Sendable {}
+/// One evaluated authorization decision from the compiled set.
+struct CedarCheckDecision: Equatable, Sendable {
+    let allowed: Bool
+    /// Ids of the policies that determined the decision — the assembler's
+    /// `@id`s (`role-editor`, `guardrail-<id>`, `platform-system-admin`, …),
+    /// which is what lets a decision log name what decided.
+    let determiningPolicyIDs: [String]
+    /// Evaluation errors Cedar encountered. Non-empty does not imply deny;
+    /// Cedar skips policies that error.
+    let evaluationErrors: [String]
 
-/// The placeholder engine: holds the assembled text without parsing it.
-/// Schema/policy correctness is covered by the structural tests and the
-/// registry-driven generation until the real engine validates on boot.
-struct TextOnlyCedarEngine: CedarEngine {
-    struct Artifact: CedarCompiledPolicySet {
-        let schemaText: String
-        let policyText: String
+    /// The tier (docs/architecture/iam.md) that produced this decision,
+    /// derived from the determining policy ids. A forbid always wins, so any
+    /// guardrail in the determining set names tier 2 regardless of what else
+    /// matched; an allow names the tier of its permit; a deny nothing decided
+    /// is the default deny.
+    var tier: String {
+        if determiningPolicyIDs.contains(where: { $0.hasPrefix("guardrail-") }) { return "guardrail" }
+        if allowed {
+            if determiningPolicyIDs.contains(where: { $0.hasPrefix("platform-") || $0 == "org-membership" }) {
+                return "platform"
+            }
+            if determiningPolicyIDs.contains(where: { $0.hasPrefix("role-") }) { return "grant" }
+            return "unknown"
+        }
+        return "default-deny"
     }
+}
 
-    func compile(schemaText: String, policyText: String) throws -> any CedarCompiledPolicySet {
-        Artifact(schemaText: schemaText, policyText: policyText)
-    }
+/// A compiled artifact ready to evaluate checks: with the real engine, parsed
+/// `Schema` + `PolicySet` handles behind `isAuthorized`.
+protocol CedarCompiledPolicySet: Sendable {
+    /// Evaluate one check against the compiled set. `context` is the full
+    /// request context (the slice's `baseContextValue`); `entitiesJSON` is the
+    /// slice's entity store in Cedar's entities JSON format.
+    func authorize(
+        principal: CedarEntityUID,
+        action: String,
+        resource: CedarEntityUID,
+        context: CedarValue,
+        entitiesJSON: String
+    ) throws -> CedarCheckDecision
 }
 
 /// This replica's compiled Cedar policy set.
@@ -65,7 +88,7 @@ actor CedarPolicySetCache {
     private let logger: Logger
     private(set) var current: Built?
 
-    init(engine: any CedarEngine = TextOnlyCedarEngine(), logger: Logger) {
+    init(engine: any CedarEngine = SwiftCedarEngine(), logger: Logger) {
         self.engine = engine
         self.logger = logger
     }
@@ -130,7 +153,9 @@ actor CedarPolicySetCache {
                 compiledGuardrails.policyText.isEmpty
                 ? staticText
                 : staticText + "\n" + compiledGuardrails.policyText
-            let artifact = try engine.compile(schemaText: schemaText, policyText: policyText)
+            let artifact = try engine.compile(
+                schemaText: schemaText,
+                policies: CedarPolicyAssembler.staticPolicies() + compiledGuardrails.policies)
 
             current = Built(
                 version: version,

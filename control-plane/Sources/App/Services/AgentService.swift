@@ -1704,8 +1704,9 @@ actor AgentService {
     }
 
     /// The full authoritative VM set for an agent, straight from Postgres —
-    /// no in-memory VM-to-agent map involved. Signed image URLs are re-issued
-    /// on every assembly so long-desired VMs never carry expired links.
+    /// no in-memory VM-to-agent map involved. Image download URLs are
+    /// mTLS-authenticated relative paths (issue #493), so nothing in the
+    /// assembly expires or needs re-signing.
     /// Internal rather than private so tests can assert assembly contents.
     func assembleDesiredState(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
@@ -1751,13 +1752,7 @@ actor AgentService {
             var imageInfo: ImageInfo?
             if let image, image.status == .ready {
                 do {
-                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-                    imageInfo = try VMSpecBuilder.buildImageInfo(
-                        from: image,
-                        controlPlaneURL: controlPlaneURL,
-                        agentName: agentId,
-                        signingKey: URLSigningService.getSigningKey(from: app)
-                    )
+                    imageInfo = try VMSpecBuilder.buildImageInfo(from: image)
                 } catch {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
@@ -1870,10 +1865,29 @@ actor AgentService {
         }
         for sandbox in sandboxes {
             guard let sandboxId = sandbox.id else { continue }
-            let restoreFrom = sandbox.restoredFromSnapshotId.flatMap { snapshotID in
-                restoreSnapshots[snapshotID].map {
-                    SandboxSnapshotRef(snapshotId: snapshotID, sourceSandboxId: $0.$sandbox.id)
+            let restoreFrom = sandbox.restoredFromSnapshotId.flatMap { snapshotID -> SandboxSnapshotRef? in
+                guard let snapshot = restoreSnapshots[snapshotID] else { return nil }
+                // A fork placed off the snapshot's agent restores from the
+                // exported copy: relative download paths + the recorded
+                // integrity material, fetched by the agent over SVID mTLS
+                // (issue #428). Placement guaranteed the export exists; if it
+                // has since been invalidated (re-export in flight), the
+                // descriptors are nil and the agent reports the miss instead
+                // of mis-converging.
+                var artifacts: [SandboxSnapshotArtifactDescriptor]?
+                if snapshot.agentId != agentId {
+                    artifacts = try? snapshot.exportedArtifactDescriptors()
+                    if artifacts == nil {
+                        app.logger.warning(
+                            "Fork is placed off its snapshot's agent but the exported copy is unavailable",
+                            metadata: [
+                                "sandboxId": .string(sandboxId.uuidString),
+                                "snapshotId": .string(snapshotID.uuidString),
+                            ])
+                    }
                 }
+                return SandboxSnapshotRef(
+                    snapshotId: snapshotID, sourceSandboxId: snapshot.$sandbox.id, artifacts: artifacts)
             }
             // Registry material first: digest pinning mutates the in-memory
             // model that buildSpec() reads. A fork already has its rootfs in
@@ -1917,8 +1931,8 @@ actor AgentService {
 
     /// The agent self-update this sync should carry (issue #434): the rollout
     /// sweep's assignment on the agent row, with its artifact re-resolved on
-    /// every assembly — mirroring signed image URLs, so a long-assigned update
-    /// never carries a stale (possibly presigned) link. Nil whenever there is
+    /// every assembly, so a long-assigned update never carries a stale
+    /// (possibly presigned) link. Nil whenever there is
     /// nothing actionable: not enrolled, not assigned, already converged, an
     /// agent too old to act on the field (a pre-v7 agent would wait out the
     /// rollout's health budget against silence), or an artifact that cannot
@@ -2670,6 +2684,10 @@ actor AgentService {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
+            // Exported snapshot objects first: the snapshot rows cascade with
+            // the sandbox row below (issue #428).
+            await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
+
             try await db.transaction { db in
                 try await sandbox.delete(on: db)
                 try await QuotaEnforcementService.release(for: sandbox, on: db)
@@ -2791,20 +2809,10 @@ actor AgentService {
         var requiredArchitecture: CPUArchitecture?
         if let snapshotID = sandbox.restoredFromSnapshotId {
             guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: db),
-                snapshot.isReady,
-                let pinnedAgentID = snapshot.agentId
+                snapshot.isReady
             else {
                 throw AgentServiceError.schedulingFailed(
-                    "the restore snapshot is unavailable, not ready, or has no owning agent")
-            }
-            guard let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID }) else {
-                throw AgentServiceError.schedulingFailed(
-                    "snapshot artifacts are pinned to agent \(pinnedAgentID), which is not schedulable")
-            }
-            guard WireProtocol.supportsSandboxFork(pinned.wireProtocolVersion ?? 0) else {
-                throw AgentServiceError.schedulingFailed(
-                    "snapshot agent \(pinned.name) is too old for sandbox forks (need wire protocol >= \(WireProtocol.sandboxForkMinimumVersion))"
-                )
+                    "the restore snapshot is unavailable or not ready")
             }
             guard
                 SandboxGuestControlProtocol.supportsReidentify(
@@ -2814,13 +2822,67 @@ actor AgentService {
                     "snapshot guest is too old for sandbox forks (need guest control protocol >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
                 )
             }
-            schedulableAgents = [pinned]
+
+            // Candidates (issue #428): the snapshot's own agent restores from
+            // local artifacts; once exported, any agent that satisfies the
+            // recorded compatibility constraints (wire v13, same architecture,
+            // same Firecracker version, CPU template or identical CPU model)
+            // can stage the archive from object storage instead.
+            var candidates: [SchedulableAgent] = []
+            if let pinnedAgentID = snapshot.agentId,
+                let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID }),
+                WireProtocol.supportsSandboxFork(pinned.wireProtocolVersion ?? 0)
+            {
+                candidates.append(pinned)
+            }
+            if snapshot.isExported {
+                let otherIDs =
+                    schedulableAgents
+                    .filter { $0.id != snapshot.agentId }
+                    .compactMap { UUID(uuidString: $0.id) }
+                if !otherIDs.isEmpty {
+                    // The compatibility inputs (probed Firecracker version,
+                    // host CPU model) live on the agent rows, not in
+                    // SchedulableAgent — fetch them for the survivors only.
+                    let rows = try await Agent.query(on: db).filter(\.$id ~~ otherIDs).all()
+                    let compatibleIDs = Set(
+                        rows.filter {
+                            SandboxSnapshotCompatibility.restoreBlocker(snapshot: snapshot, target: $0) == nil
+                        }.compactMap { $0.id?.uuidString })
+                    candidates += schedulableAgents.filter { compatibleIDs.contains($0.id) }
+                }
+            }
+            guard !candidates.isEmpty else {
+                if snapshot.isExported {
+                    throw AgentServiceError.schedulingFailed(
+                        "no schedulable agent is compatible with the restore snapshot (need Firecracker \(SandboxSnapshotCompatibility.normalizedFirecrackerVersion(snapshot.firecrackerVersion) ?? "unknown") on \(snapshot.architecture ?? "unknown"), and a matching CPU template or identical CPU)"
+                    )
+                }
+                throw AgentServiceError.schedulingFailed(
+                    "snapshot artifacts are pinned to agent \(snapshot.agentId ?? "unknown"), which is not schedulable; export the snapshot to allow cross-agent placement"
+                )
+            }
+            schedulableAgents = candidates
             if let rawArchitecture = snapshot.architecture {
                 guard let architecture = CPUArchitecture(rawValue: rawArchitecture) else {
                     throw AgentServiceError.schedulingFailed(
                         "restore snapshot records unsupported architecture '\(rawArchitecture)'")
                 }
                 requiredArchitecture = architecture
+            }
+        }
+
+        // A templated create needs an agent that actually applies
+        // `SandboxSpec.cpuTemplate`; a pre-v13 agent would silently boot the
+        // guest un-templated while the API reports a template (issue #428).
+        if sandbox.cpuTemplate != nil {
+            schedulableAgents = schedulableAgents.filter {
+                WireProtocol.supportsSandboxSnapshotMobility($0.wireProtocolVersion ?? 0)
+            }
+            guard !schedulableAgents.isEmpty else {
+                throw AgentServiceError.schedulingFailed(
+                    "no schedulable agent supports CPU templates (need wire protocol >= \(WireProtocol.sandboxSnapshotMobilityMinimumVersion))"
+                )
             }
         }
 

@@ -575,6 +575,379 @@ final class SandboxSnapshotTests {
         }
     }
 
+    // MARK: - Mobility (issue #428)
+
+    /// Registers an agent with the full mobility surface: current wire
+    /// protocol, an available Firecracker with a probed version, host CPU
+    /// model, and architecture — the compatibility inputs cross-agent
+    /// restore placement reads.
+    private func registerMobilityAgent(
+        app: Application,
+        named name: String,
+        firecrackerVersion: String? = "1.7.0",
+        cpuModel: String? = "TestCPU 3000",
+        architecture: CPUArchitecture? = CPUArchitecture.current,
+        protocolVersion: Int = WireProtocol.currentVersion
+    ) async throws -> String {
+        let message = AgentRegisterMessage(
+            agentId: name,
+            hostname: "\(name)-host",
+            version: "1.0.0",
+            capabilities: ["firecracker", MessageType.sandboxSnapshotCreate.rawValue],
+            resources: AgentResources(
+                totalCPU: 16, availableCPU: 16,
+                totalMemory: 1 << 34, availableMemory: 1 << 34,
+                totalDisk: 1 << 40, availableDisk: 1 << 40
+            ),
+            architecture: architecture,
+            hypervisors: [
+                HypervisorSupport(
+                    type: .firecracker, available: true, accelerated: true,
+                    capabilities: .firecracker, version: firecrackerVersion)
+            ],
+            protocolVersion: protocolVersion,
+            sandboxCapable: true,
+            hostInfo: HostInfo(cpuModel: cpuModel)
+        )
+        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let agentUUID = try await app.agentService.registerAgent(
+            message, agentName: name,
+            organizationScope: orgID.map { .organization($0) })
+        return agentUUID.uuidString
+    }
+
+    /// Seeds a ready snapshot with a complete export record.
+    private func seedExportedSnapshot(
+        app: Application, user: User, sandbox: Sandbox,
+        agentId: String?,
+        firecrackerVersion: String? = "1.7.0",
+        architecture: String? = CPUArchitecture.current.rawValue,
+        cpuTemplate: String? = nil,
+        sourceCPUModel: String? = "TestCPU 3000"
+    ) async throws -> SandboxSnapshot {
+        let snapshot = SandboxSnapshot(
+            name: "exported",
+            sandboxID: sandbox.id!,
+            projectID: sandbox.$project.id,
+            environment: sandbox.environment,
+            agentId: agentId,
+            createdByID: user.id!)
+        snapshot.status = .ready
+        snapshot.size = 64
+        snapshot.firecrackerVersion = firecrackerVersion
+        snapshot.architecture = architecture
+        snapshot.cpuTemplate = cpuTemplate
+        snapshot.sourceCPUModel = sourceCPUModel
+        snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
+        snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+        snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+            SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
+        }
+        snapshot.exportedAt = Date()
+        try await snapshot.save(on: app.db)
+        return snapshot
+    }
+
+    @Test("Export refuses a snapshot that is not ready")
+    func exportRefusesNotReady() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "broken",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .error
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("Export refuses an agent below wire v13")
+    func exportRefusesOldAgent() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await registerMobilityAgent(
+                app: app, named: "old-export-agent",
+                protocolVersion: WireProtocol.sandboxSnapshotMobilityMinimumVersion - 1)
+            sandbox.hypervisorId = agentId
+            try await sandbox.save(on: app.db)
+            let snapshot = SandboxSnapshot(
+                name: "stuck-local",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("too old"))
+            }
+        }
+    }
+
+    @Test("Export returns 202 and fails cleanly without a live socket")
+    func exportAcceptsAndFailsWithoutSocket() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "to-export",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            var operation: OperationResponse?
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+
+            let accepted = try #require(operation)
+            #expect(accepted.kind == .snapshotExport)
+            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
+            #expect(completed?.status == .failed)
+            let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+            #expect(current.exportedAt == nil)
+            // A failed export leaves the snapshot itself untouched.
+            #expect(current.status == .ready)
+        }
+    }
+
+    @Test("Agent mTLS artifact upload records integrity and download streams the bytes back")
+    func artifactUploadAndDownloadRoundTripOverAgentMTLS() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, _ in
+            let storeRoot = NSTemporaryDirectory() + "snapshot-transfer-\(UUID().uuidString)"
+            app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
+            defer { try? FileManager.default.removeItem(atPath: storeRoot) }
+
+            // XFCC trust requires loopback provenance, which Vapor's in-memory
+            // test harness cannot provide — bind a real ephemeral port (the
+            // ImageDownloadMTLSTests pattern) and rely on the XFCC URI alone
+            // (no trust bundle configured).
+            app.spireService = SPIREService(
+                config: SPIREServiceConfig(enabled: true, trustDomain: "strato.local"),
+                logger: app.logger, httpClient: app.client)
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let outcome: Result<Void, any Error>
+            do {
+                let port = try #require(
+                    app.http.server.shared.localAddress?.port,
+                    "HTTP server did not report a bound port")
+
+                let snapshot = SandboxSnapshot(
+                    name: "transfer",
+                    sandboxID: sandbox.id!,
+                    projectID: sandbox.$project.id,
+                    environment: sandbox.environment,
+                    agentId: "agent-a",
+                    createdByID: user.id!)
+                snapshot.status = .ready
+                snapshot.size = 1 << 20
+                try await snapshot.save(on: app.db)
+
+                let payload = "checkpointed guest memory bytes"
+                let path = SandboxSnapshot.artifactTransferPath(
+                    sandboxId: sandbox.id!, snapshotId: snapshot.id!, kind: .memory)
+                let uri = URI(string: "http://127.0.0.1:\(port)\(path)")
+                let xfcc = ("X-Forwarded-Client-Cert", "URI=spiffe://strato.local/agent/transfer-agent")
+
+                let uploadResponse = try await app.client.put(uri) { req in
+                    req.headers.add(name: xfcc.0, value: xfcc.1)
+                    req.body = ByteBuffer(string: payload)
+                }
+                #expect(uploadResponse.status == .ok)
+
+                let uploaded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let recorded = try #require(uploaded.exportedArtifact(for: .memory))
+                #expect(recorded.sizeBytes == Int64(payload.utf8.count))
+                #expect(recorded.sha256.count == 64)
+                // The export operation stamps completion, not the upload
+                // route — one landed artifact is not a complete export. (An
+                // artifact landing does *not* clear a prior stamp; see
+                // `reExportDoesNotClearPriorExport`.)
+                #expect(uploaded.exportedAt == nil)
+
+                let downloadResponse = try await app.client.get(uri) { req in
+                    req.headers.add(name: xfcc.0, value: xfcc.1)
+                }
+                #expect(downloadResponse.status == .ok)
+                let body = downloadResponse.body.map { String(buffer: $0) } ?? ""
+                #expect(body == payload)
+
+                // No forwarded certificate at all: refused, with no session
+                // fallback — these routes exist only for agents.
+                let anonymous = try await app.client.get(uri)
+                #expect(anonymous.status == .unauthorized)
+
+                // A non-agent SPIFFE identity is refused too.
+                let nonAgent = try await app.client.get(uri) { req in
+                    req.headers.add(
+                        name: xfcc.0, value: "URI=spiffe://strato.local/control-plane")
+                }
+                #expect(nonAgent.status == .forbidden)
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
+            }
+            await app.server.shutdown()
+            try outcome.get()
+        }
+    }
+
+    @Test("Cross-agent restore refuses an incompatible target and accepts a compatible one")
+    func crossAgentRestoreCompatibilityGate() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            // Target agent: current wire, Firecracker 1.7.0, known CPU model.
+            let targetId = try await registerMobilityAgent(app: app, named: "restore-target")
+            sandbox.hypervisorId = targetId
+            sandbox.setStatus(.stopped)
+            sandbox.observedGeneration = 1
+            sandbox.generation = 1
+            try await sandbox.save(on: app.db)
+
+            // Firecracker version mismatch blocks the restore.
+            let mismatched = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox,
+                agentId: "some-other-agent", firecrackerVersion: "1.6.0")
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(mismatched.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("Firecracker"))
+            }
+
+            // An un-templated snapshot from a different CPU model is blocked.
+            let cpuMismatch = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox,
+                agentId: "some-other-agent", sourceCPUModel: "OtherCPU 9000")
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(cpuMismatch.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("CPU template"))
+            }
+
+            // Same Firecracker + identical CPU model: accepted (202); the RPC
+            // then fails fast without a live socket, which is fine — the gate
+            // under test is the accept.
+            let compatible = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox, agentId: "some-other-agent")
+            var operation: OperationResponse?
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(compatible.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let accepted = try #require(operation)
+            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
+            #expect(completed?.status == .failed)
+        }
+    }
+
+    @Test("Cross-agent restore of an unexported snapshot demands an export")
+    func crossAgentRestoreRequiresExport() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let targetId = try await registerMobilityAgent(app: app, named: "unexported-target")
+            sandbox.hypervisorId = targetId
+            sandbox.setStatus(.stopped)
+            sandbox.observedGeneration = 1
+            try await sandbox.save(on: app.db)
+
+            let snapshot = SandboxSnapshot(
+                name: "local-only",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: "some-other-agent",
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("export"))
+            }
+        }
+    }
+
+    @Test("Deleting an exported snapshot removes its objects from the store")
+    func deleteRemovesExportedObjects() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let storeRoot = NSTemporaryDirectory() + "snapshot-delete-\(UUID().uuidString)"
+            app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
+            defer { try? FileManager.default.removeItem(atPath: storeRoot) }
+
+            let snapshot = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox, agentId: nil)
+            let key = SandboxSnapshotObjectKey.artifact(
+                projectId: sandbox.$project.id, snapshotId: snapshot.id!, kind: .memory)
+            let writer = try await app.imageObjectStore.openWriter(key: key)
+            try await writer.write(ByteBuffer(string: "bytes"))
+            try await writer.finish()
+            // Hoisted out of `#expect`: `#expect(try await …)` crashes the
+            // Xcode 27 beta compiler.
+            let stored = try await app.imageObjectStore.exists(key: key)
+            #expect(stored)
+
+            var operation: OperationResponse?
+            try await app.test(
+                .DELETE,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let accepted = try #require(operation)
+            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
+            #expect(completed?.status == .succeeded)
+            let stillThere = (try? await app.imageObjectStore.exists(key: key)) ?? false
+            #expect(!stillThere)
+        }
+    }
+
     @Test("Deleting the sandbox cascades its snapshot rows")
     func sandboxDeleteCascadesSnapshots() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, _ in
@@ -592,6 +965,159 @@ final class SandboxSnapshotTests {
 
             let remaining = try await SandboxSnapshot.query(on: app.db).count()
             #expect(remaining == 0)
+        }
+    }
+
+    // MARK: - Export admission (issue #428 review)
+
+    @Test("Export requires the export permission, not merely read")
+    func exportRequiresExportPermission() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            // Everything the handler checks passes except `export` itself, so
+            // a failure here means the gate fell back to a weaker verb.
+            app.spicedbMockDeniedPermissions = ["export"]
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "viewer-cannot-export",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            // No operation row: admission refused before anything was started.
+            let operations = try await ResourceOperation.query(on: app.db).count()
+            #expect(operations == 0)
+        }
+    }
+
+    @Test("Export is refused when the exported copy would exceed the storage quota")
+    func exportRespectsStorageQuota() async throws {
+        try await withSnapshotTestApp { app, user, project, sandbox, token in
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "too-big-to-export",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.size = 8 << 30
+            try await snapshot.save(on: app.db)
+
+            // A pool with room for the on-agent copy already counted, but not
+            // for a second one in object storage.
+            let quota = ResourceQuota(
+                name: "snapshot-storage",
+                projectID: try project.requireID(),
+                maxVCPUs: 64,
+                maxMemory: 64 << 30,
+                maxStorage: 12 << 30,
+                maxVMs: 32,
+                maxSandboxes: 32)
+            try await quota.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.lowercased().contains("quota"))
+            }
+        }
+    }
+
+    @Test("Exported artifacts count as a second copy against snapshot storage")
+    func exportedCopyCountsTowardStorage() async throws {
+        try await withSnapshotTestApp { app, user, project, sandbox, _ in
+            let snapshot = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox, agentId: "agent-a")
+            let quota = ResourceQuota(
+                name: "scope",
+                projectID: try project.requireID(),
+                maxVCPUs: 64,
+                maxMemory: 64 << 30,
+                maxStorage: 64 << 30,
+                maxVMs: 32,
+                maxSandboxes: 32)
+            try await quota.save(on: app.db)
+
+            let exportedBytes = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
+            let inScope = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            #expect(inScope == (snapshot.size ?? 0) + exportedBytes)
+            #expect(exportedBytes > 0)
+        }
+    }
+
+    @Test("Re-uploading an artifact leaves an existing export record intact")
+    func reExportDoesNotClearPriorExport() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, _ in
+            let storeRoot = NSTemporaryDirectory() + "snapshot-reexport-\(UUID().uuidString)"
+            app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
+            defer { try? FileManager.default.removeItem(atPath: storeRoot) }
+
+            // The transfer route authenticates agent mTLS, whose XFCC trust
+            // check needs loopback provenance — bind a real ephemeral port
+            // (see artifactUploadAndDownloadRoundTripOverAgentMTLS).
+            app.spireService = SPIREService(
+                config: SPIREServiceConfig(enabled: true, trustDomain: "strato.local"),
+                logger: app.logger, httpClient: app.client)
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let outcome: Result<Void, any Error>
+            do {
+                let port = try #require(
+                    app.http.server.shared.localAddress?.port,
+                    "HTTP server did not report a bound port")
+
+                let snapshot = try await seedExportedSnapshot(
+                    app: app, user: user, sandbox: sandbox, agentId: "agent-a")
+                // Compare stamps that both round-tripped through the
+                // database: the in-memory Date carries sub-second precision
+                // the datetime column truncates, so comparing it against a
+                // later DB read fails spuriously.
+                let seeded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let exportedAt = try #require(seeded.exportedAt)
+
+                // One artifact of a re-export lands, then the run dies. The
+                // snapshot must still be exported: the objects are unchanged
+                // and a complete copy is still there.
+                let path = SandboxSnapshot.artifactTransferPath(
+                    sandboxId: sandbox.id!, snapshotId: snapshot.id!, kind: .memory)
+                let response = try await app.client.put(
+                    URI(string: "http://127.0.0.1:\(port)\(path)")
+                ) { req in
+                    req.headers.add(
+                        name: "X-Forwarded-Client-Cert",
+                        value: "URI=spiffe://strato.local/agent/reexport-agent")
+                    req.body = ByteBuffer(string: "fresh-memory-bytes")
+                }
+                #expect(response.status == .ok)
+
+                let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                #expect(current.exportedAt == exportedAt)
+                #expect(current.isExported)
+                // The integrity entry was still refreshed from the new bytes.
+                let memory = try #require(current.exportedArtifact(for: .memory))
+                #expect(memory.sizeBytes == Int64("fresh-memory-bytes".utf8.count))
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
+            }
+            await app.server.shutdown()
+            try outcome.get()
         }
     }
 }

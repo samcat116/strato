@@ -31,9 +31,9 @@ Agents do **not** talk to the object store. They fetch from
 `GET /api/projects/{p}/images/{i}/download`, and the control plane streams the
 object through. Presigned bucket URLs would be one round trip cheaper, but:
 
-- the download route is the single place artifact authentication lives, and it
-  is about to change — issue #493 replaces the HMAC-signed URL with the agent's
-  SPIFFE SVID over the Envoy mTLS listener. You cannot put SVID RBAC on a
+- the download route is the single place artifact authentication lives:
+  agents authenticate with their SPIFFE SVID over the Envoy mTLS listener
+  (issue #493 retired the HMAC-signed URLs). You cannot put SVID RBAC on a
   presigned S3 URL.
 - bucket credentials never leave the control plane, and agents need no network
   route to the object store.

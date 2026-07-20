@@ -18,7 +18,8 @@ struct WarmSandboxSnapshotCacheTests {
         vcpus: Int = 2,
         memoryMiB: Int64 = 512,
         configCapacityBytes: Int = 256 * 1024,
-        jailed: Bool = true
+        jailed: Bool = true,
+        cpuTemplate: String? = nil
     ) -> WarmSnapshotKey {
         WarmSnapshotKey(
             imageDigest: digest,
@@ -28,7 +29,8 @@ struct WarmSandboxSnapshotCacheTests {
             vcpus: vcpus,
             memoryMiB: memoryMiB,
             configCapacityBytes: configCapacityBytes,
-            jailed: jailed)
+            jailed: jailed,
+            cpuTemplate: cpuTemplate)
     }
 
     private func makeTempRoot() throws -> String {
@@ -82,6 +84,17 @@ struct WarmSandboxSnapshotCacheTests {
         #expect(makeKey(jailed: false).directoryName != base.directoryName)
         #expect(makeKey(digest: "sha256:fedcba").directoryName != base.directoryName)
         #expect(makeKey(guestVersion: "other").directoryName != base.directoryName)
+    }
+
+    @Test("a CPU template is part of the key; passthrough keeps its pre-#428 name")
+    func cpuTemplateKeysDistinctEntries() {
+        let passthrough = makeKey()
+        let templated = makeKey(cpuTemplate: "T2")
+        #expect(templated.directoryName != passthrough.directoryName)
+        #expect(makeKey(cpuTemplate: "T2A").directoryName != templated.directoryName)
+        // Nil template must produce the exact historical name so existing
+        // cache entries survive the agent upgrade.
+        #expect(!passthrough.directoryName.contains("tpl"))
     }
 
     @Test("sanitizing two different digests cannot alias them")

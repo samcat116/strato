@@ -2,18 +2,43 @@ import Foundation
 
 // MARK: - Sandbox Specification
 
-/// Agent-local reference to the checkpoint artifacts used to create a sandbox
-/// fork (issue #427). Snapshot mobility is intentionally not implied: the
-/// control plane pins the target to the snapshot's agent, and the source
-/// sandbox id lets that agent resolve its host-owned artifact directory.
+/// Reference to the checkpoint artifacts used to create a sandbox fork
+/// (issue #427). The source sandbox id lets an agent holding the artifacts
+/// resolve its host-owned archive directory; when the fork lands on a
+/// *different* agent (issue #428), `artifacts` carries signed download
+/// descriptors for the exported copy — refreshed at sync assembly like image
+/// URLs — and the target agent stages the archive from object storage instead.
 public struct SandboxSnapshotRef: Codable, Equatable, Sendable {
     public let snapshotId: UUID
     public let sourceSandboxId: UUID
+    /// Download descriptors for an exported snapshot, present only when the
+    /// receiving agent is not the one holding the local artifacts. Additive:
+    /// pre-v13 control planes never send it, and pre-v13 agents never receive
+    /// it (cross-agent placement is gated on the wire version).
+    public let artifacts: [SandboxSnapshotArtifactDescriptor]?
 
-    public init(snapshotId: UUID, sourceSandboxId: UUID) {
+    public init(
+        snapshotId: UUID,
+        sourceSandboxId: UUID,
+        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil
+    ) {
         self.snapshotId = snapshotId
         self.sourceSandboxId = sourceSandboxId
+        self.artifacts = artifacts
     }
+}
+
+/// Firecracker CPU templates a sandbox may be created with (issue #428).
+/// A template normalizes guest-visible CPU features to a fixed baseline, which
+/// is what makes a snapshot restorable on a host with a different (same-arch)
+/// CPU — an un-templated snapshot only restores on identical CPU models. Kept
+/// as a raw string on the wire; this set is the control plane's admission
+/// validation, while the agent's Firecracker rejects templates its host
+/// cannot honour.
+public enum SandboxCPUTemplate {
+    /// Static templates understood by current Firecracker builds:
+    /// C3/T2/T2S/T2CL (Intel) and T2A (AMD) on x86_64, V1N1 on aarch64.
+    public static let known: Set<String> = ["C3", "T2", "T2S", "T2CL", "T2A", "V1N1"]
 }
 
 /// Description of a sandbox workload — a microVM booted from an OCI image —
@@ -55,6 +80,14 @@ public struct SandboxSpec: Codable, Sendable {
     /// A ready checkpoint to restore into this new sandbox instead of booting
     /// its image. Additive/optional for compatibility with pre-fork peers.
     public let restoreFrom: SandboxSnapshotRef?
+    /// Firecracker CPU template the microVM boots with (issue #428), chosen at
+    /// sandbox create time — never at restore time, because the template is
+    /// baked into every checkpoint's guest state and decides where those
+    /// checkpoints can later restore. Nil boots without a template (host CPU
+    /// passthrough); snapshots of such a sandbox only restore on identical
+    /// CPU models. Additive/optional: pre-v13 agents ignore it, so templated
+    /// sandbox placement is gated on the wire version.
+    public let cpuTemplate: String?
 
     public init(
         image: String,
@@ -66,7 +99,8 @@ public struct SandboxSpec: Codable, Sendable {
         env: [String: String] = [:],
         workingDir: String? = nil,
         network: NetworkSpec? = nil,
-        restoreFrom: SandboxSnapshotRef? = nil
+        restoreFrom: SandboxSnapshotRef? = nil,
+        cpuTemplate: String? = nil
     ) {
         self.image = image
         self.imageDigest = imageDigest
@@ -78,14 +112,15 @@ public struct SandboxSpec: Codable, Sendable {
         self.workingDir = workingDir
         self.network = network
         self.restoreFrom = restoreFrom
+        self.cpuTemplate = cpuTemplate
     }
 }
 
 // MARK: - Registry Credential
 
 /// Short-lived credential material for pulling a sandbox's image from a private
-/// registry. Minted fresh at every sync assembly (like signed image URLs), so a
-/// long-lived desired entry never carries an expired credential. Agents use it
+/// registry. Minted fresh at every sync assembly, so a long-lived desired
+/// entry never carries an expired credential. Agents use it
 /// for the pull and must never persist it; durable credential storage lives
 /// only on the control plane (issue #414).
 public struct RegistryCredential: Codable, Sendable {

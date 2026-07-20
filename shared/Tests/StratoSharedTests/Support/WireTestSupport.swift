@@ -54,8 +54,7 @@ enum Fixtures {
         filename: "debian-12.qcow2",
         checksum: "sha256:abcdef",
         size: 2_147_483_648,
-        downloadURL: "https://control-plane.example/images/debian-12.qcow2?sig=x",
-        expiresAt: laterDate
+        downloadURL: "/api/projects/\(uuidB)/images/\(uuidA)/download"
     )
 
     static let resources = AgentResources(

@@ -331,6 +331,77 @@ struct ImageCacheServiceTests {
             return value
         }
     }
+
+    // MARK: - Download URL resolution (issue #493)
+
+    private actor URLRecorder {
+        private(set) var urls: [URL] = []
+        func record(_ url: URL) { urls.append(url) }
+    }
+
+    /// A fetcher that records the URL it was asked for and serves the fixture bytes.
+    private func urlRecordingFetcher(recorder: URLRecorder) -> ImageCacheService.Fetcher {
+        { url in
+            await recorder.record(url)
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory() + "/download-" + UUID().uuidString)
+            try Self.imageBytes.write(to: tempURL)
+            return tempURL
+        }
+    }
+
+    @Test("A relative download path resolves against the control-plane base URL")
+    func relativeDownloadURLResolvesAgainstBase() async throws {
+        let cachePath = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: cachePath) }
+
+        let recorder = URLRecorder()
+        let service = ImageCacheService(
+            logger: Logger(label: "test"),
+            cachePath: cachePath,
+            controlPlaneURL: "https://cp.example:8443",
+            fetch: urlRecordingFetcher(recorder: recorder)
+        )
+
+        // The v13+ wire format: a control-plane-relative path with no scheme,
+        // host, or credential — the agent supplies the base it already dials.
+        let imageId = UUID()
+        let projectId = UUID()
+        let info = ImageInfo(
+            imageId: imageId,
+            projectId: projectId,
+            filename: "disk.qcow2",
+            checksum: Self.imageChecksum,
+            size: Int64(Self.imageBytes.count),
+            downloadURL: "/api/projects/\(projectId)/images/\(imageId)/download"
+        )
+
+        _ = try await service.getImagePath(imageInfo: info)
+
+        let fetched = await recorder.urls
+        #expect(
+            fetched.map(\.absoluteString) == [
+                "https://cp.example:8443/api/projects/\(projectId)/images/\(imageId)/download"
+            ])
+    }
+
+    @Test("An absolute download URL passes through unresolved")
+    func absoluteDownloadURLPassesThrough() async throws {
+        let cachePath = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: cachePath) }
+
+        let recorder = URLRecorder()
+        let service = ImageCacheService(
+            logger: Logger(label: "test"),
+            cachePath: cachePath,
+            controlPlaneURL: "https://cp.example:8443",
+            fetch: urlRecordingFetcher(recorder: recorder)
+        )
+
+        _ = try await service.getImagePath(imageInfo: makeImageInfo())
+
+        let fetched = await recorder.urls
+        #expect(fetched.map(\.absoluteString) == ["https://control-plane.example/images/disk.qcow2"])
+    }
 }
 
 extension FileManager {

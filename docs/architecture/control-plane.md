@@ -89,7 +89,6 @@ The important ones to know when navigating `Services/`:
 - **`VolumeService`**, **`ImageFetchService`/`ImageValidationService`**,
   **`ImageObjectStore`** (where image bytes live — filesystem or S3-compatible,
   selected by `IMAGE_STORAGE_BACKEND`; see `storage.md`),
-  **`URLSigningService`** (HMAC-signed image download URLs),
   **`RegistryClientService`** (OCI tag resolution + pull tokens for sandboxes).
 - **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
   WebSockets to the agent socket for consoles and sandbox exec.
@@ -107,7 +106,8 @@ The canonical mutation path (`Controllers/VMController.swift`):
 1. **Middleware** authenticates (session or API key) and
    `SpiceDBAuthMiddleware` does route-level authz via its route-prefix →
    resource-type map (public paths like `/health`, `/auth/*`, `/agent/ws`,
-   and signed download URLs are allowlisted; system admins bypass checks).
+   and image download URLs — authenticated in-handler by agent SVID or user
+   session — are allowlisted; system admins bypass checks).
 2. The handler validates the request: image must be `.ready` and readable,
    the user needs `project:create_resources` in SpiceDB (org membership
    alone is not enough), environment and network selections are checked.
@@ -155,8 +155,9 @@ the one imperative exception: it awaits a correlated agent response.
   reports, console/exec/log frames (see [wire-protocol](./wire-protocol.md)
   for the catalog).
 - **Sync assembly** (`assembleDesiredState`) reads the authoritative set
-  straight from Postgres — VMs with volumes/NICs/image artifacts (signed
-  URLs re-issued each sync), sandboxes with pull credentials, and the
+  straight from Postgres — VMs with volumes/NICs/image artifacts (download
+  URLs are mTLS-authenticated relative paths, so nothing expires or gets
+  re-signed), sandboxes with pull credentials, and the
   logical networks in the agent's assembly scope — into one
   `DesiredStateMessage`.
 - **Observed-state ingestion** chains per-agent tasks so reports apply in

@@ -59,6 +59,9 @@ let package = Package(
         // Any S3 API implementation works — AWS, MinIO, Garage, R2, Ceph RGW —
         // via IMAGE_S3_ENDPOINT; we don't bundle a service.
         .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
+        // 🌲 Cedar policy engine (IAM phases 3-5): Swift wrapper over the
+        // cedar-policy crate, shipping prebuilt binaries for Linux and Apple.
+        .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.1.0"),
     ],
     targets: [
         // SPIRE Server registration API client (join tokens + registration
@@ -106,6 +109,7 @@ let package = Package(
                 .product(name: "Metrics", package: "swift-metrics"),
                 .product(name: "Valkey", package: "valkey-swift"),
                 .product(name: "SotoS3", package: "soto"),
+                .product(name: "CedarPolicy", package: "swift-cedar"),
             ],
             swiftSettings: swiftSettings,
             plugins: [

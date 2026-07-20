@@ -148,8 +148,8 @@ secrets and never echoed back by the API.
 
 `DesiredSandboxState` carries an optional `RegistryCredential` (registry host,
 username, password/token, expiry, bearer flag) that the control plane mints
-**fresh at every sync assembly** — the same slot where signed image URLs are
-refreshed — so a long-lived desired entry never holds an expired secret. The
+**fresh at every sync assembly**, so a long-lived desired entry never holds an
+expired secret. The
 control plane speaks the distribution auth flow (`DistributionRegistryClient`:
 challenge probe → token endpoint → manifest; Docker Hub, GHCR, and any
 distribution-spec registry): when the registry has a token service it mints a
@@ -601,8 +601,9 @@ environment, and TTL. `sandboxes.restored_from_snapshot_id` records lineage;
 the API and web detail page expose it, and the snapshot list offers the fork
 action.
 
-Snapshot artifacts are still agent-local, so scheduling is deliberately
-pinned to the snapshot's `agent_id` (wire protocol **version 12**). The agent
+Snapshot artifacts start agent-local, so scheduling pins to the snapshot's
+`agent_id` (wire protocol **version 12**) until the snapshot is exported —
+then any compatible agent is a candidate (see snapshot mobility below). The agent
 also captures the checkpointed guest's own control-protocol version from its
 versioned `pong` and persists it on the snapshot. Fork admission and placement
 require guest control protocol v3; an upgraded v12 agent therefore cannot
@@ -660,11 +661,61 @@ fork either commits lineage before deletion checks descendants or observes the
 snapshot/source transition and is refused.
 The target retains the opaque lineage UUID for audit/display.
 
+### Snapshot mobility (issue #428)
+
+Export makes a checkpoint durable and portable:
+`POST /api/sandboxes/:id/snapshots/:snapshotId/export` (202 + operation,
+kind `snapshot_export`, wire protocol **version 14**) asks the snapshot's
+agent to stream all four artifacts to control-plane-relative upload paths.
+Bytes flow through the control plane into the image object store
+(`ImageObjectStore`, filesystem or S3) under
+`sandbox-snapshots/{projectId}/{snapshotId}/...` — agents never talk to the
+store directly, mirroring image downloads. The transfer routes authenticate
+the agent's SPIFFE SVID forwarded by the Envoy mTLS sidecar
+(`AgentMTLSAuthenticator`, the v13 image-download model; both Envoy configs
+add an agents-only RBAC route for them), with deliberately no user-session
+fallback. The upload route hashes and sizes each stream as it lands
+(integrity material is never agent-supplied) and records per-artifact
+entries on the snapshot row; the export operation stamps `exported_at` only
+once every artifact is recorded. Deleting the snapshot (or cascading its
+sandbox) deletes the exported prefix.
+
+An exported snapshot unlocks:
+
+- **Cross-agent restore** — `.../restore` no longer requires the sandbox to
+  sit on the snapshot's agent. The target must satisfy the recorded compat
+  constraints (`SandboxSnapshotCompatibility`): wire v14, same architecture,
+  the **same Firecracker version** (probed from `firecracker --version` at
+  registration and carried on `HypervisorSupport.version`), and a matching
+  guest CPU surface — either the snapshot records a CPU template, or the
+  source and target hosts report identical CPU models. Missing information
+  is always incompatible.
+- **Cross-agent fork** — fork placement widens from the pinned agent to
+  every compatible agent, and survives losing the snapshot's home agent
+  entirely. Sync assembly injects checksummed download descriptors into
+  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the
+  restore RPC carries the same descriptors. The target agent stages the
+  archive into an LRU-swept import cache
+  (`<sandbox storage>/snapshot-imports/`, sharing the warm-cache byte
+  budget), verifying each artifact's size and SHA-256 before the atomic
+  publish; concurrent forks of one snapshot on a host share a single
+  download.
+
+**CPU templates** are the mobility keystone: `POST /api/sandboxes` accepts
+`cpuTemplate` (validated against Firecracker's static templates — C3/T2/
+T2S/T2CL/T2A on x86_64, V1N1 on aarch64), applied at boot and thereby baked
+into every checkpoint. The decision is deliberately create-time-only — a
+template can never be applied at restore time, and an un-templated snapshot
+only restores on identical CPU models. Templated creates are gated on v14
+agents (an older agent would silently boot passthrough); the template is
+part of the warm-snapshot cache key.
+
 ## Later phases
 - **Phase 4 (remaining)**: the warm-vs-cold boot-latency measurement on
-  strato-dev and snapshot mobility —
-  off-node export, cross-agent restore, diff snapshots (#428). Cross-agent
-  restore is why the CPU-template decision is forced at sandbox create time.
+  strato-dev; diff snapshots via `track_dirty_pages` (wrapped in
+  SwiftFirecracker, still unused) plus a periodic auto-checkpoint policy;
+  uffd lazy-load restore for fork latency; and snapshot retention policies
+  beyond delete-time cleanup (#428).
 
 ## Non-goals (v1)
 

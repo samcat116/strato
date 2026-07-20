@@ -39,9 +39,9 @@ final class CedarPolicySetCacheTests {
             #expect(built?.guardrailCount == 0)
             #expect(built?.policyText.contains("@id(\"platform-system-admin\")") == true)
             #expect(built?.schemaText.contains("entity Folder") == true)
-            // The placeholder engine keeps the assembled text as the artifact.
-            let artifact = built?.artifact as? TextOnlyCedarEngine.Artifact
-            #expect(artifact?.policyText == built?.policyText)
+            // The default engine is the real one: the artifact holds parsed,
+            // schema-validated policies (issue #481).
+            #expect(built?.artifact is SwiftCedarEngine.Compiled)
 
             // Idempotent: reconciling at the same version keeps the build
             // rather than redoing it — this runs on every periodic tick.
@@ -145,10 +145,18 @@ final class CedarPolicySetCacheTests {
         try await withApp { app in
             final class ToggleEngine: CedarEngine, @unchecked Sendable {
                 struct Failure: Error {}
+                struct Artifact: CedarCompiledPolicySet {
+                    func authorize(
+                        principal: CedarEntityUID, action: String, resource: CedarEntityUID,
+                        context: CedarValue, entitiesJSON: String
+                    ) throws -> CedarCheckDecision {
+                        CedarCheckDecision(allowed: false, determiningPolicyIDs: [], evaluationErrors: [])
+                    }
+                }
                 var failing = false
-                func compile(schemaText: String, policyText: String) throws -> any CedarCompiledPolicySet {
+                func compile(schemaText: String, policies: [CedarPolicySource]) throws -> any CedarCompiledPolicySet {
                     if failing { throw Failure() }
-                    return TextOnlyCedarEngine.Artifact(schemaText: schemaText, policyText: policyText)
+                    return Artifact()
                 }
             }
 

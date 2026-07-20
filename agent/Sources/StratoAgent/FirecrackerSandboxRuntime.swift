@@ -57,6 +57,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// delete — keeps working, since none of it spawns a new jailer. Without
     /// this, jailed orphans would outlive their deletion unmanaged.
     private let jailerBlockedReason: String?
+    /// Moves exported snapshot artifacts between this host and control-plane
+    /// object storage over SVID mTLS (issue #428). Nil when SPIFFE is not
+    /// configured — snapshot export and cross-agent restore/fork then fail
+    /// with a clear error while everything agent-local keeps working.
+    private let snapshotTransfer: SnapshotArtifactTransfer?
     /// Logged once: hosts without a usable cgroup-v2 memory controller get no
     /// jailer memory ceiling.
     private var warnedNoMemoryCeiling = false
@@ -214,7 +219,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         jailNewSandboxes: Bool,
         jailerBlockedReason: String? = nil,
         warmStartEnabled: Bool = true,
-        warmCacheBudgetBytes: Int64? = nil
+        warmCacheBudgetBytes: Int64? = nil,
+        snapshotTransfer: SnapshotArtifactTransfer? = nil
     ) {
         self.logger = logger
         self.client = client
@@ -226,6 +232,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.jailerConfig = jailer
         self.jailNewSandboxes = jailNewSandboxes
         self.jailerBlockedReason = jailerBlockedReason
+        self.snapshotTransfer = snapshotTransfer
         // Unjailed warm start cannot work (see `warmStartActive`); requesting
         // it on an unjailed runtime silently degrades to cold boots.
         self.warmStartActive = warmStartEnabled && jailNewSandboxes
@@ -539,10 +546,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw error
         }
         do {
+            // The CPU template (issue #428) is applied at boot and thereby
+            // baked into every checkpoint taken from this guest — it is what
+            // makes those snapshots portable across same-arch hosts.
             try await manager.configureMachine(
                 MachineConfig(
                     vcpuCount: spec.cpus,
-                    memSizeMib: Int(spec.memoryBytes / (1024 * 1024))))
+                    memSizeMib: Int(spec.memoryBytes / (1024 * 1024)),
+                    cpuTemplate: spec.cpuTemplate))
 
             let bootSource = SwiftFirecracker.BootSource(
                 kernelImagePath: apiPaths.kernel,
@@ -680,17 +691,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
         let snapshotId = restoreFrom.snapshotId.uuidString
-        let archiveDir = snapshotDirectory(sourceSandboxId, snapshotId: snapshotId)
+        // Local artifacts when the source sandbox lives here; otherwise the
+        // exported copy is staged into the import cache from the signed
+        // download descriptors the sync carried (issue #428).
+        let archiveDir = try await stageSnapshotArchive(
+            sourceSandboxId: sourceSandboxId, snapshotId: snapshotId,
+            artifacts: restoreFrom.artifacts)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
         let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
-        for required in [archiveMemory, archiveVmstate, archiveRootfs, archiveConfig] {
-            guard FileManager.default.fileExists(atPath: required) else {
-                throw SandboxRuntimeError.snapshotNotFound(
-                    sandboxId: sourceSandboxId, snapshotId: snapshotId)
-            }
-        }
 
         let sourceConfig = try SandboxConfigDrive.decode(
             fromBlockImage: Data(contentsOf: URL(fileURLWithPath: archiveConfig)))
@@ -1405,7 +1415,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             storagePath: archiveDir,
             firecrackerVersion: info.vmlinuxVersion,
             guestControlProtocolVersion: guestControlProtocolVersion,
-            forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion)
+            forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion,
+            cpuTemplate: managed.spec.cpuTemplate)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
@@ -1416,7 +1427,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         return result
     }
 
-    func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?
+    ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -1426,19 +1440,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         checkpointing.insert(sandboxId)
         defer { checkpointing.remove(sandboxId) }
 
-        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        // Resolve the archive: local artifacts when this host took the
+        // snapshot, otherwise a verified download of the exported copy
+        // (issue #428). Either way every required file exists before the
+        // live VM is destroyed, not after.
+        let archiveDir = try await stageSnapshotArchive(
+            sourceSandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
         let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
-        // The config image is required too: the jailed re-staging below reads
-        // it unconditionally, and a gap must surface before the live VM is
-        // destroyed, not after.
-        for required in [archiveMemory, archiveVmstate, archiveRootfs, archiveConfig] {
-            guard FileManager.default.fileExists(atPath: required) else {
-                throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
-            }
-        }
 
         logger.info(
             "Restoring sandbox from snapshot",
@@ -1552,9 +1563,206 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     "removing snapshot artifacts at \(directory) failed: \(error.localizedDescription)")
             }
         }
+        // Any imported copy of the same snapshot goes too (a fork of it may
+        // have run here); best-effort — the import cache is a re-downloadable
+        // cache with its own LRU, unlike the accounted archive above.
+        try? FileManager.default.removeItem(atPath: snapshotImportDirectory(snapshotId))
         logger.info(
             "Sandbox snapshot deleted",
             metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+    }
+
+    // MARK: - Snapshot mobility (issue #428)
+
+    /// Root of the import cache: exported archives staged onto this host for
+    /// cross-agent restore and fork, one directory per snapshot id. A cache,
+    /// not an archive — entries re-download from object storage, so it is
+    /// LRU-swept against the same byte budget as the warm-snapshot cache.
+    private var snapshotImportRoot: String { sandboxStoragePath + "/snapshot-imports" }
+
+    private func snapshotImportDirectory(_ snapshotId: String) -> String {
+        snapshotImportRoot + "/" + snapshotId
+    }
+
+    /// In-flight import downloads, keyed by snapshot id, so a fork fan-out
+    /// hitting this host does not download the same multi-gigabyte memory
+    /// file once per fork (actor reentrancy would otherwise allow exactly
+    /// that).
+    private var snapshotImportsInFlight: [String: Task<Void, any Error>] = [:]
+
+    /// Bytes the in-flight imports above are still expecting to write. The
+    /// sweep reserves against this *plus* the incoming archive, because each
+    /// import used to size its reservation from its own descriptors alone —
+    /// leaving the budget blind to every other download racing it (issue #428
+    /// review).
+    private var snapshotImportBytesInFlight: Int64 = 0
+
+    /// Ceiling on simultaneous imports of *distinct* snapshots. Deduplication
+    /// only collapses forks of the same snapshot; without this, a scheduler
+    /// burst placing forks of many snapshots on one host opens that many
+    /// parallel multi-gigabyte downloads. Excess imports are refused rather
+    /// than queued — restore is reconciler-driven, so the next pass retries.
+    private static let maxConcurrentSnapshotImports = 2
+
+    func exportSandboxSnapshot(
+        sandboxId: String, snapshotId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget]
+    ) async throws {
+        // Export reads only the host-owned archive: the control plane only
+        // asks the agent that took the snapshot. The files are immutable
+        // after capture, so a running guest needs no pause here.
+        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        for kind in SandboxSnapshotArtifactKind.allCases {
+            guard FileManager.default.fileExists(atPath: archiveDir + "/" + kind.filename) else {
+                throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
+            }
+        }
+        guard let transfer = snapshotTransfer else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "snapshot export requires the SPIFFE mTLS transfer client, which this agent does not have"
+            )
+        }
+        // Sequential by contract: the control plane records each artifact's
+        // integrity entry with a read-modify-write on the snapshot row, so
+        // concurrent PUTs could drop entries and fail the export closed.
+        for kind in SandboxSnapshotArtifactKind.allCases {
+            guard let target = uploads.first(where: { $0.kind == kind }) else {
+                throw SandboxRuntimeError.snapshotIOFailed(
+                    "export request is missing an upload target for artifact '\(kind.rawValue)'")
+            }
+            do {
+                try await transfer.upload(
+                    filePath: archiveDir + "/" + kind.filename, to: target.uploadURL, kind: kind)
+            } catch {
+                throw SandboxRuntimeError.snapshotIOFailed(error.localizedDescription)
+            }
+        }
+        logger.info(
+            "Sandbox snapshot exported to object storage",
+            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+    }
+
+    /// Resolve a snapshot's archive directory for restore/fork: the
+    /// sandbox-owned archive when this host holds it, otherwise the import
+    /// cache — staging a verified download of the exported copy when
+    /// `artifacts` descriptors were provided. Every returned directory holds
+    /// all four artifacts.
+    private func stageSnapshotArchive(
+        sourceSandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?
+    ) async throws -> String {
+        func holdsCompleteArchive(_ directory: String) -> Bool {
+            SandboxSnapshotArtifactKind.allCases.allSatisfy {
+                FileManager.default.fileExists(atPath: directory + "/" + $0.filename)
+            }
+        }
+
+        let localDir = snapshotDirectory(sourceSandboxId, snapshotId: snapshotId)
+        if holdsCompleteArchive(localDir) {
+            return localDir
+        }
+        let importDir = snapshotImportDirectory(snapshotId)
+        if holdsCompleteArchive(importDir) {
+            // Mark the entry used so LRU ordering sees cache hits.
+            DiskCacheLRU.touch(entryDirectory: importDir)
+            return importDir
+        }
+        guard let artifacts else {
+            throw SandboxRuntimeError.snapshotNotFound(
+                sandboxId: sourceSandboxId, snapshotId: snapshotId)
+        }
+        guard let transfer = snapshotTransfer else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "restoring an exported snapshot requires the SPIFFE mTLS transfer client, which this agent does not have"
+            )
+        }
+
+        if let inFlight = snapshotImportsInFlight[snapshotId] {
+            try await inFlight.value
+            guard holdsCompleteArchive(importDir) else {
+                throw SandboxRuntimeError.snapshotIOFailed(
+                    "imported snapshot archive vanished after download")
+            }
+            return importDir
+        }
+
+        guard snapshotImportsInFlight.count < Self.maxConcurrentSnapshotImports else {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "\(snapshotImportsInFlight.count) snapshot imports are already in flight on this host; retry once one completes"
+            )
+        }
+
+        // Make room before pulling multi-gigabyte files in; the fresh entry
+        // itself is protected by the sweep's grace window afterwards. The
+        // reservation covers every concurrent import, not just this one.
+        let incoming = artifacts.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        sweepSnapshotImports(incomingBytes: incoming + snapshotImportBytesInFlight)
+        snapshotImportBytesInFlight += incoming
+
+        let downloadLogger = logger
+        let task = Task {
+            for kind in SandboxSnapshotArtifactKind.allCases {
+                guard let descriptor = artifacts.first(where: { $0.kind == kind }) else {
+                    throw SandboxRuntimeError.snapshotIOFailed(
+                        "restore descriptors are missing artifact '\(kind.rawValue)'")
+                }
+                downloadLogger.info(
+                    "Downloading exported snapshot artifact",
+                    metadata: [
+                        "snapshotId": .string(snapshotId),
+                        "kind": .string(kind.rawValue),
+                        "sizeBytes": .stringConvertible(descriptor.sizeBytes),
+                    ])
+                try await transfer.download(descriptor, to: importDir + "/" + kind.filename)
+            }
+        }
+        snapshotImportsInFlight[snapshotId] = task
+        defer {
+            snapshotImportsInFlight[snapshotId] = nil
+            snapshotImportBytesInFlight -= incoming
+        }
+        do {
+            try await task.value
+        } catch let error as SandboxRuntimeError {
+            discardPartialImport(importDir)
+            throw error
+        } catch {
+            discardPartialImport(importDir)
+            throw SandboxRuntimeError.snapshotIOFailed(error.localizedDescription)
+        }
+        return importDir
+    }
+
+    /// Drop a partially downloaded import. Without this the artifacts that
+    /// did land stay forever: nothing else removes them, and they are only
+    /// reclaimed if some *later* import happens to pick them as an LRU victim
+    /// — so a host that takes one failed cross-agent restore and no more
+    /// imports strands those bytes permanently (issue #428 review). Safe
+    /// because this only runs once the download task has finished failing,
+    /// and a concurrent fork of the same snapshot awaits that same task.
+    private func discardPartialImport(_ importDir: String) {
+        try? FileManager.default.removeItem(atPath: importDir)
+    }
+
+    /// LRU sweep of the import cache, sharing the warm cache's byte budget:
+    /// both hold re-creatable snapshot bytes, and neither is accounted
+    /// against control-plane storage quota.
+    ///
+    /// "Sharing" has to mean net of what the warm cache already occupies. The
+    /// two live under different roots, and sweeping each against the full
+    /// `warmCacheBudgetBytes` independently made the real steady-state ceiling
+    /// twice the configured number (issue #428 review). Warm templates take
+    /// priority within the shared budget — rebuilding one costs a full cold
+    /// boot, while an evicted import only costs a re-download.
+    private func sweepSnapshotImports(incomingBytes: Int64) {
+        let root = snapshotImportRoot
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else { return }
+        let warmBytes = DiskCacheLRU.directorySize(atPath: warmCache.rootPath)
+        DiskCacheLRU.sweep(
+            entryDirectories: names.map { root + "/" + $0 },
+            budgetBytes: max(0, warmCacheBudgetBytes - warmBytes),
+            incomingBytes: incomingBytes,
+            logger: logger)
     }
 
     /// Write a paused microVM's memory + vmstate to the given host paths.
@@ -1610,7 +1818,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             vcpus: spec.cpus,
             memoryMiB: spec.memoryBytes / (1024 * 1024),
             configCapacityBytes: SandboxConfigDrive.standardBlockImageBytes,
-            jailed: jailNewSandboxes)
+            jailed: jailNewSandboxes,
+            cpuTemplate: spec.cpuTemplate)
     }
 
     /// Kick off a background warm-template build for `key`. Skipped — not
@@ -2720,7 +2929,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
     }
 
-    func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?
+    ) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func exportSandboxSnapshot(
+        sandboxId: String, snapshotId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget]
+    ) async throws {
         throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
     }
 

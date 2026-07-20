@@ -154,7 +154,34 @@ public enum WireProtocol {
     /// attaches are refused when the realizing agent registered pre-v12, and
     /// sync assembly omits the field for such agents (see
     /// `supportsFloatingIPs(_:)`).
-    public static let currentVersion = 12
+    ///
+    /// Version 13: image/artifact downloads authenticate with the agent's
+    /// SPIFFE SVID over mTLS instead of HMAC-signed URLs (issue #493).
+    /// `ImageInfo.downloadURL` and `ArtifactInfo.downloadURL` are now
+    /// control-plane-relative paths (`/api/projects/.../download`) that the
+    /// agent resolves against the base URL it already dials — the Envoy mTLS
+    /// listener — and fetches with its SVID-backed TLS client. The `expiresAt`
+    /// fields are gone: an mTLS-authenticated URL never expires, which also
+    /// ends the re-signing churn at sync assembly. Breaking for pre-v13
+    /// agents in effect, not in shape: they decode the sync fine but fetch the
+    /// relative URL with a plain HTTP client and no credential, which the
+    /// control plane refuses — the fix is upgrading the agent, so there is no
+    /// send-side gate to soften it.
+    ///
+    /// Version 14: sandbox snapshot mobility (issue #428). Adds the
+    /// `sandboxSnapshotExport` request/response pair (a new `MessageType`
+    /// case, so like v6/v9 the send-side gate is load-bearing: a pre-v14
+    /// agent drops the undecodable envelope and the request would burn its
+    /// timeout against silence), optional `artifacts` transfer descriptors on
+    /// `SandboxRestoreMessage` and `SandboxSnapshotRef` — control-plane-
+    /// relative paths fetched over SVID mTLS, the v13 image-download model
+    /// (a pre-v14 agent ignores them and would fail the restore with
+    /// "snapshot not found", so cross-agent restore/fork placement is refused
+    /// for such agents) — and `SandboxSpec.cpuTemplate` (silently ignored by
+    /// a pre-v14 agent: the sandbox would boot un-templated while the API
+    /// reports a template, so templated creates are gated too; see
+    /// `supportsSandboxSnapshotMobility(_:)`).
+    public static let currentVersion = 14
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -265,6 +292,22 @@ public enum WireProtocol {
     /// must refuse the request up front rather than time out against silence.
     public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
         version >= sandboxSnapshotMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks sandbox snapshot mobility —
+    /// export to object storage, artifact transfer descriptors on restore and
+    /// fork, and CPU templates on sandbox specs (see `currentVersion` version
+    /// 14 notes).
+    public static let sandboxSnapshotMobilityMinimumVersion = 14
+
+    /// Whether an agent registered with `version` can be sent a
+    /// `SandboxSnapshotExportMessage`, an `artifacts`-carrying restore/fork,
+    /// or a templated `SandboxSpec`. A pre-v14 agent either cannot decode the
+    /// envelope (export) or silently ignores the field (artifacts,
+    /// cpuTemplate) and mis-converges, so the control plane must refuse all
+    /// three up front.
+    public static func supportsSandboxSnapshotMobility(_ version: Int) -> Bool {
+        version >= sandboxSnapshotMobilityMinimumVersion
     }
 
     /// The lowest protocol version whose network reconciler realizes

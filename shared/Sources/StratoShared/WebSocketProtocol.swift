@@ -74,6 +74,10 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxSnapshotCreate = "sandbox_snapshot_create"
     case sandboxSnapshotDelete = "sandbox_snapshot_delete"
     case sandboxRestore = "sandbox_restore"
+
+    // Snapshot mobility (protocol version >= 14, issue #428): export a
+    // checkpoint's artifacts off-node to control-plane object storage.
+    case sandboxSnapshotExport = "sandbox_snapshot_export"
 }
 
 // MARK: - Base Message Protocol
@@ -377,8 +381,11 @@ public struct AgentResources: Codable, Sendable {
 
 /// Download information for a single typed artifact within an image's set.
 ///
-/// The `downloadURL` is individually signed per artifact — an agent authorized
-/// for the kernel is not implicitly authorized for the rootfs.
+/// The `downloadURL` is a control-plane-relative path
+/// (`/api/projects/{p}/images/{i}/download?artifact={kind}`). The agent
+/// resolves it against the control-plane base URL it already dials and
+/// authenticates the fetch with its SPIFFE SVID over mTLS — there is no
+/// credential in the URL itself (issue #493).
 public struct ArtifactInfo: Codable, Sendable {
     public let kind: ArtifactKind
     /// Disk format raw string ("qcow2"/"raw") for `diskImage`/`rootfs`; nil for
@@ -389,8 +396,6 @@ public struct ArtifactInfo: Codable, Sendable {
     public let checksum: String
     public let size: Int64
     public let downloadURL: String
-    /// When the signed download URL expires (optional, for agent awareness).
-    public let expiresAt: Date?
 
     public init(
         kind: ArtifactKind,
@@ -398,8 +403,7 @@ public struct ArtifactInfo: Codable, Sendable {
         filename: String,
         checksum: String,
         size: Int64,
-        downloadURL: String,
-        expiresAt: Date? = nil
+        downloadURL: String
     ) {
         self.kind = kind
         self.format = format
@@ -407,17 +411,18 @@ public struct ArtifactInfo: Codable, Sendable {
         self.checksum = checksum
         self.size = size
         self.downloadURL = downloadURL
-        self.expiresAt = expiresAt
     }
 }
 
 /// Contains information for the agent to download and cache an image.
 ///
-/// The top-level `filename`/`checksum`/`size`/`downloadURL`/`expiresAt` describe
-/// the primary disk image and are retained for the QEMU disk path and for
+/// The top-level `filename`/`checksum`/`size`/`downloadURL` describe the
+/// primary disk image and are retained for the QEMU disk path and for
 /// backward compatibility. Multi-backend drivers read `artifacts` to fetch the
 /// specific typed files they need. `architecture` and `artifacts` decode as
-/// absent (nil / empty) from legacy single-file payloads.
+/// absent (nil / empty) from legacy single-file payloads. Like
+/// `ArtifactInfo.downloadURL`, the download URL is a control-plane-relative
+/// path fetched over SVID mTLS.
 public struct ImageInfo: Codable, Sendable {
     public let imageId: UUID
     public let projectId: UUID
@@ -425,8 +430,6 @@ public struct ImageInfo: Codable, Sendable {
     public let checksum: String
     public let size: Int64
     public let downloadURL: String
-    /// When the signed download URL expires (optional, for agent awareness)
-    public let expiresAt: Date?
     /// Guest CPU architecture of the image; nil only for legacy payloads.
     public let architecture: CPUArchitecture?
     /// Typed artifact set. Empty for legacy single-file payloads, in which case
@@ -440,7 +443,6 @@ public struct ImageInfo: Codable, Sendable {
         checksum: String,
         size: Int64,
         downloadURL: String,
-        expiresAt: Date? = nil,
         architecture: CPUArchitecture? = nil,
         artifacts: [ArtifactInfo] = []
     ) {
@@ -450,7 +452,6 @@ public struct ImageInfo: Codable, Sendable {
         self.checksum = checksum
         self.size = size
         self.downloadURL = downloadURL
-        self.expiresAt = expiresAt
         self.architecture = architecture
         self.artifacts = artifacts
     }
@@ -463,7 +464,6 @@ public struct ImageInfo: Codable, Sendable {
         checksum = try container.decode(String.self, forKey: .checksum)
         size = try container.decode(Int64.self, forKey: .size)
         downloadURL = try container.decode(String.self, forKey: .downloadURL)
-        expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
         architecture = try container.decodeIfPresent(CPUArchitecture.self, forKey: .architecture)
         artifacts = try container.decodeIfPresent([ArtifactInfo].self, forKey: .artifacts) ?? []
     }

@@ -366,13 +366,18 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   whose rebuild failed would wait for the *next* policy write. A failed
   rebuild keeps the previous set — stale converges within one tick, empty
   would deny everything or drop ceilings.
-- **The engine itself sits behind `CedarEngine`.** swift-cedar cannot be a
-  package dependency yet (unpublished binary artifact, Apple-only packaging,
-  while the control plane deploys on Linux), so the compiled artifact is
-  currently the assembled text. The generated schema, policies, entities JSON,
-  and decision semantics were verified against the real `cedar-policy` crate
-  (strict validation plus a full (role, action) enumeration); #481 swaps the
-  engine in behind this seam.
+- **The engine itself sits behind `CedarEngine`.** Since #481 the engine is
+  real: [samcat116/swift-cedar](https://github.com/samcat116/swift-cedar)
+  wraps the `cedar-policy` crate via UniFFI and ships prebuilt binaries for
+  Linux and Apple, so `SwiftCedarEngine` parses and strictly validates the
+  schema and policy set at compile time (a set that fails validation keeps the
+  previous one, per the cache's stale-beats-broken rule) and evaluates checks
+  through the formally verified evaluator. Policies are parsed individually
+  with their assembler-assigned ids (`role-editor`, `guardrail-<id>`, …) —
+  Cedar's set parser would assign positional ids and decisions could never
+  name what decided. The (role × action) enumeration that was verified against
+  the crate out-of-band in phase 3 now runs in-repo through the actual engine
+  (`SwiftCedarEngineTests`).
 
 ### Required APIs (day one of the new system, not v2)
 
@@ -382,7 +387,8 @@ The schema, the static policies, the loader, and the compiled-set cache are in
    historical decisions before applying.
 4. **Decision logs** — every authz decision with the reason, the policy
    version, and the tier that produced it. Distinct from the mutation audit
-   log; this is what makes guardrail denials debuggable.
+   log; this is what makes guardrail denials debuggable. **Shipped** (#481) —
+   see "Shadow evaluation and decision logs" below.
 
 `who-can` answers from `role_bindings` plus the resource tree — an ancestor
 walk (`IAMResourceTree`) and a group expansion — never from the policy engine.
@@ -408,6 +414,67 @@ caller-scoped form goes to SpiceDB (what actually gates requests, so
 goes to the bindings table so it agrees with `who-can` (so `permission` is an
 IAM action name). Phase 5 collapses both onto the evaluator and the two
 vocabularies become one.
+
+### Shadow evaluation and decision logs (shipped with #481)
+
+Until cutover, SpiceDB gates requests and Cedar shadows it: every
+`checkPermission` also runs through the compiled Cedar set in a background
+task, and every decision lands in `iam_decision_logs` with both verdicts, the
+deciding policy ids, the policy-set version, and the tier. The pieces that
+matter:
+
+- **Coverage is total by construction.** The shadow lives in a decorator
+  returned by `Request.spicedb` (`ShadowingSpiceDBService`), which is the one
+  accessor every middleware and handler check site goes through — no call
+  sites changed, and new check sites are covered automatically. Off by
+  default only under `.testing`; `IAM_SHADOW_EVAL_ENABLED=false` is the
+  production kill switch.
+- **The vocabulary bridge is explicit and audited.** `IAMShadowTranslator`
+  maps each SpiceDB check (`read` on `virtual_machine`, `manage_project` on
+  `project`, …) to the IAM action naming the act being gated (`vm:read`,
+  `project:update`). A check with no faithful mapping is recorded as
+  `untranslated` rather than skipped, so coverage gaps are countable; a
+  mapping is only emitted if the action exists in the registry and is
+  schema-applicable to the node.
+- **Decision rows record why, not just what**: the determining policy ids
+  (which is why the engine compiles policies under their assembler ids), the
+  derived tier (`platform` / `guardrail` / `grant` / `default-deny`), the
+  policy-set version, the containing org, and the count of conditioned
+  bindings the slice deliberately skipped. Cedar-side failures are verdicts of
+  their own (`skipped`, `error`) — a replica that never compiled its set shows
+  up as a wall of `skipped` rows, not silence.
+- **Burn-down runs off `GET /api/iam/decision-logs`** (`?mismatchesOnly=true`,
+  system-admin only) and `/summary`, which buckets decisions by permission,
+  action, both verdicts, and tier over a bounded window (`?sinceHours`, default
+  24 — the log takes a row per check, so an unbounded `GROUP BY` would scan the
+  whole retention window). Mismatches also log a warning carrying the full
+  comparison. Three mismatch classes are *expected* and confirm the target
+  semantics rather than refuting them:
+  1. org members losing implicit project visibility;
+  2. nested-folder admin inheritance being fixed;
+  3. **conditioned bindings**, which the entity slice deliberately does not
+     flatten — the ambient half of the context (`mfa`, `sourceIP`) arrives at
+     cutover, so until then a conditioned grant reads as `spicedb=allow /
+     cedar=deny`. These rows carry a non-zero
+     `skipped_conditioned_bindings`, which is how they are separated from
+     genuine mismatches.
+- Rows are append-only, FK-free (decisions outlive what they describe), and
+  pruned by a retention sweep (`IAM_DECISION_LOG_RETENTION_DAYS`, default 30,
+  cluster-singleton via the coordination sweep lock). The sweep is armed even
+  when shadowing is switched off, so the kill switch stops new rows without
+  stranding the ones already written.
+- **Shadowing is bounded, not free.** Each check costs roughly ten sequential
+  queries (the ancestor walk, group and org memberships, bindings) plus the row
+  insert, against a Fluent pool that defaults to one connection per event loop.
+  `IAMShadowGate` caps concurrent evaluations
+  (`IAM_SHADOW_EVAL_MAX_CONCURRENCY`, default 4) and the queue behind them
+  (`IAM_SHADOW_EVAL_MAX_QUEUE_DEPTH`, default 512); overflow is shed and
+  counted in the logs rather than queued without limit, so a saturated gate is
+  a number rather than a latency regression in the request path.
+
+The admin bypass and public-route allowlist still short-circuit *before*
+SpiceDB, so those decisions do not appear yet; they flow through the evaluator
+(and thus the log) at cutover.
 
 ### Enforcement path
 
@@ -435,11 +502,13 @@ Phases; each lands independently:
 3. **Cedar integration.** Swift binding (separate track), Cedar schema (entity
    types, action groups, binding templates), entity-slice loader, compiled
    policy-set cache with Valkey invalidation. **Shipped** — see "The Cedar
-   encoding" above; the engine itself plugs into the `CedarEngine` seam when
-   the swift-cedar packaging (Linux included) lands.
+   encoding" above.
 4. **Shadow evaluation + decision logs.** Every check runs through both
    engines; mismatches are logged with both verdicts and burned down against
    this document's semantics. The decision-log infrastructure is built here.
+   **Shipped** (#481, including the real engine behind `CedarEngine`) — see
+   "Shadow evaluation and decision logs" above. The burn-down itself is the
+   gate on phase 5, not part of this phase.
 5. **Cutover.** Flip `req.can` and the middleware to Cedar; default-deny
    middleware; admin bypass through the evaluator; creator bindings at create.
 6. **Deletion.** Remove tuple writes, the SpiceDB reconciliation services,
