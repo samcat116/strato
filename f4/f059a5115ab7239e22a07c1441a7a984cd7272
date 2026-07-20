@@ -1,0 +1,257 @@
+agent/Tests/StratoAgentTests/AgentHardeningTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-116
+deploy/compose/.env.example
+  s_c1e74efaba2a64::t_c3ea998c74f932 24-25
+agent/Sources/StratoAgentCore/SnapshotArtifactTransfer.swift
+  s_c1e74efaba2a64::t_c056f35cd46eda 7,9-13,17-22,49-64,67,73,75-77,86,90-91,95,101-102,105-110,115,133-137
+  s_c1e74efaba2a64::t_8fdfe7a08e298b 138-139
+control-plane/web/src/lib/api/index.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 20
+docs/architecture/sandboxes.md
+  s_c1e74efaba2a64::t_23b9819dd4cfc5 687,695-702
+  s_c1e74efaba2a64::t_c3ea998c74f932 151-152
+  s_c1e74efaba2a64::t_d750918cbe3649 668-681
+  s_c1e74efaba2a64::t_a87c5677be6210 709
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 147-148,161-164,205-207
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 20-23
+  s_c1e74efaba2a64::t_1ee582ceeb2527 24-28,32
+control-plane/Sources/App/Services/DecoyKeyService.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-110
+deploy/compose/setup.sh
+  s_c1e74efaba2a64::t_c3ea998c74f932 125-126
+shared/Sources/StratoShared/SandboxModels.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 122-123
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 58-62,79-82,206
+control-plane/web/src/types/api.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 186-188,201-202,209,212,218,1115,1121,1130
+docs/architecture/overview.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 48-49,128-129,155-156,158,190-191,201,208,212
+control-plane/web/src/components/folders/folder-form-dialog.tsx
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-199
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 102
+control-plane/Tests/AppTests/SwiftCedarEngineTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-274
+agent/Sources/StratoAgent/Agent.swift
+  s_c1e74efaba2a64::t_f3f5e1eee1f42d 579-593,610-611
+  s_c1e74efaba2a64::t_c3ea998c74f932 60-72,446-450,454-456,874-914,2014,2127
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 946-965,968
+docs/architecture/agent-updates.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 99-100
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 123-126,161-165,172-174,189-206,209-210,359-371,498-501
+  s_c1e74efaba2a64::t_d1c28ddb38966c 502-504
+control-plane/Sources/App/Services/SandboxSnapshotMobilityService.swift
+  s_c1e74efaba2a64::t_82787de1681c76 90-106,113-114,116
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 167-170,172
+control-plane/web/src/app/(dashboard)/hierarchy/page.tsx
+  s_c1e74efaba2a64::t_c3ea998c74f932 61,71,148
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 16-19,23,26-35,37-51,53,55-67,91,156-158
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 36
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_c1e74efaba2a64::t_e08ce0656741cc 171
+  s_c1e74efaba2a64::t_66848f0402da83 65,77-79,83-84
+  s_c1e74efaba2a64::t_c43c91f7dd7eab 8,11-20
+  s_c1e74efaba2a64::t_a1f75df617ead3 252-259,261-267,280-287
+  s_c1e74efaba2a64::t_3467ed2116725e 241
+agent/Tests/StratoAgentTests/MTLSArtifactDownloaderTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-260
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-203
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-116
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 374,385,416,426,430,664,667,675
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 296-308
+control-plane/Tests/AppTests/CedarPolicySetCacheTests.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 42-44,148-155,157,159
+control-plane/web/src/lib/api/hierarchy.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 1
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 384-388,406,419-420,423-425
+  s_c1e74efaba2a64::t_aa99bfccb90690 78
+SwiftFirecracker/Tests/SwiftFirecrackerTests/JailerOptionsTests.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 42,53-64
+  s_c1e74efaba2a64::t_bd8eb9ad8a4fee 65-66
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_c1e74efaba2a64::t_c3ea998c74f932 28,45,79,81,83-84,86-87,89-90,93,171-172
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_c1e74efaba2a64::t_c3ea998c74f932 17,150,152,158,162,166-167,169,187-188,196
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 57
+control-plane/Tests/AppTests/IAMShadowEvaluatorTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-304
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  s_c1e74efaba2a64::t_19c0fdd4ce7450 146-224
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-145,225-300
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 945-949,951-961
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_c1e74efaba2a64::t_c3ea998c74f932 18,155,158,283-285
+docs/architecture/iam.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 24,26-28,369-380,390-391,418-478,505,509-511
+control-plane/web/src/lib/api/projects.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 75
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 1369
+docs/architecture/wire-protocol.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 45,64-69,128-129
+control-plane/Tests/AppTests/ImageDownloadMTLSTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-226
+docs/deployment/iam.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 4
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 31-43,111-112,133-162,169-173,181-186
+  s_c1e74efaba2a64::t_17559b7776d3bc 187
+control-plane/web/src/lib/hooks/use-folders.ts
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-71
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_c1e74efaba2a64::t_d8ff9b7da7c8f4 1660-1664
+  s_c1e74efaba2a64::t_7f43d5e6310196 1694
+  s_c1e74efaba2a64::t_8c1d698868981b 60-64
+  s_c1e74efaba2a64::t_54a0cbf117aad9 222-223,235
+  s_c1e74efaba2a64::t_474e0fd44363b1 1606-1610,1620
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_c1e74efaba2a64::t_2d535610cccc7a 742-744,749-814,816-817
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-130
+control-plane/Sources/App/Services/AgentService.swift
+  s_c1e74efaba2a64::t_94e3085a9ecdea 1871-1876,1879
+  s_c1e74efaba2a64::t_c3ea998c74f932 1707-1709,1755,1934-1935
+control-plane/Sources/App/Services/SPIFFE/AgentMTLSAuthenticator.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-122
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 228-235,245,247,257,288
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 15-16
+control-plane/Sources/App/Models/AppSetting.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 33-38
+control-plane/Sources/App/Services/S3ImageObjectStore.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 16-17
+control-plane/Package.resolved
+  s_c1e74efaba2a64::t_c3ea998c74f932 2,256-262
+  s_c1e74efaba2a64::t_d0f5c32e451410 263-264
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 12-24,29-34,37-38,44-50,57-63,73-79,88-97,100,116,119-123,142,229,231,238,243
+control-plane/Tests/AppTests/IAMDecisionLogEndpointTests.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-288
+control-plane/web/src/components/folders/index.ts
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-4
+agent/Sources/StratoAgentCore/OCI/LayerDecompressor.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 12-15,31,43-44,59
+control-plane/Sources/App/Services/VolumeService.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 207-209,211
+docs/architecture/control-plane.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 85-86,109-110,158-160
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 398-399
+control-plane/Package.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 62-64,111
+control-plane/Tests/AppTests/VMSpecBuilderImageInfoTests.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 39,48,53-55,57,76,81
+shared/Sources/StratoShared/WireProtocol.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 158-169
+  s_c1e74efaba2a64::t_06d1a3799ec4d0 170-171,173,175-182,184
+  s_c1e74efaba2a64::t_65a1b04f3a4e86 298,300-301,305
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 35-46,55-56,65,126-128
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_c1e74efaba2a64::t_e9daa0be6abe28 105-130
+  s_c1e74efaba2a64::t_c3ea998c74f932 77-104,141-157
+control-plane/web/src/components/folders/folders-section.tsx
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-96
+deploy/compose/spiffe/envoy.yaml
+  s_c1e74efaba2a64::t_c3ea998c74f932 115-142,182-193
+  s_c1e74efaba2a64::t_b22f7e22a22783 143-169
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 208-232
+control-plane/web/src/lib/hooks/index.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 100-106
+control-plane/Sources/App/Controllers/UserController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 607,610
+deploy/compose/docker-compose.yml
+  s_c1e74efaba2a64::t_c3ea998c74f932 355-359
+control-plane/Sources/App/configure.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 326,466-469,570-572,649-655
+  s_c1e74efaba2a64::t_f45ba7592630d9 656
+control-plane/web/src/lib/api/folders.ts
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-47
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 316,328,348,358,362,492,508
+control-plane/Sources/App/Models/Project.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 212,216
+control-plane/web/src/components/folders/folder-tree.tsx
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-268
+agent/Package.resolved
+  s_c1e74efaba2a64::t_c3ea998c74f932 2,4-12,112-120,228-236
+helm/strato-control-plane/templates/spire-agent-configmap.yaml
+  s_c1e74efaba2a64::t_c3ea998c74f932 61-66
+shared/Sources/StratoShared/SandboxSnapshotMessages.swift
+  s_c1e74efaba2a64::t_300c88759d4415 58-63,66-67,77,86-90,93-94
+  s_c1e74efaba2a64::t_c2276408aa959c 36
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 82,89,94,131,136,155,190,199,204,223,259,266,271,280-281,289,317,324,329,343,352,357,364,369,375,435,442,447,486,496,501,512
+docs/architecture/networking.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 365
+helm/strato-control-plane/templates/spire-agent-daemonset.yaml
+  s_c1e74efaba2a64::t_c3ea998c74f932 58-64
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_c1e74efaba2a64::t_fe422974570fa5 451
+agent/Tests/StratoAgentTests/ImageCacheServiceTests.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 334-404
+CLAUDE.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 80,128
+control-plane/Sources/App/Migrations/CreateIAMDecisionLog.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-55
+control-plane/Sources/App/routes.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 16-17
+control-plane/Sources/App/IAM/Cedar/SwiftCedarEngine.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-95
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 50
+control-plane/web/src/lib/api/quotas.ts
+  s_c1e74efaba2a64::t_c3ea998c74f932 40
+deploy/compose/README.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 111-113
+docs/architecture/storage.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 34-36
+control-plane/Sources/App/IAM/ShadowTranslation.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-145
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 13-16,162-175,179-180,240-241,385,432-442,472-476
+control-plane/Sources/App/IAM/IAMShadowEvaluator.swift
+  s_c1e74efaba2a64::t_ba1ee7dc56d1e8 1-489
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 54-55,120-121
+agent/Sources/StratoAgentCore/OCI/SandboxImageService.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 49-59,222-227,230-231
+agent/Package.swift
+  s_c1e74efaba2a64::t_c3ea998c74f932 18-21,52-57,112-116
+docs/deployment/agents.md
+  s_c1e74efaba2a64::t_c3ea998c74f932 30
+control-plane/web/src/components/agents/agent-table.tsx
+  s_c1e74efaba2a64::t_c3ea998c74f932 26,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f4f059a5115ab7239e22a07c1441a7a984cd7272",
+  "prompts": {},
+  "sessions": {
+    "s_c1e74efaba2a64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc4f4359-64cb-472e-836c-dd5f9c0edac9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
