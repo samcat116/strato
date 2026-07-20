@@ -19,7 +19,10 @@ import Logging
 ///   baked into the saved virtio state (restores stage a different document
 ///   at the same capacity);
 /// - `jailed` — jailed snapshots record chroot-relative drive paths,
-///   unjailed ones absolute paths, so the two never mix.
+///   unjailed ones absolute paths, so the two never mix;
+/// - `cpuTemplate` — the guest-visible CPU surface baked into the held
+///   memory (issue #428); a templated sandbox must never restore a
+///   passthrough template snapshot or vice versa.
 public struct WarmSnapshotKey: Sendable, Equatable {
     public let imageDigest: String
     public let guestVersion: String
@@ -29,6 +32,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
     public let memoryMiB: Int64
     public let configCapacityBytes: Int
     public let jailed: Bool
+    public let cpuTemplate: String?
 
     public init(
         imageDigest: String,
@@ -38,7 +42,8 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         vcpus: Int,
         memoryMiB: Int64,
         configCapacityBytes: Int,
-        jailed: Bool
+        jailed: Bool,
+        cpuTemplate: String? = nil
     ) {
         self.imageDigest = imageDigest
         self.guestVersion = guestVersion
@@ -48,6 +53,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         self.memoryMiB = memoryMiB
         self.configCapacityBytes = configCapacityBytes
         self.jailed = jailed
+        self.cpuTemplate = cpuTemplate
     }
 
     /// The cache entry directory name for this key. Every component is
@@ -55,7 +61,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
     /// can never collide into one entry (a collision would boot the wrong
     /// workload).
     public var directoryName: String {
-        let components = [
+        var components = [
             Self.sanitize(imageDigest),
             Self.sanitize(guestVersion),
             Self.sanitize(arch),
@@ -65,6 +71,11 @@ public struct WarmSnapshotKey: Sendable, Equatable {
             "\(configCapacityBytes)cfg",
             jailed ? "jailed" : "flat",
         ]
+        // Appended only when set, so pre-existing passthrough cache entries
+        // keep their names (and stay valid) across the agent upgrade.
+        if let cpuTemplate {
+            components.append(Self.sanitize(cpuTemplate) + "tpl")
+        }
         return components.joined(separator: "_")
     }
 

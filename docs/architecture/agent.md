@@ -51,6 +51,18 @@ default) funnels into `launchAgent`.
   able to connect. The agent persists no credential state at all — its name
   comes from `--agent-id` (defaulting to the hostname) and its identity from
   SPIRE, so there is nothing on disk to rotate, corrupt, or leak.
+- **Server identity is pinned, not just chain-verified**: every workload in
+  the trust domain holds a bundle-signed SVID, so "chains to the bundle"
+  would accept a compromised workload impersonating the control plane. The
+  agent instead pins the control plane's SPIFFE ID
+  (`[spiffe] control_plane_spiffe_id`, defaulting to
+  `spiffe://<trust_domain>/control-plane` — what both supported deployments
+  provision for Envoy) and verifies it against the leaf certificate's URI SAN
+  in a custom TLS verification callback. websocket-kit cannot carry that
+  callback, so `SPIFFEWebSocketConnector` builds the client pipeline itself
+  (`NIOSSLClientHandler` → HTTP upgrade → hand-off to websocket-kit); the
+  shared `SPIFFEVerification` target holds the verifier, which the control
+  plane also uses to pin the SPIRE server's identity. See issue #552.
 - **`WebSocketClient`** (actor, executable target): WebSocketKit with a
   16 MiB max frame (the desired-state sync is one frame; must match the
   control plane), inbound frames decoded and yielded into an `AsyncStream`

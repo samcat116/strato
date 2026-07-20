@@ -323,6 +323,17 @@ the `[spiffe]` section of `config.toml.example` and the SPIRE options in the
 Helm chart. SVIDs are short-lived and rotate automatically, so there is no
 long-lived agent credential anywhere on the host.
 
+The verification is mutual: the agent pins the control plane's SPIFFE ID and
+refuses a server presenting any other identity, even one whose certificate
+validly chains to the trust bundle (every workload in the trust domain has
+one of those). The pinned ID defaults to
+`spiffe://<trust_domain>/control-plane`, which is what both `deploy/compose`
+and the Helm chart provision for the control plane's Envoy. Deployments that
+issue the control plane a different SVID must set
+`control_plane_spiffe_id` in the agent's `[spiffe]` config block (or pass
+`--control-plane-spiffe-id` to the install script) **before upgrading
+agents**, or the agents will refuse to connect.
+
 ### What enrollment provisions
 
 Enrollment requires the control plane to have access to the SPIRE server

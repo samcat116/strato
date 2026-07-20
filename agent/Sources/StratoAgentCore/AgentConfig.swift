@@ -110,6 +110,15 @@ public struct SPIFFEConfig: Codable, Sendable {
     /// Path to trust bundle file (for file-based source)
     public let trustBundlePath: String?
 
+    /// The SPIFFE ID the control plane must present on its TLS certificate.
+    /// Every workload in the trust domain holds a bundle-signed SVID, so the
+    /// agent pins this exact ID and refuses any other peer — chain
+    /// verification alone would let a compromised workload impersonate the
+    /// control plane (issue #552). Nil derives the conventional
+    /// `spiffe://<trust_domain>/control-plane`, which is what both supported
+    /// deployment paths (deploy/compose Envoy and the Helm chart) provision.
+    public let controlPlaneSPIFFEID: String?
+
     enum CodingKeys: String, CodingKey {
         case enabled
         case trustDomain = "trust_domain"
@@ -118,6 +127,7 @@ public struct SPIFFEConfig: Codable, Sendable {
         case certificatePath = "certificate_path"
         case privateKeyPath = "private_key_path"
         case trustBundlePath = "trust_bundle_path"
+        case controlPlaneSPIFFEID = "control_plane_spiffe_id"
     }
 
     public init(
@@ -127,7 +137,8 @@ public struct SPIFFEConfig: Codable, Sendable {
         sourceType: String? = nil,
         certificatePath: String? = nil,
         privateKeyPath: String? = nil,
-        trustBundlePath: String? = nil
+        trustBundlePath: String? = nil,
+        controlPlaneSPIFFEID: String? = nil
     ) {
         self.enabled = enabled
         self.trustDomain = trustDomain
@@ -136,6 +147,28 @@ public struct SPIFFEConfig: Codable, Sendable {
         self.certificatePath = certificatePath
         self.privateKeyPath = privateKeyPath
         self.trustBundlePath = trustBundlePath
+        self.controlPlaneSPIFFEID = controlPlaneSPIFFEID
+    }
+
+    /// The control-plane SPIFFE ID to pin: the configured override, or the
+    /// conventional `spiffe://<trust_domain>/control-plane`.
+    public var resolvedControlPlaneSPIFFEID: String {
+        controlPlaneSPIFFEID ?? "spiffe://\(trustDomain ?? Self.defaultTrustDomain)/control-plane"
+    }
+
+    /// Whether `id` is a full SPIFFE ID — `spiffe://<trust-domain>/<path>`
+    /// with both parts non-empty. Config load applies this to the *resolved*
+    /// ID so a typo in an explicit `control_plane_spiffe_id` and an empty
+    /// `trust_domain` are both caught: either way the only symptom would
+    /// otherwise be every TLS handshake failing with a pin mismatch.
+    public static func isWellFormedSPIFFEID(_ id: String) -> Bool {
+        let scheme = "spiffe://"
+        guard id.hasPrefix(scheme) else { return false }
+        let authorityAndPath = id.dropFirst(scheme.count)
+        guard let slash = authorityAndPath.firstIndex(of: "/") else { return false }
+        let trustDomain = authorityAndPath[..<slash]
+        let path = authorityAndPath[authorityAndPath.index(after: slash)...]
+        return !trustDomain.isEmpty && !path.isEmpty
     }
 
     /// Default SPIFFE configuration (disabled)
@@ -560,15 +593,36 @@ public struct AgentConfig: Codable {
             let privateKeyPath = spiffeTable.string("private_key_path")
             let trustBundlePath = spiffeTable.string("trust_bundle_path")
 
-            spiffeConfig = SPIFFEConfig(
+            let controlPlaneSPIFFEID = spiffeTable.string("control_plane_spiffe_id")
+
+            let parsedSPIFFEConfig = SPIFFEConfig(
                 enabled: enabled,
                 trustDomain: trustDomain,
                 workloadAPISocketPath: workloadAPISocketPath,
                 sourceType: sourceType,
                 certificatePath: certificatePath,
                 privateKeyPath: privateKeyPath,
-                trustBundlePath: trustBundlePath
+                trustBundlePath: trustBundlePath,
+                controlPlaneSPIFFEID: controlPlaneSPIFFEID
             )
+
+            // Validate what actually gets pinned, not just the override: an
+            // empty trust_domain derives the equally malformed
+            // "spiffe:///control-plane", and either way the only symptom
+            // would be every TLS handshake failing with a pin mismatch.
+            let resolvedID = parsedSPIFFEConfig.resolvedControlPlaneSPIFFEID
+            guard SPIFFEConfig.isWellFormedSPIFFEID(resolvedID) else {
+                let source =
+                    controlPlaneSPIFFEID == nil
+                    ? "derived from trust_domain '\(trustDomain ?? "")'"
+                    : "from control_plane_spiffe_id"
+                throw AgentConfigError.invalidConfiguration(
+                    "The control plane's pinned SPIFFE ID (\(source)) must be a full SPIFFE ID "
+                        + "(spiffe://<trust-domain>/<path>), got '\(resolvedID)'"
+                )
+            }
+
+            spiffeConfig = parsedSPIFFEConfig
 
             if enabled {
                 logger?.info(

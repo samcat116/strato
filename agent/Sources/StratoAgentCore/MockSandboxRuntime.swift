@@ -274,9 +274,22 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
     }
 
-    public func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+    public func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?
+    ) async throws {
         guard sandboxes[sandboxId] != nil else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        // A cross-agent restore (issue #428) hands this host download
+        // descriptors for the exported copy; the mock "stages" it by minting
+        // a local snapshot record instead of downloading bytes.
+        if snapshots[snapshotId] == nil, artifacts != nil {
+            snapshots[snapshotId] = MockSnapshot(
+                sandboxId: sandboxId,
+                capturedStatus: .running,
+                capturedExitCode: nil,
+                memoryBytes: sandboxes[sandboxId]?.spec.memoryBytes ?? 0)
         }
         guard let snapshot = snapshots[snapshotId], snapshot.sandboxId == sandboxId else {
             throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
@@ -291,6 +304,24 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         if snapshot.capturedStatus == .running {
             markRunning(sandboxId)
         }
+    }
+
+    public func exportSandboxSnapshot(
+        sandboxId: String, snapshotId: String,
+        uploads: [SandboxSnapshotArtifactUploadTarget]
+    ) async throws {
+        guard let snapshot = snapshots[snapshotId], snapshot.sandboxId == sandboxId else {
+            throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
+        }
+        // No bytes to move in mock mode; the real runtime PUTs each artifact
+        // to its pre-signed target.
+        logger.info(
+            "Exporting mock sandbox snapshot (mock mode)",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "snapshotId": .string(snapshotId),
+                "uploads": .stringConvertible(uploads.count),
+            ])
     }
 
     public func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {

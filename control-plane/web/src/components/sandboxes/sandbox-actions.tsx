@@ -55,6 +55,8 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
   snapshot: null,
   snapshot_delete: null,
   restore: null,
+  // Export is driven from the snapshot card, not a lifecycle button.
+  snapshot_export: null,
 };
 
 export function SandboxActions({

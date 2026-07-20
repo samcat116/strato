@@ -576,6 +576,21 @@ actor Agent {
                 }
 
                 logger.info("Initializing sandbox runtime (Linux only)")
+                // Snapshot mobility (issue #428): exported artifacts move
+                // through the control plane's transfer routes over SVID mTLS,
+                // like image downloads. The downloader resolves the TLS
+                // config per call, so building this before the SVID manager
+                // exists is fine — no transfer can start before registration.
+                let snapshotDownloader = makeMTLSArtifactDownloader()
+                let snapshotTransfer = SnapshotArtifactTransfer(
+                    controlPlaneBaseURL: controlPlaneHTTPBase,
+                    downloadFile: { url, destination in
+                        try await snapshotDownloader.downloadSnapshotArtifact(url: url, to: destination)
+                    },
+                    uploadFile: { url, source in
+                        try await snapshotDownloader.uploadFile(url: url, fromFile: source)
+                    }
+                )
                 sandboxRuntime = FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
@@ -592,7 +607,8 @@ actor Agent {
                     jailNewSandboxes: jailNewSandboxes,
                     jailerBlockedReason: sandboxJailerBlockedReason,
                     warmStartEnabled: sandboxWarmStart,
-                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes
+                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes,
+                    snapshotTransfer: snapshotTransfer
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
@@ -633,11 +649,13 @@ actor Agent {
         }
 
         let tlsConfiguration: TLSConfiguration?
+        let controlPlanePinning: SPIFFEPeerPinning?
         logger.info(
             "Initializing SPIFFE authentication",
             metadata: [
                 "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
                 "sourceType": .string(spiffe.sourceType ?? "workload_api"),
+                "controlPlaneSPIFFEID": .string(spiffe.resolvedControlPlaneSPIFFEID),
             ])
 
         do {
@@ -645,8 +663,12 @@ actor Agent {
             svidManager = SVIDManager(client: spiffeClient, logger: logger)
             try await svidManager?.start()
 
-            // Get TLS configuration from SVID
+            // Get TLS configuration from SVID, and pin the control plane's
+            // SPIFFE identity: chaining to the trust bundle alone would let
+            // any workload in the trust domain impersonate the control plane
+            // (issue #552).
             tlsConfiguration = try await svidManager?.getTLSConfiguration()
+            controlPlanePinning = try await makeControlPlanePinning(spiffe: spiffe)
             logger.info("SPIFFE authentication initialized successfully")
 
             // Register for SVID rotation
@@ -668,6 +690,7 @@ actor Agent {
         logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         websocketClient = WebSocketClient(
             url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration,
+            spiffePinning: controlPlanePinning,
             inboundContinuation: inboundContinuation)
 
         if let client = websocketClient {
@@ -855,6 +878,20 @@ actor Agent {
         }
     }
 
+    /// Pinned control-plane identity built from the current SVID's trust
+    /// bundle and the configured (or trust-domain-derived) control-plane
+    /// SPIFFE ID. Rebuilt on every rotation so a rotated trust bundle is
+    /// picked up along with the SVID.
+    private func makeControlPlanePinning(spiffe: SPIFFEConfig) async throws -> SPIFFEPeerPinning {
+        guard let svidManager else {
+            throw AgentError.spiffeConfigurationError("SVID manager not initialized")
+        }
+        let svid = try await svidManager.getSVID()
+        return try SPIFFEPeerPinning(
+            expectedSPIFFEID: spiffe.resolvedControlPlaneSPIFFEID,
+            trustBundlePEM: svid.trustBundle)
+    }
+
     /// The current SVID-backed client TLS configuration, looked up fresh so
     /// rotated SVIDs are picked up without any re-wiring. Throws until the
     /// SVID manager has started.
@@ -900,9 +937,17 @@ actor Agent {
         logger.info("SVID rotated, updating WebSocket TLS configuration")
 
         do {
+            guard let spiffe = spiffeConfig else {
+                // Unreachable while SPIFFE is mandatory at startup; log rather
+                // than return silently so a future refactor that loosens that
+                // shows up as a rotation that stopped happening.
+                logger.error("SVID rotated but no SPIFFE configuration is present; pinning not updated")
+                return
+            }
             let newTLSConfig = try await svidManager?.getTLSConfiguration()
+            let newPinning = try await makeControlPlanePinning(spiffe: spiffe)
             if let client = websocketClient {
-                await client.updateTLSConfiguration(newTLSConfig)
+                await client.updateTLSConfiguration(newTLSConfig, spiffePinning: newPinning)
             }
             logger.info("WebSocket TLS configuration updated after SVID rotation")
         } catch {
@@ -938,11 +983,18 @@ actor Agent {
         } else {
             let preflight = runHostPreflight()
             logHostPreflight(preflight)
-            hypervisors = preflight.gate(
+            let probed = preflight.gate(
                 HypervisorProbe.probeAll(
                     qemuBinaryPath: qemuBinaryPath,
                     firecrackerBinaryPath: firecrackerBinaryPath
                 ))
+            // Firecracker's binary version rides the registration (issue
+            // #428): snapshot mobility keys cross-agent restore placement on
+            // version equality, so the control plane needs to know what each
+            // host would load snapshots with.
+            hypervisors = HypervisorProbe.stampingFirecrackerVersion(
+                probed,
+                version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
         }
         let networkCapability = currentNetworkCapability()
         var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
@@ -1835,6 +1887,9 @@ extension Agent {
             case .sandboxRestore:
                 let message = try envelope.decode(as: SandboxRestoreMessage.self)
                 await handleSandboxRestore(message)
+            case .sandboxSnapshotExport:
+                let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
+                await handleSandboxSnapshotExport(message)
             // Volume operations
             case .volumeCreate:
                 let message = try envelope.decode(as: VolumeCreateMessage.self)
@@ -2648,7 +2703,8 @@ extension Agent {
                 firecrackerVersion: result.firecrackerVersion,
                 architecture: CPUArchitecture.current,
                 guestControlProtocolVersion: result.guestControlProtocolVersion,
-                forkLayoutVersion: result.forkLayoutVersion)
+                forkLayoutVersion: result.forkLayoutVersion,
+                cpuTemplate: result.cpuTemplate)
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
         } catch {
@@ -2704,7 +2760,8 @@ extension Agent {
 
         do {
             try await runtime.restoreSandbox(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
+                artifacts: message.artifacts)
             await sendSuccess(for: message.requestId, message: "Sandbox restored from snapshot")
         } catch {
             await sendError(
@@ -2712,6 +2769,38 @@ extension Agent {
                 error: "Failed to restore sandbox: \(error.localizedDescription)")
             logger.error(
                 "Failed to restore sandbox from snapshot",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleSandboxSnapshotExport(_ message: SandboxSnapshotExportMessage) async {
+        logger.info(
+            "Sandbox snapshot export request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.exportSandboxSnapshot(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
+                uploads: message.uploads)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot exported")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to export sandbox snapshot: \(error.localizedDescription)")
+            logger.error(
+                "Failed to export sandbox snapshot",
                 metadata: [
                     "sandboxId": .string(message.sandboxId),
                     "snapshotId": .string(message.snapshotId),
