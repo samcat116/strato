@@ -192,6 +192,12 @@ extension ResourceQuota {
     /// `creating` rows carry the admission estimate (the sandbox's guest
     /// memory) until the agent reports actual sizes; `error` rows are
     /// excluded — a failed checkpoint removes its partial artifacts.
+    ///
+    /// An exported snapshot (issue #428) exists twice — on its agent and in
+    /// control-plane object storage — and both copies draw from this pool, so
+    /// the recorded per-artifact sizes are added on top. Counting the
+    /// *recorded* bytes rather than a flag makes the figure track a partial
+    /// export as its artifacts land, and fall away with the row on delete.
     func sandboxSnapshotStorageInScope(on db: Database) async throws -> Int64 {
         guard let projectIDs = try await scopedProjectIDs(on: db), !projectIDs.isEmpty else { return 0 }
         let query = SandboxSnapshot.query(on: db)
@@ -201,7 +207,10 @@ extension ResourceQuota {
             query.filter(\.$environment == environment)
         }
         let snapshots = try await query.all()
-        return snapshots.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+        return snapshots.reduce(Int64(0)) { total, snapshot in
+            let exported = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
+            return total + (snapshot.size ?? 0) + exported
+        }
     }
 }
 

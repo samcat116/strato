@@ -234,6 +234,12 @@ definition sandbox_snapshot {
     // outlive a demotion (unlike volume_snapshot.restore, which only writes
     // data back to the volume).
     permission restore = sandbox->start
+    // Export copies the whole archive into project object storage and
+    // occupies the source agent while it streams, so it takes the same bar as
+    // producing the checkpoint in the first place (issue #428). Deliberately
+    // NOT `read`: a project viewer must not be able to trigger unbounded
+    // storage writes.
+    permission export = owner + sandbox->snapshot + project->manage_project
 }
 
 /** image represents a VM disk image that can be used to create VMs */

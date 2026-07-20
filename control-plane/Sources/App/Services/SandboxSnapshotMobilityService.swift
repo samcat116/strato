@@ -92,7 +92,8 @@ extension SandboxSnapshot {
     /// are rebuilt at every sync assembly / restore dispatch, never stored).
     /// Returns nil unless the export is complete.
     func exportedArtifactDescriptors(
-        agentName: String, app: Application, expiresIn: TimeInterval = URLSigningService.defaultExpiration
+        agentName: String, app: Application,
+        expiresIn: TimeInterval = SandboxSnapshotService.transferURLExpiration
     ) throws -> [SandboxSnapshotArtifactDescriptor]? {
         guard isExported, let exportedArtifacts else { return nil }
         let sandboxID = self.$sandbox.id

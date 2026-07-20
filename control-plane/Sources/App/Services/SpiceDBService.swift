@@ -729,6 +729,10 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     /// when `checkPermissionResult` is true, so tests can withhold access to
     /// one resource while the rest of a handler's checks still pass.
     var deniedResources: Set<String> = []
+    /// Permission names (e.g. "export") denied even when
+    /// `checkPermissionResult` is true, so a test can grant a handler's other
+    /// checks on the same resource type while withholding exactly one verb.
+    var deniedPermissions: Set<String> = []
     var recorder: SpiceDBMockRecorder?
     /// When true, relationship writes throw, so tests can exercise the
     /// partial-failure paths of flows that pair SQL rows with SpiceDB tuples.
@@ -748,6 +752,7 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
     {
         return checkPermissionResult && !deniedResources.contains(resource)
+            && !deniedPermissions.contains(permission)
     }
 
     func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
@@ -827,6 +832,7 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
         async throws -> Bool
     {
         return checkPermissionResult && !deniedResources.contains(resource)
+            && !deniedPermissions.contains(permission)
     }
 }
 
@@ -856,6 +862,21 @@ extension Application {
     var spicedbMockDeniedResources: Set<String> {
         get { storage[SpiceDBMockDeniedResourcesKey.self] ?? [] }
         set { storage[SpiceDBMockDeniedResourcesKey.self] = newValue }
+    }
+
+    /// Storage key for the testing SpiceDB mock's per-permission denials.
+    private struct SpiceDBMockDeniedPermissionsKey: StorageKey {
+        typealias Value = Set<String>
+    }
+
+    /// In testing mode, permission names the mock SpiceDB denies even while
+    /// `spicedbMockAllows` is true. Complements `spicedbMockDeniedResources`
+    /// for handlers that check several verbs on the *same* resource type —
+    /// e.g. snapshot export, which needs `export` and must not settle for
+    /// `read`. Empty by default.
+    var spicedbMockDeniedPermissions: Set<String> {
+        get { storage[SpiceDBMockDeniedPermissionsKey.self] ?? [] }
+        set { storage[SpiceDBMockDeniedPermissionsKey.self] = newValue }
     }
 
     /// Storage key for making the testing SpiceDB mock's writes fail.
@@ -909,6 +930,7 @@ extension Application {
                 return MockSpiceDBService(
                     checkPermissionResult: spicedbMockAllows,
                     deniedResources: spicedbMockDeniedResources,
+                    deniedPermissions: spicedbMockDeniedPermissions,
                     recorder: spicedbMockRecorder,
                     writesFail: spicedbMockWritesFail,
                     relationships: spicedbMockRelationships

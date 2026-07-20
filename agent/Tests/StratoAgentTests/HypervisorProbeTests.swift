@@ -137,4 +137,26 @@ struct HypervisorProbeTests {
         // Nil leaves the reports untouched.
         #expect(HypervisorProbe.stampingFirecrackerVersion(reports, version: nil) == reports)
     }
+
+    @Test("A hanging firecracker binary cannot wedge the version probe")
+    func firecrackerVersionTimesOut() async throws {
+        // This probe runs inline on the agent's registration path, which has
+        // no other escape hatch: a binary that blocks (a wrapper waiting on a
+        // lock, a stalled mount) would otherwise hang registration and every
+        // reconnect after it (issue #428 review).
+        let script = NSTemporaryDirectory() + "hanging-firecracker-\(UUID().uuidString)"
+        try "#!/bin/sh\nsleep 60\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        defer { try? FileManager.default.removeItem(atPath: script) }
+
+        let started = Date()
+        let version = await HypervisorProbe.firecrackerVersion(
+            binaryPath: script, timeout: .milliseconds(200))
+        let elapsed = Date().timeIntervalSince(started)
+
+        // A timed-out probe is indistinguishable from a failed one: nil keeps
+        // the host ineligible as a cross-agent restore target.
+        #expect(version == nil)
+        #expect(elapsed < 10)
+    }
 }

@@ -778,8 +778,10 @@ final class SandboxSnapshotTests {
             let recorded = try #require(uploaded.exportedArtifact(for: .memory))
             #expect(recorded.sizeBytes == Int64(payload.utf8.count))
             #expect(recorded.sha256.count == 64)
-            // A landed artifact invalidates any prior completion stamp until
-            // the export operation re-verifies the full set.
+            // The export operation stamps completion, not the upload route —
+            // one landed artifact is not a complete export. (An artifact
+            // landing does *not* clear a prior stamp; see
+            // `reExportDoesNotClearPriorExport`.)
             #expect(uploaded.exportedAt == nil)
 
             let downloadURL = URLSigningService.signSandboxSnapshotArtifactURL(
@@ -910,7 +912,10 @@ final class SandboxSnapshotTests {
             let writer = try await app.imageObjectStore.openWriter(key: key)
             try await writer.write(ByteBuffer(string: "bytes"))
             try await writer.finish()
-            #expect(try await app.imageObjectStore.exists(key: key))
+            // Hoisted out of `#expect`: `#expect(try await …)` crashes the
+            // Xcode 27 beta compiler.
+            let stored = try await app.imageObjectStore.exists(key: key)
+            #expect(stored)
 
             var operation: OperationResponse?
             try await app.test(
@@ -947,6 +952,138 @@ final class SandboxSnapshotTests {
 
             let remaining = try await SandboxSnapshot.query(on: app.db).count()
             #expect(remaining == 0)
+        }
+    }
+
+    // MARK: - Export admission (issue #428 review)
+
+    @Test("Export requires the export permission, not merely read")
+    func exportRequiresExportPermission() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            // Everything the handler checks passes except `export` itself, so
+            // a failure here means the gate fell back to a weaker verb.
+            app.spicedbMockDeniedPermissions = ["export"]
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "viewer-cannot-export",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            // No operation row: admission refused before anything was started.
+            let operations = try await ResourceOperation.query(on: app.db).count()
+            #expect(operations == 0)
+        }
+    }
+
+    @Test("Export is refused when the exported copy would exceed the storage quota")
+    func exportRespectsStorageQuota() async throws {
+        try await withSnapshotTestApp { app, user, project, sandbox, token in
+            let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
+            let snapshot = SandboxSnapshot(
+                name: "too-big-to-export",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.size = 8 << 30
+            try await snapshot.save(on: app.db)
+
+            // A pool with room for the on-agent copy already counted, but not
+            // for a second one in object storage.
+            let quota = ResourceQuota(
+                name: "snapshot-storage",
+                projectID: try project.requireID(),
+                maxVCPUs: 64,
+                maxMemory: 64 << 30,
+                maxStorage: 12 << 30,
+                maxVMs: 32,
+                maxSandboxes: 32)
+            try await quota.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.lowercased().contains("quota"))
+            }
+        }
+    }
+
+    @Test("Exported artifacts count as a second copy against snapshot storage")
+    func exportedCopyCountsTowardStorage() async throws {
+        try await withSnapshotTestApp { app, user, project, sandbox, _ in
+            let snapshot = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox, agentId: "agent-a")
+            let quota = ResourceQuota(
+                name: "scope",
+                projectID: try project.requireID(),
+                maxVCPUs: 64,
+                maxMemory: 64 << 30,
+                maxStorage: 64 << 30,
+                maxVMs: 32,
+                maxSandboxes: 32)
+            try await quota.save(on: app.db)
+
+            let exportedBytes = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
+            let inScope = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            #expect(inScope == (snapshot.size ?? 0) + exportedBytes)
+            #expect(exportedBytes > 0)
+        }
+    }
+
+    @Test("Re-uploading an artifact leaves an existing export record intact")
+    func reExportDoesNotClearPriorExport() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, _ in
+            let storeRoot = NSTemporaryDirectory() + "snapshot-reexport-\(UUID().uuidString)"
+            app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
+            defer { try? FileManager.default.removeItem(atPath: storeRoot) }
+
+            let snapshot = try await seedExportedSnapshot(
+                app: app, user: user, sandbox: sandbox, agentId: "agent-a")
+            let exportedAt = try #require(snapshot.exportedAt)
+            let signingKey = try await URLSigningService.getSigningKeyAsync(from: app)
+
+            // One artifact of a re-export lands, then the run dies. The
+            // snapshot must still be exported: the objects are unchanged and
+            // a complete copy is still there.
+            let uploadURL = URLSigningService.signSandboxSnapshotArtifactURL(
+                method: "PUT",
+                sandboxId: sandbox.id!,
+                snapshotId: snapshot.id!,
+                kind: .memory,
+                agentName: "agent-a",
+                baseURL: "",
+                signingKey: signingKey)
+            try await app.test(.PUT, uploadURL) { req in
+                req.body = ByteBuffer(string: "fresh-memory-bytes")
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+            #expect(current.exportedAt == exportedAt)
+            #expect(current.isExported)
+            // The integrity entry was still refreshed from the new bytes.
+            let memory = try #require(current.exportedArtifact(for: .memory))
+            #expect(memory.sizeBytes == Int64("fresh-memory-bytes".utf8.count))
         }
     }
 }

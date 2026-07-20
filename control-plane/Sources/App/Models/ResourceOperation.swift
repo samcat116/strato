@@ -62,14 +62,21 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 // Pause/resume are unreachable for sandboxes (no endpoint
                 // issues them) but the budget total function stays total.
                 return 120
-            case .snapshot, .restore:
-                // Checkpoint/restore copy the guest memory file plus a full
-                // rootfs on filesystems without reflink support (issue #426).
+            case .snapshot:
+                // Checkpoint copies the guest memory file plus a full rootfs
+                // on filesystems without reflink support (issue #426).
                 return 600
+            case .restore:
+                // A local restore is the same class of copy, but a cross-agent
+                // one stages the whole archive from object storage first
+                // (issue #428) — the budget has to cover the slower shape,
+                // since it is keyed by kind and both share `.restore`.
+                return 3600
             case .snapshotExport:
                 // Export streams the whole archive (guest memory + rootfs)
-                // through the control plane into object storage (issue #428).
-                return 600
+                // through the control plane into object storage (issue #428),
+                // so it is bounded by the network, not local disk.
+                return 3600
             case .snapshotDelete:
                 return 120
             }

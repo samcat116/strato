@@ -57,6 +57,7 @@ const pendingOperationLabels: Record<OperationKind, string> = {
   snapshot: "Snapshotting",
   snapshot_delete: "Deleting snapshot",
   restore: "Restoring",
+  snapshot_export: "Exporting snapshot",
 };
 
 export function VMStatusBadge({
