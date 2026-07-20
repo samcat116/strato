@@ -10,6 +10,10 @@ import FoundationNetworking
 public actor ImageCacheService {
     private let logger: Logger
     private let cachePath: String
+    /// Base the control plane's relative download paths resolve against — the
+    /// HTTP(S) flavor of the WebSocket URL the agent dials, i.e. the Envoy
+    /// mTLS listener. Download URLs carry no credential; the fetcher
+    /// authenticates with the agent's SVID (issue #493).
     private let controlPlaneURL: String
     /// Byte budget for the whole cache; nil means unbounded (the historical
     /// behavior). Enforced by LRU eviction of whole image directories before
@@ -362,7 +366,7 @@ public actor ImageCacheService {
                     + "backing \(directoryPath). Free up space or point the image cache at a larger filesystem.")
         }
 
-        guard let url = URL(string: downloadURL) else {
+        guard let url = resolveDownloadURL(downloadURL) else {
             throw ImageCacheError.invalidURL(downloadURL)
         }
 
@@ -409,6 +413,17 @@ public actor ImageCacheService {
         }
     }
 
+    /// Resolves a download URL from the control plane: relative paths (the
+    /// v13+ wire format) resolve against the control-plane base the agent
+    /// dials; absolute URLs pass through untouched.
+    private func resolveDownloadURL(_ downloadURL: String) -> URL? {
+        if let absolute = URL(string: downloadURL), absolute.scheme != nil {
+            return absolute
+        }
+        guard let base = URL(string: controlPlaneURL) else { return nil }
+        return URL(string: downloadURL, relativeTo: base)?.absoluteURL
+    }
+
     /// Downloads `url` to a temporary file, retrying transient failures with
     /// backoff. Returns the temporary file URL of a completed HTTP 200 body.
     private func downloadWithRetry(from url: URL) async throws -> URL {
@@ -438,9 +453,11 @@ public actor ImageCacheService {
         throw lastError
     }
 
-    /// The production fetcher: one URLSession download, with server-side and throttling
-    /// failures reported as transient. Other statuses (403 expired signature, 404) are not
-    /// going to change within this operation, so they surface as-is and end the retry loop.
+    /// The fallback fetcher: one URLSession download, with server-side and throttling
+    /// failures reported as transient. Other statuses (403, 404) are not going to change
+    /// within this operation, so they surface as-is and end the retry loop. Production
+    /// agents inject an SVID-backed mTLS fetcher instead (issue #493); this default
+    /// carries no client certificate and only suits tests and plain-HTTP sources.
     public static let defaultFetch: Fetcher = { url in
         let tempURL: URL
         let response: URLResponse

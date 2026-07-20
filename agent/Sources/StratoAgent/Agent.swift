@@ -57,6 +57,19 @@ actor Agent {
     private let qemuSocketDir: String
     private let logger: Logger
 
+    /// The HTTP(S) base of the control plane, derived from the dialed
+    /// WebSocket URL: query off first (the `name` parameter would otherwise
+    /// trail every request), scheme swapped to HTTP, `/agent/ws` suffix
+    /// dropped. Relative image-download paths resolve against this base and
+    /// are fetched over SVID mTLS (issue #493) — the same Envoy listener that
+    /// carries the WebSocket.
+    private var controlPlaneHTTPBase: String {
+        (WebSocketURLs.removingQuery(from: webSocketURL) ?? webSocketURL)
+            .replacingOccurrences(of: "ws://", with: "http://")
+            .replacingOccurrences(of: "wss://", with: "https://")
+            .replacingOccurrences(of: "/agent/ws", with: "")
+    }
+
     private var websocketClient: WebSocketClient?
     // Registry of hypervisor drivers keyed by backend type, populated once in
     // start(). This registry and `getHypervisorService(for:)` are the only
@@ -430,17 +443,17 @@ actor Agent {
             )
         } else {
             logger.info("Initializing image cache service")
+            // Downloads present the agent's SVID as the client certificate.
+            // The downloader looks the TLS config up per fetch, so building it
+            // here — before the SVID manager exists — is fine: no download can
+            // start until after registration, by which point the SVID is live.
+            let artifactDownloader = makeMTLSArtifactDownloader()
             imageCacheService = ImageCacheService(
                 logger: logger,
                 cachePath: imageCachePath,
-                // Derive the HTTP base from the dialed WebSocket URL. The query
-                // (the `name` parameter) must come off first, or it would trail
-                // the base URL every request is built on.
-                controlPlaneURL: (WebSocketURLs.removingQuery(from: webSocketURL) ?? webSocketURL)
-                    .replacingOccurrences(of: "ws://", with: "http://")
-                    .replacingOccurrences(of: "wss://", with: "https://")
-                    .replacingOccurrences(of: "/agent/ws", with: ""),
-                maxCacheSizeBytes: imageCacheMaxSizeBytes
+                controlPlaneURL: controlPlaneHTTPBase,
+                maxCacheSizeBytes: imageCacheMaxSizeBytes,
+                fetch: { url in try await artifactDownloader.fetchToTemporaryFile(url: url) }
             )
 
             logger.info("Initializing storage backend")
@@ -840,6 +853,53 @@ actor Agent {
                 "Unknown SPIFFE source_type: \(config.sourceType ?? "nil"). Use 'files' or 'workload_api'"
             )
         }
+    }
+
+    /// The current SVID-backed client TLS configuration, looked up fresh so
+    /// rotated SVIDs are picked up without any re-wiring. Throws until the
+    /// SVID manager has started.
+    private func currentSVIDTLSConfiguration() async throws -> TLSConfiguration {
+        guard let svidManager else {
+            throw AgentError.spiffeConfigurationError("no SVID is available yet for an mTLS download")
+        }
+        return try await svidManager.getTLSConfiguration()
+    }
+
+    /// Downloader for control-plane artifacts (images, typed artifacts,
+    /// control-plane-hosted update binaries), authenticating with the agent's
+    /// SVID over mTLS.
+    private func makeMTLSArtifactDownloader() -> MTLSArtifactDownloader {
+        MTLSArtifactDownloader(
+            tlsConfigurationProvider: { [weak self] in
+                guard let self else {
+                    throw AgentError.spiffeConfigurationError("agent is shutting down")
+                }
+                return try await self.currentSVIDTLSConfiguration()
+            },
+            logger: logger
+        )
+    }
+
+    /// Downloader for agent-update artifacts: URLs targeting the control
+    /// plane's origin fetch over SVID mTLS (they sit behind the Envoy mTLS
+    /// listener, issue #493); everything else — GitHub release URLs, `file://`
+    /// overrides on air-gapped hosts — keeps the stock path.
+    private func makeUpdateArtifactDownload() -> AgentUpdater.Downloader {
+        let mtlsDownloader = makeMTLSArtifactDownloader()
+        let base = controlPlaneHTTPBase
+        return { url, destination in
+            if Self.urlTargetsOrigin(url, base: base) {
+                try await mtlsDownloader.downloadArtifact(url: url, to: destination)
+            } else {
+                try await AgentUpdater.defaultDownload(from: url, to: destination)
+            }
+        }
+    }
+
+    /// Whether `url` points at the same scheme/host/port origin as `base`.
+    private static func urlTargetsOrigin(_ url: URL, base: String) -> Bool {
+        guard let baseURL = URL(string: base) else { return false }
+        return url.scheme == baseURL.scheme && url.host == baseURL.host && url.port == baseURL.port
     }
 
     private func handleSVIDRotation() async {
@@ -1931,7 +1991,7 @@ extension Agent {
 
         let outcome: AgentUpdateOutcome
         do {
-            let updater = AgentUpdater(logger: logger)
+            let updater = AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
             outcome = try await updater.applyUpdate(
                 artifactURL: message.artifactURL,
                 sha256: message.sha256,
@@ -2044,7 +2104,7 @@ extension Agent {
 
         let outcome: AgentUpdateOutcome
         do {
-            let updater = AgentUpdater(logger: logger)
+            let updater = AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
             outcome = try await updater.applyUpdate(
                 artifactURL: update.artifactURL,
                 sha256: update.sha256,

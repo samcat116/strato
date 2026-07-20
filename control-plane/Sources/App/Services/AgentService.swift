@@ -1704,8 +1704,9 @@ actor AgentService {
     }
 
     /// The full authoritative VM set for an agent, straight from Postgres —
-    /// no in-memory VM-to-agent map involved. Signed image URLs are re-issued
-    /// on every assembly so long-desired VMs never carry expired links.
+    /// no in-memory VM-to-agent map involved. Image download URLs are
+    /// mTLS-authenticated relative paths (issue #493), so nothing in the
+    /// assembly expires or needs re-signing.
     /// Internal rather than private so tests can assert assembly contents.
     func assembleDesiredState(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
@@ -1751,13 +1752,7 @@ actor AgentService {
             var imageInfo: ImageInfo?
             if let image, image.status == .ready {
                 do {
-                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-                    imageInfo = try VMSpecBuilder.buildImageInfo(
-                        from: image,
-                        controlPlaneURL: controlPlaneURL,
-                        agentName: agentId,
-                        signingKey: URLSigningService.getSigningKey(from: app)
-                    )
+                    imageInfo = try VMSpecBuilder.buildImageInfo(from: image)
                 } catch {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",

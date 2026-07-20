@@ -124,7 +124,8 @@ design proposal is [distributed-storage](./distributed-storage.md).
 Images have an architecture and a set of typed artifacts (`diskImage` for
 QEMU; `rootfs`/`kernel`/`initramfs` for Firecracker/direct boot), each
 with format, checksum, and size. Agents filter artifacts by supported
-backend and host architecture, and image downloads use HMAC-signed URLs.
+backend and host architecture, and download them over the Envoy mTLS
+listener authenticated by their SPIFFE SVID (issue #493).
 
 ## Identity: authentication, authorization, and the org hierarchy
 
@@ -183,7 +184,8 @@ Integration points:
 
 - `SpiceDBAuthMiddleware` (registered globally, including in tests)
   intercepts all HTTP requests: it skips a public allowlist (health
-  checks, `/auth/*`, the agent WebSocket, signed download URLs), requires
+  checks, `/auth/*`, the agent WebSocket, image download URLs — which
+  authenticate the agent's SVID or a user session in-handler), requires
   an authenticated user for everything else, lets system admins bypass
   permission checks, and for the prefix-guarded resource APIs maps HTTP
   method + path to a permission (`read`, `create`, `update`, `delete`,

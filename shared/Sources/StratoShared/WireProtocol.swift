@@ -154,7 +154,20 @@ public enum WireProtocol {
     /// attaches are refused when the realizing agent registered pre-v12, and
     /// sync assembly omits the field for such agents (see
     /// `supportsFloatingIPs(_:)`).
-    public static let currentVersion = 12
+    ///
+    /// Version 13: image/artifact downloads authenticate with the agent's
+    /// SPIFFE SVID over mTLS instead of HMAC-signed URLs (issue #493).
+    /// `ImageInfo.downloadURL` and `ArtifactInfo.downloadURL` are now
+    /// control-plane-relative paths (`/api/projects/.../download`) that the
+    /// agent resolves against the base URL it already dials — the Envoy mTLS
+    /// listener — and fetches with its SVID-backed TLS client. The `expiresAt`
+    /// fields are gone: an mTLS-authenticated URL never expires, which also
+    /// ends the re-signing churn at sync assembly. Breaking for pre-v13
+    /// agents in effect, not in shape: they decode the sync fine but fetch the
+    /// relative URL with a plain HTTP client and no credential, which the
+    /// control plane refuses — the fix is upgrading the agent, so there is no
+    /// send-side gate to soften it.
+    public static let currentVersion = 13
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

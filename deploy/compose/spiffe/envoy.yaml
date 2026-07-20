@@ -112,6 +112,34 @@ static_resources:
                                         - authenticated:
                                             principal_name:
                                               prefix: "spiffe://strato.local/agent/"
+                        # Image/artifact downloads (issue #493): agents fetch
+                        # base-image bytes here with their SVID as the client
+                        # cert; the control plane re-verifies the forwarded
+                        # identity (XFCC) and serves the object. Same RBAC
+                        # shape as /ingest/* — restricted to agent identities
+                        # so e.g. a telemetry workload's SVID cannot pull
+                        # tenant images. Timeout 0: image bodies are tens of
+                        # GB and stream for longer than any fixed budget.
+                        - match:
+                            safe_regex:
+                              regex: "^/api/projects/[^/]+/images/[^/]+/download$"
+                          route:
+                            cluster: control_plane_upstream
+                            timeout: 0s
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    agents-only:
+                                      permissions:
+                                        - any: true
+                                      principals:
+                                        - authenticated:
+                                            principal_name:
+                                              prefix: "spiffe://strato.local/agent/"
                         - match:
                             prefix: "/agent/"
                           route:

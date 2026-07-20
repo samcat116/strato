@@ -30,5 +30,10 @@ final class AppSetting: Model, @unchecked Sendable {
 
     // MARK: - Known Keys
 
-    static let imageDownloadSigningKey = "image_download_signing_key"
+    /// Secret keying WebAuthn decoy credentials (see `DecoyKeyService`). The
+    /// raw value predates that use: this key originally signed image-download
+    /// URLs, and keeping the stored name means existing deployments keep the
+    /// same secret — and therefore stable decoys — across the retirement of
+    /// URL signing (issue #493).
+    static let decoyCredentialKey = "image_download_signing_key"
 }

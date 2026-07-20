@@ -943,54 +943,23 @@ struct ImageController: RouteCollection {
             artifactKind = nil
         }
 
-        // Try signed URL authentication first (for agents)
-        if let agentName = req.query[String.self, at: "agent"],
-            let expiresStr = req.query[String.self, at: "expires"],
-            let expires = Int(expiresStr),
-            let signature = req.query[String.self, at: "sig"]
-        {
-
-            // Verify the signing key is configured
-            let signingKey: String
-            do {
-                signingKey = try URLSigningService.getSigningKey(from: req.application)
-            } catch {
-                req.logger.error("Image download signing key not configured")
-                throw error
-            }
-
-            // Verify the signature
-            let path = "/api/projects/\(projectID)/images/\(imageID)/download"
-            let isValid = URLSigningService.verifySignature(
-                path: path,
-                imageId: imageID,
-                projectId: projectID,
-                agentName: agentName,
-                expires: expires,
-                signature: signature,
-                signingKey: signingKey,
-                artifactKind: artifactKind
-            )
-
-            guard isValid else {
-                req.logger.warning(
-                    "Invalid or expired image download signature",
-                    metadata: [
-                        "imageId": .string(imageID.uuidString),
-                        "agent": .string(agentName),
-                    ])
-                throw Abort(.forbidden, reason: "Invalid or expired download signature")
-            }
+        // Agent path: a forwarded client certificate means the request came
+        // through the Envoy mTLS listener. Authenticate the SVID (issue #493)
+        // — an agent identity in the trust domain is authorized for any ready
+        // image, the same trust already extended to it over the agent socket.
+        // Never fall through to session auth on failure: a request carrying
+        // XFCC that doesn't verify is a spoofing attempt, not a browser.
+        if AgentMTLSAuthenticator.hasClientCertificate(req) {
+            let agentName = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
 
             req.logger.info(
-                "Agent downloading image via signed URL",
+                "Agent downloading image via SVID mTLS",
                 metadata: [
                     "imageId": .string(imageID.uuidString),
                     "agent": .string(agentName),
                     "artifact": .string(artifactKind?.rawValue ?? "disk"),
                 ])
 
-            // Signature valid - serve the file
             return try await serveImageFile(
                 req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
         }
