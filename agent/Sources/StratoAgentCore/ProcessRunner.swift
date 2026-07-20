@@ -28,6 +28,19 @@ public struct ProcessResult: Sendable {
     }
 }
 
+public enum ProcessRunnerError: Error, CustomStringConvertible {
+    /// A streamed subprocess wrote more than the caller's byte ceiling and was
+    /// terminated. Used to stop a decompression bomb from filling the host disk.
+    case outputLimitExceeded(limit: Int)
+
+    public var description: String {
+        switch self {
+        case .outputLimitExceeded(let limit):
+            return "process output exceeded the \(limit)-byte limit and was terminated"
+        }
+    }
+}
+
 /// Runs external commands without blocking the Swift concurrency cooperative
 /// thread pool.
 ///
@@ -95,7 +108,8 @@ public enum ProcessRunner {
         executableURL: URL,
         arguments: [String],
         inputFile: URL,
-        outputFile: URL
+        outputFile: URL,
+        maxOutputBytes: Int? = nil
     ) async throws -> ProcessResult {
         let inputHandle = try FileHandle(forReadingFrom: inputFile)
         defer { try? inputHandle.close() }
@@ -116,17 +130,59 @@ public enum ProcessRunner {
 
         try process.run()
 
+        // Enforce an output ceiling by polling the growing output file and
+        // terminating the subprocess if it blows past the limit. The stream
+        // goes straight to the file (not through this process's memory), so the
+        // size must be observed out of band. This is what stops a decompression
+        // bomb — a tiny, digest-valid gzip/zstd layer expanding to fill the
+        // host disk — since the ceiling can't be derived from the trusted input.
+        let outputPath = outputFile.path
+        let limitMonitor: Task<Bool, Never>? = maxOutputBytes.map { limit in
+            Task {
+                while process.isRunning {
+                    // stat(2) rather than FileManager attributes: this is the
+                    // enforcement point of a security control, and an NSNumber
+                    // bridging cast that returns nil would silently disable the
+                    // ceiling instead of failing loudly.
+                    if let size = fileSize(atPath: outputPath), size > Int64(limit) {
+                        process.terminate()
+                        // A decompressor that ignores SIGTERM would keep
+                        // filling the disk, so give it a moment and escalate.
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if process.isRunning {
+                            kill(process.processIdentifier, SIGKILL)
+                        }
+                        return true
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
+                }
+                return false
+            }
+        }
+
         let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
         async let stderrData = drain(fd: stderrFD)
 
         let err = await stderrData
         await waitForExit(exited)
 
+        if await limitMonitor?.value == true {
+            try? FileManager.default.removeItem(atPath: outputPath)
+            throw ProcessRunnerError.outputLimitExceeded(limit: maxOutputBytes ?? 0)
+        }
+
         return ProcessResult(
             terminationStatus: process.terminationStatus,
             standardOutput: Data(),
             standardError: err
         )
+    }
+
+    /// Current size of `path` via `stat(2)`, or nil if it cannot be read.
+    static func fileSize(atPath path: String) -> Int64? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return Int64(info.st_size)
     }
 
     /// Reads a file descriptor to EOF on a background queue.

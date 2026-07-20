@@ -120,9 +120,10 @@ public actor FirecrackerClient {
         }
 
         // Spawn the Firecracker process — directly, or through the jailer,
-        // which sets up the barrier and then execs Firecracker in place (we
-        // never daemonize, so the child handle *is* the jailed Firecracker
-        // and terminate/wait work identically on both paths).
+        // which sets up the barrier and then runs Firecracker. Without
+        // `--new-pid-ns` the jailer execs in place, so the child handle *is*
+        // the jailed Firecracker; with it the jailer forks and the parent
+        // exits, so the VMM is tracked by pid instead (see below).
         let process = Process()
         if let jail {
             process.executableURL = URL(fileURLWithPath: jail.jailerBinaryPath)
@@ -157,14 +158,20 @@ public actor FirecrackerClient {
             throw FirecrackerError.processSpawnFailed(error.localizedDescription)
         }
 
+        // With `--new-pid-ns` the jailer forks the VMM into the new namespace
+        // and the parent exits 0 straight away, so a dead child handle is the
+        // expected steady state rather than a spawn failure.
+        let parentExitsOnSuccess = jail?.newPidNamespace == true
+
         // Wait for socket to become available
         do {
             try await waitForSocket(path: socketPath, timeout: 5.0)
         } catch {
             // The jailer exits immediately on a setup failure (bad cgroup
             // value, missing netns, unwritable chroot base); surface its
-            // stderr instead of an opaque socket timeout.
-            if !process.isRunning {
+            // stderr instead of an opaque socket timeout. A `--new-pid-ns`
+            // parent exiting 0 is normal, so only its *failure* status counts.
+            if !process.isRunning && !(parentExitsOnSuccess && process.terminationStatus == 0) {
                 let stderr = String(
                     data: errorPipe.fileHandleForReading.availableData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -179,10 +186,28 @@ public actor FirecrackerClient {
         let manager = FirecrackerManager(socketPath: socketPath, logger: logger)
         try await manager.connect()
 
+        // Resolve which handle actually represents the VMM. Without
+        // `--new-pid-ns` the jailer execs Firecracker in place, so the child
+        // handle *is* the VMM and terminate/wait work directly. With it, that
+        // handle is a parent that has already exited — track the forked VMM by
+        // pid instead (the same discovery re-adoption uses), or destroy would
+        // silently skip termination and leak a privileged process.
+        var trackedProcess: Process? = process
+        var trackedPID: Int32?
+        if parentExitsOnSuccess {
+            trackedProcess = nil
+            trackedPID = Self.discoverPID(vmId: vmId)
+            if trackedPID == nil {
+                logger.error(
+                    "Could not resolve the jailed VMM pid after spawn; the process will survive destroy",
+                    metadata: ["vm_id": "\(vmId)"])
+            }
+        }
+
         // Store VM info
         runningVMs[vmId] = RunningVM(
-            process: process,
-            adoptedPID: nil,
+            process: trackedProcess,
+            adoptedPID: trackedPID,
             socketPath: socketPath,
             jailDirectory: jail.map {
                 JailerOptions.jailDirectory(
@@ -331,6 +356,19 @@ public actor FirecrackerClient {
             for _ in 0..<50 where Self.processAlive(pid) {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
+            // Escalate rather than leak. A `--new-pid-ns` VMM is pid 1 of its
+            // namespace, and the kernel drops an ancestor's SIGTERM to a
+            // namespace init unless that process installed a handler — SIGKILL
+            // is always delivered, and takes the whole namespace with it.
+            if Self.processAlive(pid) {
+                logger.warning(
+                    "VMM ignored SIGTERM; escalating to SIGKILL",
+                    metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
+                Self.forceKill(pid: pid)
+                for _ in 0..<50 where Self.processAlive(pid) {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
         }
 
         // Remove socket
@@ -454,6 +492,13 @@ public actor FirecrackerClient {
     static func terminate(pid: Int32) {
         #if os(Linux) || canImport(Darwin)
         _ = kill(pid, SIGTERM)
+        #endif
+    }
+
+    /// Sends SIGKILL to a Firecracker process that ignored SIGTERM.
+    static func forceKill(pid: Int32) {
+        #if os(Linux) || canImport(Darwin)
+        _ = kill(pid, SIGKILL)
         #endif
     }
 
