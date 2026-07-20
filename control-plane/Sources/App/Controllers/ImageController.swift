@@ -957,7 +957,7 @@ struct ImageController: RouteCollection {
         // bytes are not a meaningful escalation. Deployments that place
         // mutually untrusting tenants on separate agents do not get isolation
         // here. Narrowing this to images the requesting agent has actually
-        // been assigned is left as follow-up work.
+        // been assigned is tracked in issue #562.
         //
         // Never fall through to session auth on failure: a request carrying
         // XFCC that doesn't verify is a spoofing attempt, not a browser.
