@@ -1912,8 +1912,8 @@ actor AgentService {
 
     /// The agent self-update this sync should carry (issue #434): the rollout
     /// sweep's assignment on the agent row, with its artifact re-resolved on
-    /// every assembly — mirroring signed image URLs, so a long-assigned update
-    /// never carries a stale (possibly presigned) link. Nil whenever there is
+    /// every assembly, so a long-assigned update never carries a stale
+    /// (possibly presigned) link. Nil whenever there is
     /// nothing actionable: not enrolled, not assigned, already converged, an
     /// agent too old to act on the field (a pre-v7 agent would wait out the
     /// rollout's health budget against silence), or an artifact that cannot

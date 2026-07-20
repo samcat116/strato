@@ -49,6 +49,12 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                // Streams download bodies to disk off the cooperative pool.
+                // NonBlockingFileIO is deprecated in favor of this.
+                .product(name: "_NIOFileSystem", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
             ],
             path: "Sources/StratoAgentCore",
             swiftSettings: swiftSettings
@@ -79,7 +85,6 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
-                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
@@ -104,6 +109,11 @@ let package = Package(
                 "StratoAgentCore",
                 "StratoAgentSPIFFE",
                 .product(name: "StratoShared", package: "shared"),
+                // A loopback HTTP origin for the artifact-downloader tests.
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),

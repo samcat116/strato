@@ -45,7 +45,8 @@ The control plane is declarative, not imperative:
   `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
   Each desired record carries a monotonic **generation** counter guarding
   against reordering; syncs are level-triggered and safe to drop or replay.
-  Signed image URLs are refreshed at sync-assembly time.
+  Image download URLs are control-plane-relative paths the agent fetches
+  over SVID mTLS, so nothing in a sync expires.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence

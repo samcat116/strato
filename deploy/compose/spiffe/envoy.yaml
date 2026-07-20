@@ -152,9 +152,18 @@ static_resources:
                 http_filters:
                   # No listener-level rules: everything is allowed unless a
                   # route overrides via typed_per_filter_config (the /ingest/*
-                  # routes above). Control-plane routes keep their existing
-                  # model — the control plane re-verifies the forwarded client
-                  # cert (XFCC) itself.
+                  # and image-download routes above). Control-plane routes keep
+                  # their existing model — the control plane re-verifies the
+                  # forwarded client cert (XFCC) itself.
+                  #
+                  # Note the shape: because the catch-all "/" route below
+                  # carries no RBAC, a path that misses a guarded route's
+                  # matcher is allowed through, not denied. For the image
+                  # download that is deliberate but not load-bearing — the
+                  # control plane independently re-verifies the XFCC identity
+                  # and requires an agent SVID before serving bytes, so this
+                  # RBAC is defense in depth, not the gate. Do not remove the
+                  # in-handler check on the strength of this config.
                   - name: envoy.filters.http.rbac
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC

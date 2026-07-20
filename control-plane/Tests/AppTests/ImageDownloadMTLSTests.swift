@@ -134,6 +134,33 @@ struct ImageDownloadMTLSTests {
         }
     }
 
+    @Test("A client certificate forwarded by a non-loopback peer is refused")
+    func xfccFromNonLoopbackPeerRefused() async throws {
+        guard let hostIP = nonLoopbackIPv4() else {
+            // Nothing but loopback on this host, so the rejection path cannot
+            // be reached; the accept path above still covers the check.
+            return
+        }
+
+        try await withRunningImageApp { app, port in
+            self.enableSPIRE(on: app)
+            let (project, image, _) = try await self.makeReadyImage(app: app)
+
+            // Only the co-located Envoy sidecar forwards on loopback. The very
+            // same header from anywhere else is a spoofing attempt: an
+            // attacker who can reach the control plane's plain HTTP listener
+            // must not be able to mint an agent identity by setting a header.
+            let header = self.xfccHeader(identity: "agent/dl-agent")
+            let response = try await app.client.get(
+                URI(string: "http://\(hostIP):\(port)\(self.downloadPath(project: project, image: image))")
+            ) { req in
+                req.headers.add(name: header.name, value: header.value)
+            }
+
+            #expect(response.status == .forbidden)
+        }
+    }
+
     @Test("A client certificate is refused when SPIRE is not configured")
     func xfccWithoutSPIRERefused() async throws {
         try await withRunningImageApp { app, port in
@@ -164,18 +191,36 @@ private func withRunningImageApp(_ test: (Application, Int) async throws -> Void
         defer { try? FileManager.default.removeItem(atPath: tempStorage) }
         app.imageObjectStore = FilesystemImageObjectStore(rootPath: tempStorage)
 
-        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        // Bound on 0.0.0.0 rather than 127.0.0.1 so a test can also reach the
+        // server on a non-loopback address and exercise the rejection path.
+        try await app.server.start(address: .hostname("0.0.0.0", port: 0))
+
+        // `defer` cannot hold an `await`, so the outcome is captured and
+        // rethrown after the one shutdown that every path runs through —
+        // leaving the server up would strand it until app teardown and invite
+        // the ServeCommand deinit race.
+        let outcome: Result<Void, any Error>
         do {
-            guard let port = app.http.server.shared.localAddress?.port else {
-                Issue.record("HTTP server did not report a bound port")
-                await app.server.shutdown()
-                return
-            }
+            let port = try #require(
+                app.http.server.shared.localAddress?.port, "HTTP server did not report a bound port")
             try await test(app, port)
+            outcome = .success(())
         } catch {
-            await app.server.shutdown()
-            throw error
+            outcome = .failure(error)
         }
         await app.server.shutdown()
+        try outcome.get()
     }
+}
+
+/// A non-loopback IPv4 address of this host, or nil when there isn't one (a
+/// network-isolated CI container). Used to prove the XFCC provenance check
+/// rejects a peer that did not arrive from the pod-local sidecar.
+private func nonLoopbackIPv4() -> String? {
+    for device in (try? System.enumerateDevices()) ?? [] {
+        guard let address = device.address, case .v4 = address, let ip = address.ipAddress else { continue }
+        guard !ip.hasPrefix("127.") else { continue }
+        return ip
+    }
+    return nil
 }

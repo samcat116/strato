@@ -323,7 +323,7 @@ public func configure(_ app: Application) async throws {
     // Cloud-init user data column. Same ordering constraint as above.
     app.migrations.add(AddUserDataToVM())
 
-    // App settings migration (for signing keys, etc.)
+    // App settings migration (the WebAuthn decoy credential key, etc.)
     app.migrations.add(CreateAppSetting())
 
     // Volume management migrations

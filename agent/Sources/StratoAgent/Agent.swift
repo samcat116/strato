@@ -888,18 +888,12 @@ actor Agent {
         let mtlsDownloader = makeMTLSArtifactDownloader()
         let base = controlPlaneHTTPBase
         return { url, destination in
-            if Self.urlTargetsOrigin(url, base: base) {
+            if MTLSArtifactDownloader.targetsOrigin(url, of: base) {
                 try await mtlsDownloader.downloadArtifact(url: url, to: destination)
             } else {
                 try await AgentUpdater.defaultDownload(from: url, to: destination)
             }
         }
-    }
-
-    /// Whether `url` points at the same scheme/host/port origin as `base`.
-    private static func urlTargetsOrigin(_ url: URL, base: String) -> Bool {
-        guard let baseURL = URL(string: base) else { return false }
-        return url.scheme == baseURL.scheme && url.host == baseURL.host && url.port == baseURL.port
     }
 
     private func handleSVIDRotation() async {

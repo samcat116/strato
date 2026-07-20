@@ -944,9 +944,21 @@ struct ImageController: RouteCollection {
         }
 
         // Agent path: a forwarded client certificate means the request came
-        // through the Envoy mTLS listener. Authenticate the SVID (issue #493)
-        // — an agent identity in the trust domain is authorized for any ready
-        // image, the same trust already extended to it over the agent socket.
+        // through the Envoy mTLS listener. Authenticate the SVID (issue #493).
+        //
+        // Authorization is deliberately coarse: *any* enrolled agent identity
+        // may fetch *any* ready image, in any project. This is broader than
+        // what it replaced — the retired HMAC signature bound a URL to one
+        // image, project, artifact kind, and agent name — and it is not the
+        // same trust the agent socket extends, which only ever hands an agent
+        // the desired state for its own placements. The accepted model is that
+        // an enrolled agent is a trusted hypervisor node: it already runs
+        // tenant workloads and holds their disks on local storage, so image
+        // bytes are not a meaningful escalation. Deployments that place
+        // mutually untrusting tenants on separate agents do not get isolation
+        // here. Narrowing this to images the requesting agent has actually
+        // been assigned is left as follow-up work.
+        //
         // Never fall through to session auth on failure: a request carrying
         // XFCC that doesn't verify is a spoofing attempt, not a browser.
         if AgentMTLSAuthenticator.hasClientCertificate(req) {

@@ -18,6 +18,14 @@ import Vapor
 /// name still says so); that use is gone — agents authenticate downloads with
 /// their SPIFFE SVID over mTLS (issue #493) — but the stored key survives so
 /// existing deployments keep emitting the same decoys.
+///
+/// The retired signing service also honored an `IMAGE_DOWNLOAD_SIGNING_KEY`
+/// environment override, which is deliberately not carried over: it was
+/// undocumented, set by no deployment path in this repo, and an operator-facing
+/// knob for a value that is now purely internal. A deployment that did set it
+/// starts emitting different decoys after upgrading — which changes nothing an
+/// attacker can distinguish, since decoys only ever need to be stable going
+/// forward, not stable across the upgrade.
 enum DecoyKeyService {
     /// Gets the decoy key, generating and persisting one if none exists yet.
     /// Concurrent first calls (multi-replica boot) race benignly: the loser of
