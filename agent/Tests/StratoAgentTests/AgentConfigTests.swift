@@ -139,6 +139,81 @@ struct AgentConfigTests {
         }
     }
 
+    // MARK: - Pinned control-plane SPIFFE ID (issue #552)
+
+    @Test("control_plane_spiffe_id defaults to spiffe://<trust_domain>/control-plane")
+    func controlPlaneSPIFFEIDDefault() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "wss://cp.example:8443/agent/ws"
+                [spiffe]
+                enabled = true
+                trust_domain = "prod.example.com"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            let spiffe = try #require(config.spiffe)
+            #expect(spiffe.controlPlaneSPIFFEID == nil)
+            #expect(spiffe.resolvedControlPlaneSPIFFEID == "spiffe://prod.example.com/control-plane")
+        }
+    }
+
+    @Test("control_plane_spiffe_id defaults from the default trust domain when unset")
+    func controlPlaneSPIFFEIDDefaultTrustDomain() {
+        let spiffe = SPIFFEConfig(enabled: true)
+        #expect(spiffe.resolvedControlPlaneSPIFFEID == "spiffe://strato.local/control-plane")
+    }
+
+    @Test("An explicit control_plane_spiffe_id overrides the derived default")
+    func controlPlaneSPIFFEIDOverride() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "wss://cp.example:8443/agent/ws"
+                [spiffe]
+                enabled = true
+                trust_domain = "prod.example.com"
+                control_plane_spiffe_id = "spiffe://prod.example.com/cp/primary"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            let spiffe = try #require(config.spiffe)
+            #expect(spiffe.resolvedControlPlaneSPIFFEID == "spiffe://prod.example.com/cp/primary")
+        }
+    }
+
+    @Test(
+        "A malformed control_plane_spiffe_id is rejected at load",
+        arguments: [
+            "control-plane",  // no scheme
+            "https://prod.example.com/control-plane",  // wrong scheme
+            "spiffe://",  // no trust domain
+            "spiffe:///control-plane",  // empty trust domain
+            "spiffe://prod.example.com",  // no workload path
+            "spiffe://prod.example.com/",  // empty workload path
+        ])
+    func malformedControlPlaneSPIFFEIDRejected(id: String) throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "wss://cp.example:8443/agent/ws"
+                [spiffe]
+                enabled = true
+                control_plane_spiffe_id = "\(id)"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
     // MARK: - Image cache settings
 
     @Test("Load image cache settings")

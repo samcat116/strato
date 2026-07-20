@@ -56,6 +56,11 @@
 #   --trust-bundle PATH           SPIRE trust bundle PEM. Without it the agent
 #                                 uses insecure_bootstrap (TOFU) — fine for labs,
 #                                 not for hostile networks.
+#   --control-plane-spiffe-id ID  SPIFFE ID the control plane's TLS certificate
+#                                 must present; the agent refuses any other
+#                                 identity, even bundle-signed ones (issue #552).
+#                                 Default: spiffe://<trust-domain>/control-plane,
+#                                 which both supported deployments provision.
 #   --no-telemetry                Skip Alloy/spiffe-helper (host metrics + logs)
 #   --ingest-url URL              Telemetry ingest origin (default: derived from
 #                                 the control-plane URL, e.g. https://cp:8443)
@@ -125,6 +130,7 @@ while [ $# -gt 0 ]; do
     --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; shift 2 ;;
     --trust-domain)          TRUST_DOMAIN="$2"; shift 2 ;;
     --trust-bundle)          TRUST_BUNDLE="$2"; shift 2 ;;
+    --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; shift 2 ;;
     --no-telemetry)          INSTALL_TELEMETRY=0; shift ;;
     --ingest-url)            INGEST_URL="$2"; shift 2 ;;
     --spire-version)         SPIRE_VERSION="${2#v}"; shift 2 ;;
@@ -829,17 +835,27 @@ write_config() {
   # the command line (defaulting to the hostname), which the systemd unit above
   # pins to the enrolled name. The agent dials control_plane_url with it as the
   # ?name= query parameter and the control plane resolves the enrollment by it.
+  #
+  # control_plane_spiffe_id is only written when the operator overrode it:
+  # unset, the agent pins the conventional spiffe://<trust-domain>/control-plane.
+  local cp_spiffe_id_line=""
+  if [ -n "$CONTROL_PLANE_SPIFFE_ID" ]; then
+    cp_spiffe_id_line='control_plane_spiffe_id = "'"$CONTROL_PLANE_SPIFFE_ID"'"'
+  fi
   cat > "$CONFIG_FILE" << EOF
 control_plane_url = "$cp_url"
 network_mode = "$NETWORK_MODE"
 
 # The agent presents its SVID from the Workload API as the mTLS client
-# certificate; the control plane maps it back to this node's identity.
+# certificate; the control plane maps it back to this node's identity. The
+# agent in turn pins the control plane's SPIFFE ID on every connection
+# (control_plane_spiffe_id; defaults to spiffe://<trust_domain>/control-plane).
 [spiffe]
 enabled = true
 trust_domain = "$TRUST_DOMAIN"
 workload_api_socket_path = "$SPIRE_SOCKET"
 source_type = "workload_api"
+$cp_spiffe_id_line
 EOF
 }
 

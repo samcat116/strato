@@ -620,11 +620,13 @@ actor Agent {
         }
 
         let tlsConfiguration: TLSConfiguration?
+        let controlPlanePinning: SPIFFEPeerPinning?
         logger.info(
             "Initializing SPIFFE authentication",
             metadata: [
                 "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
                 "sourceType": .string(spiffe.sourceType ?? "workload_api"),
+                "controlPlaneSPIFFEID": .string(spiffe.resolvedControlPlaneSPIFFEID),
             ])
 
         do {
@@ -632,8 +634,12 @@ actor Agent {
             svidManager = SVIDManager(client: spiffeClient, logger: logger)
             try await svidManager?.start()
 
-            // Get TLS configuration from SVID
+            // Get TLS configuration from SVID, and pin the control plane's
+            // SPIFFE identity: chaining to the trust bundle alone would let
+            // any workload in the trust domain impersonate the control plane
+            // (issue #552).
             tlsConfiguration = try await svidManager?.getTLSConfiguration()
+            controlPlanePinning = try await makeControlPlanePinning(spiffe: spiffe)
             logger.info("SPIFFE authentication initialized successfully")
 
             // Register for SVID rotation
@@ -655,6 +661,7 @@ actor Agent {
         logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         websocketClient = WebSocketClient(
             url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration,
+            spiffePinning: controlPlanePinning,
             inboundContinuation: inboundContinuation)
 
         if let client = websocketClient {
@@ -842,13 +849,29 @@ actor Agent {
         }
     }
 
+    /// Pinned control-plane identity built from the current SVID's trust
+    /// bundle and the configured (or trust-domain-derived) control-plane
+    /// SPIFFE ID. Rebuilt on every rotation so a rotated trust bundle is
+    /// picked up along with the SVID.
+    private func makeControlPlanePinning(spiffe: SPIFFEConfig) async throws -> SPIFFEPeerPinning {
+        guard let svidManager else {
+            throw AgentError.spiffeConfigurationError("SVID manager not initialized")
+        }
+        let svid = try await svidManager.getSVID()
+        return try SPIFFEPeerPinning(
+            expectedSPIFFEID: spiffe.resolvedControlPlaneSPIFFEID,
+            trustBundlePEM: svid.trustBundle)
+    }
+
     private func handleSVIDRotation() async {
         logger.info("SVID rotated, updating WebSocket TLS configuration")
 
         do {
+            guard let spiffe = spiffeConfig else { return }
             let newTLSConfig = try await svidManager?.getTLSConfiguration()
+            let newPinning = try await makeControlPlanePinning(spiffe: spiffe)
             if let client = websocketClient {
-                await client.updateTLSConfiguration(newTLSConfig)
+                await client.updateTLSConfiguration(newTLSConfig, spiffePinning: newPinning)
             }
             logger.info("WebSocket TLS configuration updated after SVID rotation")
         } catch {
