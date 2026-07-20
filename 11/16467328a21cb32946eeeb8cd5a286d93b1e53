@@ -1,0 +1,151 @@
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_c1e74efaba2a64::t_4d63b9ff2ad8dc 105
+control-plane/Sources/App/Migrations/AddSnapshotExportOperationKind.swift
+  s_c1e74efaba2a64::t_c47630ad8bc95f 1-31
+agent/Sources/StratoAgentCore/SnapshotArtifactTransfer.swift
+  s_c1e74efaba2a64::t_b49fe59cf6ebbc 1-179
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_c1e74efaba2a64::t_2867b9f72fec85 88-114
+  s_c1e74efaba2a64::t_cca6174e630f90 3
+  s_c1e74efaba2a64::t_06c2185fcc6ef5 204-207,224-225
+  s_c1e74efaba2a64::t_fe46e1ac57458a 151-159,168-180
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_c1e74efaba2a64::t_b9a5eb8241d133 146-149,160-161,170
+  s_c1e74efaba2a64::t_306a06963f5fd0 61-75
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_c1e74efaba2a64::t_174933ed706426 23-31
+shared/Sources/StratoShared/WireProtocol.swift
+  s_c1e74efaba2a64::t_9d488add60dec3 283-298
+  s_c1e74efaba2a64::t_b4fca1228773ff 157-170
+control-plane/Sources/App/configure.swift
+  s_c1e74efaba2a64::t_578aba6ab4f79b 504-509
+  s_c1e74efaba2a64::t_b50a70ccf06c33 473-475
+control-plane/web/src/lib/api/sandboxes.ts
+  s_c1e74efaba2a64::t_6b4eb2730afd97 70-78
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_c1e74efaba2a64::t_bb6c25ba655165 140-192
+docs/architecture/sandboxes.md
+  s_c1e74efaba2a64::t_e92fbd2a5a87e5 604-606
+  s_c1e74efaba2a64::t_8cb10a45c71bb3 664-708,711-714
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_c1e74efaba2a64::t_90b0722de462d3 77-80
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_c1e74efaba2a64::t_36a663a05d2516 1-302
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_c1e74efaba2a64::t_4198280e15ac46 5
+  s_c1e74efaba2a64::t_13184c38f1435a 35,42-62
+  s_c1e74efaba2a64::t_dd1efdaf684d83 124-126,135-137,140-166
+  s_c1e74efaba2a64::t_aafb8609a58445 202-204
+  s_d07d11578f97c9::t_64b028e3abbd14 63-64,167
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_c1e74efaba2a64::t_1c594a03e0f449 55
+  s_c1e74efaba2a64::t_83dba208b626b7 71
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_c1e74efaba2a64::t_8642b4323bba1f 277-280,284-293,309-324
+  s_c1e74efaba2a64::t_bd8eaa1cddc793 325-326
+agent/Tests/StratoAgentTests/HypervisorProbeTests.swift
+  s_c1e74efaba2a64::t_3ad1315a54a569 103-139
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_c1e74efaba2a64::t_f4b2d21a1dcc73 111-153
+control-plane/web/src/types/api.ts
+  s_c1e74efaba2a64::t_0c2fe29908011f 708-712
+  s_c1e74efaba2a64::t_65f96a89c79dc4 733-736
+control-plane/Sources/App/Services/AgentService.swift
+  s_c1e74efaba2a64::t_8fbfb31a8791c9 2843-2844
+  s_c1e74efaba2a64::t_89d5dd95594bb1 2691-2694
+  s_c1e74efaba2a64::t_7ea0d94a707db0 1873-1891,1893-1894
+  s_c1e74efaba2a64::t_21f7b4e6535031 2816,2819,2829-2842,2845-2869,2879-2890
+  s_c1e74efaba2a64::t_cae9dc20b8e396 2891-2892
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_c1e74efaba2a64::t_93b323d32122cf 479-587
+agent/Tests/StratoAgentTests/WarmSandboxSnapshotCacheTests.swift
+  s_c1e74efaba2a64::t_a30932d67b795d 21-22,32-33
+  s_c1e74efaba2a64::t_54fb8d43bad823 89-99
+shared/Sources/StratoShared/SandboxModels.swift
+  s_c1e74efaba2a64::t_6235d62054b034 5-10,14-18,20-24,27,31-41
+  s_c1e74efaba2a64::t_8ef913e8f134ab 83-90,102-103,115
+  s_c1e74efaba2a64::t_fbfff9d1e58f0f 42-43
+control-plane/Sources/App/Services/SandboxSnapshotMobilityService.swift
+  s_c1e74efaba2a64::t_a9e0e94329068a 1-73,75-143
+  s_c1e74efaba2a64::t_a4a6f73b3cee35 74
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_c1e74efaba2a64::t_f24df3290495f0 493-495,500,509-510
+  s_c1e74efaba2a64::t_f55d40e2a2c4da 456,546-561
+  s_c1e74efaba2a64::t_4f068e70a5b31a 616-618
+  s_c1e74efaba2a64::t_37919e50aa15bb 429-455
+  s_c1e74efaba2a64::t_20e89cce5c0d9e 197-203
+  s_c1e74efaba2a64::t_5415269c873216 343-345
+  s_c1e74efaba2a64::t_ff81c08742b3a4 481-482
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_c1e74efaba2a64::t_fff3cfb3abd8c8 22-25,35,45-46,56,64,74-78
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_c1e74efaba2a64::t_7f98722591d3a9 99-105,111-112,119
+shared/Sources/StratoShared/OperationModels.swift
+  s_c1e74efaba2a64::t_a711e623bfb150 20-22
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_c1e74efaba2a64::t_6d6ee86c3a4b99 33-39
+  s_c1e74efaba2a64::t_99ee334bf15c2b 443-463
+  s_c1e74efaba2a64::t_7bae56388febec 272-276
+  s_c1e74efaba2a64::t_ed4f901270ff08 928-931
+  s_c1e74efaba2a64::t_4627ac6d161811 291
+  s_c1e74efaba2a64::t_38b8531b321201 318-327,329-338,342
+  s_c1e74efaba2a64::t_ee90701d2396c4 476-477
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_c1e74efaba2a64::t_7173bc78e6fcf0 687-692
+  s_c1e74efaba2a64::t_459a651fe8b123 1411-1412
+  s_c1e74efaba2a64::t_538f1254d3c37d 1423-1426,1436-1441
+  s_c1e74efaba2a64::t_8d8a92a13370cf 1759-1760
+  s_c1e74efaba2a64::t_6764c7e5b052f6 1704,2870-2880
+  s_c1e74efaba2a64::t_b88cc9db52899a 542-544,548-549
+  s_c1e74efaba2a64::t_1aaa3de5daa3cc 1559-1562,1568-1703
+  s_c1e74efaba2a64::t_fb94bd93d196eb 1705
+control-plane/Sources/App/Models/Sandbox.swift
+  s_c1e74efaba2a64::t_fa342ba5bbc6f3 265-266
+  s_c1e74efaba2a64::t_30ef59332ed1e8 75-82
+  s_c1e74efaba2a64::t_361f951010a23a 137-138,153
+  s_c1e74efaba2a64::t_4f99a6e89abd10 292
+  s_c1e74efaba2a64::t_04b0ce252acc29 315
+shared/Sources/StratoShared/SandboxSnapshotMessages.swift
+  s_c1e74efaba2a64::t_1d31319a0a134b 183-186,193-196,202-203,209
+  s_c1e74efaba2a64::t_0b4202fa093039 239-243,255-256,268
+  s_c1e74efaba2a64::t_c5d39d3b890493 36-128
+control-plane/Sources/App/Services/SandboxSnapshotService.swift
+  s_c1e74efaba2a64::t_74b7a81e8a6166 81-83,88,92-108
+agent/Sources/StratoAgent/Agent.swift
+  s_c1e74efaba2a64::t_8dcf23ff2b5086 2607-2608
+  s_c1e74efaba2a64::t_0dcb6ad2a426f3 2664-2665
+  s_c1e74efaba2a64::t_c786fce95ba13f 887,892-898
+  s_c1e74efaba2a64::t_ec570d24919f45 2681-2712
+  s_c1e74efaba2a64::t_26a194fa872e1d 1791-1793
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_c1e74efaba2a64::t_b2351dc7a61b29 578-932
+control-plane/Sources/App/Migrations/AddSandboxSnapshotMobility.swift
+  s_c1e74efaba2a64::t_acd9105542a3b9 1-50
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_c1e74efaba2a64::t_ef0addddff52ea 69-72
+  s_c1e74efaba2a64::t_033fa1d3669233 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1116467328a21cb32946eeeb8cd5a286d93b1e53",
+  "prompts": {},
+  "sessions": {
+    "s_c1e74efaba2a64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc4f4359-64cb-472e-836c-dd5f9c0edac9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d07d11578f97c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c24c9982-0ae9-44a1-b39d-efc7d0538c89",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
