@@ -1,0 +1,24 @@
+control-plane/Tests/AppTests/SCIMProvisioningIntegrationTests.swift
+  s_6e792186ddb562::t_ffec23546b895b 167-212
+control-plane/Sources/App/openapi.yaml
+  s_6e792186ddb562::t_124f850f81fabd 11298-11300
+  s_6e792186ddb562::t_823d665c95afca 11289
+control-plane/Sources/App/Controllers/SCIMController.swift
+  s_6e792186ddb562::t_761abffb51365f 266-271,275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1bb8bb9b47db75f6a2c16ce8ff88c7a8a90b9fc3",
+  "prompts": {},
+  "sessions": {
+    "s_6e792186ddb562": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27be8a5e-c45a-402a-b6f0-9a2712ae8eeb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
