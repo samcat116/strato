@@ -149,6 +149,33 @@ jobs:
             --set externalDatabase.password=external-db-password > /tmp/external-db-template.yaml
           echo "External database template generated successfully"
 
+      - name: Template with an external monitoring stack
+        run: |
+          helm template strato-monitoring helm/strato-control-plane/ \
+            -f helm/strato-control-plane/ci/external-monitoring-values.yaml \
+            --set spire.enabled=true > /tmp/external-monitoring-template.yaml
+          echo "External monitoring template generated successfully"
+
+      - name: Assert scrape endpoints survive disabling the bundled Prometheus
+        run: |
+          python3 - <<'EOF'
+          r = open('/tmp/external-monitoring-template.yaml').read()
+          # The whole point of prometheusExport: metrics stay scrapeable with
+          # opentelemetry.prometheus.enabled=false.
+          assert 'kind: ServiceMonitor' in r, "no ServiceMonitor rendered"
+          assert 'name: strato-monitoring-strato-control-plane-otel-collector\n' in r
+          assert 'name: strato-monitoring-strato-control-plane-spire-server\n' in r
+          assert 'exporters: [debug, prometheus]' in r, "collector prometheus exporter missing"
+          assert 'prometheus.io/scrape' in r, "scrape annotations missing"
+          # ...and the bundled Prometheus StatefulSet/PVC does not come along.
+          assert 'strato-monitoring-strato-control-plane-prometheus' not in r, \
+              "bundled Prometheus rendered despite enabled=false"
+          assert 'prometheusremotewrite' not in r
+          # The Issuance panel follows the external URL.
+          assert 'http://kube-prometheus-stack-prometheus.monitoring.svc:9090' in r
+          print("✅ Scrape endpoints decoupled from the bundled Prometheus")
+          EOF
+
       - name: Template with SPIRE enabled
         run: |
           helm template strato-spire helm/strato-control-plane/ \

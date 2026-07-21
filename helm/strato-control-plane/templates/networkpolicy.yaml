@@ -106,7 +106,8 @@ spec:
     # (SPIRE_METRICS_PROMETHEUS_URL). Appended outside the egress with/else so it
     # applies to both the default and any custom egress list, and scoped to the
     # Prometheus pods rather than opening the port to every destination. For an
-    # *external* Prometheus, add your own egress rule to reach it.
+    # *external* Prometheus (opentelemetry.prometheus.url), add your own egress
+    # rule to reach it — the 443 rule below already covers an https URL.
     - to:
         - podSelector:
             matchLabels:

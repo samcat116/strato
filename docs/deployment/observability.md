@@ -24,6 +24,60 @@ sites stay in the code but cost nothing.
 Production should run with `OTEL_METRICS_ENABLED=true` pointed at a collector.
 The Helm chart wires this via the `opentelemetry.*` values.
 
+## Scraping the chart from an existing Prometheus
+
+The control plane has **no `/metrics` endpoint of its own** — it pushes OTLP to
+a collector. What a Prometheus scrapes is the collector's `prometheus` exporter
+(port `8889`), which re-exposes everything in the metric catalog below.
+
+That exporter is controlled by `opentelemetry.prometheusExport`, which is
+independent of `opentelemetry.prometheus` (the chart's *bundled* Prometheus
+StatefulSet). To scrape strato from a monitoring stack you already run, without
+also standing up a second Prometheus and its PVC:
+
+```yaml
+opentelemetry:
+  enabled: true
+
+  prometheusExport:
+    enabled: true          # default: exposes the scrape endpoints
+    serviceMonitor:
+      enabled: true        # needs the monitoring.coreos.com CRDs
+      labels:
+        release: kube-prometheus-stack   # match your operator's serviceMonitorSelector
+
+  prometheus:
+    enabled: false         # no bundled Prometheus, no 10Gi PVC
+    # Keeps the Workload Identity "Issuance" panel working without it
+    url: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+```
+
+This renders two ServiceMonitors:
+
+| Target | Port | What it carries |
+|--------|------|-----------------|
+| `<release>-otel-collector` | `prometheus` (8889) | Strato application metrics (the catalog below) |
+| `<release>-otel-collector` | `metrics` (8888) | The collector's own pipeline health — set `serviceMonitor.collectorTelemetry: false` to drop it |
+| `<release>-spire-server` | `metrics` (9988) | SPIRE SVID-signing counters, one target per replica |
+
+Without the Prometheus Operator, set `prometheusExport.podAnnotations: true`
+instead for `prometheus.io/scrape` annotation discovery (plain Prometheus
+`kubernetes_sd`, Grafana Alloy, DataDog).
+
+Logs and traces stay on the OTLP path — point
+`opentelemetry.collector.endpoint` (or the collector's exporters) at your
+backend; only metrics need the scrape endpoint.
+
+Setting `opentelemetry.prometheusExport.enabled: false` **and**
+`opentelemetry.prometheus.enabled: false` removes the exporter, its Service and
+container ports, and SPIRE's telemetry listener entirely.
+
+::: warning networkPolicy
+With `networkPolicy.enabled: true`, an external `opentelemetry.prometheus.url`
+on a non-443 port needs its own rule in `networkPolicy.egress` — the chart can
+only scope the built-in rule to its own Prometheus pods.
+:::
+
 ## Metric catalog
 
 All metrics are defined in one place: `control-plane/Sources/App/Telemetry/Telemetry.swift`.

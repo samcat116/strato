@@ -109,7 +109,7 @@ data:
         live_path = "/live"
         ready_path = "/ready"
     }
-    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+    {{- if include "strato-control-plane.metricsExposed" . }}
 
     # Expose SPIRE server telemetry (incl. the CA SVID-signing counters
     # spire_server_server_ca_sign_x509_svid / _jwt_svid) for Prometheus to

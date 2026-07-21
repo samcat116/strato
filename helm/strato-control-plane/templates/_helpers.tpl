@@ -442,3 +442,46 @@ when an access key is set in values.
 {{- printf "%s-image-storage" (include "strato-control-plane.fullname" .) }}
 {{- end }}
 {{- end }}
+
+{{/*
+Whether Prometheus-format scrape endpoints are rendered at all: the collector's
+`prometheus` exporter, its container/Service port, SPIRE's telemetry listener
+and its headless metrics Service.
+
+Either consumer turns them on — an external scraper (`prometheusExport`) or the
+bundled Prometheus, which scrapes the very same endpoints. Empty (falsey to
+`if`) when neither is in play.
+*/}}
+{{- define "strato-control-plane.metricsExposed" -}}
+{{- if and .Values.opentelemetry.enabled (or .Values.opentelemetry.prometheusExport.enabled .Values.opentelemetry.prometheus.enabled) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Prometheus HTTP API the control plane queries for the Workload Identity
+"Issuance" panel. An explicit `opentelemetry.prometheus.url` wins so the panel
+survives disabling the bundled Prometheus; otherwise the bundled Service, or
+empty when there is nothing to query.
+*/}}
+{{- define "strato-control-plane.prometheusQueryURL" -}}
+{{- if not .Values.opentelemetry.enabled }}
+{{- else if .Values.opentelemetry.prometheus.url }}
+{{- .Values.opentelemetry.prometheus.url }}
+{{- else if .Values.opentelemetry.prometheus.enabled }}
+{{- printf "http://%s-prometheus:%v" (include "strato-control-plane.fullname" .) .Values.opentelemetry.prometheus.service.port }}
+{{- end }}
+{{- end }}
+
+{{/*
+prometheus.io/* discovery annotations for a scrape target, or nothing when
+annotation-based discovery is off. Call with a dict: (dict "ctx" $ "port" 8889
+"path" "/metrics").
+*/}}
+{{- define "strato-control-plane.scrapeAnnotations" -}}
+{{- if .ctx.Values.opentelemetry.prometheusExport.podAnnotations }}
+prometheus.io/scrape: "true"
+prometheus.io/port: {{ .port | quote }}
+prometheus.io/path: {{ .path | default "/metrics" | quote }}
+{{- end }}
+{{- end }}
