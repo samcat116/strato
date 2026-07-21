@@ -98,7 +98,8 @@ struct VMController: RouteCollection {
         user: User,
         settingVMStatus transitionalStatus: VMStatus? = nil,
         settingDesiredStatus desiredStatus: DesiredVMStatus? = nil,
-        on db: Database
+        on db: Database,
+        mutation: (@Sendable (any Database) async throws -> Void)? = nil
     ) async throws -> ResourceOperation {
         try await ResourceOperation.begin(
             kind,
@@ -119,6 +120,10 @@ struct VMController: RouteCollection {
             if desiredStatus != nil || transitionalStatus != nil {
                 try await vm.save(on: db)
             }
+            // Spec changes that aren't power-state changes (issue #568's
+            // resize) bring their own mutation, which commits with the
+            // operation record on the same terms.
+            try await mutation?(db)
         }
     }
 
@@ -375,6 +380,11 @@ struct VMController: RouteCollection {
             let cpu: Int?
             let memory: Int64?
             let disk: Int64?
+            // Hot-add ceilings (issue #568). Fixed for the life of a running
+            // hypervisor process, so they are chosen here and only raised by
+            // a stop/start. Default to the boot sizing, i.e. no headroom.
+            let maxCpu: Int?
+            let maxMemory: Int64?
             let cmdline: String?
             let networkId: UUID?
             let networkName: String?
@@ -530,6 +540,22 @@ struct VMController: RouteCollection {
         guard diskValue > 0 else {
             throw Abort(.badRequest, reason: "'disk' must be positive")
         }
+
+        // Hot-add headroom (issue #568). The ceilings bound what a later
+        // online resize may reach; below the boot sizing they would be
+        // meaningless, and the upper vCPU bound keeps a typo from spawning a
+        // VM with thousands of (unusable) hotplug slots.
+        let maxCpuValue = createRequest.maxCpu ?? cpuValue
+        let maxMemoryValue = createRequest.maxMemory ?? memoryValue
+        guard maxCpuValue >= cpuValue else {
+            throw Abort(.badRequest, reason: "'maxCpu' must be at least 'cpu'")
+        }
+        guard maxCpuValue <= Self.maxHotpluggableCPUs else {
+            throw Abort(.badRequest, reason: "'maxCpu' must not exceed \(Self.maxHotpluggableCPUs)")
+        }
+        guard maxMemoryValue >= memoryValue else {
+            throw Abort(.badRequest, reason: "'maxMemory' must be at least 'memory'")
+        }
         let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
         // The kernel cmdline is passed through to the agent's hypervisor
@@ -572,7 +598,8 @@ struct VMController: RouteCollection {
             memory: memoryValue,
             disk: diskValue,
             hypervisorType: chosenHypervisor,
-            maxCpu: cpuValue
+            maxCpu: maxCpuValue,
+            maxMemory: maxMemoryValue
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -803,19 +830,36 @@ struct VMController: RouteCollection {
         }
     }
 
-    func update(req: Request) async throws -> VMDetailResponse {
+    /// Updates a VM's metadata and, since issue #568, its vCPU/memory sizing.
+    ///
+    /// Sizing changes take one of two routes:
+    ///
+    /// * **Resting VM** — the new sizing is simply persisted (raising the
+    ///   hot-add ceilings with it, since the next boot spawns a fresh
+    ///   hypervisor process). Answers `200` with the updated VM.
+    /// * **Running VM** — the change must fit the ceilings the running
+    ///   process was spawned with, so it is validated against them, reserved
+    ///   against quota, and written as a desired-state change with a
+    ///   generation bump. The agent's reconciler diffs the new spec against
+    ///   what the VM is running and hot-adds the difference. Answers `202`
+    ///   with the operation to poll, like the other agent-backed mutations.
+    ///
+    /// Metadata-only updates keep their historical `200` + VM body.
+    func update(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
         struct UpdateVMRequest: Content {
             let name: String?
             let description: String?
+            /// Target boot vCPU count (issue #568).
+            let cpu: Int?
+            /// Target memory in bytes (issue #568).
+            let memory: Int64?
         }
 
         let updateRequest = try req.content.decode(UpdateVMRequest.self)
 
-        // Only allow updating name and description for now
-        // Resource changes would require VM shutdown and recreation
         if let name = updateRequest.name {
             existingVM.name = name
         }
@@ -824,16 +868,112 @@ struct VMController: RouteCollection {
             existingVM.description = description
         }
 
-        try await existingVM.save(on: req.db)
+        let newCPU = updateRequest.cpu ?? existingVM.cpu
+        let newMemory = updateRequest.memory ?? existingVM.memory
+        guard newCPU != existingVM.cpu || newMemory != existingVM.memory else {
+            try await existingVM.save(on: req.db)
+            return try await Self.detailResponse(for: existingVM, on: req)
+        }
 
-        // The DTO, not the model: the raw `VM` encoding would expose fields
-        // that must stay server-side (cloud-init user_data can carry secrets).
-        try await existingVM.$networkInterfaces.load(on: req.db)
-        for interface in existingVM.networkInterfaces {
+        guard newCPU > 0 else { throw Abort(.badRequest, reason: "'cpu' must be positive") }
+        guard newMemory > 0 else { throw Abort(.badRequest, reason: "'memory' must be positive") }
+        guard newCPU <= Self.maxHotpluggableCPUs else {
+            throw Abort(.badRequest, reason: "'cpu' must not exceed \(Self.maxHotpluggableCPUs)")
+        }
+
+        guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "VM's project no longer exists")
+        }
+        let cpuDelta = newCPU - existingVM.cpu
+        let memoryDelta = newMemory - existingVM.memory
+
+        // A resting VM re-spawns from the new spec on its next boot, so both
+        // the sizing and its ceilings can move freely.
+        guard existingVM.status == .running else {
+            guard existingVM.status == .created || existingVM.status == .shutdown || existingVM.status == .error
+            else {
+                throw Abort(
+                    .conflict,
+                    reason: "A VM can only be resized while it is running or stopped (this one is "
+                        + "\(existingVM.status.rawValue))")
+            }
+            try await req.db.transaction { db in
+                try await QuotaEnforcementService.reserveVMResize(
+                    for: project, environment: existingVM.environment,
+                    vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
+                existingVM.cpu = newCPU
+                existingVM.memory = newMemory
+                existingVM.maxCpu = max(existingVM.maxCpu, newCPU)
+                existingVM.maxMemory = max(existingVM.maxMemory, newMemory)
+                // The stopped VM still has a desired-state entry the agent
+                // syncs on; bump so the new spec isn't dropped as stale.
+                existingVM.bumpGeneration()
+                try await existingVM.save(on: db)
+            }
+            return try await Self.detailResponse(for: existingVM, on: req)
+        }
+
+        // Online resize: the ceilings were fixed when the process spawned, so
+        // exceeding them is a `422` naming the restart as the remedy rather
+        // than an operation that could never converge.
+        guard newCPU <= existingVM.maxCpu else {
+            throw Abort(
+                .unprocessableEntity,
+                reason: "This VM was started with a maximum of \(existingVM.maxCpu) vCPUs; "
+                    + "restart it to grow beyond that")
+        }
+        guard newMemory <= existingVM.maxMemory else {
+            throw Abort(
+                .unprocessableEntity,
+                reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
+                    + "restart it to grow beyond that")
+        }
+        guard await Self.agentSupportsOnlineResize(vm: existingVM, app: req.application) else {
+            throw Abort(
+                .unprocessableEntity,
+                reason: "This VM's agent is too old to resize a running VM; restart the VM to apply a new size")
+        }
+
+        let operation = try await beginOperation(.resize, vm: existingVM, user: user, on: req.db) { @Sendable db in
+            try await QuotaEnforcementService.reserveVMResize(
+                for: project, environment: existingVM.environment,
+                vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
+            existingVM.cpu = newCPU
+            existingVM.memory = newMemory
+            // Desired status is unchanged — this is a spec change — but the
+            // generation must still advance for the agent to apply it.
+            existingVM.bumpGeneration()
+            try await existingVM.save(on: db)
+        }
+        Self.dispatchStateSync(operation, vm: existingVM, app: req.application)
+        return try operation.acceptedResponse()
+    }
+
+    /// Upper bound on a VM's vCPU count, and so on the hotplug slots QEMU is
+    /// spawned with. Well above any host Strato schedules onto, low enough
+    /// that a mistyped ceiling can't produce an unbootable machine.
+    static let maxHotpluggableCPUs = 512
+
+    /// Whether the VM's agent speaks the reconciler resize step. A pre-v17
+    /// agent reports the bumped generation as converged without touching the
+    /// guest, so the operation would succeed having changed nothing.
+    private static func agentSupportsOnlineResize(vm: VM, app: Application) async -> Bool {
+        guard let agentId = vm.hypervisorId,
+            let agent = await app.agentService.getAgentInfo(agentId)
+        else { return false }
+        return WireProtocol.supportsVMResize(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// The VM detail DTO with its NIC children loaded. The DTO, not the model:
+    /// the raw `VM` encoding would expose fields that must stay server-side
+    /// (cloud-init user_data can carry secrets).
+    private static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
+        try await vm.$networkInterfaces.load(on: req.db)
+        for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
         }
-        return VMDetailResponse(from: existingVM)
+        return try await VMDetailResponse(from: vm).encodeResponse(for: req)
     }
 
     func delete(req: Request) async throws -> Response {

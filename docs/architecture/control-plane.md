@@ -135,6 +135,19 @@ guard through a partial unique index on pending operations — followed by
 otherwise publish a nudge to the replica that does. A lost nudge is harmless;
 the ~60s periodic sync re-sends full state.
 
+`PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
+`cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
+`maxMemory` ceilings the VM was started with (`422` naming the restart
+otherwise, including when its agent predates `supportsVMResize`), reserved
+against quota as a *delta*, then written with a generation bump — desired
+status unchanged, since a resize is a spec change, not a power-state change
+— and answered `202` with a `resize` operation. On a **stopped** VM the new
+sizing (and the ceilings, which the next boot re-spawns from) is simply
+persisted and answered `200`. Quota accounting always follows the *current*
+sizing, never the ceiling: reserving to the maximum would strand capacity
+the VM may never use, and the scheduler's placement figures are the same
+current values.
+
 **Operations complete from observed state, not from the HTTP request**: when
 an agent's `ObservedStateReport` shows the VM's observed status/generation
 caught up to desired, `completeIfPending` marks the row terminal. The

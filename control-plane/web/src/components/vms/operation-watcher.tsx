@@ -15,6 +15,7 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   pause: { succeeded: "Paused", infinitive: "pause" },
   resume: { succeeded: "Resumed", infinitive: "resume" },
   delete: { succeeded: "Deleted", infinitive: "delete" },
+  resize: { succeeded: "Resized", infinitive: "resize" },
   snapshot: { succeeded: "Snapshotted", infinitive: "snapshot" },
   snapshot_delete: { succeeded: "Snapshot deleted", infinitive: "delete the snapshot of" },
   restore: { succeeded: "Restored", infinitive: "restore" },

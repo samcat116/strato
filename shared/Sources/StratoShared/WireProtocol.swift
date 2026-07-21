@@ -204,7 +204,19 @@ public enum WireProtocol {
     /// v15's `guestInfo` — an older control plane ignores the key, an older
     /// agent never sends it, absence can never mean a destructive action — so
     /// there is no gate.
-    public static let currentVersion = 16
+    ///
+    /// Version 17: CPU/memory hot-add (issue #568). Adds
+    /// `VMSpec.maxMemoryBytes` (optional, defaulting to `memoryBytes`) and,
+    /// on the agent side, a reconciler step that resizes a *running* VM when
+    /// a new generation's spec changes `cpus`/`memoryBytes`. The spec field
+    /// is additive and nil-tolerant, but the convergence behavior is not: a
+    /// pre-v17 agent sees no status change, plans no work, and reports the
+    /// new generation as converged — so the resize would silently succeed
+    /// having changed nothing. The control plane therefore refuses an
+    /// online resize for agents below this version and tells the caller to
+    /// restart the VM instead (see `supportsVMResize(_:)`); resizing a
+    /// stopped VM needs no gate, since the next boot uses the new spec.
+    public static let currentVersion = 17
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -331,6 +343,18 @@ public enum WireProtocol {
     /// three up front.
     public static func supportsSandboxSnapshotMobility(_ version: Int) -> Bool {
         version >= sandboxSnapshotMobilityMinimumVersion
+    }
+
+    /// The lowest protocol version whose reconciler converges a running VM's
+    /// vCPU/memory sizing (see `currentVersion` version 17 notes).
+    public static let vmResizeMinimumVersion = 17
+
+    /// Whether a VM on an agent registered with `version` can be resized
+    /// while it runs. A pre-v17 agent reports the new generation as converged
+    /// without touching the guest, so the control plane refuses the online
+    /// resize rather than completing an operation that did nothing.
+    public static func supportsVMResize(_ version: Int) -> Bool {
+        version >= vmResizeMinimumVersion
     }
 
     /// The lowest protocol version whose network reconciler realizes

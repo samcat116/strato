@@ -209,6 +209,43 @@ and collects the stats. The same guest-info slow poll caches the result as
 without the driver, or not yet reporting (`last-update == 0`, `-1`
 sentinels), yield nil — never a fabricated zero.
 
+## CPU/memory hot-add (resize without a reboot)
+
+A VM created with headroom — `maxCpus > cpus` or `maxMemoryBytes >
+memoryBytes` in its spec (issue #568) — spawns with the extra QEMU
+arguments that make it resizable: `-smp cpus=<n>,maxcpus=<max>` for the
+vCPU hotplug slots, and `-m <base>M,slots=1,maxmem=<max>M` plus a
+`memory-backend-ram` + `virtio-mem-pci` pair for memory. Without headroom
+none of that is emitted, so the overwhelming majority of VMs spawn with
+exactly the argument vector they did before the feature existed.
+
+Resizing is **declarative, not an RPC**: the control plane writes the new
+sizing into the VM's desired state and bumps its generation, and the
+reconciler's planner — comparing each running VM's manifest sizing against
+the sync's spec — emits a `.resize` step. That survives dropped syncs by
+construction, since the next level-triggered sync re-derives the same diff.
+The step reaches `QEMUService.resizeVM`, which drives the same
+`qmp-stats.sock` monitor the balloon probe uses:
+
+- **vCPUs**: `query-hotpluggable-cpus` enumerates the machine's slots
+  (realized ones carry a `qom-path`), and free slots are realized with
+  `device_add` in ascending topology order until the target is met.
+- **Memory**: `qom-set requested-size` on the virtio-mem device, aligned
+  down to the device's block size, asks the guest to plug (or unplug) the
+  region above boot memory.
+
+Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
+unplug is unreliable — and memory never shrinks below the boot size; both
+smaller figures apply at the next reboot, which re-spawns from the whole
+spec anyway. Growing past the ceilings the process spawned with is a
+permanent failure on the agent and a `422` at the API: `maxcpus`/`maxmem`
+are fixed for the life of a QEMU process. Hot-plugged resources arrive
+offline, so the cloud-init provisioning installs udev rules that online
+them (modern distros already ship equivalents).
+
+The manifest entry is rewritten only after the driver reports success, so a
+failed resize is re-planned by the next sync rather than looking applied.
+
 ## The reconciler
 
 `StratoAgentCore/Reconciliation.swift` — two layers, generalized over
@@ -216,7 +253,8 @@ sentinels), yield nil — never a fabricated zero.
 
 - **A pure diff** (`Reconciler.plan`): desired list vs observed presence
   (`.managed(status)` or `.orphaned`) → `[ReconcileWorkItem]` of steps
-  (`create`, `adopt`, `boot`, `pause`, `resume`, `shutdown`, `delete`).
+  (`create`, `adopt`, `boot`, `pause`, `resume`, `resize`, `shutdown`,
+  `delete`).
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
   present-but-undesired workloads get deleted (full-list semantics).

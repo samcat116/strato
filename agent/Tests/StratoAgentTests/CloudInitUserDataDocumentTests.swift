@@ -30,6 +30,17 @@ struct CloudInitUserDataDocumentTests {
         #expect(doc.contains("systemctl enable --now qemu-guest-agent"))
     }
 
+    @Test("legacy document installs the hot-plug onlining udev rules")
+    func legacyInstallsHotplugRules() {
+        let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: nil)
+        // Hot-added vCPUs/memory arrive offline; the guest has to bring them
+        // up for a resize to be visible (issue #568).
+        #expect(doc.contains("/etc/udev/rules.d/80-strato-hotplug.rules"))
+        #expect(doc.contains(#"SUBSYSTEM=="cpu""#))
+        #expect(doc.contains(#"SUBSYSTEM=="memory""#))
+        #expect(doc.contains("udevadm control --reload-rules"))
+    }
+
     @Test("legacy document authorizes trimmed, non-empty SSH keys")
     func legacyDocumentWithKeys() {
         let doc = CloudInitProvisioner.userDataDocument(
@@ -79,6 +90,19 @@ struct CloudInitUserDataDocumentTests {
         // Strato's own cloud-config part carries no packages: key that a caller
         // could clobber.
         #expect(!CloudInitProvisioner.systemCloudConfig(authorizedKeys: []).contains("packages"))
+    }
+
+    /// A caller cloud-config with its own `write_files`/`runcmd` would replace
+    /// ours under cloud-init's list merge, so the onlining travels as a script
+    /// part instead (issue #568).
+    @Test("hot-plug onlining survives a caller that supplies its own write_files")
+    func hotplugOnliningSurvivesCallerWriteFiles() {
+        let payload = "#cloud-config\nwrite_files:\n  - path: /etc/motd\n    content: hi\n"
+        let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: payload)
+        #expect(doc.contains("filename=\"strato-hotplug-online.sh\""))
+        #expect(doc.contains("80-strato-hotplug.rules"))
+        // Strato's own cloud-config part carries no write_files to be replaced.
+        #expect(doc.contains("/etc/motd"))
     }
 
     @Test("multipart labels the caller part with its detected content type")
@@ -164,10 +188,10 @@ struct CloudInitUserDataDocumentTests {
         let boundary = String(declared[start..<end])
         #expect(boundary != "strato-cloud-init-boundary")
         #expect(!hostile.contains(boundary))
-        // Every part opener is framed with the extended boundary: four Strato
-        // parts (provisioning cfg, console setup, qga setup, caller payload)
-        // give four openers → five segments.
-        #expect(doc.components(separatedBy: "\n--\(boundary)\n").count == 5)
+        // Every part opener is framed with the extended boundary: five parts
+        // (provisioning cfg, console setup, qga setup, hot-plug onlining,
+        // caller payload) give five openers → six segments.
+        #expect(doc.components(separatedBy: "\n--\(boundary)\n").count == 6)
         #expect(doc.hasSuffix("\n--\(boundary)--\n"))
     }
 

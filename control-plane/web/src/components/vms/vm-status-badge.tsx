@@ -53,6 +53,7 @@ const pendingOperationLabels: Record<OperationKind, string> = {
   pause: "Pausing",
   resume: "Resuming",
   delete: "Deleting",
+  resize: "Resizing",
   // Sandbox-only kinds; VMs never carry them but the map stays total.
   snapshot: "Snapshotting",
   snapshot_delete: "Deleting snapshot",

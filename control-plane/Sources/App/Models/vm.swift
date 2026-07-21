@@ -103,6 +103,13 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "memory")
     var memory: Int64
 
+    /// Upper bound for online memory growth (issue #568), the counterpart of
+    /// `maxCpu`. Fixed when the VM's hypervisor process spawns, so raising
+    /// `memory` past it needs a stop/start; equal to `memory` for VMs created
+    /// without headroom, which get no hot-pluggable memory device at all.
+    @Field(key: "max_memory")
+    var maxMemory: Int64
+
     @Field(key: "hugepages")
     var hugepages: Bool
 
@@ -177,6 +184,7 @@ final class VM: Model, @unchecked Sendable {
         status: VMStatus = .created,
         hypervisorType: HypervisorType = .qemu,
         maxCpu: Int? = nil,
+        maxMemory: Int64? = nil,
         hugepages: Bool = false,
         sharedMemory: Bool = false,
         readonlyDisk: Bool = false,
@@ -192,6 +200,7 @@ final class VM: Model, @unchecked Sendable {
         self.cpu = cpu
         self.maxCpu = maxCpu ?? cpu
         self.memory = memory
+        self.maxMemory = max(maxMemory ?? memory, memory)
         self.disk = disk
         self.status = status
         self.desiredStatus = .shutdown
@@ -237,6 +246,15 @@ extension VM {
     /// `save(on:)` afterwards.
     func setDesiredStatus(_ newDesired: DesiredVMStatus) {
         desiredStatus = newDesired
+        generation += 1
+    }
+
+    /// Bumps the generation without changing the desired status, for a change
+    /// to the *spec* rather than the power state (issue #568: a vCPU/memory
+    /// resize). Agents converge on spec and status from the same
+    /// generation-guarded entry, so a spec edit that skipped the bump would
+    /// be dropped as stale. Does not persist — call `save(on:)` afterwards.
+    func bumpGeneration() {
         generation += 1
     }
 
@@ -346,6 +364,9 @@ struct VMDetailResponse: Content {
     let maxCpu: Int
     let memory: Int64
     let memoryFormatted: String
+    /// Ceiling for online memory growth (issue #568); equal to `memory` when
+    /// the VM was created without hot-add headroom.
+    let maxMemory: Int64
     let disk: Int64
     let diskFormatted: String
     let networkInterfaces: [NetworkInterfaceResponse]
@@ -379,6 +400,7 @@ struct VMDetailResponse: Content {
         self.maxCpu = vm.maxCpu
         self.memory = vm.memory
         self.memoryFormatted = VMDetailResponse.formatSize(vm.memory)
+        self.maxMemory = vm.maxMemory
         self.disk = vm.disk
         self.diskFormatted = VMDetailResponse.formatSize(vm.disk)
         // `.value ?? []` tolerates callers that didn't eager-load the children;

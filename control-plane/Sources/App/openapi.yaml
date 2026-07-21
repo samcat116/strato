@@ -282,7 +282,12 @@ paths:
     put:
       operationId: updateVM
       summary: Update a virtual machine
-      description: Only `name` and `description` are mutable.
+      description: >-
+        Updates `name`/`description`, and `cpu`/`memory` (issue #568). A sizing
+        change to a *running* VM is applied online within the `maxCpu`/`maxMemory`
+        ceilings it was started with and answers `202` with a `resize` operation;
+        a sizing change to a stopped VM (which may also raise those ceilings, since
+        the next boot re-spawns the VM) and a metadata-only update answer `200`.
       tags: [Virtual Machines]
       requestBody:
         required: true
@@ -297,10 +302,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VMDetail"
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: >-
+            The requested size exceeds the ceilings the running VM was started
+            with, or its agent is too old to resize online; restart the VM to apply it.
     delete:
       operationId: deleteVM
       summary: Delete a virtual machine
@@ -6593,6 +6604,7 @@ components:
         - pause
         - resume
         - delete
+        - resize
         - snapshot
         - snapshot_delete
         - restore
@@ -6636,6 +6648,16 @@ components:
           type: integer
           format: int64
           description: Disk in bytes.
+        maxCpu:
+          type: integer
+          description: >-
+            Ceiling for online vCPU growth (issue #568). Defaults to `cpu` (no
+            headroom); fixed for the life of a running hypervisor process.
+        maxMemory:
+          type: integer
+          format: int64
+          description: >-
+            Ceiling for online memory growth in bytes. Defaults to `memory`.
         cmdline:
           type: string
         networkId:
@@ -6658,6 +6680,15 @@ components:
           type: string
         description:
           type: string
+        cpu:
+          type: integer
+          description: >-
+            Target boot vCPU count. On a running VM it must not exceed `maxCpu`.
+        memory:
+          type: integer
+          format: int64
+          description: >-
+            Target memory in bytes. On a running VM it must not exceed `maxMemory`.
     VMDetail:
       type: object
       required:
@@ -6668,6 +6699,7 @@ components:
         - cpu
         - maxCpu
         - memory
+        - maxMemory
         - memoryFormatted
         - disk
         - diskFormatted
@@ -6701,6 +6733,10 @@ components:
           format: int64
         memoryFormatted:
           type: string
+        maxMemory:
+          type: integer
+          format: int64
+          description: Ceiling for online memory growth; equals `memory` without headroom.
         disk:
           type: integer
           format: int64

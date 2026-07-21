@@ -52,6 +52,8 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
   pause: null,
   resume: null,
   delete: "delete",
+  // VM-only, but the map stays total over OperationKind.
+  resize: null,
   snapshot: null,
   snapshot_delete: null,
   restore: null,

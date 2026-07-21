@@ -101,8 +101,8 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         .init(
             table: "resource_operations", column: "kind",
             allowedValues: [
-                "create", "boot", "shutdown", "reboot", "pause", "resume", "delete", "snapshot",
-                "snapshot_delete", "restore", "snapshot_export",
+                "create", "boot", "shutdown", "reboot", "pause", "resume", "delete", "resize",
+                "snapshot", "snapshot_delete", "restore", "snapshot_export",
             ]
         ),
         .init(

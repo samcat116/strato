@@ -27,6 +27,25 @@ struct ReconciliationTests {
         )
     }
 
+    /// A desired entry whose spec asks for a specific size (issue #568).
+    private static func desiredSized(
+        _ vmId: UUID,
+        status: DesiredVMStatus = .running,
+        generation: Int64 = 1,
+        cpus: Int,
+        memoryBytes: Int64 = 1 << 30
+    ) -> DesiredVMState {
+        DesiredVMState(
+            vmId: vmId,
+            hypervisorType: .qemu,
+            spec: VMSpec(
+                cpus: cpus, maxCpus: 8, memoryBytes: memoryBytes, maxMemoryBytes: 8 << 30,
+                boot: .disk(firmware: nil)),
+            desiredStatus: status,
+            generation: generation
+        )
+    }
+
     private static func sync(_ vms: [DesiredVMState]) -> DesiredStateMessage {
         DesiredStateMessage(vms: vms)
     }
@@ -35,6 +54,9 @@ struct ReconciliationTests {
     /// updating its own presence map on each action.
     private actor MockActuator: ReconcileActuator {
         var presence: [String: VMPresence]
+        /// What each managed VM is running with, diffed against the desired
+        /// spec to plan resizes (issue #568).
+        var sizing: [String: VMSizing] = [:]
         private(set) var performed: [(step: ReconcileStep, vmId: String)] = []
         private(set) var reportCount = 0
         /// Status an adopted orphan turns out to have.
@@ -58,6 +80,14 @@ struct ReconciliationTests {
             presence
         }
 
+        func observedSizing() -> [String: VMSizing] {
+            sizing
+        }
+
+        func setSizing(_ sizing: [String: VMSizing]) {
+            self.sizing = sizing
+        }
+
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus {
             if let failWith { throw failWith }
             performed.append((.adopt, item.vmId))
@@ -74,6 +104,10 @@ struct ReconciliationTests {
             case .pause: presence[item.vmId] = .managed(.paused)
             case .shutdown: presence[item.vmId] = .managed(.shutdown)
             case .delete: presence.removeValue(forKey: item.vmId)
+            case .resize:
+                if let desired = item.desired {
+                    sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
+                }
             case .adopt: break
             }
         }
@@ -405,5 +439,92 @@ struct ReconciliationTests {
         #expect(performed.map(\.step) == [.delete])
         let presence = await actuator.presence
         #expect(presence.isEmpty)
+    }
+
+    // MARK: - Online resize (issue #568)
+
+    @Test("Running VM whose desired spec grew plans a resize")
+    func planResizesGrownRunningVM() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 6)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.count == 1)
+        #expect(items[0].steps == [.resize])
+        #expect(items[0].generation == 2)
+    }
+
+    @Test("Memory-only change on a running VM plans a resize")
+    func planResizesMemoryChange() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, memoryBytes: 4 << 30)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.map(\.steps) == [[.resize]])
+    }
+
+    @Test("Matching sizing on a converged VM plans nothing")
+    func planSkipsResizeWhenSizeMatches() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 2],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.isEmpty)
+    }
+
+    @Test("A stopped VM boots into the new size instead of resizing")
+    func planBootsRatherThanResizesStoppedVM() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 6)],
+            present: [vmId.uuidString: .managed(.shutdown)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.map(\.steps) == [[.boot]])
+    }
+
+    @Test("A stale resize sync is dropped")
+    func planDropsStaleResize() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 1, cpus: 6)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 4],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.isEmpty)
+    }
+
+    @Test("Applying a resize sync drives the step and advances the generation")
+    func resizeConverges() async {
+        let vmId = UUID()
+        let key = vmId.uuidString
+        let actuator = MockActuator(presence: [key: .managed(.running)])
+        await actuator.setSizing([key: VMSizing(cpus: 2, memoryBytes: 1 << 30)])
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(Self.sync([Self.desiredSized(vmId, generation: 2, cpus: 6)]))
+        _ = await actuator.waitForReports(1)
+
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.resize])
+        let applied = await reconciler.observedGeneration(for: key)
+        #expect(applied == 2)
+
+        // Re-applying the same sync is a no-op now that the VM runs the size
+        // the spec asks for.
+        await reconciler.apply(Self.sync([Self.desiredSized(vmId, generation: 2, cpus: 6)]))
+        let stillOnce = await actuator.performed
+        #expect(stillOnce.count == 1)
     }
 }
