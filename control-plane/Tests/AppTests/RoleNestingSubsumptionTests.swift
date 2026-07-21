@@ -35,7 +35,12 @@ struct RoleNestingSubsumptionTests {
     }
 
     /// A request environment each action is actually declared for.
-    private func environment(for action: String) -> CedarRequestEnvironment? {
+    /// Named distinctly from the locals that hold its result: `let environment
+    /// = environment(for:)` is a self-referential declaration, which the Linux
+    /// toolchain resolves to the variable being declared rather than to this
+    /// method — and inside a `#require` expansion that surfaces as a baffling
+    /// "cannot call value of non-function type".
+    private func requestEnvironment(for action: String) -> CedarRequestEnvironment? {
         guard let resourceType = CedarSchemaBuilder.resourceTypes(for: action).first else { return nil }
         return CedarRequestEnvironment(principalType: .user, action: action, resourceType: resourceType)
     }
@@ -46,7 +51,7 @@ struct RoleNestingSubsumptionTests {
         for higher in IAMRole.allCases {
             guard let lower = higher.implies else { continue }
             for action in IAMRoleRegistry.actions(for: lower).sorted() {
-                guard let environment = environment(for: action) else { continue }
+                guard let environment = requestEnvironment(for: action) else { continue }
                 let result = try await analyzer.implies(
                     schemaText: schemaText, [rolePolicy(lower)], [rolePolicy(higher)],
                     in: environment)
@@ -69,7 +74,8 @@ struct RoleNestingSubsumptionTests {
             let exclusive = IAMRoleRegistry.actions(for: higher)
                 .subtracting(IAMRoleRegistry.actions(for: lower))
             let action = try #require(exclusive.sorted().first)
-            let environment = try #require(environment(for: action))
+            let candidate = requestEnvironment(for: action)
+            let environment = try #require(candidate)
 
             let result = try await analyzer.implies(
                 schemaText: schemaText, [rolePolicy(higher)], [rolePolicy(lower)],
