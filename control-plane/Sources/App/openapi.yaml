@@ -3803,7 +3803,7 @@ paths:
                   $ref: "#/components/schemas/AgentDetail"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-  /api/agents/enrollments:
+  /api/agent-enrollments:
     get:
       operationId: listAgentEnrollments
       summary: List agent enrollments
@@ -3877,7 +3877,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/agents/enrollments/{enrollmentId}:
+  /api/agent-enrollments/{enrollmentId}:
     parameters:
       - $ref: "#/components/parameters/EnrollmentID"
     delete:

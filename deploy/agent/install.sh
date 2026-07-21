@@ -15,7 +15,7 @@
 #     --trust-domain 'strato.local'
 #
 # That invocation is exactly what the Strato UI emits when you enroll a node
-# (Agents -> Enroll node, or POST /api/agents/enrollments): enrollment
+# (Agents -> Enroll node, or POST /api/agent-enrollments): enrollment
 # provisions the node in SPIRE and hands back this command with the join token
 # filled in. Agents authenticate to the control plane ONLY by SPIFFE X.509 SVID
 # over mTLS, so all five flags above are required — there is no token join and

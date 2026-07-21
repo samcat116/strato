@@ -52,7 +52,7 @@ for production values (ingress, TLS, WebAuthn hostname).
 
 ### Adding a hypervisor
 
-In the web UI: **Agents → Enroll node** (or `POST /api/agents/enrollments`),
+In the web UI: **Agents → Enroll node** (or `POST /api/agent-enrollments`),
 which provisions the node's identity in SPIRE and returns a
 `bootstrapCommand` — a single pre-filled line to run on the hypervisor host:
 

@@ -110,7 +110,7 @@
 #
 #   For a genuinely fresh fleet, deregister the agents in the UI (or via
 #   DELETE /api/agents/:id), delete their enrollments (DELETE
-#   /api/agents/enrollments/:id) and remove the base dir, or just pick a new
+#   /api/agent-enrollments/:id) and remove the base dir, or just pick a new
 #   --name-prefix.
 
 set -euo pipefail
@@ -441,7 +441,7 @@ fi
 # Enrollments currently known to the control plane, fetched once so an agent
 # that is already enrolled is not enrolled again. Empty when the list is
 # unavailable (auth, or an older control plane).
-ENROLLMENTS_JSON="$(curl -sS "$CONTROL_PLANE/api/agents/enrollments" \
+ENROLLMENTS_JSON="$(curl -sS "$CONTROL_PLANE/api/agent-enrollments" \
   ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} 2>/dev/null || true)"
 if ! echo "$ENROLLMENTS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
   ENROLLMENTS_JSON=""
@@ -525,7 +525,7 @@ for i in $(seq 1 "$COUNT"); do
     reused=$((reused + 1))
   else
     mode="new"
-    resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agents/enrollments" \
+    resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agent-enrollments" \
       -H "Content-Type: application/json" \
       ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
       -d "{\"agentName\":\"$name\",\"organizationId\":\"$ORG_ID\"}")" || {
