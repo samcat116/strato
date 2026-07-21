@@ -516,6 +516,10 @@ public func configure(_ app: Application) async throws {
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 
+    // Replace the constant "platform" device type on existing passkeys with the
+    // value implied by their backup-eligible flag.
+    app.migrations.add(BackfillPasskeyDeviceType())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

@@ -7705,6 +7705,14 @@ components:
           description: The base64url challenge returned by `/auth/claim/begin`.
         response:
           $ref: "#/components/schemas/WebAuthnRegistrationCredential"
+        transports:
+          type: array
+          description: >-
+            The authenticator's `getTransports()` values, stored and echoed back
+            in later `allowCredentials`/`excludeCredentials` lists. Unrecognized
+            values are discarded.
+          items:
+            type: string
 
     PasskeyRegistrationBeginRequest:
       type: object
@@ -7730,6 +7738,14 @@ components:
           description: The base64url challenge returned by the matching begin call.
         response:
           $ref: "#/components/schemas/WebAuthnRegistrationCredential"
+        transports:
+          type: array
+          description: >-
+            The authenticator's `getTransports()` values, stored and echoed back
+            in later `allowCredentials`/`excludeCredentials` lists. Unrecognized
+            values are discarded.
+          items:
+            type: string
 
     PasskeyRegistrationFinishResponse:
       type: object
@@ -7820,14 +7836,18 @@ components:
           description: User-supplied label; null when the client renders a default.
         deviceType:
           type: string
-          description: The authenticator's credential device type as reported at enrollment.
+          description: >-
+            `multi_device` for a syncable passkey, `single_device` for one bound
+            to the authenticator that created it. Refreshed on every sign-in.
         transports:
           type: array
           items:
             type: string
         backedUp:
           type: boolean
-          description: True when the authenticator syncs the credential to a cloud keychain.
+          description: >-
+            True when the credential is currently backed up to a cloud keychain.
+            Refreshed from the authenticator on every sign-in.
         createdAt:
           type: string
           format: date-time
@@ -7847,6 +7867,14 @@ components:
         name:
           type: string
           description: Optional label for the new passkey (max 64 characters).
+        transports:
+          type: array
+          description: >-
+            The authenticator's `getTransports()` values, stored and echoed back
+            in later `allowCredentials`/`excludeCredentials` lists. Unrecognized
+            values are discarded.
+          items:
+            type: string
 
     RenamePasskeyRequest:
       type: object

@@ -73,10 +73,19 @@ export class WebAuthnClient {
   private prepareCreationResponse(
     credential: PublicKeyCredential,
     challenge: string
-  ): object {
+  ): { challenge: string; transports: string[]; response: unknown } {
     const response = credential.response as AuthenticatorAttestationResponse;
     return {
       challenge,
+      // How this authenticator can be reached. The server stores these and
+      // hands them back in allowCredentials/excludeCredentials so the browser
+      // can prompt for the right thing ("insert your security key", "use your
+      // phone") instead of offering every option. Guarded because getTransports
+      // is not implemented everywhere.
+      transports:
+        typeof response.getTransports === "function"
+          ? response.getTransports()
+          : [],
       response: {
         id: credential.id,
         rawId: bufferToBase64url(credential.rawId),
@@ -148,10 +157,7 @@ export class WebAuthnClient {
 
     // Step 4: Finish registration
     const result = await authApi.registerFinish(
-      this.prepareCreationResponse(credential, challenge) as {
-        challenge: string;
-        response: unknown;
-      }
+      this.prepareCreationResponse(credential, challenge)
     );
 
     return result;
@@ -177,10 +183,7 @@ export class WebAuthnClient {
     }
 
     // Step 3: Finish — consumes the token and logs the user in.
-    const prepared = this.prepareCreationResponse(credential, challenge) as {
-      challenge: string;
-      response: unknown;
-    };
+    const prepared = this.prepareCreationResponse(credential, challenge);
     return authApi.claimFinish({ token, ...prepared });
   }
 
@@ -202,10 +205,7 @@ export class WebAuthnClient {
       throw new Error("Failed to create credential");
     }
 
-    const prepared = this.prepareCreationResponse(credential, challenge) as {
-      challenge: string;
-      response: unknown;
-    };
+    const prepared = this.prepareCreationResponse(credential, challenge);
     return passkeysApi.addFinish({ ...prepared, name });
   }
 
