@@ -1,0 +1,21 @@
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_8e85300f8535a5::t_d2bd428c60ac57 204-206,221-245,251,268-273,278-283
+  s_8e85300f8535a5::t_5a00cebc7689e5 32-36
+  s_8e85300f8535a5::t_49d359ab8c392a 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "4de2c3496de098203c2728883e472873cdbd7496",
+  "prompts": {},
+  "sessions": {
+    "s_8e85300f8535a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41e29ce2-a9ba-455b-bb8f-c09d4ef7ed84",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
