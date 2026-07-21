@@ -616,9 +616,57 @@ opentelemetry:
     # OTLP exporter endpoint (if not using collector)
     # endpoint: "http://external-collector:4317"
 
-  # Prometheus for metrics storage (if enabled)
+  # Prometheus-format scrape endpoints, independent of the bundled Prometheus
+  # below. The control plane has no /metrics endpoint of its own: its metrics
+  # arrive at the collector over OTLP, and the collector's `prometheus`
+  # exporter is what re-exposes them for scraping. Leave this enabled to point
+  # an *existing* Prometheus (kube-prometheus-stack, Grafana Alloy, ...) at the
+  # chart without also running `opentelemetry.prometheus`.
+  #
+  # Exposes: the collector's `prometheus` exporter (application metrics), the
+  # collector's own internal telemetry, and SPIRE server telemetry (the
+  # SVID-signing counters behind the Workload Identity "Issuance" panel).
+  prometheusExport:
+    enabled: true
+
+    # Render ServiceMonitor objects for a Prometheus Operator installation
+    # (kube-prometheus-stack). Requires the monitoring.coreos.com CRDs.
+    serviceMonitor:
+      enabled: false
+      # Namespace to create the ServiceMonitors in; empty uses the release
+      # namespace. Set this when the operator only watches its own namespace.
+      namespace: ""
+      # Extra labels — usually what the operator's serviceMonitorSelector
+      # matches on, e.g. `release: kube-prometheus-stack`.
+      labels: {}
+      annotations: {}
+      interval: 30s
+      scrapeTimeout: ""
+      honorLabels: false
+      relabelings: []
+      metricRelabelings: []
+      # Also scrape the collector's own internal telemetry (pipeline throughput,
+      # queue depth, refused spans) alongside the application metrics.
+      collectorTelemetry: true
+
+    # prometheus.io/{scrape,port,path} annotations on the collector and SPIRE
+    # metrics pods, for annotation-based discovery (plain Prometheus
+    # kubernetes_sd, Grafana Alloy, DataDog) instead of the operator.
+    podAnnotations: false
+
+  # Bundled Prometheus for metrics storage. Independent of `prometheusExport`
+  # above — disable this when an existing Prometheus scrapes the chart, and it
+  # takes its StatefulSet and PVC with it.
   prometheus:
     enabled: true
+
+    # Prometheus HTTP API the control plane queries for the Workload Identity
+    # "Issuance" panel (SPIRE_METRICS_PROMETHEUS_URL). Empty uses the bundled
+    # Prometheus above; set it to an existing Prometheus (e.g.
+    # "http://kube-prometheus-stack-prometheus.monitoring.svc:9090") to keep
+    # the panel working with `enabled: false`. With networkPolicy.enabled, an
+    # external non-443 URL needs its own egress rule in networkPolicy.egress.
+    url: ""
     image:
       repository: prom/prometheus
       # NB: there is no Prometheus 2.56 — the previous v2.56.0 pin never

@@ -20,7 +20,7 @@ spec:
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: spire-server
-{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+{{- if include "strato-control-plane.metricsExposed" . }}
 ---
 # Headless companion Service exposing SPIRE server metrics per pod. This is a
 # separate, always-ClusterIP-None Service so the unauthenticated metrics port
@@ -35,7 +35,14 @@ metadata:
   name: {{ include "strato-control-plane.fullname" . }}-spire-server-metrics
   labels:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
-    app.kubernetes.io/component: spire-server
+    # Distinct from the main Service's `spire-server` so a ServiceMonitor can
+    # select the metrics Service alone. Only metadata: the pod selector below
+    # still targets the spire-server pods.
+    app.kubernetes.io/component: spire-server-metrics
+  {{- with include "strato-control-plane.scrapeAnnotations" (dict "ctx" $ "port" 9988) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   clusterIP: None
   # Publish addresses before readiness so a starting replica is still

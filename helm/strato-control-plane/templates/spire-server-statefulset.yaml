@@ -57,7 +57,7 @@ spec:
             - name: federation
               containerPort: 8443
               protocol: TCP
-            {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+            {{- if include "strato-control-plane.metricsExposed" . }}
             - name: metrics
               containerPort: 9988
               protocol: TCP

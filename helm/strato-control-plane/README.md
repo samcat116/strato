@@ -185,7 +185,12 @@ spicedb:
 | `gateway.tls.certManager.enabled` | bool | `false` | Add the cert-manager Gateway-shim annotation to the rendered Gateway (DNS-01 issuer required for the multi-host SAN) |
 | `networkPolicy.enabled` | bool | `false` | Enable network policies |
 | `podDisruptionBudget.enabled` | bool | `false` | Enable pod disruption budget |
-| `monitoring.serviceMonitor.enabled` | bool | `false` | Enable ServiceMonitor for Prometheus |
+| `opentelemetry.prometheusExport.enabled` | bool | `true` | Expose Prometheus-format scrape endpoints (collector `prometheus` exporter, SPIRE telemetry), independent of the bundled Prometheus |
+| `opentelemetry.prometheusExport.serviceMonitor.enabled` | bool | `false` | Render ServiceMonitors for a Prometheus Operator install (requires the CRDs) |
+| `opentelemetry.prometheusExport.serviceMonitor.labels` | object | `{}` | Extra ServiceMonitor labels — usually what the operator's `serviceMonitorSelector` matches |
+| `opentelemetry.prometheusExport.podAnnotations` | bool | `false` | `prometheus.io/scrape` annotations for annotation-based discovery instead of the operator |
+| `opentelemetry.prometheus.enabled` | bool | `true` | Run the chart's bundled Prometheus (StatefulSet + PVC) |
+| `opentelemetry.prometheus.url` | string | `""` | External Prometheus HTTP API for the Workload Identity "Issuance" panel; empty uses the bundled one |
 
 ## Testing
 
@@ -315,27 +320,34 @@ When `networkPolicy.enabled=true`, the chart creates policies that:
 
 ### Metrics
 
-The control plane exposes Prometheus metrics on `/metrics` when enabled:
-
-```yaml
-monitoring:
-  metrics:
-    enabled: true
-    port: 9090
-```
+The control plane has no `/metrics` endpoint — it exports OTLP to the chart's
+OTel collector, whose `prometheus` exporter (port 8889) re-exposes everything
+for scraping. That exporter is on by default and is independent of the bundled
+Prometheus.
 
 ### ServiceMonitor
 
-For Prometheus Operator integration:
+For Prometheus Operator integration, scraping the chart from a monitoring stack
+you already run — no bundled Prometheus StatefulSet or PVC:
 
 ```yaml
-monitoring:
-  serviceMonitor:
-    enabled: true
-    interval: 30s
-    labels:
-      prometheus: kube-prometheus
+opentelemetry:
+  prometheusExport:
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+      labels:
+        release: kube-prometheus-stack   # your operator's serviceMonitorSelector
+  prometheus:
+    enabled: false
+    # Keeps the Workload Identity "Issuance" panel working without the bundle
+    url: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
 ```
+
+Without the operator, use `opentelemetry.prometheusExport.podAnnotations: true`
+for `prometheus.io/scrape` annotation discovery. Full details, including which
+targets carry what, are in
+[Observability: Metrics & Alerts](../../docs/deployment/observability.md).
 
 ### Health Checks
 

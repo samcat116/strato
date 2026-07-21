@@ -1,0 +1,51 @@
+# CI test values for the "existing monitoring stack" configuration: an external
+# Prometheus scrapes the chart through ServiceMonitors, and the chart's own
+# bundled Prometheus (StatefulSet + PVC) is off.
+
+image:
+  repository: nginx  # Using nginx for CI tests
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  webauthn:
+    relyingPartyId: "monitoring.local"
+    relyingPartyName: "Strato"
+    relyingPartyOrigin: "http://monitoring.local:8080"
+
+spicedb:
+  presharedKey: "monitoring-test-key"
+  persistence:
+    enabled: false
+
+postgresql:
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: monitoring-test-password
+    postgresPassword: monitoring-postgres-password
+  primary:
+    persistence:
+      enabled: false
+
+opentelemetry:
+  enabled: true
+
+  prometheusExport:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      labels:
+        release: kube-prometheus-stack
+      interval: 15s
+      scrapeTimeout: 10s
+    podAnnotations: true
+
+  prometheus:
+    enabled: false
+    # Workload Identity "Issuance" panel keeps working against the external
+    # Prometheus even with the bundled one disabled.
+    url: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+
+migration:
+  enabled: false

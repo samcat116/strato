@@ -1,0 +1,114 @@
+{{- $sm := .Values.opentelemetry.prometheusExport.serviceMonitor }}
+{{- if and $sm.enabled (include "strato-control-plane.metricsExposed" .) }}
+{{- if .Values.opentelemetry.collector.enabled }}
+# Application metrics: the control plane has no /metrics endpoint of its own,
+# so what an external Prometheus scrapes is the collector's `prometheus`
+# exporter, fed over OTLP by every control-plane replica.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-otel-collector
+  namespace: {{ $sm.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $sm.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $sm.namespace }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-collector
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: {{ $sm.interval }}
+      {{- with $sm.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      honorLabels: {{ $sm.honorLabels }}
+      {{- with $sm.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sm.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- if $sm.collectorTelemetry }}
+    # The collector's own health: pipeline throughput, queue depth, refused
+    # points. Distinct port from the exporter above.
+    - port: metrics
+      path: /metrics
+      interval: {{ $sm.interval }}
+      {{- with $sm.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with $sm.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sm.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- if .Values.spire.enabled }}
+---
+# SPIRE server telemetry (SVID-signing counters). Targets the headless metrics
+# Service so every replica is scraped as its own target — the load-balanced
+# main Service would pin each scrape to one replica and under-count.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-server
+  namespace: {{ $sm.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server-metrics
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $sm.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $sm.namespace }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: spire-server-metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $sm.interval }}
+      {{- with $sm.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      honorLabels: {{ $sm.honorLabels }}
+      {{- with $sm.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sm.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

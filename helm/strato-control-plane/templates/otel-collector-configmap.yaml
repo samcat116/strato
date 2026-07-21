@@ -39,7 +39,12 @@ data:
         endpoint: "http://{{ include "strato-control-plane.fullname" . }}-prometheus:{{ .Values.opentelemetry.prometheus.service.port }}/api/v1/write"
         tls:
           insecure: true
+      {{- end }}
 
+      {{- if include "strato-control-plane.metricsExposed" . }}
+      # Re-exposes OTLP metrics for scraping. Deliberately independent of the
+      # bundled Prometheus above: an external scraper needs this endpoint and
+      # nothing else from `opentelemetry.prometheus`.
       prometheus:
         endpoint: "0.0.0.0:{{ .Values.opentelemetry.collector.service.prometheusPort }}"
       {{- end }}
@@ -49,7 +54,7 @@ data:
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, batch, resourcedetection]
-          exporters: [debug{{- if .Values.opentelemetry.prometheus.enabled }}, prometheusremotewrite, prometheus{{- end }}]
+          exporters: [debug{{- if .Values.opentelemetry.prometheus.enabled }}, prometheusremotewrite{{- end }}{{- if include "strato-control-plane.metricsExposed" . }}, prometheus{{- end }}]
 
         traces:
           receivers: [otlp]
