@@ -1,0 +1,20 @@
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_b43197b9370391::t_6fcfb021adcc55 342,377-385,391
+  s_b43197b9370391::t_fffbcf4dd18734 159-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a446eab067a6b09b20d0c3518cd620ba3730e09e",
+  "prompts": {},
+  "sessions": {
+    "s_b43197b9370391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea664118-a025-4def-b6cb-d0af529be8d8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
