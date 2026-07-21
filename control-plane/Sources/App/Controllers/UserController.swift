@@ -381,10 +381,7 @@ struct UserController: RouteCollection {
             )
         }
 
-        let options = try await req.webAuthn.beginRegistration(
-            for: user,
-            excludeCredentials: excludeCredentials
-        )
+        let options = try await req.webAuthn.beginRegistration(for: user)
 
         // Store challenge
         try await req.webAuthn.storeChallenge(
@@ -394,7 +391,7 @@ struct UserController: RouteCollection {
             on: req.db
         )
 
-        return RegistrationBeginResponse(options: options)
+        return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
     }
 
     func finishRegistration(req: Request) async throws -> RegistrationFinishResponse {
@@ -415,6 +412,7 @@ struct UserController: RouteCollection {
         let credential = try await req.webAuthn.finishRegistration(
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,
+            transports: finishRequest.transports,
             on: req.db
         )
 
@@ -496,10 +494,7 @@ struct UserController: RouteCollection {
             )
         }
 
-        let options = try await req.webAuthn.beginRegistration(
-            for: user,
-            excludeCredentials: excludeCredentials
-        )
+        let options = try await req.webAuthn.beginRegistration(for: user)
 
         // Store under a distinct operation so this invite-authorized challenge
         // can only be redeemed via /auth/claim/finish — never replayed through
@@ -511,7 +506,7 @@ struct UserController: RouteCollection {
             on: req.db
         )
 
-        return RegistrationBeginResponse(options: options)
+        return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
     }
 
     /// Public: finish the passkey ceremony for an invited account, consume the
@@ -566,6 +561,7 @@ struct UserController: RouteCollection {
         let webAuthn = try req.webAuthn
         let challenge = finishRequest.challenge
         let response = finishRequest.response
+        let transports = finishRequest.transports
         let operation = Self.claimChallengeOperation
         let credential = try await req.db.transaction { db -> UserCredential in
             guard let sql = db as? SQLDatabase else {
@@ -585,6 +581,7 @@ struct UserController: RouteCollection {
             let credential = try await webAuthn.finishRegistration(
                 challenge: challenge,
                 credentialCreationData: response,
+                transports: transports,
                 operation: operation,
                 on: db
             )
@@ -824,6 +821,8 @@ struct ClaimFinishRequest: Content {
     let token: String
     let challenge: String
     let response: RegistrationCredential
+    /// `getTransports()` from the client. Optional: older clients omit it.
+    let transports: [String]?
 
     func encode(to encoder: Encoder) throws {
         // Decode-only, mirroring RegistrationFinishRequest: RegistrationCredential
@@ -836,7 +835,7 @@ struct ClaimFinishRequest: Content {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case token, challenge, response
+        case token, challenge, response, transports
     }
 }
 
@@ -845,10 +844,10 @@ struct RegistrationBeginRequest: Content {
 }
 
 struct RegistrationBeginResponse: Content {
-    let options: PublicKeyCredentialCreationOptions
+    let options: RegistrationOptions
 
-    init(options: PublicKeyCredentialCreationOptions) {
-        self.options = options
+    init(options: PublicKeyCredentialCreationOptions, excludeCredentials: [PublicKeyCredentialDescriptor] = []) {
+        self.options = RegistrationOptions(options: options, excludeCredentials: excludeCredentials)
     }
 
     init(from decoder: Decoder) throws {
@@ -858,9 +857,36 @@ struct RegistrationBeginResponse: Content {
     }
 }
 
+/// The creation options as swift-webauthn serializes them, plus
+/// `excludeCredentials`.
+///
+/// `PublicKeyCredentialCreationOptions` has no `excludeCredentials` field, so
+/// the library cannot emit one — but without it an authenticator that already
+/// holds a passkey for this account silently enrolls a second one instead of
+/// telling the user it is already registered. Encoding both into the same JSON
+/// object is what gets the list to `navigator.credentials.create()`.
+struct RegistrationOptions: Encodable {
+    let options: PublicKeyCredentialCreationOptions
+    let excludeCredentials: [PublicKeyCredentialDescriptor]
+
+    func encode(to encoder: Encoder) throws {
+        try options.encode(to: encoder)
+        // Encoding into a keyed container at the same level merges these keys
+        // with the ones the library just wrote.
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(excludeCredentials, forKey: .excludeCredentials)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case excludeCredentials
+    }
+}
+
 struct RegistrationFinishRequest: Content {
     let challenge: String
     let response: RegistrationCredential
+    /// `getTransports()` from the client. Optional: older clients omit it.
+    let transports: [String]?
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -875,7 +901,7 @@ struct RegistrationFinishRequest: Content {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case challenge, response
+        case challenge, response, transports
     }
 }
 
