@@ -9082,7 +9082,7 @@ components:
         A project in the organization hierarchy. Exactly one of
         `organizationId` / `organizationalUnitId` is set, naming the immediate
         parent.
-      required: [name, description, path, defaultEnvironment, environments]
+      required: [id, name, description, path, defaultEnvironment, environments]
       properties:
         id:
           type: string

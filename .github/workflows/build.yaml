@@ -30,6 +30,7 @@ jobs:
       agent: ${{ steps.filter.outputs.agent }}
       shared: ${{ steps.filter.outputs.shared }}
       cli: ${{ steps.filter.outputs.cli }}
+      api_client: ${{ steps.filter.outputs.api_client }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       workflow: ${{ steps.filter.outputs.workflow }}
       code: ${{ steps.filter.outputs.code }}
@@ -60,6 +61,10 @@ jobs:
               - 'shared/**'
             cli:
               - 'cli/**'
+            # The generated Swift client tracks the spec, which lives in the
+            # control plane — a spec-only change still has to rebuild it.
+            api_client:
+              - 'clients/swift/**'
             firecracker:
               - 'SwiftFirecracker/**'
             workflow:
@@ -82,7 +87,7 @@ jobs:
     needs: changes
     # SwiftFirecracker/ is vendored and deliberately not linted, so
     # firecracker-only changes don't trigger this job.
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
     # Swift runner pool free for the heavy build+test job. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
@@ -103,12 +108,13 @@ jobs:
             control-plane/Sources control-plane/Tests \
             agent/Sources agent/Tests \
             shared/Sources shared/Tests \
-            cli/Sources cli/Tests
+            cli/Sources cli/Tests \
+            clients/swift/Sources clients/swift/Tests
 
   lint-and-build-frontend:
     name: Frontend Lint & Build
     needs: changes
-    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight Bun job — runs on GitHub-hosted runners to keep the
     # Swift runner pool free for the heavy build+test job.
     runs-on: ubuntu-latest
@@ -124,6 +130,15 @@ jobs:
       - name: Install dependencies
         working-directory: control-plane/web
         run: bun install --frozen-lockfile
+
+      # `src/types/openapi.ts` is generated from the spec and checked in, so
+      # editors and CI see the same types. Regenerating must be a no-op.
+      - name: Check generated API types are current
+        working-directory: control-plane/web
+        run: |
+          bun run generate:api-types
+          git diff --exit-code -- src/types/openapi.ts \
+            || { echo "::error::src/types/openapi.ts is stale — run 'bun run generate:api-types' in control-plane/web"; exit 1; }
 
       - name: Run linting
         working-directory: control-plane/web
@@ -174,7 +189,7 @@ jobs:
   test:
     name: Build and Test Swift Packages
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
     # Backstop for a hung build/test: the default 360-minute timeout would pin
     # a scarce runner-pool slot for six hours. Warm runs finish in ~15 minutes,
@@ -198,7 +213,7 @@ jobs:
       # in-flight build tree.
       - name: Prune build scratch dirs if oversized
         run: |
-          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent" "$RUNNER_TOOL_CACHE/strato-swift-build/cli"; do
+          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent" "$RUNNER_TOOL_CACHE/strato-swift-build/cli" "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"; do
             if [ -d "$scratch" ]; then
               size_kb=$(du -sk "$scratch" | cut -f1)
               if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -208,11 +223,17 @@ jobs:
             fi
           done
 
+      # Each package's steps are gated on the paths that affect it: the job as a
+      # whole also runs for spec-only changes (which rebuild the API client), and
+      # those should not pay for a shared/agent build.
       - name: Build Shared Package
+        id: build-shared
+        if: ${{ needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' }}
         working-directory: shared
         run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
 
       - name: Test Shared Package
+        if: ${{ !cancelled() && steps.build-shared.outcome == 'success' }}
         working-directory: shared
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
 
@@ -220,7 +241,7 @@ jobs:
         # Run even if the shared tests failed — agent coverage should
         # always report on PRs that touch it.
         id: build-agent
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: agent
         run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
 
@@ -241,6 +262,20 @@ jobs:
         if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
         working-directory: cli
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli"
+
+      # The generated API client (issue #583). Its openapi.yaml is a symlink to
+      # the control plane's, so a spec change that breaks generation fails here
+      # rather than in a downstream consumer.
+      - name: Build Swift API Client
+        id: build-api-client
+        if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
+        working-directory: clients/swift
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"
+
+      - name: Test Swift API Client
+        if: ${{ !cancelled() && steps.build-api-client.outcome == 'success' }}
+        working-directory: clients/swift
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"
 
   # One control-plane job running the identical suite twice: fast
   # engine-independent coverage on SQLite, then against the real engine

@@ -1,0 +1,8 @@
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic
+# No `filter` here: unlike the server side (which only generates handlers for
+# migrated surfaces), the client covers the whole documented API so consumers —
+# the CLI (#558) first — can call any endpoint.
