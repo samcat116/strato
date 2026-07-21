@@ -37,6 +37,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "strato-control-plane.serviceAccountName" . }}
+      # Budget from SIGTERM to SIGKILL. Must cover the preStop drain delay plus
+      # the longest in-flight request; Kubernetes' 30s default does not.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
@@ -362,6 +365,24 @@ spec:
             # STRATO_DEFAULT_NETWORK_*, ...). Rendered with tpl.
             {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
+          {{- if .Values.terminationDrain.enabled }}
+          # Delays SIGTERM so endpoint removal propagates to kube-proxy and the
+          # ingress before the process stops accepting connections. See the
+          # terminationDrain comment in values.yaml.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "{{ .Values.terminationDrain.seconds | default 15 }}"]
+          {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.startupProbe.path | default "/health/live" }}
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold | default 60 }}
+          {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:

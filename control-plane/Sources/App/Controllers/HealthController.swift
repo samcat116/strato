@@ -1,22 +1,27 @@
 import Fluent
+import SQLKit
 import Vapor
 
 struct HealthController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let health = routes.grouped("health")
 
-        // Basic health check - just returns 200 OK
+        // Overall health, including build identity. Dependency-free: use
+        // /health/ready to gate traffic.
         health.get(use: self.health)
 
-        // Readiness check - checks database and SpiceDB connectivity
+        // Readiness check - dependency connectivity plus this process's own
+        // migration/drain gates. The only endpoint a load balancer should poll.
         health.get("ready", use: readiness)
 
         // Liveness check - basic application health
         health.get("live", use: liveness)
     }
 
-    func health(req: Request) async throws -> HTTPStatus {
-        return .ok
+    func health(req: Request) async throws -> HealthResponse {
+        // Deliberately identical to liveness: an unauthenticated endpoint that
+        // touches no dependency cannot be used to probe them.
+        try await liveness(req: req)
     }
 
     func liveness(req: Request) async throws -> HealthResponse {
@@ -24,7 +29,7 @@ struct HealthController: RouteCollection {
         // Includes per-boot identity so callers can tell *which* control plane
         // answered (the missing signal when a stale duplicate hijacked the port).
         return HealthResponse(
-            status: "healthy",
+            status: HealthResponse.healthy,
             timestamp: Date(),
             checks: [
                 HealthCheck(name: "application", status: "up")
@@ -33,32 +38,114 @@ struct HealthController: RouteCollection {
         )
     }
 
-    func readiness(req: Request) async throws -> HealthResponse {
+    /// Readiness: "should this replica receive traffic right now?"
+    ///
+    /// Answers with the HTTP status, not just the body — a load balancer or
+    /// `readinessProbe` reads the code, so a failed dependency has to surface as
+    /// 503 or a broken replica silently stays in rotation through a blue/green
+    /// cutover.
+    ///
+    /// Checks are graded, because not every dependency is equally fatal:
+    ///
+    /// - **database** (fatal) — nothing works without Postgres.
+    /// - **migrations** (fatal) — schema application must have finished.
+    /// - **spicedb** (fatal) — every authorized request goes through it, so a
+    ///   replica that cannot reach it would 500 on effectively all traffic.
+    /// - **valkey** (degraded) — coordination is documented as fail-open
+    ///   (`docs/architecture/multi-replica.md`); agents still converge via the
+    ///   periodic sync. Reported, but never a reason to pull a replica out of
+    ///   rotation.
+    /// - **drain** (fatal) — set once SIGTERM arrives.
+    func readiness(req: Request) async throws -> Response {
         var checks: [HealthCheck] = []
-        var overallStatus = "healthy"
+        var failed = false
+        var degraded = false
 
-        // Check database connectivity
-        do {
-            // Simple database connectivity check using an existing model
-            _ = try await VM.query(on: req.db).count()
-            checks.append(HealthCheck(name: "database", status: "up"))
-        } catch {
-            checks.append(HealthCheck(name: "database", status: "down", error: error.localizedDescription))
-            overallStatus = "unhealthy"
+        // Draining is checked first and short-circuits: a replica on its way out
+        // should not spend probe latency on dependencies it is about to drop.
+        if req.readiness.isDraining {
+            let response = HealthResponse(
+                status: HealthResponse.draining,
+                timestamp: Date(),
+                checks: [HealthCheck(name: "drain", status: "draining")],
+                identity: ServiceIdentity(req.instanceIdentity)
+            )
+            return try await response.encodeResponse(status: .serviceUnavailable, for: req)
         }
 
-        // TODO: Add SpiceDB connectivity check when service is properly configured
+        // Database. `SELECT 1` rather than a model count: this runs on every
+        // probe interval on every replica, and counting a table that grows with
+        // the fleet turns the probe into a recurring sequential scan.
+        do {
+            guard let sql = req.db as? SQLDatabase else {
+                throw Abort(.internalServerError, reason: "database does not support raw SQL")
+            }
+            try await sql.raw("SELECT 1").run()
+            checks.append(HealthCheck(name: "database", status: "up"))
+        } catch {
+            checks.append(HealthCheck(name: "database", status: "down", error: String(reflecting: error)))
+            failed = true
+        }
 
-        return HealthResponse(
-            status: overallStatus,
+        // Migrations. A reachable database says nothing about whether this
+        // process finished applying schema to it.
+        if req.readiness.migrationsComplete {
+            checks.append(HealthCheck(name: "migrations", status: "up"))
+        } else {
+            checks.append(HealthCheck(name: "migrations", status: "down", error: "migrations have not completed"))
+            failed = true
+        }
+
+        // SpiceDB. `readSchema` is the cheapest read on the API and exercises
+        // the same client, endpoint, and preshared key that authorization uses.
+        do {
+            _ = try await req.spicedb.readSchema()
+            checks.append(HealthCheck(name: "spicedb", status: "up"))
+        } catch {
+            checks.append(HealthCheck(name: "spicedb", status: "down", error: String(reflecting: error)))
+            failed = true
+        }
+
+        // Valkey. Degraded-only by design: coordination fails open.
+        do {
+            _ = try await req.application.coordination.probe()
+            checks.append(HealthCheck(name: "valkey", status: "up"))
+        } catch {
+            checks.append(HealthCheck(name: "valkey", status: "degraded", error: String(reflecting: error)))
+            degraded = true
+        }
+
+        let status: String
+        if failed {
+            status = HealthResponse.unhealthy
+        } else if degraded {
+            status = HealthResponse.degraded
+        } else {
+            status = HealthResponse.healthy
+        }
+
+        let response = HealthResponse(
+            status: status,
             timestamp: Date(),
             checks: checks,
             identity: ServiceIdentity(req.instanceIdentity)
         )
+        // Degraded still serves traffic: pulling every replica out of rotation
+        // because Valkey blipped would be a worse outage than the blip.
+        return try await response.encodeResponse(status: failed ? .serviceUnavailable : .ok, for: req)
     }
 }
 
 struct HealthResponse: Content {
+    /// Every dependency is reachable.
+    static let healthy = "healthy"
+    /// A fail-open dependency is unreachable; the replica still serves traffic.
+    static let degraded = "degraded"
+    /// A required dependency is unreachable or a gate has not opened.
+    static let unhealthy = "unhealthy"
+    /// Shutdown requested; the replica is finishing in-flight work.
+    static let draining = "draining"
+
     let status: String
     let timestamp: Date
     let checks: [HealthCheck]

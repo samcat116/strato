@@ -208,6 +208,25 @@ resources:
     memory: 512Mi
 
 # Health check probes configuration
+#
+# /health/live is dependency-free — it fails only if the process is wedged, so
+# a Postgres or SpiceDB outage never triggers a restart loop. /health/ready
+# probes those dependencies and returns 503 when one a request cannot survive
+# without is unreachable, so an unhealthy replica leaves the Service endpoints
+# instead of black-holing traffic.
+
+# Covers boot: the port is bound only after migrations and boot-time backfills
+# finish, which on a large database can outlast a liveness threshold. While a
+# startupProbe is pending, Kubernetes suspends the liveness and readiness
+# probes, so this is what decides how long a slow boot is allowed to take
+# (periodSeconds × failureThreshold = 5 minutes by default).
+startupProbe:
+  enabled: true
+  path: /health/live
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 60
+
 livenessProbe:
   enabled: true
   path: /health/live
@@ -224,6 +243,28 @@ readinessProbe:
   timeoutSeconds: 5
   successThreshold: 1
   failureThreshold: 3
+
+# Graceful shutdown, the second half of a blue/green cutover.
+#
+# Endpoint removal and SIGTERM are delivered concurrently, and endpoint removal
+# is asynchronous — kube-proxy, the ingress, and any external load balancer
+# learn about it at their own pace. Without a preStop delay the process can
+# stop accepting connections while callers are still being routed to it, which
+# surfaces as connection-refused errors during every deploy.
+#
+# The preStop sleep holds SIGTERM back until that propagation has happened. Once
+# SIGTERM lands, the control plane reports itself unready immediately (any probe
+# still in flight sees 503) and Vapor drains in-flight requests and agent
+# WebSockets within the grace period below.
+terminationDrain:
+  enabled: true
+  # Must comfortably exceed readinessProbe.periodSeconds and your ingress's
+  # endpoint-refresh interval.
+  seconds: 15
+
+# Total budget from SIGTERM to SIGKILL. Must exceed terminationDrain.seconds
+# plus the longest in-flight request you are willing to wait for.
+terminationGracePeriodSeconds: 60
 
 autoscaling:
   enabled: false

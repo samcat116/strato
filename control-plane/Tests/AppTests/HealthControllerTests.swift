@@ -195,4 +195,142 @@ struct HealthControllerTests {
         try await app.shutdownForTesting()
     }
 
+    // MARK: - Dependency Coverage
+
+    @Test("Readiness reports every gating dependency")
+    func testReadinessCoversDependencies() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+            let names = Set(health.checks.map(\.name))
+
+            // A readiness probe that only knows about Postgres would keep a
+            // replica in rotation while SpiceDB is unreachable and every
+            // authorized request 500s.
+            #expect(names == ["database", "migrations", "spicedb", "valkey"])
+        }
+        try await app.shutdownForTesting()
+    }
+
+    // MARK: - Failure Signalling
+
+    @Test("Readiness returns 503 when a required gate is closed")
+    func testReadinessFailsClosed() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        // The migrations gate stands in for any fatal check: it is the one a
+        // test can close without tearing down a live dependency. What is being
+        // asserted is the status *code* — a load balancer reads that, not the
+        // body, so a 200 here would keep a broken replica serving traffic.
+        app.readiness.closeMigrationsGateForTesting()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .serviceUnavailable)
+
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "unhealthy")
+
+            let migrations = health.checks.first { $0.name == "migrations" }
+            #expect(migrations?.status == "down")
+            #expect(migrations?.error != nil)
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("Liveness stays healthy while readiness fails")
+    func testLivenessIndependentOfReadiness() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+        app.readiness.closeMigrationsGateForTesting()
+
+        // Liveness must not follow readiness: a dependency outage should pull
+        // the replica from rotation, never restart-loop the process.
+        try await app.test(.GET, "/health/live") { res async throws in
+            #expect(res.status == .ok)
+
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "healthy")
+        }
+        try await app.shutdownForTesting()
+    }
+
+    // MARK: - Drain
+
+    @Test("Draining replica reports 503 without probing dependencies")
+    func testDrainingReportsUnready() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        app.readiness.beginDraining()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .serviceUnavailable)
+
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "draining")
+
+            // Short-circuits: a replica on its way out should not spend probe
+            // latency on dependencies it is about to drop.
+            #expect(health.checks.map(\.name) == ["drain"])
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("Draining is idempotent so repeated SIGTERM logs once")
+    func testBeginDrainingIsIdempotent() {
+        let readiness = ReadinessState()
+
+        #expect(readiness.isDraining == false)
+        #expect(readiness.beginDraining() == true)
+        #expect(readiness.beginDraining() == false)
+        #expect(readiness.isDraining == true)
+    }
+
+    @Test("Draining replica still reports liveness")
+    func testDrainingStaysLive() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+        app.readiness.beginDraining()
+
+        // Killing a draining pod on a failed liveness probe would cut exactly
+        // the in-flight work the drain exists to protect.
+        try await app.test(.GET, "/health/live") { res async throws in
+            #expect(res.status == .ok)
+        }
+        try await app.shutdownForTesting()
+    }
+
+    // MARK: - Build Identity
+
+    @Test("Health endpoint carries build identity")
+    func testHealthCarriesIdentity() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+
+        // /health is documented as carrying build identity, and a blue/green
+        // cutover uses instanceId to tell which replica answered.
+        try await app.test(.GET, "/health") { res async throws in
+            #expect(res.status == .ok)
+
+            let health = try res.content.decode(HealthResponse.self)
+            let identity = try #require(health.identity)
+            #expect(identity.instanceId == app.instanceIdentity.instanceId.uuidString)
+        }
+        try await app.shutdownForTesting()
+    }
+
 }

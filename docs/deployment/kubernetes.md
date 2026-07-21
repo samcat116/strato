@@ -109,6 +109,13 @@ domain:
   enrollment (join tokens, entry revocation) and the Workload Identity view.
   The plaintext admin socket never crosses the network.
 
+## Rollouts
+
+The chart ships startup/liveness/readiness probes and a `preStop` drain delay
+tuned for zero-downtime rollouts. See
+[Health checks & zero-downtime deploys](/deployment/health-checks) for what each
+probe promises and which knobs to raise for a slow database or a slow ingress.
+
 ## Adding hypervisors
 
 Agents typically run on hypervisor hardware outside the cluster. Set
