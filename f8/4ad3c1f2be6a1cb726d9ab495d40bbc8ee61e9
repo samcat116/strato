@@ -1,0 +1,104 @@
+README.md
+  s_2279545463a027::t_cac47e59cf576e 55
+scripts/install-cvc5.sh
+  s_2279545463a027::t_cac47e59cf576e 1-42
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_2279545463a027::t_cac47e59cf576e 242-262
+control-plane/Sources/App/Models/SandboxInterfaceAddress.swift
+  s_2279545463a027::t_cac47e59cf576e 73,75-78
+docs/deployment/agents.md
+  s_2279545463a027::t_cac47e59cf576e 18,28-29,342
+docs/development/local-development.md
+  s_2279545463a027::t_cac47e59cf576e 12-13,69-87
+CLAUDE.md
+  s_2279545463a027::t_cac47e59cf576e 51
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_2279545463a027::t_cac47e59cf576e 121-131,170-180,270-278
+  s_2279545463a027::t_0d3649bc340f24 279
+control-plane/Sources/App/Services/NetworkSpecFactory.swift
+  s_2279545463a027::t_cac47e59cf576e 1-37
+control-plane/Sources/App/Services/SandboxSpecBuilder.swift
+  s_2279545463a027::t_cac47e59cf576e 6-7,32
+control-plane/Package.swift
+  s_2279545463a027::t_cac47e59cf576e 62-68
+control-plane/Sources/App/openapi.yaml
+  s_2279545463a027::t_cac47e59cf576e 2369-2371,2385,2406-2411,2425,3338-3340,3354,3370-3374,3388,3410-3412,3426,3806,3880,4388,4392,4431,4435,6484-6493,10547-10581,11357,11366-11368
+control-plane/Tests/AppTests/GuardrailWriteCheckTests.swift
+  s_2279545463a027::t_cac47e59cf576e 1-391
+deploy/agent/install.sh
+  s_2279545463a027::t_cac47e59cf576e 18
+control-plane/Sources/App/Models/NetworkAddressable.swift
+  s_2279545463a027::t_cac47e59cf576e 1-51
+.github/workflows/build.yaml
+  s_2279545463a027::t_cac47e59cf576e 302-313
+control-plane/Package.resolved
+  s_2279545463a027::t_cac47e59cf576e 234-235
+  s_2279545463a027::t_50ce1b4b96c6da 2
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_2279545463a027::t_cac47e59cf576e 298-323,329
+docs/architecture/iam.md
+  s_2279545463a027::t_cac47e59cf576e 172,174,176-178,182-184,194-244,289-291,706-708
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_2279545463a027::t_cac47e59cf576e 379-390,505-515
+  s_2279545463a027::t_c64d17b7646910 516
+control-plane/Dockerfile
+  s_2279545463a027::t_cac47e59cf576e 110,117-123
+  s_2279545463a027::t_9a1fbd666bfebc 124
+control-plane/Tests/AppTests/RoleNestingSubsumptionTests.swift
+  s_2279545463a027::t_cac47e59cf576e 1-86
+redocly.yaml
+  s_2279545463a027::t_cac47e59cf576e 18-20
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_2279545463a027::t_cac47e59cf576e 90
+cli/Sources/StratoCLI/Commands/AgentCommand.swift
+  s_2279545463a027::t_cac47e59cf576e 104
+control-plane/Sources/App/IAM/Cedar/GuardrailAnalyzer.swift
+  s_2279545463a027::t_cac47e59cf576e 1-244
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_2279545463a027::t_cac47e59cf576e 75,77-80
+agent/scripts/spawn-sim-fleet.sh
+  s_2279545463a027::t_cac47e59cf576e 113,444,528
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_2279545463a027::t_cac47e59cf576e 1-475
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_2279545463a027::t_cac47e59cf576e 27-31,88-89,91-93,208
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_2279545463a027::t_cac47e59cf576e 57,283,290,323,331,361,585,704
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_2279545463a027::t_cac47e59cf576e 88
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_2279545463a027::t_cac47e59cf576e 185-192
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_2279545463a027::t_cac47e59cf576e 203-205,227-266
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_2279545463a027::t_cac47e59cf576e 205-226
+control-plane/Tests/AppTests/SCIMProvisioningIntegrationTests.swift
+  s_2279545463a027::t_cac47e59cf576e 167-212
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_2279545463a027::t_cac47e59cf576e 81,150,170,189,209,231,241,264,298,329,358,380,406,498,512,519
+control-plane/web/src/lib/api/agents.ts
+  s_2279545463a027::t_cac47e59cf576e 45,51,55
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_2279545463a027::t_cac47e59cf576e 9-14,379
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_2279545463a027::t_cac47e59cf576e 119-131,226-230,235,270-273,333-370
+  s_2279545463a027::t_eee16f76a963f5 371
+control-plane/Sources/App/Controllers/SCIMController.swift
+  s_2279545463a027::t_cac47e59cf576e 266-271,275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f84ad3c1f2be6a1cb726d9ab495d40bbc8ee61e9",
+  "prompts": {},
+  "sessions": {
+    "s_2279545463a027": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "790bb16a-595d-4221-a46a-248a05b4670b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
