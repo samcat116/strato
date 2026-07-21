@@ -67,7 +67,10 @@ private final class NIOQGAByteChannel: QGAByteChannel, @unchecked Sendable {
 /// Accumulates inbound bytes off the event loop and satisfies one pending
 /// `readSome()` at a time. Cancellation of the awaiting task fails the pending
 /// read so a `StageBudget` timeout can unwind a probe against a silent guest.
-private final class QGAInboundHandler: ChannelInboundHandler, @unchecked Sendable {
+///
+/// `internal` (not `private`) only so `QGAInboundHandlerTests` can exercise the
+/// cancellation path directly — the live channel path can't be unit-tested.
+final class QGAInboundHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     private let lock = NSLock()
@@ -75,6 +78,12 @@ private final class QGAInboundHandler: ChannelInboundHandler, @unchecked Sendabl
     private var closed = false
     private var failure: Error?
     private var waiter: CheckedContinuation<[UInt8], Error>?
+    /// Set once the awaiting task is cancelled. Checked in the continuation body
+    /// so a `readSome()` entered *already cancelled* fails immediately instead
+    /// of parking a continuation nothing will resume — otherwise `onCancel`,
+    /// which runs before the body parks, finds `waiter == nil` and no-ops, and
+    /// the read (and the `StageBudget.cancelAndWait` that awaits it) hangs.
+    private var cancelled = false
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let buffer = unwrapInboundIn(data)
@@ -93,11 +102,19 @@ private final class QGAInboundHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     /// Awaits the next inbound chunk. Returns an empty array once the channel is
-    /// closed and drained (EOF).
+    /// closed and drained (EOF). Throws `CancellationError` if the awaiting task
+    /// is (or becomes) cancelled.
     func readSome() async throws -> [UInt8] {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[UInt8], Error>) in
                 lock.lock()
+                // Already cancelled (possibly by `onCancel` running before this
+                // body parked): fail now rather than park unreachably.
+                if cancelled {
+                    lock.unlock()
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 if !pending.isEmpty {
                     let bytes = pending
                     pending.removeAll(keepingCapacity: true)
@@ -120,6 +137,7 @@ private final class QGAInboundHandler: ChannelInboundHandler, @unchecked Sendabl
             }
         } onCancel: {
             lock.lock()
+            cancelled = true
             let continuation = waiter
             waiter = nil
             lock.unlock()

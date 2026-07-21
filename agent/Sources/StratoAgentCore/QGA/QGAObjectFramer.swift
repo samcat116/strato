@@ -20,6 +20,19 @@ final class QGAObjectFramer {
     private static let backslash: UInt8 = 0x5C  // \
     private static let syncMarker: UInt8 = 0xFF
 
+    /// Upper bound on buffered bytes. A guest that streams a never-closing
+    /// object would otherwise grow memory unbounded within a probe's budget;
+    /// qga replies are small, so 1 MiB is far above any legitimate one.
+    private let maxBufferedBytes: Int
+
+    init(maxBufferedBytes: Int = 1 << 20) {
+        self.maxBufferedBytes = maxBufferedBytes
+    }
+
+    /// Whether the buffer has grown past its cap without yielding a complete
+    /// object — a broken or hostile stream the client should abandon.
+    var isOverBudget: Bool { buffer.count > maxBufferedBytes }
+
     func append(_ bytes: [UInt8]) {
         buffer.append(contentsOf: bytes)
     }

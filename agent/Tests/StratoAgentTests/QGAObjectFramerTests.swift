@@ -76,4 +76,15 @@ struct QGAObjectFramerTests {
         framer.append(bytes("no marker yet"))
         #expect(!framer.consumeThroughSyncMarker())
     }
+
+    @Test("A never-closing object trips the buffer budget instead of growing unbounded")
+    func overBudget() {
+        let framer = QGAObjectFramer(maxBufferedBytes: 16)
+        framer.append(bytes(#"{"a":""#))  // open object, no close
+        #expect(!framer.isOverBudget)
+        framer.append(Array(repeating: UInt8(ascii: "x"), count: 32))
+        #expect(framer.isOverBudget)
+        // Still no complete object — the client abandons on the budget signal.
+        #expect(framer.nextObject() == nil)
+    }
 }

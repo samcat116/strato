@@ -44,11 +44,16 @@ public enum StageBudget {
     // instead of stalling the report or the shutdown. A live agent answers a
     // sync + query in milliseconds.
     public static let guestAgentSeconds = 5
-    // The hard cap on holding a guest's filesystems frozen for a snapshot
-    // (freeze → overlay create → thaw). A frozen guest is worse than a
-    // crash-consistent snapshot, so if the whole sequence overruns this the
-    // caller thaws and proceeds crash-consistent rather than waiting longer.
-    public static let guestFreezeSeconds = 10
+    // The bound on the freeze command itself and on the overlay-create step
+    // while the guest is frozen (issue #563). More generous than the general
+    // qga budget: `guest-fsfreeze-freeze` flushes dirty pages across every
+    // guest filesystem, which under I/O load is legitimately slower than a
+    // millisecond round-trip — too tight a bound would routinely cancel a
+    // freeze that was about to succeed. A frozen guest is still worse than a
+    // crash-consistent snapshot, so this caps how long the window can last;
+    // the caller thaws unconditionally once a freeze was attempted, even if
+    // that freeze's reply arrived after the budget.
+    public static let guestFreezeSeconds = 30
 
     /// What a budget does with an operation that is still running when the
     /// deadline passes. The right answer depends on whether the operation has

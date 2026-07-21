@@ -619,33 +619,57 @@ actor QEMUService: HypervisorService {
     }
 
     /// Freezes the attached guest's filesystems for an application-consistent
-    /// snapshot. Returns whether a freeze actually took (so the caller knows to
-    /// thaw). Best-effort: a qga-less or unresponsive guest yields `false` and a
-    /// crash-consistent snapshot, which is the pre-#563 behavior.
+    /// snapshot. Returns whether a freeze was **attempted** against a responsive
+    /// guest agent — the caller MUST `thawGuestFilesystems` whenever this is
+    /// `true`, because `guest-fsfreeze-freeze` can leave the guest frozen even
+    /// when its reply arrives *after* the budget (freezing flushes every guest
+    /// filesystem and is legitimately slow under I/O load), and a frozen guest
+    /// left un-thawed blocks all guest I/O. `false` (no qga socket, or the guest
+    /// agent didn't answer a liveness ping) means nothing was frozen and the
+    /// snapshot is crash-consistent — the pre-#563 behavior.
     func freezeGuestFilesystems(vmId: String) async -> Bool {
         guard let client = qgaClient(vmId: vmId) else { return false }
+
+        // Confirm the guest agent is actually answering before freezing.
+        // Otherwise a running-but-qga-less guest (its socket exists, but nothing
+        // is listening) would pay a freeze-timeout *and* a thaw-timeout on every
+        // snapshot. A ping is a quick sync round-trip.
+        do {
+            try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qga-ping", onTimeout: .cancelAndWait
+            ) {
+                try await client.ping()
+            }
+        } catch {
+            logger.debug(
+                "Guest agent not responding; snapshot will be crash-consistent",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            return false
+        }
+
+        // From here the guest may end up frozen even if the freeze reply is
+        // late, so the caller must thaw regardless of the outcome below.
         do {
             let count = try await StageBudget.run(
-                seconds: StageBudget.guestAgentSeconds, stage: "qga-fsfreeze", onTimeout: .cancelAndWait
+                seconds: StageBudget.guestFreezeSeconds, stage: "qga-fsfreeze", onTimeout: .cancelAndWait
             ) {
                 try await client.freezeFilesystems()
             }
             logger.info(
                 "Froze guest filesystems for snapshot",
                 metadata: ["vmId": .string(vmId), "frozen": .stringConvertible(count)])
-            return true
         } catch {
             logger.warning(
-                "Guest fs-freeze unavailable; snapshot will be crash-consistent",
+                "Guest fs-freeze did not confirm within its budget; thawing regardless (snapshot may be crash-consistent)",
                 metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-            return false
         }
+        return true
     }
 
     /// Thaws the attached guest's filesystems after a snapshot. Safe (and
-    /// intended) to call unconditionally once a freeze succeeded — a frozen
-    /// guest is worse than a crash-consistent snapshot, so a thaw failure is
-    /// logged loudly.
+    /// intended) to call unconditionally once a freeze was attempted — a frozen
+    /// guest is worse than a crash-consistent snapshot, and qga returns 0 when
+    /// nothing is frozen — so a thaw failure is logged loudly.
     func thawGuestFilesystems(vmId: String) async {
         guard let client = qgaClient(vmId: vmId) else { return }
         do {

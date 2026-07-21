@@ -692,4 +692,44 @@ final class DesiredStateReconciliationTests {
             #expect(rows.map(\.address) == ["10.0.0.9"])
         }
     }
+
+    @Test("A nil guestInfo on a stopped VM clears the stale qga view")
+    func guestInfoClearedWhenNotRunning() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+            try await nic.save(on: app.db)
+
+            func send(status: VMStatus, guestInfo: GuestInfo?) async throws {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [ObservedVMState(vmId: vm.id!, status: status, observedGeneration: 1, guestInfo: guestInfo)]
+                )
+                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            }
+
+            // Running with a live guest agent: hostname, availability, addresses recorded.
+            try await send(
+                status: .running,
+                guestInfo: GuestInfo(
+                    qgaAvailable: true, hostname: "web-01",
+                    interfaces: [
+                        GuestNetworkInterface(
+                            name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
+                            addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24)])
+                    ]))
+            #expect(try await VM.find(vm.id, on: app.db)?.qgaAvailable == true)
+
+            // The VM is now observed shut down with no guest info: the stale qga
+            // view (which would otherwise persist forever) is cleared.
+            try await send(status: .shutdown, guestInfo: nil)
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.qgaAvailable == nil)
+            #expect(refreshed.observedHostname == nil)
+            let rows = try await VMInterfaceObservedAddress.query(on: app.db)
+                .filter(\.$interface.$id == nic.id!).all()
+            #expect(rows.isEmpty)
+        }
+    }
 }

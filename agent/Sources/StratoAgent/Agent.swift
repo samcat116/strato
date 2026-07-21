@@ -3260,14 +3260,17 @@ extension Agent {
         // qga-less/hung guest all fall through to the crash-consistent path.
         let qemu = hypervisorServices[.qemu] as? QEMUService
         let freezeVMId = message.attachedVMId
-        var didFreeze = false
+        // `true` once a freeze was *attempted* against a responsive guest — the
+        // guest can be frozen even if the freeze reply was late, so this (not
+        // "freeze confirmed") is what gates the mandatory thaw below.
+        var freezeAttempted = false
         if let vmId = freezeVMId, let qemu {
-            didFreeze = await qemu.freezeGuestFilesystems(vmId: vmId)
+            freezeAttempted = await qemu.freezeGuestFilesystems(vmId: vmId)
         }
 
         let result: Result<String, Error>
         do {
-            if didFreeze {
+            if freezeAttempted {
                 // Hard-cap the frozen window: a frozen guest is worse than a
                 // crash-consistent snapshot, so on overrun we thaw and proceed.
                 result = .success(
@@ -3293,9 +3296,9 @@ extension Agent {
             result = .failure(error)
         }
 
-        // Unconditional thaw whenever a freeze took, whatever the snapshot's
-        // outcome (the "defer thaw" the freeze contract requires).
-        if didFreeze, let vmId = freezeVMId, let qemu {
+        // Unconditional thaw whenever a freeze was attempted, whatever the
+        // snapshot's outcome (the "defer thaw" the freeze contract requires).
+        if freezeAttempted, let vmId = freezeVMId, let qemu {
             await qemu.thawGuestFilesystems(vmId: vmId)
         }
 
@@ -3319,7 +3322,7 @@ extension Agent {
                     "volumeId": .string(message.volumeId),
                     "snapshotId": .string(message.snapshotId),
                     "path": .string(snapshotPath),
-                    "frozen": .stringConvertible(didFreeze),
+                    "freezeAttempted": .stringConvertible(freezeAttempted),
                 ])
         case .failure(let error):
             await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")

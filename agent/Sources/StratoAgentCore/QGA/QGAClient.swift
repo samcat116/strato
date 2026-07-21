@@ -191,6 +191,7 @@ public actor QGAClient {
             let chunk = try await channel.readSome()
             if chunk.isEmpty { throw QGAError.connectionClosed }
             framer.append(chunk)
+            if framer.isOverBudget { throw QGAError.malformedResponse }
         }
 
         let object = try await readNextObject(channel, framer)
@@ -240,6 +241,7 @@ public actor QGAClient {
             let chunk = try await channel.readSome()
             if chunk.isEmpty { throw QGAError.connectionClosed }
             framer.append(chunk)
+            if framer.isOverBudget { throw QGAError.malformedResponse }
         }
     }
 }
