@@ -167,16 +167,51 @@ enum WhoCanService {
         return network.$project.id == nil
     }
 
+    /// The `role_bindings.role` values (role-definition ids in uuidString
+    /// form) of every role that grants `action` and is bindable somewhere on
+    /// `chain`: the platform-owned rows plus rows owned by the chain's org or
+    /// project. The action-set filter runs in Swift — the in-scope role set
+    /// is small, and it keeps the query free of dialect-specific array
+    /// operators.
+    static func grantingRoleBindingValues(
+        action: String, chain: [IAMNode], on db: any Database
+    ) async throws -> [String] {
+        let orgID = chain.first { $0.type == .organization }?.id
+        let projectID = chain.first { $0.type == .project }?.id
+        let candidates = try await IAMRoleDefinition.query(on: db)
+            .group(.or) { anyOwner in
+                anyOwner.filter(\.$ownerType == IAMRoleOwnerType.platform.rawValue)
+                if let orgID {
+                    anyOwner.group(.and) { owner in
+                        owner.filter(\.$ownerType == IAMRoleOwnerType.organization.rawValue)
+                        owner.filter(\.$ownerID == orgID)
+                    }
+                }
+                if let projectID {
+                    anyOwner.group(.and) { owner in
+                        owner.filter(\.$ownerType == IAMRoleOwnerType.project.rawValue)
+                        owner.filter(\.$ownerID == projectID)
+                    }
+                }
+            }
+            .all()
+        return
+            candidates
+            .filter { $0.actions.contains(action) }
+            .compactMap { $0.id?.uuidString }
+    }
+
     /// Bindings along the chain whose role carries the action, plus the users
     /// each group binding expands to.
     private static func bindingEntries(
         action: String, chain: [IAMNode], on db: any Database
     ) async throws -> [WhoCanEntry] {
-        let grantingRoles = IAMRoleRegistry.roles(granting: action)
-        guard !grantingRoles.isEmpty, !chain.isEmpty else { return [] }
+        guard !chain.isEmpty else { return [] }
+        let grantingRoles = try await grantingRoleBindingValues(action: action, chain: chain, on: db)
+        guard !grantingRoles.isEmpty else { return [] }
 
         let bindings = try await RoleBinding.query(on: db)
-            .filter(\.$role ~~ grantingRoles.map(\.rawValue))
+            .filter(\.$role ~~ grantingRoles)
             .group(.or) { anyNode in
                 for node in chain {
                     anyNode.group(.and) { thisNode in
@@ -199,7 +234,7 @@ enum WhoCanService {
                 WhoCanEntry(
                     principal: WhoCanPrincipalRef(type: principalType, id: binding.principalID),
                     source: .binding,
-                    role: binding.role,
+                    role: roleLabel(binding.role),
                     grantedOn: IAMNode(type: nodeType, id: binding.nodeID),
                     via: nil,
                     expiresAt: binding.expiresAt
@@ -226,7 +261,7 @@ enum WhoCanService {
                     WhoCanEntry(
                         principal: WhoCanPrincipalRef(type: .user, id: membership.$user.id),
                         source: .binding,
-                        role: binding.role,
+                        role: roleLabel(binding.role),
                         grantedOn: IAMNode(type: nodeType, id: binding.nodeID),
                         via: group,
                         expiresAt: binding.expiresAt
@@ -235,6 +270,14 @@ enum WhoCanService {
             }
         }
         return entries
+    }
+
+    /// Seeded roles keep reporting their names ("admin"), not their row ids —
+    /// the who-can API's role field predates row identity and its consumers
+    /// render it. User-created roles surface their id until the API grows
+    /// display names (issue #605).
+    private static func roleLabel(_ bindingValue: String) -> String {
+        UUID(uuidString: bindingValue).flatMap { IAMRole(seededID: $0)?.rawValue } ?? bindingValue
     }
 
     /// Org members, for the two actions membership grants directly.
@@ -336,10 +379,10 @@ enum WhoCanService {
             principals += groupIDs.map { (.group, $0) }
         }
 
-        let grantingRoles = IAMRoleRegistry.roles(granting: action)
+        let grantingRoles = try await grantingRoleBindingValues(action: action, chain: chain, on: db)
         if !grantingRoles.isEmpty {
             let matches = try await RoleBinding.query(on: db)
-                .filter(\.$role ~~ grantingRoles.map(\.rawValue))
+                .filter(\.$role ~~ grantingRoles)
                 .group(.or) { anyPrincipal in
                     for (type, id) in principals {
                         anyPrincipal.group(.and) { thisPrincipal in

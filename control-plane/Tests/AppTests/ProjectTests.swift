@@ -153,7 +153,7 @@ final class ProjectTests {
             let bindingCount = try await RoleBinding.query(on: app.db)
                 .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                 .filter(\.$principalID == testUser.id!)
-                .filter(\.$role == IAMRole.admin.rawValue)
+                .filter(\.$role == IAMRole.admin.seededID.uuidString)
                 .filter(\.$nodeType == IAMNodeType.project.rawValue)
                 .filter(\.$nodeID == projectId)
                 .count()

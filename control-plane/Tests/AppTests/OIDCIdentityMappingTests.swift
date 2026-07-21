@@ -133,7 +133,7 @@ final class OIDCIdentityMappingTests {
                 .filter(\.$nodeType == IAMNodeType.organization.rawValue)
                 .filter(\.$nodeID == org.id!)
                 .all()
-            #expect(bindings.map(\.role) == [IAMRole.admin.rawValue])
+            #expect(bindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
         }
     }
 
@@ -432,7 +432,7 @@ final class OIDCIdentityMappingTests {
                 try await RoleBinding.query(on: app.db)
                     .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                     .filter(\.$principalID == user.id!)
-                    .filter(\.$role == IAMRole.admin.rawValue)
+                    .filter(\.$role == IAMRole.admin.seededID.uuidString)
                     .filter(\.$nodeType == IAMNodeType.organization.rawValue)
                     .filter(\.$nodeID == org.id!)
                     .count()

@@ -3,13 +3,14 @@ import Testing
 
 @testable import App
 
-/// IAM phase 3 (issue #480): the generated Cedar schema.
+/// IAM phase 3 (issue #480), rebuilt for the unified role store (issue #604):
+/// the generated Cedar schema.
 ///
-/// The nesting-direction tests are the load-bearing ones. The design warns the
-/// role-implication direction is easy to get backwards; with a finite action
-/// inventory, comparing every action's group closure against
-/// `IAMRoleRegistry.roles(granting:)` *is* the subsumption check — `action in
-/// Action::"role:R"` matches exactly the closure computed here.
+/// Role permits now carry explicit action lists (no role action-groups in the
+/// schema), so the load-bearing checks are: the seeded roles' expanded action
+/// sets keep the `viewer ⊂ operator ⊂ editor ⊂ admin` chain, the canonical
+/// permit text enumerates exactly those sets, and the `Grants` record
+/// declares one field pair per role row.
 @Suite("Cedar Schema Tests")
 struct CedarSchemaTests {
 
@@ -26,65 +27,72 @@ struct CedarSchemaTests {
         return result
     }
 
-    // MARK: - Role-group nesting direction
-
-    @Test("Every action's role-group closure matches the registry's granting roles")
-    func roleGroupClosureMatchesRegistry() {
-        let decls = CedarSchemaBuilder.actionDecls()
-        for action in IAMRoleRegistry.allActions.sorted() {
-            let expected = Set(
-                IAMRoleRegistry.roles(granting: action).map { CedarSchemaBuilder.roleGroupName($0) })
-            let actual = closure(of: action, in: decls).filter { $0.hasPrefix("role:") }
-            #expect(
-                actual == expected,
-                "\(action): `action in role group` would match \(actual.sorted()), registry says \(expected.sorted())")
-        }
+    private func descriptor(for role: IAMRole) -> RoleDescriptor {
+        let actions = IAMRoleRegistry.actions(for: role).sorted()
+        return RoleDescriptor(
+            id: role.seededID,
+            name: role.rawValue,
+            cedarText: RoleDescriptor.canonicalPermitText(id: role.seededID, actions: actions),
+            actions: actions
+        )
     }
 
-    @Test("Role groups nest lower-into-higher (viewer ∈ operator ∈ editor ∈ admin)")
-    func roleGroupNestingDirection() {
-        let decls = CedarSchemaBuilder.actionDecls()
-        let byName = Dictionary(uniqueKeysWithValues: decls.map { ($0.name, $0) })
+    private var seededDescriptors: [RoleDescriptor] { IAMRole.allCases.map(descriptor(for:)) }
 
-        // The lower role's group is a *member of* the higher one — that is
-        // what makes `action in Action::"role:admin"` reach a viewer action.
-        // The reversed declaration would make the viewer policy grant admin
-        // actions, which is the failure mode the design warns about.
-        #expect(byName["role:viewer"]?.memberOf == ["role:operator"])
-        #expect(byName["role:operator"]?.memberOf == ["role:editor"])
-        #expect(byName["role:editor"]?.memberOf == ["role:admin"])
-        #expect(byName["role:admin"]?.memberOf == [])
-    }
+    // MARK: - Seeded role action sets
 
-    @Test("Role subset chain holds under the closure: each role matches a superset of the one below")
-    func roleClosuresAreNested() {
-        let decls = CedarSchemaBuilder.actionDecls()
-        func matched(by role: IAMRole) -> Set<String> {
-            let group = CedarSchemaBuilder.roleGroupName(role)
-            return Set(
-                IAMRoleRegistry.allActions.filter { closure(of: $0, in: decls).contains(group) })
-        }
-        let viewer = matched(by: .viewer)
-        let op = matched(by: .operator)
-        let editor = matched(by: .editor)
-        let admin = matched(by: .admin)
+    @Test("Seeded role expansion keeps the subset chain (viewer ⊂ operator ⊂ editor ⊂ admin)")
+    func seededRoleChainNested() {
+        let viewer = IAMRoleRegistry.actions(for: .viewer)
+        let op = IAMRoleRegistry.actions(for: .operator)
+        let editor = IAMRoleRegistry.actions(for: .editor)
+        let admin = IAMRoleRegistry.actions(for: .admin)
 
         #expect(viewer.isSubset(of: op))
         #expect(op.isSubset(of: editor))
         #expect(editor.isSubset(of: admin))
         // Strict subsets: each role must add something, or the chain is
-        // degenerate and a declaration got lost.
+        // degenerate and a registry entry got lost.
         #expect(viewer != op)
         #expect(op != editor)
         #expect(editor != admin)
         #expect(admin == IAMRoleRegistry.allActions.subtracting(["project:create"]))
     }
 
-    @Test("Membership-derived project:create belongs to no role group")
+    @Test("Canonical permit text enumerates exactly the role's expanded actions")
+    func canonicalPermitEnumeratesActions() {
+        for role in IAMRole.allCases {
+            let text = descriptor(for: role).cedarText
+            for action in IAMRoleRegistry.actions(for: role) {
+                #expect(text.contains("Action::\"\(action)\""), "\(role.rawValue) permit misses \(action)")
+            }
+            // Nothing beyond the role's own set — the editor permit granting
+            // an admin action is the failure mode explicit lists must avoid.
+            for action in IAMRoleRegistry.allActions.subtracting(IAMRoleRegistry.actions(for: role)) {
+                #expect(!text.contains("Action::\"\(action)\""), "\(role.rawValue) permit leaks \(action)")
+            }
+        }
+    }
+
+    @Test("Canonical permit matches only the role's own grants fields")
+    func canonicalPermitUsesOwnGrantsFields() {
+        for role in IAMRole.allCases {
+            let text = descriptor(for: role).cedarText
+            #expect(text.contains("context.grants[\"\(RoleDescriptor.grantsUsersField(role.seededID))\"]"))
+            #expect(text.contains("context.grants[\"\(RoleDescriptor.grantsGroupsField(role.seededID))\"]"))
+            for other in IAMRole.allCases where other != role {
+                #expect(
+                    !text.contains(RoleDescriptor.grantsUsersField(other.seededID)),
+                    "\(role.rawValue) permit reads \(other.rawValue)'s grants")
+            }
+        }
+    }
+
+    @Test("Membership-derived project:create belongs to no seeded role")
     func membershipActionOutsideRoles() {
-        let decls = CedarSchemaBuilder.actionDecls()
-        let roleGroups = closure(of: "project:create", in: decls).filter { $0.hasPrefix("role:") }
-        #expect(roleGroups.isEmpty)
+        for role in IAMRole.allCases {
+            #expect(!IAMRoleRegistry.actions(for: role).contains("project:create"))
+        }
     }
 
     // MARK: - Service groups
@@ -116,12 +124,18 @@ struct CedarSchemaTests {
         }
     }
 
-    @Test("Pure groups (roles and services) carry no appliesTo — they cannot be requested")
+    @Test("Service groups carry no appliesTo — they cannot be requested")
     func groupsAreNotRequestable() {
         let decls = CedarSchemaBuilder.actionDecls()
-        for decl in decls where decl.name.hasPrefix("role:") || decl.name.hasPrefix("svc:") {
+        for decl in decls where decl.name.hasPrefix("svc:") {
             #expect(decl.resourceTypes == nil, "\(decl.name) should be a pure group")
         }
+    }
+
+    @Test("No role action-groups remain in the inventory")
+    func noRoleGroups() {
+        let decls = CedarSchemaBuilder.actionDecls()
+        #expect(!decls.contains { $0.name.hasPrefix("role:") })
     }
 
     @Test("project:create excludes Project — projects do not nest")
@@ -136,7 +150,7 @@ struct CedarSchemaTests {
 
     @Test("Schema text declares the tree, the grants vocabulary, and the context")
     func schemaTextStructure() {
-        let text = CedarSchemaBuilder.schemaText()
+        let text = CedarSchemaBuilder.schemaText(roles: seededDescriptors)
 
         // Entity tree, with the OU → Folder rename in the Cedar vocabulary.
         #expect(text.contains("entity Folder in [Organization, Folder]"))
@@ -145,18 +159,15 @@ struct CedarSchemaTests {
         #expect(text.contains("entity User in [Group]"))
         #expect(!text.contains("OrganizationalUnit"))
 
-        // Grants and context vocabulary.
-        for role in IAMRole.allCases {
+        // Grants and context vocabulary: one field pair per role row.
+        for role in seededDescriptors {
             #expect(text.contains("\"\(role.grantsUsersField)\": Set<User>"))
             #expect(text.contains("\"\(role.grantsGroupsField)\": Set<Group>"))
         }
         #expect(text.contains("\"mfa\"?: Bool"))
         #expect(text.contains("\"sourceIP\"?: ipaddr"))
 
-        // Nesting direction as it will reach the engine.
-        #expect(text.contains("action \"role:viewer\" in [\"role:operator\"];"))
-        #expect(text.contains("action \"role:admin\";"))
-        #expect(text.contains("action \"vm:start\" in [\"role:operator\", \"svc:vm\"]"))
+        #expect(text.contains("action \"vm:start\" in [\"svc:vm\"]"))
 
         // Every node type declares an optional environment, so compiled
         // environment ceilings validate under strict mode on every type an
@@ -167,9 +178,24 @@ struct CedarSchemaTests {
         #expect(text.contains("\"openToAllUsers\": Bool"))
     }
 
-    @Test("Schema text is deterministic")
+    @Test("Grants fields for user-created roles ride alongside the seeded ones")
+    func grantsFieldsForUserRoles() {
+        let custom = RoleDescriptor(
+            id: UUID(),
+            name: "auditor",
+            cedarText: RoleDescriptor.canonicalPermitText(id: UUID(), actions: ["vm:read"]),
+            actions: ["vm:read"]
+        )
+        let text = CedarSchemaBuilder.schemaText(roles: seededDescriptors + [custom])
+        #expect(text.contains("\"\(custom.grantsUsersField)\": Set<User>"))
+        #expect(text.contains("\"\(custom.grantsGroupsField)\": Set<Group>"))
+    }
+
+    @Test("Schema text is deterministic and order-independent")
     func schemaTextDeterministic() {
-        #expect(CedarSchemaBuilder.schemaText() == CedarSchemaBuilder.schemaText())
+        let forward = CedarSchemaBuilder.schemaText(roles: seededDescriptors)
+        let reversed = CedarSchemaBuilder.schemaText(roles: seededDescriptors.reversed())
+        #expect(forward == reversed)
     }
 
     @Test("Every IAM node type maps to a distinct Cedar entity type")

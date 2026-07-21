@@ -12,35 +12,46 @@ import Foundation
 // `WhoCanService.can`).
 
 /// The flattened role grants for one check: which users and groups hold each
-/// role on the target resource or anything above it, from the active,
-/// unconditioned `role_bindings` along the ancestor chain.
+/// role (by role-definition row id) on the target resource or anything above
+/// it, from the active, unconditioned `role_bindings` along the ancestor
+/// chain.
 struct CedarRoleGrants: Equatable, Sendable {
-    private(set) var users: [IAMRole: Set<UUID>] = [:]
-    private(set) var groups: [IAMRole: Set<UUID>] = [:]
+    private(set) var users: [UUID: Set<UUID>] = [:]
+    private(set) var groups: [UUID: Set<UUID>] = [:]
 
-    mutating func addUser(_ id: UUID, role: IAMRole) {
-        users[role, default: []].insert(id)
+    mutating func addUser(_ id: UUID, roleID: UUID) {
+        users[roleID, default: []].insert(id)
     }
 
-    mutating func addGroup(_ id: UUID, role: IAMRole) {
-        groups[role, default: []].insert(id)
+    mutating func addGroup(_ id: UUID, roleID: UUID) {
+        groups[roleID, default: []].insert(id)
     }
 
-    func users(for role: IAMRole) -> Set<UUID> { users[role] ?? [] }
-    func groups(for role: IAMRole) -> Set<UUID> { groups[role] ?? [] }
+    func users(for roleID: UUID) -> Set<UUID> { users[roleID] ?? [] }
+    func groups(for roleID: UUID) -> Set<UUID> { groups[roleID] ?? [] }
 
-    /// The `Grants` record for `context.grants`, every field present (the
-    /// schema declares them required) and sorted for determinism.
-    var contextValue: CedarValue {
+    /// The role ids the chain's bindings named — for logging what a stale
+    /// schema dropped.
+    var roleIDs: Set<UUID> { Set(users.keys).union(groups.keys) }
+
+    /// The `Grants` record for `context.grants`: one field pair for **every**
+    /// role the compiled schema declares (they are required fields — empty
+    /// sets when no binding matched), and nothing else — a field the schema
+    /// doesn't know fails strict validation for the whole request. Grants for
+    /// a role id outside `roleIDs` (a role created seconds ago that this
+    /// replica hasn't recompiled for, or deleted out from under a binding)
+    /// are dropped: under-grant, never over-grant, converging on the next
+    /// version nudge or 30s re-read.
+    func contextValue(roleIDs: Set<UUID>) -> CedarValue {
         var fields: [String: CedarValue] = [:]
-        for role in IAMRole.allCases {
-            fields[role.grantsUsersField] = .set(
-                users(for: role)
+        for roleID in roleIDs {
+            fields[RoleDescriptor.grantsUsersField(roleID)] = .set(
+                users(for: roleID)
                     .map { CedarEntityUID(type: .user, id: $0) }
                     .sorted { $0.id < $1.id }
                     .map { .entity($0) })
-            fields[role.grantsGroupsField] = .set(
-                groups(for: role)
+            fields[RoleDescriptor.grantsGroupsField(roleID)] = .set(
+                groups(for: roleID)
                     .map { CedarEntityUID(type: .group, id: $0) }
                     .sorted { $0.id < $1.id }
                     .map { .entity($0) })
@@ -82,13 +93,14 @@ struct CedarEntitySlice: Equatable, Sendable {
         try CedarText.json(entities)
     }
 
-    /// The request context carrying the grants. Ambient conditions (`mfa`,
-    /// `sourceIP`) belong to the request rather than the slice and will merge
-    /// in at check time; shadow evaluation (#481) passes this through
-    /// unchanged, so conditioned bindings are skipped and counted until
-    /// cutover (#482) wires the ambient half.
-    var baseContextValue: CedarValue {
-        .record(["grants": grants.contextValue])
+    /// The request context carrying the grants, shaped to the compiled
+    /// schema: `roleIDs` is the caller's `Built.roleIDs`. Ambient conditions
+    /// (`mfa`, `sourceIP`) belong to the request rather than the slice and
+    /// will merge in at check time; shadow evaluation (#481) passes this
+    /// through unchanged, so conditioned bindings are skipped and counted
+    /// until cutover (#482) wires the ambient half.
+    func baseContextValue(roleIDs: Set<UUID>) -> CedarValue {
+        .record(["grants": grants.contextValue(roleIDs: roleIDs)])
     }
 }
 
@@ -155,12 +167,15 @@ enum EntitySliceLoader {
                     skippedConditionedBindings += 1
                     continue
                 }
-                // An unknown role or principal type is a row this build cannot
-                // interpret; skipping under-grants, never over-grants.
-                guard let role = IAMRole(rawValue: binding.role) else { continue }
+                // A role value that is no UUID, or an unknown principal type,
+                // is a row this build cannot interpret; skipping under-grants,
+                // never over-grants. (Whether the id names a *live* role is
+                // the compiled set's call — `contextValue(roleIDs:)` filters
+                // against it at context-build time.)
+                guard let roleID = UUID(uuidString: binding.role) else { continue }
                 switch IAMPrincipalType(rawValue: binding.principalType) {
-                case .user: grants.addUser(binding.principalID, role: role)
-                case .group: grants.addGroup(binding.principalID, role: role)
+                case .user: grants.addUser(binding.principalID, roleID: roleID)
+                case .group: grants.addGroup(binding.principalID, roleID: roleID)
                 case nil: continue
                 }
             }
