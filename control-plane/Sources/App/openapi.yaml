@@ -11354,11 +11354,7 @@ components:
 
     SCIMErrorResponse:
       type: object
-      description: >-
-        An RFC 7644 §3.12 error. Note that `status` is a string for errors
-        raised inside the SCIM processor but a JSON number for the controller's
-        own pre-processor errors (bad organization id, unknown organization,
-        bad token), so clients must accept both.
+      description: An RFC 7644 §3.12 error.
       required: [schemas, status]
       properties:
         schemas:
@@ -11367,10 +11363,9 @@ components:
             type: string
           example: ["urn:ietf:params:scim:api:messages:2.0:Error"]
         status:
-          oneOf:
-            - type: string
-            - type: integer
-          description: The HTTP status code.
+          type: string
+          description: The HTTP status code, expressed as a JSON string.
+          example: "401"
         detail:
           type: string
         scimType:

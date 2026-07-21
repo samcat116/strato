@@ -263,15 +263,16 @@ struct SCIMController: RouteCollection {
     }
 
     private func scimErrorResponse(status: HTTPStatus, detail: String, scimType: String? = nil) -> Response {
-        let error: [String: Any] = [
-            "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
-            "detail": detail,
-            "status": status.code,
-        ]
+        // RFC 7644 §3.12 requires `status` to be the HTTP status code as a JSON string.
+        let error = SCIMErrorResponse(
+            detail: detail,
+            status: String(status.code),
+            scimType: scimType
+        )
 
         let body: Data
         do {
-            body = try JSONSerialization.data(withJSONObject: error)
+            body = try JSONEncoder().encode(error)
         } catch {
             body = Data()
         }
