@@ -645,6 +645,10 @@ opentelemetry:
       httpPort: 4318
       metricsPort: 8888
       prometheusPort: 8889
+      # Serves the health_check extension, which is what the probes query.
+      # Deliberately not metricsPort: that port answers /metrics and nothing
+      # else, so probing it at / 404s forever.
+      healthPort: 13133
 
     resources:
       limits:

@@ -8,6 +8,13 @@ metadata:
     app.kubernetes.io/component: otel-collector
 data:
   otel-collector-config.yaml: |
+    extensions:
+      # Backs the container's liveness/readiness probes. Without this the
+      # collector serves no health endpoint at all and the probes have nothing
+      # valid to target.
+      health_check:
+        endpoint: 0.0.0.0:{{ .Values.opentelemetry.collector.service.healthPort }}
+
     receivers:
       otlp:
         protocols:
@@ -50,6 +57,8 @@ data:
       {{- end }}
 
     service:
+      extensions: [health_check]
+
       pipelines:
         metrics:
           receivers: [otlp]

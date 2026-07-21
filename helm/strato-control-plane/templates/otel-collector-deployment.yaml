@@ -36,6 +36,9 @@ spec:
             - name: metrics
               containerPort: {{ .Values.opentelemetry.collector.service.metricsPort }}
               protocol: TCP
+            - name: health
+              containerPort: {{ .Values.opentelemetry.collector.service.healthPort }}
+              protocol: TCP
             {{- if include "strato-control-plane.metricsExposed" . }}
             - name: prometheus
               containerPort: {{ .Values.opentelemetry.collector.service.prometheusPort }}
@@ -50,7 +53,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /
-              port: {{ .Values.opentelemetry.collector.service.metricsPort }}
+              port: {{ .Values.opentelemetry.collector.service.healthPort }}
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
@@ -58,7 +61,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /
-              port: {{ .Values.opentelemetry.collector.service.metricsPort }}
+              port: {{ .Values.opentelemetry.collector.service.healthPort }}
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 5
