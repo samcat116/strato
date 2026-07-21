@@ -54,6 +54,22 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "observed_hostname")
     var observedHostname: String?
 
+    // Observed guest memory usage from the VM's virtio-balloon device
+    // (issue #567). Purely informational, populated by the agent's balloon
+    // stats poll; nil for guests without the virtio_balloon driver. Total is
+    // the memory the guest OS actually sees (less than the grant: firmware
+    // reservations and balloon inflation come out of it); available is what
+    // the guest can allocate without swapping. `guestMemoryStatsAt` stamps
+    // the last report so readers can judge freshness.
+    @OptionalField(key: "guest_memory_total_bytes")
+    var guestMemoryTotalBytes: Int64?
+
+    @OptionalField(key: "guest_memory_available_bytes")
+    var guestMemoryAvailableBytes: Int64?
+
+    @OptionalField(key: "guest_memory_stats_at")
+    var guestMemoryStatsAt: Date?
+
     @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
@@ -338,6 +354,15 @@ struct VMDetailResponse: Content {
     /// guest OS's own hostname when it reported one.
     let qgaAvailable: Bool?
     let observedHostname: String?
+    /// Observed guest memory usage from the virtio-balloon device (issue
+    /// #567), nil until a guest with the virtio_balloon driver reports.
+    /// `guestMemoryUsedBytes` is derived (`total - available`) — the number
+    /// the "committed vs used" UI actually wants.
+    let guestMemoryTotalBytes: Int64?
+    let guestMemoryAvailableBytes: Int64?
+    let guestMemoryUsedBytes: Int64?
+    let guestMemoryUsedFormatted: String?
+    let guestMemoryStatsAt: Date?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -363,6 +388,17 @@ struct VMDetailResponse: Content {
             .map(NetworkInterfaceResponse.init)
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
+        self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes
+        self.guestMemoryAvailableBytes = vm.guestMemoryAvailableBytes
+        if let total = vm.guestMemoryTotalBytes, let available = vm.guestMemoryAvailableBytes {
+            let used = max(0, total - available)
+            self.guestMemoryUsedBytes = used
+            self.guestMemoryUsedFormatted = VMDetailResponse.formatSize(used)
+        } else {
+            self.guestMemoryUsedBytes = nil
+            self.guestMemoryUsedFormatted = nil
+        }
+        self.guestMemoryStatsAt = vm.guestMemoryStatsAt
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
     }

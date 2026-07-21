@@ -132,6 +132,16 @@ export interface VM {
    */
   qgaAvailable?: boolean;
   observedHostname?: string;
+  /**
+   * Observed guest memory usage from the virtio-balloon device (issue #567).
+   * Undefined until a guest with the virtio_balloon driver reports; used is
+   * derived server-side as total - available.
+   */
+  guestMemoryTotalBytes?: number;
+  guestMemoryAvailableBytes?: number;
+  guestMemoryUsedBytes?: number;
+  guestMemoryUsedFormatted?: string;
+  guestMemoryStatsAt?: string;
   createdAt: string;
   updatedAt: string;
 }

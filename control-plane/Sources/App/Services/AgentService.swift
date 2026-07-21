@@ -2453,6 +2453,15 @@ actor AgentService {
             try await clearGuestInfo(vm: vm, on: db)
         }
 
+        // Balloon memory stats (issue #567) follow the same contract as
+        // guestInfo, independently: a guest can report balloon stats without
+        // qga (and vice versa), so their presence is tracked separately.
+        if let memoryStats = observed.memoryStats {
+            try await persistMemoryStats(vm: vm, stats: memoryStats, on: db)
+        } else if Self.guestInfoClearedByStatus.contains(observed.status) {
+            try await clearMemoryStats(vm: vm, on: db)
+        }
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
@@ -2612,11 +2621,39 @@ actor AgentService {
         }
     }
 
+    /// Persists a VM's observed balloon memory stats (issue #567), stamping
+    /// the report time. Skips the write when the numbers are unchanged (the
+    /// steady state for an idle guest) so the report stream doesn't churn the
+    /// row — which means `guestMemoryStatsAt` records when the values last
+    /// *changed*, a freshness signal that survives unchanged reports.
+    private func persistMemoryStats(vm: VM, stats: VMMemoryStats, on db: Database) async throws {
+        guard
+            vm.guestMemoryTotalBytes != stats.totalBytes
+                || vm.guestMemoryAvailableBytes != stats.availableBytes
+        else { return }
+        vm.guestMemoryTotalBytes = stats.totalBytes
+        vm.guestMemoryAvailableBytes = stats.availableBytes
+        vm.guestMemoryStatsAt = Date()
+        try await vm.save(on: db)
+    }
+
+    /// Clears a VM's observed memory stats once the guest is definitively not
+    /// running — a stopped guest's last-known usage is stale, and surfacing it
+    /// as current would mislead the "committed vs used" view.
+    private func clearMemoryStats(vm: VM, on db: Database) async throws {
+        guard vm.guestMemoryTotalBytes != nil || vm.guestMemoryAvailableBytes != nil else { return }
+        vm.guestMemoryTotalBytes = nil
+        vm.guestMemoryAvailableBytes = nil
+        vm.guestMemoryStatsAt = nil
+        try await vm.save(on: db)
+    }
+
     /// VM statuses for which a nil `guestInfo` should *clear* the stored qga
     /// view rather than preserve it: the guest is definitively not running, so
     /// its last-known hostname/addresses are stale. Running, paused,
     /// transitional, and unknown are deliberately excluded — a nil there is a
     /// transient probe miss, and nil-preserves-last-known keeps the UI stable.
+    /// The balloon memory stats (issue #567) share this contract.
     private static let guestInfoClearedByStatus: Set<VMStatus> = [.shutdown, .created, .error]
 
     /// Clears a VM's observed guest-agent state (hostname, availability, and all
