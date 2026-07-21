@@ -176,7 +176,22 @@ struct APIKeyController: RouteCollection {
 
 struct APIDocumentationController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
+        // The spec-first OpenAPI document (issue #557) and its viewer. The
+        // document is authored in Sources/App/openapi.yaml, consumed by the
+        // swift-openapi-generator plugin at build time, and shipped as a bundle
+        // resource so it can be served verbatim here.
+        routes.get("api", "openapi.yaml", use: openAPIDocument)
         routes.get("api", "docs", use: documentation)
+    }
+
+    func openAPIDocument(req: Request) async throws -> Response {
+        guard let yaml = OpenAPISpec.yaml else {
+            throw Abort(.internalServerError, reason: "OpenAPI document is unavailable")
+        }
+        return Response(
+            status: .ok,
+            headers: HTTPHeaders([("Content-Type", "application/yaml; charset=utf-8")]),
+            body: .init(string: yaml))
     }
 
     func documentation(req: Request) async throws -> Response {
@@ -193,7 +208,7 @@ struct APIDocumentationController: RouteCollection {
                     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
                     <script>
                         window.ui = SwaggerUIBundle({
-                            url: '/openapi.json',
+                            url: '/api/openapi.yaml',
                             dom_id: '#swagger-ui',
                             presets: [SwaggerUIBundle.presets.apis],
                             layout: 'BaseLayout'

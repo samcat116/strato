@@ -111,6 +111,13 @@ let package = Package(
                 .product(name: "SotoS3", package: "soto"),
                 .product(name: "CedarPolicy", package: "swift-cedar"),
             ],
+            resources: [
+                // Ship the spec so the control plane can serve it at runtime
+                // (GET /api/openapi.yaml). This is the same file the
+                // swift-openapi-generator build plugin consumes; declaring it a
+                // resource additionally copies it into the product bundle.
+                .copy("openapi.yaml")
+            ],
             swiftSettings: swiftSettings,
             plugins: [
                 .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")

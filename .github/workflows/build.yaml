@@ -133,6 +133,28 @@ jobs:
         working-directory: control-plane/web
         run: bun run build
 
+  openapi-validate:
+    name: OpenAPI Spec Validation
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true'
+    # Lightweight validity check of the spec-first OpenAPI document (issue
+    # #557). The swift-openapi-generator build plugin is the authoritative
+    # validator (it fails the Swift build on an invalid spec); this job gives
+    # fast feedback without the multi-minute Swift build. Runs on a
+    # GitHub-hosted runner to keep the Swift runner pool free.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Lint OpenAPI document
+        run: bunx @redocly/cli@1 lint control-plane/Sources/App/openapi.yaml
+
   # The three Swift test jobs below run concurrently on the ARC scale set —
   # the wall-clock win that used to be impossible when everything shared one
   # job. Each keeps its own scratch dir under RUNNER_TOOL_CACHE (see the
@@ -291,7 +313,7 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-sqlite.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
         # Run even if the SQLite leg failed (but not if the build did) —
@@ -319,7 +341,17 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This leg
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-postgres.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      # Surface the exact failing test (and its message) as a JUnit report,
+      # since the raw job log is dominated by per-request debug output.
+      - name: Upload control-plane test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-test-results
+          path: control-plane/test-results-*.xml
+          if-no-files-found: warn
 
   test-agent-macos:
     name: Build & Test Agent (macOS)
