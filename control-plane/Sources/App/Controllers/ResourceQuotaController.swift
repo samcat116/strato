@@ -527,9 +527,7 @@ struct ResourceQuotaController: RouteCollection {
     /// pre-cutover audit). Only system admins may touch it — enough to
     /// inspect and delete a corrupt row without widening access.
     private func requireSystemAdminForScopelessQuota(on req: Request) throws {
-        guard let user = req.auth.get(User.self), user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "Quota has no scope")
-        }
+        _ = try req.requireSystemAdmin("Quota has no scope")
     }
 
     private func validateQuotaNameUniqueness(

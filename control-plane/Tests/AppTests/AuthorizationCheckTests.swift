@@ -1,18 +1,20 @@
+import Fluent
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
+
 @testable import App
 
 /// Tests the batch "can I?" endpoint (`POST /api/authorization/check`) that the
-/// frontend uses to gate UI. Drives per-resource verdicts through the mock SpiceDB
-/// (`spicedbMockAllows` / `spicedbMockDeniedResources`).
+/// frontend uses to gate UI. Since cutover (#482) the caller-scoped form is
+/// answered by the authoritative Cedar evaluator, so verdicts come from real
+/// bindings — not a mock.
 @Suite("Authorization Check Endpoint Tests", .serialized)
 final class AuthorizationCheckTests {
 
     private func withApp(
         systemAdmin: Bool = false,
-        _ test: (Application, User, String) async throws -> Void
+        _ test: (Application, User, Organization, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
         do {
@@ -30,9 +32,11 @@ final class AuthorizationCheckTests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
+            let project = try await builder.createProject(
+                name: "Auth Check Project", description: "d", organization: org)
 
             let token = try await user.generateAPIKey(on: app.db)
-            try await test(app, user, token)
+            try await test(app, user, org, project, token)
 
         } catch {
             try await app.shutdownForTesting()
@@ -41,33 +45,32 @@ final class AuthorizationCheckTests {
         try await app.shutdownForTesting()
     }
 
-    private func body(
-        _ items: [(key: String, resourceType: String, permission: String)]
-    ) -> AuthorizationController.CheckRequest {
-        AuthorizationController.CheckRequest(
-            checks: items.map {
-                AuthorizationController.PermissionCheckItem(
-                    key: $0.key,
-                    resourceType: $0.resourceType,
-                    resourceId: UUID().uuidString,
-                    permission: $0.permission
-                )
-            }
-        )
+    private func item(
+        key: String, resourceType: String, resourceId: String, permission: String
+    ) -> AuthorizationController.PermissionCheckItem {
+        AuthorizationController.PermissionCheckItem(
+            key: key, resourceType: resourceType, resourceId: resourceId, permission: permission)
     }
 
-    @Test("Per-resource denial is reflected per key")
+    @Test("Per-resource verdicts reflect the caller's bindings per key")
     func perResourceDenial() async throws {
-        try await withApp { app, _, token in
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["organization"]
+        try await withApp { app, user, org, project, token in
+            // Viewer on the project, bare member of the org: project read is
+            // granted by the binding, org member management is not.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
 
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    self.body([
-                        (key: "manage_org", resourceType: "organization", permission: "manage_members"),
-                        (key: "view_proj", resourceType: "project", permission: "view_project"),
+                    AuthorizationController.CheckRequest(checks: [
+                        self.item(
+                            key: "manage_org", resourceType: "organization",
+                            resourceId: org.id!.uuidString, permission: "manage_members"),
+                        self.item(
+                            key: "view_proj", resourceType: "project",
+                            resourceId: project.id!.uuidString, permission: "view_project"),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -80,19 +83,51 @@ final class AuthorizationCheckTests {
         }
     }
 
-    @Test("System admin gets all-true without consulting SpiceDB")
-    func systemAdminAllTrue() async throws {
-        try await withApp(systemAdmin: true) { app, _, token in
-            // Even with the mock set to deny everything, the admin short-circuit wins.
-            app.spicedbMockAllows = false
-            app.spicedbMockDeniedResources = ["organization", "project"]
+    @Test("Native IAM action names are accepted alongside legacy permission names")
+    func nativeActionVocabulary() async throws {
+        try await withApp { app, user, org, project, token in
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
 
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    self.body([
-                        (key: "a", resourceType: "organization", permission: "manage_members"),
-                        (key: "b", resourceType: "project", permission: "manage_project"),
+                    AuthorizationController.CheckRequest(checks: [
+                        self.item(
+                            key: "read", resourceType: "project",
+                            resourceId: project.id!.uuidString, permission: "project:read"),
+                        self.item(
+                            key: "update", resourceType: "project",
+                            resourceId: project.id!.uuidString, permission: "project:update"),
+                        self.item(
+                            key: "org_read", resourceType: "organization",
+                            resourceId: org.id!.uuidString, permission: "org:read"),
+                    ]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let decoded = try res.content.decode(AuthorizationController.CheckResponse.self)
+                #expect(decoded.results["read"] == true)
+                #expect(decoded.results["update"] == false)
+                // Membership-derived, no binding behind it.
+                #expect(decoded.results["org_read"] == true)
+            }
+        }
+    }
+
+    @Test("System admin gets all-true through the platform policy")
+    func systemAdminAllTrue() async throws {
+        try await withApp(systemAdmin: true) { app, _, org, project, token in
+            try await app.test(.POST, "/api/authorization/check") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AuthorizationController.CheckRequest(checks: [
+                        self.item(
+                            key: "a", resourceType: "organization",
+                            resourceId: org.id!.uuidString, permission: "manage_members"),
+                        self.item(
+                            key: "b", resourceType: "project",
+                            resourceId: project.id!.uuidString, permission: "manage_project"),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -107,10 +142,14 @@ final class AuthorizationCheckTests {
 
     @Test("Unauthenticated request is rejected (401)")
     func unauthenticated() async throws {
-        try await withApp { app, _, _ in
+        try await withApp { app, _, org, _, _ in
             try await app.test(.POST, "/api/authorization/check") { req in
                 try req.content.encode(
-                    self.body([(key: "a", resourceType: "organization", permission: "view_organization")]))
+                    AuthorizationController.CheckRequest(checks: [
+                        self.item(
+                            key: "a", resourceType: "organization",
+                            resourceId: org.id!.uuidString, permission: "view_organization")
+                    ]))
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
             }
@@ -119,13 +158,16 @@ final class AuthorizationCheckTests {
 
     @Test("More than 50 checks is rejected (400)")
     func tooManyChecks() async throws {
-        try await withApp { app, _, token in
-            app.spicedbMockAllows = true
-            let items = (0..<51).map { (key: "k\($0)", resourceType: "project", permission: "view_project") }
+        try await withApp { app, _, _, project, token in
+            let items = (0..<51).map {
+                self.item(
+                    key: "k\($0)", resourceType: "project",
+                    resourceId: project.id!.uuidString, permission: "view_project")
+            }
 
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(self.body(items))
+                try req.content.encode(AuthorizationController.CheckRequest(checks: items))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }

@@ -407,35 +407,43 @@ visible.
 Reading who holds access is itself administrative — both endpoints require
 admin over the resource or a container above it.
 
-Until cutover the two forms of `can-i` answer from different stores, which is
-a deliberate consequence of SpiceDB still being authoritative: the
-caller-scoped form goes to SpiceDB (what actually gates requests, so
-`permission` is a SpiceDB permission name), while the arbitrary-principal form
-goes to the bindings table so it agrees with `who-can` (so `permission` is an
-IAM action name). Phase 5 collapses both onto the evaluator and the two
-vocabularies become one.
+Since cutover the caller-scoped form of `can-i` answers from the evaluator —
+exactly what gates requests, guardrails included, with no admin fast path
+(a forbid can deny an admin, so short-circuiting to "true" could lie). It
+accepts IAM action names, plus legacy SpiceDB permission names translated the
+same way `req.can` translates, until clients finish migrating. The
+arbitrary-principal form still answers from the bindings table so it agrees
+with `who-can`.
 
-### Shadow evaluation and decision logs (shipped with #481)
+### Decision logs and the reverse shadow (shipped with #481, flipped with #482)
 
-Until cutover, SpiceDB gates requests and Cedar shadows it: every
-`checkPermission` also runs through the compiled Cedar set in a background
-task, and every decision lands in `iam_decision_logs` with both verdicts, the
-deciding policy ids, the policy-set version, and the tier. The pieces that
-matter:
+Before cutover, SpiceDB gated requests and Cedar shadowed it. Since cutover
+the direction is reversed: **Cedar gates requests inline**
+(`IAMAuthorizer`), every decision lands in `iam_decision_logs` with the
+deciding policy ids, the policy-set version, and the tier — and while SpiceDB
+remains deployed (until #483), each check that has a SpiceDB-vocabulary
+equivalent also asks SpiceDB in a background task and records both verdicts,
+so the mismatch surface keeps watching for regressions through the rollback
+window. The pieces that matter:
 
-- **Coverage is total by construction.** The shadow lives in a decorator
-  returned by `Request.spicedb` (`ShadowingSpiceDBService`), which is the one
-  accessor every middleware and handler check site goes through — no call
-  sites changed, and new check sites are covered automatically. Off by
-  default only under `.testing`; `IAM_SHADOW_EVAL_ENABLED=false` is the
-  production kill switch.
-- **The vocabulary bridge is explicit and audited.** `IAMShadowTranslator`
-  maps each SpiceDB check (`read` on `virtual_machine`, `manage_project` on
-  `project`, …) to the IAM action naming the act being gated (`vm:read`,
-  `project:update`). A check with no faithful mapping is recorded as
-  `untranslated` rather than skipped, so coverage gaps are countable; a
-  mapping is only emitted if the action exists in the registry and is
-  schema-applicable to the node.
+- **Coverage is total by construction.** The authoritative check lives in a
+  decorator returned by `Request.spicedb`
+  (`CedarAuthoritativeSpiceDBService`), which is the one accessor every
+  legacy-vocabulary check site goes through — no call sites changed, and new
+  check sites are covered automatically. Relationship *writes* still forward
+  to SpiceDB (the dual-write keeps rollback open). Decision rows are written
+  in every environment; `IAM_SHADOW_EVAL_ENABLED=false` switches off only the
+  background SpiceDB comparison (and is the default under `.testing`, where
+  SpiceDB is a mock).
+- **The vocabulary bridge is explicit, audited, and now load-bearing.**
+  `IAMActionTranslator` maps each SpiceDB-vocabulary check (`read` on
+  `virtual_machine`, `manage_project` on `project`, …) to the IAM action
+  naming the act being gated (`vm:read`, `project:update`). A check with no
+  faithful mapping **fails closed** — denied, logged, and recorded as
+  `untranslated` — because an unmapped pair is a check site nobody mapped,
+  not an allowance; a mapping is only emitted if the action exists in the
+  registry and is schema-applicable to the node. The translator (and the
+  legacy vocabulary itself) goes away when #483 converts the call sites.
 - **Decision rows record why, not just what**: the determining policy ids
   (which is why the engine compiles policies under their assembler ids), the
   derived tier (`platform` / `guardrail` / `grant` / `default-deny`), the
@@ -453,11 +461,11 @@ matter:
   1. org members losing implicit project visibility;
   2. nested-folder admin inheritance being fixed;
   3. **conditioned bindings**, which the entity slice deliberately does not
-     flatten — the ambient half of the context (`mfa`, `sourceIP`) arrives at
-     cutover, so until then a conditioned grant reads as `spicedb=allow /
-     cedar=deny`. These rows carry a non-zero
-     `skipped_conditioned_bindings`, which is how they are separated from
-     genuine mismatches.
+     flatten. No write path can create one yet, so nothing regressed at
+     cutover; the ambient half of the context (`mfa`, `sourceIP`) ships with
+     the condition vocabulary (the #484 track) rather than as dead code here.
+     Such rows would carry a non-zero `skipped_conditioned_bindings`, which
+     is how they are separated from genuine mismatches.
 - Rows are append-only, FK-free (decisions outlive what they describe), and
   pruned by a retention sweep (`IAM_DECISION_LOG_RETENTION_DAYS`, default 30,
   cluster-singleton via the coordination sweep lock). The sweep is armed even
@@ -472,9 +480,15 @@ matter:
   counted in the logs rather than queued without limit, so a saturated gate is
   a number rather than a latency regression in the request path.
 
-The admin bypass and public-route allowlist still short-circuit *before*
-SpiceDB, so those decisions do not appear yet; they flow through the evaluator
-(and thus the log) at cutover.
+Since cutover the system-admin bypass is gone from the middleware and
+`req.can`: admins are allowed by the `platform-system-admin` policy inside the
+evaluator, so their decisions appear in the log (`AuditMiddleware` derives its
+admin-bypass marker from the determining policy ids) and tier-2 guardrail
+forbids bind them like everyone else. A handful of controller-local admin
+fast paths (list widenings and object-check skips) survive the cutover and
+are removed with #483's call-site conversion; the deliberately admin-only
+platform surfaces (hierarchy repair, audit events, decision logs, workload
+identity) gate through `req.requireSystemAdmin()`, which can only deny.
 
 ### Pre-cutover audit of handler-level allows (gate on phase 5)
 
@@ -527,14 +541,32 @@ the default-deny allowlist keeps these login-only):
   needs its explicit middleware carve-out preserved by the cutover allowlist,
   like `/ssf/events/` and the agent mTLS endpoints.
 
-### Enforcement path
+### Enforcement path (shipped with #482)
 
-Authorization becomes **structurally default-deny** at the middleware with an
-explicit public-route allowlist — replacing today's arrangement where only
-`/api/vms` and `/api/sandboxes` are middleware-guarded and everything else
-relies on per-handler checks. The system-admin bypass is re-expressed as a
-tier-1 platform policy so it flows through the evaluator and appears in
-decision logs instead of skipping authorization entirely.
+Authorization is **structurally default-deny** at `AuthorizationMiddleware`:
+every registered route must fall into exactly one class — **public** (the
+explicit allowlist: login, health, the agent mTLS surfaces, the SCIM data
+plane), **loginOnly** (identity-plane surfaces whose authorization is row
+scoping by construction: API keys, users, operations, OAuth sessions, the
+can-i/who-can endpoints), **resource-mapped** (`/api/vms`, `/api/sandboxes` —
+the middleware itself evaluates the method/path-derived check), or
+**handlerChecked** (authorized in the handler through the evaluator). A path
+matching no class is denied, and `assertAllRoutesClassified` fails *boot* if
+a route is registered without one, in every environment — adding an endpoint
+forces a classification decision, and the whole test suite enforces it.
+
+For handler-checked routes the middleware also asserts, after the handler
+runs, that a successful **mutating** request actually evaluated a decision
+(`req.can`, the evaluator, or an explicit `req.requireSystemAdmin()` /
+`req.markRowScopedAuthorization()` declaration) — a hard 500 under
+`.testing`, an error log in production. Reads are not asserted: list
+endpoints legitimately evaluate nothing when their row scoping matches no
+rows.
+
+The system-admin bypass is re-expressed as the `platform-system-admin` tier-1
+policy, so it flows through the evaluator and appears in decision logs
+instead of skipping authorization entirely — which also means guardrail
+forbids bind system admins.
 
 ## Migration plan
 
@@ -562,6 +594,10 @@ Phases; each lands independently:
    gate on phase 5, not part of this phase.
 5. **Cutover.** Flip `req.can` and the middleware to Cedar; default-deny
    middleware; admin bypass through the evaluator; creator bindings at create.
+   **Shipped** (#482) — see "Enforcement path" above. Call sites keep the
+   SpiceDB vocabulary through `IAMActionTranslator` (fail-closed) until #483
+   converts them; SpiceDB keeps receiving writes and answers the background
+   reverse shadow, which is the regression watch for the rollback window.
 6. **Deletion.** Remove tuple writes, the SpiceDB reconciliation services,
    `SpiceDBService`, `schema.zed`; drop SpiceDB from compose/helm/CI.
    Keep a read-only rollback window first.

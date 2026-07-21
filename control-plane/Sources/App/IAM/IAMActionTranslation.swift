@@ -1,16 +1,15 @@
 import Foundation
 
-// IAM phase 4 (issue #481): the SpiceDB-permission → IAM-action translator.
-//
-// Until cutover the two authorization vocabularies deliberately coexist:
-// SpiceDB permissions (`read`, `manage_project`, `view_organization`) gate
-// requests, and IAM actions (`vm:read`, `project:update`, `org:read`) are what
-// the Cedar policy set evaluates. Shadow evaluation has to bridge them: each
-// SpiceDB check is translated to the IAM action naming the *act being gated*,
-// so a verdict mismatch reflects a real semantic difference between the two
-// models — not a translation artifact. Untranslatable checks are recorded as
-// such in the decision log rather than silently skipped, so coverage gaps are
-// visible and countable.
+// The SpiceDB-permission → IAM-action translator. Born with shadow evaluation
+// (issue #481) to bridge the two vocabularies for comparison; since cutover
+// (issue #482) it is the load-bearing boundary: handler sites still speaking
+// SpiceDB vocabulary (`req.can("read", on: "virtual_machine", ...)`,
+// `req.spicedb.checkPermission`) are translated here to the IAM action naming
+// the *act being gated*, then evaluated through the authoritative Cedar
+// policy set. Untranslatable checks fail closed and are recorded as
+// `untranslated` in the decision log — an unmapped pair is a check site
+// nobody mapped, not an allowance. The vocabulary (and this translator) goes
+// away when #483 converts the call sites and deletes SpiceDB.
 
 /// One translated check: the IAM action and the tree node to evaluate it on.
 struct IAMShadowTranslation: Equatable, Sendable {
@@ -18,7 +17,7 @@ struct IAMShadowTranslation: Equatable, Sendable {
     let node: IAMNode
 }
 
-enum IAMShadowTranslator {
+enum IAMActionTranslator {
 
     /// Translate a SpiceDB check into the Cedar vocabulary, or nil when the
     /// pair has no faithful IAM-action equivalent (unknown resource type,
@@ -76,6 +75,13 @@ enum IAMShadowTranslator {
         case "create":
             return "\(service):create"
         case "update", "update_project":
+            // A floating IP has no update of its own — the handlers gate
+            // attach/detach with `update`, so the route names the act.
+            if nodeType == .floatingIP {
+                if path.hasSuffix("/attach") { return "floatingip:attach" }
+                if path.hasSuffix("/detach") { return "floatingip:detach" }
+                return nil
+            }
             return "\(service):update"
         case "delete":
             // Deleting a snapshot is the parent's snapshot permission, not a
@@ -103,6 +109,27 @@ enum IAMShadowTranslator {
             case "volume": return "volume:restore"
             default: return nil
             }
+        case "export":
+            // Snapshot mobility (issue #428): exporting a snapshot's artifacts.
+            return service == "sandbox" ? "sandbox:export" : nil
+        case "attach":
+            switch service {
+            case "volume": return "volume:attach"
+            case "floatingip": return "floatingip:attach"
+            default: return nil
+            }
+        case "detach":
+            switch service {
+            case "volume": return "volume:detach"
+            case "floatingip": return "floatingip:detach"
+            default: return nil
+            }
+        case "clone":
+            return service == "volume" ? "volume:clone" : nil
+        case "resize":
+            // The registry has no distinct resize action; growing a volume is
+            // an update of it.
+            return service == "volume" ? "volume:update" : nil
         case "view_console":
             return "vm:viewConsole"
         case "download":
@@ -114,6 +141,8 @@ enum IAMShadowTranslator {
             return "org:update"
         case "manage_ou":
             return "folder:update"
+        case "view_ou":
+            return "folder:read"
         case "manage_project":
             return "project:update"
         case "manage":

@@ -34,7 +34,7 @@ final class SandboxExecTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Exec Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -189,13 +189,18 @@ final class SandboxExecTests {
         }
     }
 
-    @Test("POST exec is denied (403) when SpiceDB withholds the exec permission")
+    @Test("POST exec is denied (403) for a viewer (sandbox:exec is operator and above)")
     func execDeniedWithoutPermission() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
-            app.spicedbMockAllows = false
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let viewer = try await TestDataBuilder(db: app.db).createUser(
+                username: "exec-viewer", email: "exec-viewer@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/exec") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
                 try req.content.encode(ExecBody(command: ["/bin/sh"]))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -495,13 +500,15 @@ final class SandboxExecTests {
         }
     }
 
-    @Test("GET /api/sandboxes/:id/logs is denied (403) when SpiceDB withholds read")
+    @Test("GET /api/sandboxes/:id/logs is denied (403) when no binding grants read")
     func logsDeniedWithoutPermission() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
-            app.spicedbMockAllows = false
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "logs-outsider", email: "logs-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)/logs") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

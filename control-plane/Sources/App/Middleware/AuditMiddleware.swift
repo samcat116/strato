@@ -1,17 +1,13 @@
 import Vapor
 
-/// Marks a request as having been served through the system-admin permission
-/// bypass, so `AuditMiddleware` can record it as a first-class admin audit
-/// event (issue #39). Set by both bypass sites: `SpiceDBAuthMiddleware` and
-/// `Request.can`.
-struct AdminBypassAuditKey: StorageKey {
-    typealias Value = Bool
-}
-
 extension Request {
+    /// Whether any authorization decision this request was allowed by the
+    /// `platform-system-admin` policy, so `AuditMiddleware` can record it as a
+    /// first-class admin audit event (issue #39). Since cutover (#482) this is
+    /// derived from the evaluator's determining policies — there is no code
+    /// bypass to flag anymore.
     var adminBypassUsed: Bool {
-        get { storage[AdminBypassAuditKey.self] ?? false }
-        set { storage[AdminBypassAuditKey.self] = newValue }
+        iamAuthState.adminPolicyUsed.withLockedValue { $0 }
     }
 }
 

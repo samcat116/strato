@@ -28,7 +28,7 @@ final class NetworkControllerTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Network Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -100,14 +100,17 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("GET /api/networks?project_id denied when project read is withheld (403)")
+    @Test("GET /api/networks?project_id denied when no binding grants project read (403)")
     func listDeniedForInaccessibleProject() async throws {
-        try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["project"]
+        try await withNetworkTestApp { app, _, project, _ in
+            // A bare org member: membership grants org:read + project:create
+            // only, so the project_id filter's view_project check denies.
+            let member = try await TestDataBuilder(db: app.db).createUser(
+                username: "net-member", email: "net-member@example.com")
+            let memberToken = try await member.generateAPIKey(on: app.db)
 
             try await app.test(.GET, "/api/networks?project_id=\(project.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -378,12 +381,18 @@ final class NetworkControllerTests {
 
     @Test("POST /api/networks denied without create_network permission (403)")
     func createDeniedWithoutPermission() async throws {
-        try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["project"]
+        try await withNetworkTestApp { app, _, project, _ in
+            // A project viewer can see the project but holds no
+            // network:create.
+            let viewer = try await TestDataBuilder(db: app.db).createUser(
+                username: "net-viewer", email: "net-viewer@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app.db)
 
             try await app.test(.POST, "/api/networks") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
                 try req.content.encode(
                     CreateNetworkRequest(
                         name: "denied-net", subnet: "10.50.0.0/24", gateway: nil, projectId: project.id!))

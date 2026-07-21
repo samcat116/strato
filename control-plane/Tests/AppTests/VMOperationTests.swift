@@ -32,7 +32,7 @@ final class VMOperationTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "VM Op Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -233,7 +233,6 @@ final class VMOperationTests {
             let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
-            app.spicedbMockAllows = true
             try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -243,9 +242,12 @@ final class VMOperationTests {
                 #expect(body.vmId == vm.id)
             }
 
-            app.spicedbMockAllows = false
+            // A user with no binding on the VM cannot read its operation.
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "op-outsider", email: "op-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
             try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

@@ -38,6 +38,13 @@ final class OrganizationalUnitTests {
             )
             try await userOrg.save(on: app.db)
 
+            // The admin role binding the API/backfill would have written
+            // alongside the membership row — the Cedar evaluator (#482)
+            // answers from `role_bindings`.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: testUser.id!, role: .admin,
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
+
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
             try await test(app, testUser, testOrganization, authToken)

@@ -55,21 +55,23 @@ struct AuthorizationController: RouteCollection {
     ///          "principal": { "type", "id" }? }`
     /// Returns: `{ "results": { "<key>": true/false, ... } }`
     ///
-    /// The two forms answer from different stores, deliberately:
+    /// Since cutover (#482) both forms answer in one vocabulary:
     ///
-    /// - **No `principal`** (the caller asks about themselves): answered by
-    ///   SpiceDB, which is what actually gates requests today. `permission` is a
-    ///   SpiceDB permission name (`manage_project`).
+    /// - **No `principal`** (the caller asks about themselves): evaluated by
+    ///   the authoritative Cedar policy set — exactly what gates requests, so
+    ///   the answer here is the answer enforcement would give, guardrails
+    ///   included. `permission` accepts an IAM action name (`vm:start`) or,
+    ///   for callers not yet migrated, a legacy SpiceDB permission name
+    ///   (`manage_project`), translated the same way `req.can` translates.
     /// - **With `principal`**: answered from the `role_bindings` table + the
     ///   resource tree, so it agrees with `who-can`. `permission` is an IAM
-    ///   action name (`vm:start`) — a different vocabulary, because the
-    ///   bindings model has no SpiceDB permissions in it.
+    ///   action name.
     ///
-    /// The split exists because SpiceDB remains authoritative through phase 1.
-    /// At cutover (#482) both forms collapse onto the evaluator and the
-    /// vocabularies become one.
+    /// There is no admin fast path: guardrail forbids bind system admins, so
+    /// short-circuiting to "true" could report an allow the evaluator would
+    /// refuse.
     func check(req: Request) async throws -> CheckResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard let user = req.auth.get(User.self), let userID = user.id else {
             throw Abort(.unauthorized)
         }
 
@@ -86,25 +88,27 @@ struct AuthorizationController: RouteCollection {
             return try await checkForPrincipal(principal, payload.checks, caller: user, req: req)
         }
 
-        // System admins can do everything — answer without hitting SpiceDB.
-        if user.isSystemAdmin {
-            var results: [String: Bool] = [:]
-            for item in payload.checks {
-                results[item.key] = true
+        var results: [String: Bool] = [:]
+        for item in payload.checks {
+            // Action names carry a `:`; anything else is the legacy SpiceDB
+            // vocabulary and goes through the same translation as `req.can`.
+            if item.permission.contains(":") {
+                let node = try Self.node(resourceType: item.resourceType, resourceId: item.resourceId)
+                results[item.key] = try await req.can(item.permission, on: node)
+            } else {
+                results[item.key] = try await IAMAuthorizer.checkLegacyVocabulary(
+                    userID: userID,
+                    permission: item.permission,
+                    resourceType: item.resourceType,
+                    resourceID: item.resourceId,
+                    context: IAMCheckContext(
+                        path: req.url.path, method: req.method.rawValue, requestID: req.id),
+                    state: req.iamAuthState,
+                    app: req.application,
+                    db: req.db
+                )
             }
-            return CheckResponse(results: results)
         }
-
-        let queries = payload.checks.map {
-            PermissionQuery(
-                key: $0.key,
-                permission: $0.permission,
-                resourceType: $0.resourceType,
-                resourceId: $0.resourceId
-            )
-        }
-
-        let results = try await req.spicedb.checkBulk(subject: user.id?.uuidString ?? "", queries)
         return CheckResponse(results: results)
     }
 
@@ -191,9 +195,8 @@ struct AuthorizationController: RouteCollection {
     /// Reading who holds access is itself an administrative act — the answer
     /// lists other people's grants. See `IAMPolicyGate` for the rule.
     private static func requirePolicyRead(on node: IAMNode, caller: User, req: Request) async throws {
-        try await IAMPolicyGate.requireAdmin(
+        try await IAMPolicyGate.requirePolicyRead(
             on: node,
-            caller: caller,
             deniedReason: "Reading access policy requires admin on the resource or a container above it",
             req: req
         )

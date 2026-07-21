@@ -422,6 +422,22 @@ struct TestDataBuilder {
             role: role
         )
         try await userOrg.save(on: db)
+
+        // Mirror the dual-write the API performs: an org admin carries an
+        // `admin` role binding (a bare member carries none — membership itself
+        // grants only org:read + project:create). Without this the Cedar
+        // evaluator, which answers from `role_bindings`, sees no grant.
+        if let bindingRole = IAMRole.fromOrganizationRole(role) {
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: bindingRole,
+                nodeType: .organization,
+                nodeID: organization.id!,
+                createdBy: nil,
+                on: db
+            )
+        }
     }
 
     func createOU(

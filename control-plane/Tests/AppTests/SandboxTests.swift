@@ -33,7 +33,7 @@ final class SandboxTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Sandbox Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -806,26 +806,30 @@ final class SandboxTests {
 
     // MARK: - Authorization
 
-    @Test("GET /api/sandboxes/:id is denied (403) when SpiceDB withholds read")
+    @Test("GET /api/sandboxes/:id is denied (403) when no binding grants read")
     func showDeniedWhenNoPermission() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
-            app.spicedbMockAllows = false
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "sandbox-outsider", email: "sandbox-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
         }
     }
 
-    @Test("POST /api/sandboxes/:id/start is denied (403) when SpiceDB withholds start")
+    @Test("POST /api/sandboxes/:id/start is denied (403) when no binding grants start")
     func startDeniedWhenNoPermission() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
-            app.spicedbMockAllows = false
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "sandbox-outsider2", email: "sandbox-outsider2@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/start") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

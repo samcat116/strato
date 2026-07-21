@@ -513,11 +513,13 @@ final class AgentOrganizationScopeTests {
     func destructiveActionsGuardForeignVMs() async throws {
         try await withScopedApp { app, org, _ in
             let builder = TestDataBuilder(db: app.db)
-            // Delegated org admin: not a system admin; the mock SpiceDB grants
-            // agent#manage, so only the foreign-VM guard stands in the way.
+            // Delegated org admin: not a system admin; their org-admin binding
+            // grants agent:manage, so only the foreign-VM guard stands in the
+            // way.
             let orgAdmin = try await builder.createUser(
                 username: "delegated-admin", email: "delegated-admin@example.com",
                 displayName: "Delegated Admin", isSystemAdmin: false)
+            try await builder.addUserToOrganization(user: orgAdmin, organization: org, role: "admin")
             let orgAdminToken = try await orgAdmin.generateAPIKey(on: app.db)
 
             let agentUUID = try await app.agentService.registerAgent(
@@ -621,7 +623,7 @@ final class AgentOrganizationScopeTests {
             let user = try await builder.createUser(
                 username: "net-pinner", email: "net-pinner@example.com",
                 displayName: "Net Pinner", isSystemAdmin: false)
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
             let project = try await builder.createProject(

@@ -154,10 +154,13 @@ final class ProjectMemberTests {
 
     @Test("Listing requires view_project")
     func listRequiresViewProject() async throws {
-        try await withApp { app, project, _, _, _, token, _ in
-            app.spicedbMockDeniedResources = ["project"]
+        try await withApp { app, project, _, _, _, _, _ in
+            // No binding anywhere: project:read is denied.
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "pm-outsider", email: "pm-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
             try await app.test(.GET, "/api/projects/\(project.id!)/members") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -166,10 +169,17 @@ final class ProjectMemberTests {
 
     @Test("Granting requires manage_project")
     func grantRequiresManageProject() async throws {
-        try await withApp { app, project, _, target, _, token, _ in
-            app.spicedbMockDeniedResources = ["project"]
+        try await withApp { app, project, _, target, _, _, _ in
+            // A viewer can list members but holds no project:update, so the
+            // grant is denied.
+            let viewer = try await TestDataBuilder(db: app.db).createUser(
+                username: "pm-viewer", email: "pm-viewer@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app.db)
             try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
                         userEmail: target.email, userID: nil, role: "member"))

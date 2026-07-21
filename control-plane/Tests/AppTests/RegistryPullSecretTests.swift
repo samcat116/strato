@@ -39,7 +39,7 @@ final class RegistryPullSecretTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Pull Secret Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -231,10 +231,17 @@ final class RegistryPullSecretTests {
 
     @Test("Mutations require manage_project; denial is a 403")
     func mutationsRequirePermission() async throws {
-        try await withPullSecretTestApp { app, _, project, _, token in
-            app.spicedbMockAllows = false
+        try await withPullSecretTestApp { app, _, project, _, _ in
+            // A project viewer can read but holds no project:update, so the
+            // requireProjectAdmin gate denies the mutation.
+            let viewer = try await TestDataBuilder(db: app.db).createUser(
+                username: "secret-viewer", email: "secret-viewer@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app.db)
             try await app.test(.POST, credentialsPath(project)) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
                 try req.content.encode([
                     "registry": "ghcr.io", "username": "bot", "secret": "s",
                 ])

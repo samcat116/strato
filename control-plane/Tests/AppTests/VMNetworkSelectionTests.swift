@@ -201,14 +201,23 @@ final class VMNetworkSelectionTests {
 
     @Test("POST /api/vms is denied (403) when SpiceDB withholds project create")
     func createDeniedWithoutProjectCreatePermission() async throws {
-        try await withApp { app, _, _, project, image, token in
-            // Org membership alone must not authorize VM creation: withhold the
-            // project-scoped `create_resources` permission (deny the "project"
-            // resource type) while image read still passes, and the create must 403.
-            app.spicedbMockDeniedResources = ["project"]
+        try await withApp { app, _, org, project, image, _ in
+            // A project *viewer* can read the image but does not hold
+            // vm:create — org membership plus read access must not authorize
+            // VM creation.
+            let builder = TestDataBuilder(db: app.db)
+            let viewer = try await builder.createUser(
+                username: "vm-net-viewer", email: "vm-net-viewer@example.com")
+            try await builder.addUserToOrganization(user: viewer, organization: org, role: "member")
+            viewer.currentOrganizationId = org.id
+            try await viewer.save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
                 try req.content.encode(
                     CreateVMBody(
                         name: "unauthorized-vm", imageId: image.id, projectId: project.id,

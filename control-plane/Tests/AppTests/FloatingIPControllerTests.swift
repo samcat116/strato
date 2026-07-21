@@ -30,7 +30,7 @@ final class FloatingIPControllerTests {
                 isSystemAdmin: true
             )
             let org = try await builder.createOrganization(name: "FIP Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -512,20 +512,22 @@ final class FloatingIPControllerTests {
     @Test("Pinning a pool to a site requires manage permission on the site")
     func poolSitePinPermission() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in
-            let site = Site(name: "gated-site", organizationScope: .organization(org.id!))
+            // The site belongs to a different organization: an admin of
+            // `org` may create pools in their own scope but must not occupy
+            // another tenant's site.
+            let builder = TestDataBuilder(db: app.db)
+            let foreignOrg = try await builder.createOrganization(name: "Pool Foreign Org")
+            let site = Site(name: "gated-site", organizationScope: .organization(foreignOrg.id!))
             try await site.save(on: app.db)
 
-            // A non-admin org admin (mock grants manage_agents on the org but
-            // denies site manage) must not occupy another scope's site.
-            let builder = TestDataBuilder(db: app.db)
             let member = try await builder.createUser(
                 username: "poolmember",
                 email: "poolmember@example.com",
                 displayName: "Pool Member",
                 isSystemAdmin: false
             )
+            try await builder.addUserToOrganization(user: member, organization: org, role: "admin")
             let memberToken = try await member.generateAPIKey(on: app.db)
-            app.spicedbMockDeniedResources = ["site"]
 
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -539,7 +541,6 @@ final class FloatingIPControllerTests {
             }
 
             // Unpinned creation by the same caller is fine.
-            app.spicedbMockDeniedResources = []
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode([
@@ -603,8 +604,9 @@ final class FloatingIPControllerTests {
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.90.0.5")
 
-            // A non-admin project member who owns the floating IP but is
-            // denied on the VM must not be able to change its exposure.
+            // A user who holds the floating IP (a resource-level admin
+            // binding, what allocation writes for its creator) but nothing on
+            // the VM must not be able to change the VM's exposure.
             let builder = TestDataBuilder(db: app.db)
             let member = try await builder.createUser(
                 username: "fipmember",
@@ -616,14 +618,16 @@ final class FloatingIPControllerTests {
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 fipId = try res.content.decode(FloatingIPResponse.self).id
             }
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: member.id!, role: .admin,
+                nodeType: .floatingIP, nodeID: fipId!, createdBy: nil, on: app.db)
 
-            app.spicedbMockDeniedResources = ["virtual_machine"]
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -631,7 +635,10 @@ final class FloatingIPControllerTests {
                 #expect(res.status == .forbidden)
             }
 
-            app.spicedbMockDeniedResources = []
+            // Editor on the VM itself flips the verdict.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: member.id!, role: .editor,
+                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: nil, on: app.db)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(["vmId": vm.id!.uuidString])

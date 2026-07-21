@@ -415,9 +415,9 @@ final class IAMWhoCanTests {
             let token = try await owner.generateAPIKey(on: app.db)
 
             // Admin on the snapshot itself, nothing above it.
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["project", "organizational_unit", "organization"]
-            defer { app.spicedbMockDeniedResources = [] }
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: owner.id!, role: .admin,
+                nodeType: .sandboxSnapshot, nodeID: snapshot.id!, createdBy: nil, on: app.db)
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -593,9 +593,9 @@ final class IAMWhoCanTests {
             let token = try await owner.generateAPIKey(on: app.db)
 
             // Admin on the VM itself, nothing above it — a VM creator's position.
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["project", "organizational_unit", "organization"]
-            defer { app.spicedbMockDeniedResources = [] }
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: owner.id!, role: .admin,
+                nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.db)
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

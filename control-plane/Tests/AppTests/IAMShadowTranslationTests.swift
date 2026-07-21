@@ -16,7 +16,7 @@ struct IAMShadowTranslationTests {
     private func action(
         _ permission: String, on resourceType: String, path: String = "/api/test"
     ) -> String? {
-        IAMShadowTranslator.translate(
+        IAMActionTranslator.translate(
             permission: permission, resourceType: resourceType, resourceID: id, path: path
         )?.action
     }
@@ -98,7 +98,7 @@ struct IAMShadowTranslationTests {
         #expect(action("frobnicate", on: "virtual_machine") == nil)
         // Non-UUID resource id (collection wildcard)
         #expect(
-            IAMShadowTranslator.translate(
+            IAMActionTranslator.translate(
                 permission: "read", resourceType: "virtual_machine", resourceID: "*",
                 path: "/api/vms") == nil)
         // A verb that exists but not for this service
@@ -117,7 +117,7 @@ struct IAMShadowTranslationTests {
             ("delete", "floating_ip"),
         ]
         for (permission, resourceType) in samples {
-            let translation = IAMShadowTranslator.translate(
+            let translation = IAMActionTranslator.translate(
                 permission: permission, resourceType: resourceType, resourceID: id, path: "/")
             let translated = try #require(translation)
             let isRegistryAction = IAMRoleRegistry.allActions.contains(translated.action)

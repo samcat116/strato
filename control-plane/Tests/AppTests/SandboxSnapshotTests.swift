@@ -34,7 +34,7 @@ final class SandboxSnapshotTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Snapshot Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -970,12 +970,20 @@ final class SandboxSnapshotTests {
 
     // MARK: - Export admission (issue #428 review)
 
-    @Test("Export requires the export permission, not merely read")
+    @Test("Export is denied for an operator (sandbox:export is editor and above)")
     func exportRequiresExportPermission() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, token in
-            // Everything the handler checks passes except `export` itself, so
-            // a failure here means the gate fell back to a weaker verb.
-            app.spicedbMockDeniedPermissions = ["export"]
+        try await withSnapshotTestApp { app, user, project, sandbox, _ in
+            // An operator can drive the sandbox lifecycle but holds neither
+            // sandbox:snapshot nor sandbox:export — the per-verb gate now
+            // falls out of role membership (the registry pins which roles
+            // carry export; CedarSchemaTests prove the closure).
+            let builder = TestDataBuilder(db: app.db)
+            let operatorUser = try await builder.createUser(
+                username: "snap-operator", email: "snap-operator@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: operatorUser.id!, role: .operator,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let token = try await operatorUser.generateAPIKey(on: app.db)
             let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
             let snapshot = SandboxSnapshot(
                 name: "viewer-cannot-export",

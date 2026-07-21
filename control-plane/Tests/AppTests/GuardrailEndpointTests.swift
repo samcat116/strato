@@ -165,12 +165,18 @@ final class GuardrailEndpointTests {
     @Test("Managing guardrails requires admin over the node")
     func nonAdminIsForbidden() async throws {
         try await withApp { app, fixture in
-            app.spicedbMockAllows = false
+            // A bare org member holds no admin binding, so iam:setPolicy on
+            // the org is denied.
+            let member = try await TestDataBuilder(db: app.db).createUser(
+                username: "guardrail-member", email: "guardrail-member@example.com")
+            try await TestDataBuilder(db: app.db).addUserToOrganization(
+                user: member, organization: fixture.org, role: "member")
+            let memberToken = try await member.generateAPIKey(on: app.db)
 
             try await app.test(
                 .POST, "/api/iam/guardrails",
                 beforeRequest: { req in
-                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                     try req.content.encode(self.createBody(name: "not-allowed", org: fixture.org))
                 },
                 afterResponse: { res in

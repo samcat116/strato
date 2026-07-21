@@ -58,6 +58,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -91,6 +94,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -120,6 +126,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -149,6 +158,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -184,6 +196,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -217,6 +232,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -250,6 +268,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -285,6 +306,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that checks user details
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
@@ -320,6 +344,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that checks API key storage
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             guard let storedKey = req.apiKey else {
@@ -362,6 +389,9 @@ struct APIKeyAuthenticatorTests {
 
         // Create a test route that checks isAPIKeyAuthenticated
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             return req.isAPIKeyAuthenticated ? "true" : "false"
@@ -392,6 +422,9 @@ struct APIKeyAuthenticatorTests {
     /// authenticator + scope middleware, mirroring the production pipeline.
     private func registerScopedRoutes(on app: Application) {
         app.routes.all.removeAll()
+        // Ad-hoc routes outside the production classification; declare them so
+        // the default-deny middleware treats them as login-gated (#482).
+        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(),
             APIKeyScopeMiddleware()
