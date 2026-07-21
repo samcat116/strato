@@ -522,6 +522,9 @@ public func configure(_ app: Application) async throws {
     // fresh databases. Ordered after EnforcePersistedEnumValues.
     app.migrations.add(AddSnapshotExportOperationKind())
 
+    // virtio-balloon guest memory stats (issue #567).
+    app.migrations.add(AddGuestMemoryStatsToVM())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

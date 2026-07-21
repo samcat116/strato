@@ -17,12 +17,23 @@ import { Badge } from "@/components/ui/badge";
 import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
 import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
-import { useAgent } from "@/lib/hooks";
+import { useAgent, useVMs } from "@/lib/hooks";
 
 export default function AgentDetailPage() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") || "";
   const { data: agent, isLoading, error } = useAgent(id);
+  // Guest-reported memory usage (virtio-balloon, issue #567), aggregated over
+  // this agent's VMs that are visible in the current org and reporting stats.
+  const { data: vms } = useVMs();
+  const agentVMs = (vms ?? []).filter((vm) => vm.hypervisorId === id);
+  const reportingVMs = agentVMs.filter(
+    (vm) => vm.guestMemoryUsedBytes != null
+  );
+  const guestUsedBytes = reportingVMs.reduce(
+    (sum, vm) => sum + (vm.guestMemoryUsedBytes ?? 0),
+    0
+  );
 
   if (!id) {
     return (
@@ -140,6 +151,18 @@ export default function AgentDetailPage() {
             <p className="text-sm text-muted-foreground">
               of {formatMemory(agent.resources.totalMemory)} available
             </p>
+            <p className="text-sm text-muted-foreground">
+              {formatMemory(
+                agent.resources.totalMemory - agent.resources.availableMemory
+              )}{" "}
+              committed to VMs
+            </p>
+            {reportingVMs.length > 0 && (
+              <p className="text-sm text-muted-foreground">
+                {formatMemory(guestUsedBytes)} used in guests (
+                {reportingVMs.length}/{agentVMs.length} VMs reporting)
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card className="bg-card border-border">

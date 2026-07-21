@@ -196,7 +196,15 @@ public enum WireProtocol {
     ///   volume) simply yields the crash-consistent snapshot taken before.
     /// Neither field can mean a destructive action when absent, which is why
     /// v15 — unlike v13/v14's shape-breaking changes — needs no send-side gate.
-    public static let currentVersion = 15
+    ///
+    /// Version 16: virtio-balloon guest memory stats (issue #567).
+    /// `ObservedVMState.memoryStats` (optional `VMMemoryStats`) carries the
+    /// guest's balloon-reported memory usage back on the observed-state report.
+    /// Additive and nil-tolerant in both directions with the exact contract of
+    /// v15's `guestInfo` — an older control plane ignores the key, an older
+    /// agent never sends it, absence can never mean a destructive action — so
+    /// there is no gate.
+    public static let currentVersion = 16
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

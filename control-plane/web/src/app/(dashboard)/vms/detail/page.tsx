@@ -170,6 +170,38 @@ export default function VMDetailPage() {
                 <div className="text-xl font-bold text-foreground">
                   {vm.memoryFormatted}
                 </div>
+                {/* Guest-reported usage (virtio-balloon); absent until the
+                    guest's balloon driver reports. */}
+                {vm.guestMemoryUsedFormatted != null &&
+                  vm.guestMemoryUsedBytes != null && (
+                    <>
+                      <p className="text-sm text-muted-foreground">
+                        {vm.guestMemoryUsedFormatted} used in guest
+                      </p>
+                      <div
+                        className="mt-2 h-1.5 w-full rounded-full bg-muted"
+                        role="progressbar"
+                        aria-label="Guest memory usage"
+                        aria-valuenow={Math.round(
+                          (vm.guestMemoryUsedBytes / vm.memory) * 100
+                        )}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
+                        <div
+                          className="h-1.5 rounded-full bg-blue-600"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(
+                                (vm.guestMemoryUsedBytes / vm.memory) * 100
+                              )
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
               </CardContent>
             </Card>
             <Card className="bg-card border-border">

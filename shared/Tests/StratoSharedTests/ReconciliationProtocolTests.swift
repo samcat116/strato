@@ -253,6 +253,48 @@ struct ReconciliationProtocolTests {
         #expect(decoded.observedGeneration == 2)
     }
 
+    @Test("ObservedVMState carries balloon memoryStats through the envelope (issue #567)")
+    func observedStateMemoryStatsRoundTrip() throws {
+        let message = ObservedStateReport(
+            agentId: "agent-1",
+            vms: [
+                ObservedVMState(
+                    vmId: UUID(),
+                    status: .running,
+                    observedGeneration: 4,
+                    memoryStats: VMMemoryStats(
+                        totalBytes: 8_254_390_272,
+                        availableBytes: 6_442_450_944,
+                        freeBytes: 4_294_967_296
+                    )
+                ),
+                // A guest without the virtio_balloon driver reports nothing:
+                // nil survives, never a fabricated zero.
+                ObservedVMState(vmId: UUID(), status: .running, observedGeneration: 4),
+            ],
+            resources: AgentResources(
+                totalCPU: 8, availableCPU: 4,
+                totalMemory: 16, availableMemory: 8,
+                totalDisk: 100, availableDisk: 50
+            )
+        )
+        let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
+        let stats = try #require(decoded.vms.first?.memoryStats)
+        #expect(stats.totalBytes == 8_254_390_272)
+        #expect(stats.availableBytes == 6_442_450_944)
+        #expect(stats.freeBytes == 4_294_967_296)
+        #expect(decoded.vms[1].memoryStats == nil)
+    }
+
+    @Test("ObservedVMState from a pre-v16 agent (no memoryStats key) decodes to nil")
+    func observedStateMemoryStatsBackwardCompatible() throws {
+        let legacy = """
+            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2}
+            """
+        let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
+        #expect(decoded.memoryStats == nil)
+    }
+
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")
     func desiredStatusStrictDecoding() throws {
         let decoder = WireProtocol.makeDecoder()

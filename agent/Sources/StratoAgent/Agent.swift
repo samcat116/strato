@@ -175,6 +175,9 @@ actor Agent {
     // agent) never delays the report itself. Wholesale-replaced each refresh, so
     // entries for gone or no-longer-running VMs prune themselves.
     private var guestInfoCache: [String: GuestInfo] = [:]
+    // Last-known balloon memory stats per VM (issue #567), maintained by the
+    // same slow poll with the same lifecycle as `guestInfoCache`.
+    private var memoryStatsCache: [String: VMMemoryStats] = [:]
     /// When the guest-info cache was last refreshed, to throttle probing to the
     /// slow-poll cadence regardless of how often reports/heartbeats fire.
     private var lastGuestInfoRefresh: ContinuousClock.Instant?
@@ -1625,11 +1628,12 @@ actor Agent {
         }
     }
 
-    /// Refreshes the guest-info cache for running QEMU VMs, but only once the
-    /// slow-poll interval has elapsed. Probes run concurrently (each bounded
-    /// inside `QEMUService`), and the whole pass is bounded here so a fleet of
-    /// unresponsive guests can't stall the heartbeat. The cache is replaced
-    /// wholesale, so VMs that stopped running or were deleted drop out.
+    /// Refreshes the guest-info and balloon memory-stats caches for running
+    /// QEMU VMs, but only once the slow-poll interval has elapsed. Probes run
+    /// concurrently (each bounded inside `QEMUService`), and the whole pass is
+    /// bounded here so a fleet of unresponsive guests can't stall the
+    /// heartbeat. The caches are replaced wholesale, so VMs that stopped
+    /// running or were deleted drop out.
     private func refreshGuestInfoCacheIfDue() async {
         let now = ContinuousClock.now
         if let last = lastGuestInfoRefresh, now - last < Self.guestInfoRefreshInterval {
@@ -1641,41 +1645,47 @@ actor Agent {
         let qemuVMIds = managedVMs.compactMap { $0.value.hypervisorType == .qemu ? $0.key : nil }
         guard !qemuVMIds.isEmpty else {
             guestInfoCache = [:]
+            memoryStatsCache = [:]
             return
         }
 
         do {
-            guestInfoCache = try await StageBudget.run(
+            let observations = try await StageBudget.run(
                 seconds: 15, stage: "guest-info-refresh", onTimeout: .abandon
             ) {
-                await Self.probeGuestInfo(vmIds: qemuVMIds, using: qemu)
+                await Self.probeGuestObservations(vmIds: qemuVMIds, using: qemu)
             }
+            guestInfoCache = observations.guestInfo
+            memoryStatsCache = observations.memoryStats
         } catch {
-            // A whole-pass timeout leaves the previous cache in place; the next
-            // slow poll retries. Individual probes already degrade to nil.
+            // A whole-pass timeout leaves the previous caches in place; the
+            // next slow poll retries. Individual probes already degrade to nil.
             logger.debug("Guest-info refresh exceeded its budget; keeping the previous cache")
         }
     }
 
-    /// Concurrently probes each VM's guest agent (each probe bounded inside
-    /// `QEMUService`), returning only the VMs that answered. A VM must be
-    /// observed running before we probe — qga on a stopped VM just times out.
-    private static func probeGuestInfo(
+    /// Concurrently probes each VM's guest agent and balloon device (each
+    /// probe bounded inside `QEMUService`), returning only the VMs that
+    /// answered. A VM must be observed running before we probe — qga on a
+    /// stopped VM just times out, and a stopped VM has no stats socket.
+    private static func probeGuestObservations(
         vmIds: [String], using qemu: QEMUService
-    ) async -> [String: GuestInfo] {
-        await withTaskGroup(of: (String, GuestInfo?).self) { group in
+    ) async -> (guestInfo: [String: GuestInfo], memoryStats: [String: VMMemoryStats]) {
+        await withTaskGroup(of: (String, GuestInfo?, VMMemoryStats?).self) { group in
             for vmId in vmIds {
                 group.addTask {
                     let status = (try? await qemu.getVMStatus(vmId: vmId)) ?? .unknown
-                    guard status == .running else { return (vmId, nil) }
-                    return (vmId, await qemu.guestInfo(vmId: vmId))
+                    guard status == .running else { return (vmId, nil, nil) }
+                    return (vmId, await qemu.guestInfo(vmId: vmId), await qemu.memoryStats(vmId: vmId))
                 }
             }
-            var result: [String: GuestInfo] = [:]
-            for await (vmId, info) in group where info != nil {
-                result[vmId] = info
+            var guestInfo: [String: GuestInfo] = [:]
+            var memoryStats: [String: VMMemoryStats] = [:]
+            for await (vmId, info, stats) in group {
+                if let info { guestInfo[vmId] = info }
+                if let stats { memoryStats[vmId] = stats }
             }
-            return result
+            return (guestInfo, memoryStats)
         }
     }
 
@@ -3843,9 +3853,11 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
                     failedGeneration: await reconciler.failedGeneration(for: vmId),
-                    // Last-known guest-agent view (issue #563); nil until the
-                    // slow poll first sees a responsive qga on this VM.
-                    guestInfo: guestInfoCache[vmId]
+                    // Last-known guest-agent view (issue #563) and balloon
+                    // memory stats (issue #567); nil until the slow poll first
+                    // sees a responsive qga / reporting balloon on this VM.
+                    guestInfo: guestInfoCache[vmId],
+                    memoryStats: memoryStatsCache[vmId]
                 ))
             reported.insert(vmId)
         }
