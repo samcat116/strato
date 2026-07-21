@@ -55,8 +55,8 @@ struct SandboxExecAttachIntegrationTests {
             #expect(registered.type == .agentRegisterResponse)
 
             // A user whose API key authenticates the browser socket. System
-            // admin, so the attach authorization path does not depend on
-            // SpiceDB relationships this test never writes.
+            // admin, so attach authorization flows through the
+            // platform-system-admin policy without bindings.
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "execattach",
@@ -66,8 +66,16 @@ struct SandboxExecAttachIntegrationTests {
             )
             let apiKey = try await user.generateAPIKey(on: app.db)
 
+            // A real sandbox in a real project: since the #482 cutover the
+            // middleware evaluates sandbox:read on the attach URL, and a
+            // sandbox id with no row behind it is a truncated chain — denied
+            // outright, admins included (fail-closed ceilings).
+            let project = try await builder.createProject(
+                name: "Exec WS Project", description: "p", organization: org)
+            let sandboxRow = try await builder.createSandbox(name: "exec-ws-sb", project: project)
+
             // A pending exec session, exactly as POST /exec mints it.
-            let sandboxId = UUID().uuidString
+            let sandboxId = try sandboxRow.requireID().uuidString
             let session = app.sandboxExecSessionManager.createPendingSession(
                 sandboxId: sandboxId,
                 agentName: agentName,
