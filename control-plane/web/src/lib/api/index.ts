@@ -3,6 +3,7 @@
 export { api, apiClient, ApiError } from "./client";
 export { authApi } from "./auth";
 export { usersApi } from "./users";
+export { passkeysApi } from "./passkeys";
 export { vmsApi } from "./vms";
 export { sandboxesApi } from "./sandboxes";
 export { operationsApi } from "./operations";

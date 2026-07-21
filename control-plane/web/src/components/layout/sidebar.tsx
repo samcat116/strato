@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { ChevronRight, CircleUser, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
@@ -151,6 +151,13 @@ function UserCard() {
             Theme
           </DropdownMenuLabel>
           <ThemeToggle />
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild className="cursor-pointer">
+            <Link href="/settings/profile">
+              <CircleUser className="mr-2 h-4 w-4" />
+              Profile &amp; passkeys
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout} className="cursor-pointer">
             <LogOut className="mr-2 h-4 w-4" />

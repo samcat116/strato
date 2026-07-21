@@ -7,8 +7,9 @@ import type {
 } from "./types";
 import { authApi } from "@/lib/api/auth";
 import { usersApi } from "@/lib/api/users";
+import { passkeysApi } from "@/lib/api/passkeys";
 import { ApiError } from "@/lib/api/client";
-import type { CreateUserRequest, User } from "@/types/api";
+import type { CreateUserRequest, Passkey, User } from "@/types/api";
 
 export class WebAuthnClient {
   /**
@@ -181,6 +182,31 @@ export class WebAuthnClient {
       response: unknown;
     };
     return authApi.claimFinish({ token, ...prepared });
+  }
+
+  /**
+   * Enroll an additional passkey on the already signed-in account. Unlike
+   * `register`, no user record is created and the session — not a username —
+   * identifies the account, so this can only ever add a credential to the
+   * caller's own user.
+   */
+  async addPasskey(name?: string): Promise<Passkey> {
+    const { options } = await passkeysApi.addBegin();
+    const challenge = options.challenge;
+
+    const credential = (await navigator.credentials.create({
+      publicKey: this.prepareCreationOptions(options),
+    })) as PublicKeyCredential | null;
+
+    if (!credential) {
+      throw new Error("Failed to create credential");
+    }
+
+    const prepared = this.prepareCreationResponse(credential, challenge) as {
+      challenge: string;
+      response: unknown;
+    };
+    return passkeysApi.addFinish({ ...prepared, name });
   }
 
   /**

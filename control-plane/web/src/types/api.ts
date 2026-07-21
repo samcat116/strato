@@ -50,8 +50,22 @@ export interface ClaimInfoResponse {
 }
 
 export interface UpdateUserRequest {
+  username?: string;
   displayName?: string;
   email?: string;
+}
+
+/** A registered WebAuthn credential, as returned by /api/users/me/passkeys. */
+export interface Passkey {
+  id: string;
+  /** User-chosen label; null until the user names it. */
+  name: string | null;
+  deviceType: string;
+  transports: string[];
+  /** True for cloud-synced ("multi-device") passkeys. */
+  backedUp: boolean;
+  createdAt?: string;
+  lastUsedAt?: string;
 }
 
 export type VMStatus =
