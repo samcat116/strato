@@ -71,12 +71,25 @@ export interface InterfaceAddress {
   gateway?: string;
 }
 
+/**
+ * An address the guest actually configured on a NIC, reported by the QEMU
+ * guest agent (issue #563) — distinct from the allocated `InterfaceAddress`.
+ * No gateway, and `prefixLength` is optional since qga doesn't always supply it.
+ */
+export interface ObservedInterfaceAddress {
+  family: "ipv4" | "ipv6";
+  address: string;
+  prefixLength?: number;
+}
+
 export interface VMNetworkInterface {
   id?: string;
   network: string;
   macAddress: string;
   /** All addresses on the NIC, one per family on a dual-stack network. */
   addresses?: InterfaceAddress[];
+  /** Guest-reported addresses (qga); empty until a guest agent reports them. */
+  observedAddresses?: ObservedInterfaceAddress[];
   mtu?: number;
   deviceName: string;
   orderIndex: number;
@@ -98,6 +111,13 @@ export interface VM {
   disk: number;
   diskFormatted: string;
   networkInterfaces: VMNetworkInterface[];
+  /**
+   * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
+   * until the agent's slow poll first sees a responsive guest agent;
+   * `observedHostname` is the guest OS's own hostname when it reported one.
+   */
+  qgaAvailable?: boolean;
+  observedHostname?: string;
   createdAt: string;
   updatedAt: string;
 }

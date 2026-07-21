@@ -16,6 +16,16 @@ function nicAddresses(nic: VMNetworkInterface): string[] {
   return (nic.addresses ?? []).map((a) => `${a.address}/${a.prefixLength}`);
 }
 
+/**
+ * Guest-reported addresses (qga), as `address/prefix` — or just `address` when
+ * the guest agent didn't supply a prefix length (issue #563).
+ */
+function nicObservedAddresses(nic: VMNetworkInterface): string[] {
+  return (nic.observedAddresses ?? []).map((a) =>
+    a.prefixLength != null ? `${a.address}/${a.prefixLength}` : a.address,
+  );
+}
+
 function nicGateways(nic: VMNetworkInterface): string[] {
   return (nic.addresses ?? []).flatMap((a) => (a.gateway ? [a.gateway] : []));
 }
@@ -29,6 +39,20 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
         <CardTitle className="text-lg font-semibold text-foreground">
           Network Interfaces
         </CardTitle>
+        {(vm.observedHostname || vm.qgaAvailable != null) && (
+          <p className="text-sm text-muted-foreground">
+            {vm.observedHostname ? (
+              <>
+                Guest hostname:{" "}
+                <span className="font-mono text-foreground/80">
+                  {vm.observedHostname}
+                </span>
+              </>
+            ) : (
+              "Guest agent connected"
+            )}
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         {interfaces.length === 0 ? (
@@ -50,6 +74,9 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Addresses
+                </TableHead>
+                <TableHead className="text-muted-foreground font-medium">
+                  Observed (guest)
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Gateway
@@ -75,6 +102,13 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                   <TableCell className="text-foreground/80 font-mono text-sm">
                     {nicAddresses(nic).length > 0
                       ? nicAddresses(nic).map((address) => (
+                          <div key={address}>{address}</div>
+                        ))
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="text-foreground/80 font-mono text-sm">
+                    {nicObservedAddresses(nic).length > 0
+                      ? nicObservedAddresses(nic).map((address) => (
                           <div key={address}>{address}</div>
                         ))
                       : "—"}

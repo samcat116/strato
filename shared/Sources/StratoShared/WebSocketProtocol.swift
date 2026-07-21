@@ -1030,6 +1030,15 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
     public let snapshotId: String
     public let volumePath: String
     public let snapshotPath: String?
+    /// The VM this volume is currently attached to, when the control plane
+    /// knows it (`Volume.$vm`), so the agent can quiesce that guest's
+    /// filesystems with the QEMU guest agent (`guest-fsfreeze-freeze`/`-thaw`)
+    /// around the overlay creation for an application-consistent snapshot
+    /// (issue #563). Nil for a detached volume, or from an older control plane:
+    /// the agent then takes the crash-consistent snapshot it always did.
+    /// Best-effort — an unattached or qga-less VM still snapshots, just without
+    /// the freeze.
+    public let attachedVMId: String?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1037,7 +1046,8 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         volumeId: String,
         snapshotId: String,
         volumePath: String,
-        snapshotPath: String? = nil
+        snapshotPath: String? = nil,
+        attachedVMId: String? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -1045,6 +1055,7 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         self.snapshotId = snapshotId
         self.volumePath = volumePath
         self.snapshotPath = snapshotPath
+        self.attachedVMId = attachedVMId
     }
 }
 

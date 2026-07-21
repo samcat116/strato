@@ -148,6 +148,46 @@ The `user-data` document has two shapes:
   `user-data` verbatim — the escape hatch for callers who want complete
   control (this skips Strato's console/password/SSH-key provisioning).
 
+Both non-passthrough shapes also install and enable the **QEMU guest agent**
+(issue #563) so stock cloud images gain verified shutdown, fs-freeze snapshots,
+and guest IP reporting without image changes. The no-caller path uses cloud-init's
+native `packages:` key; the multipart path installs it from a `text/x-shellscript`
+part instead, because a caller cloud-config's own `packages:` list would replace
+a merged key under cloud-init's `dict(replace)+list()` policy (the same reason
+console setup travels as a script part).
+
+## QEMU guest agent (qga)
+
+`StratoAgentCore/QGA/` holds `QGAClient` (issue #563): a testable JSON-over-
+unix-socket client for the guest agent, sitting in Core behind a `QGATransport`
+seam so its framing and resync logic unit-test against an in-memory fake, with
+`NIOQGATransport` the real unix-socket transport. Unlike QMP there is no
+greeting or `qmp_capabilities` handshake — every operation opens a channel,
+resynchronizes the stream with `guest-sync-delimited` (a `0xFF` marker frames
+the reply so stale bytes are discarded, and its success is the guest-is-alive
+proof), issues its command(s), and closes.
+
+Every VM already carries a `virtio-serial-pci` bus for the console channel, so
+`QEMUService.convertToQEMUConfiguration` just adds one more `virtserialport`
+named `org.qemu.guest_agent.0` on a deterministic `<vmStoragePath>/<vmId>/qga.sock`
+(so re-adopted VMs reconnect too). qga is **unresponsive whenever the guest is
+not running the agent**, so every call is bounded by a short `StageBudget` and a
+timeout is the *normal* path, not the error path — each use site degrades to
+pre-qga behavior:
+
+- **Verified shutdown**: `shutdownVM` tries `guest-shutdown` first; its success
+  confirms the guest heard us, and it falls back to the universal ACPI powerdown
+  when qga doesn't answer.
+- **fs-freeze snapshots**: the volume-snapshot handler freezes the attached
+  guest's filesystems (named by the control plane's `attachedVMId`) around
+  overlay creation and always thaws afterward, under a hard time cap — a frozen
+  guest is worse than a crash-consistent snapshot. A detached volume or qga-less
+  guest just gets the crash-consistent snapshot.
+- **Guest info**: a throttled slow poll (folded into the heartbeat cadence)
+  probes running QEMU VMs for hostname and configured addresses off the report's
+  hot path, caching the result the observed-state report reads. This is the only
+  way DHCP/SLAAC addresses the control plane never allocated become visible.
+
 ## The reconciler
 
 `StratoAgentCore/Reconciliation.swift` — two layers, generalized over

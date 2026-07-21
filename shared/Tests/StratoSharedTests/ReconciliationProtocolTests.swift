@@ -184,6 +184,73 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[1].convergencePhase == "downloading image")
         #expect(decoded.vms[1].lastError == "previous attempt: disk full")
         #expect(decoded.vms[1].failedGeneration == 3)
+        // No qga probe: guestInfo stays nil rather than a fabricated empty.
+        #expect(decoded.vms[0].guestInfo == nil)
+    }
+
+    @Test("ObservedVMState carries qga guestInfo through the envelope (issue #563)")
+    func observedStateGuestInfoRoundTrip() throws {
+        let vmId = UUID()
+        let message = ObservedStateReport(
+            agentId: "agent-1",
+            vms: [
+                ObservedVMState(
+                    vmId: vmId,
+                    status: .running,
+                    observedGeneration: 4,
+                    guestInfo: GuestInfo(
+                        qgaAvailable: true,
+                        hostname: "web-01",
+                        interfaces: [
+                            GuestNetworkInterface(
+                                name: "enp0s3",
+                                hardwareAddress: "52:54:00:12:34:56",
+                                addresses: [
+                                    GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24),
+                                    GuestIPAddress(
+                                        family: .ipv6, address: "fe80::5054:ff:fe12:3456", prefixLength: 64),
+                                ]
+                            ),
+                            GuestNetworkInterface(name: "lo", hardwareAddress: nil, addresses: []),
+                        ]
+                    )
+                )
+            ],
+            resources: AgentResources(
+                totalCPU: 8, availableCPU: 4,
+                totalMemory: 16, availableMemory: 8,
+                totalDisk: 100, availableDisk: 50
+            )
+        )
+        let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
+        let guest = try #require(decoded.vms.first?.guestInfo)
+        #expect(guest.qgaAvailable)
+        #expect(guest.hostname == "web-01")
+        #expect(guest.interfaces.count == 2)
+        let eth = try #require(guest.interfaces.first { $0.name == "enp0s3" })
+        #expect(eth.hardwareAddress == "52:54:00:12:34:56")
+        #expect(eth.addresses.count == 2)
+        #expect(eth.addresses[0].family == .ipv4)
+        #expect(eth.addresses[0].address == "10.0.0.5")
+        #expect(eth.addresses[0].prefixLength == 24)
+        #expect(eth.addresses[1].family == .ipv6)
+        // The MAC-less loopback interface survives the round trip.
+        let lo = try #require(guest.interfaces.first { $0.name == "lo" })
+        #expect(lo.hardwareAddress == nil)
+        #expect(lo.addresses.isEmpty)
+    }
+
+    @Test("ObservedVMState from an older agent (no guestInfo key) decodes to nil")
+    func observedStateGuestInfoBackwardCompatible() throws {
+        // A pre-v15 agent emits no `guestInfo` key at all; the control plane
+        // must tolerate its absence rather than fail to decode the report.
+        let legacy = """
+            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2}
+            """
+        let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
+        #expect(decoded.guestInfo == nil)
+        #expect(decoded.status == .running)
+        #expect(decoded.observedGeneration == 2)
     }
 
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")

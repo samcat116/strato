@@ -318,7 +318,10 @@ struct VMController: RouteCollection {
         // A VM reaches its organization through its project, so narrowing by org means
         // narrowing to that org's projects. An org with no projects matches no VMs —
         // return early rather than let an empty `~~ []` stand in for "unfiltered".
-        var query = VM.query(on: req.db).with(\.$networkInterfaces) { $0.with(\.$addresses) }
+        var query = VM.query(on: req.db).with(\.$networkInterfaces) {
+            $0.with(\.$addresses)
+            $0.with(\.$observedAddresses)
+        }
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
             if projectIDs.isEmpty { return [] }
@@ -364,6 +367,7 @@ struct VMController: RouteCollection {
         try await vm.$networkInterfaces.load(on: req.db)
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
+            try await interface.$observedAddresses.load(on: req.db)
         }
 
         return VMDetailResponse(from: vm)
@@ -874,6 +878,7 @@ struct VMController: RouteCollection {
         try await existingVM.$networkInterfaces.load(on: req.db)
         for interface in existingVM.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
+            try await interface.$observedAddresses.load(on: req.db)
         }
         return VMDetailResponse(from: existingVM)
     }
@@ -995,6 +1000,7 @@ struct VMController: RouteCollection {
         try await vm.$networkInterfaces.load(on: req.db)
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
+            try await interface.$observedAddresses.load(on: req.db)
         }
         return VMDetailResponse(from: vm)
     }

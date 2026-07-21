@@ -498,6 +498,12 @@ public func configure(_ app: Application) async throws {
     // vm_network_interfaces, which it references.
     app.migrations.add(CreateFloatingIP())
 
+    // QEMU guest agent (issue #563): guest-reported addresses per NIC, and the
+    // observed hostname / qga-availability on the VM. Ordered after
+    // vm_network_interfaces (referenced) and the vms table.
+    app.migrations.add(CreateVMInterfaceObservedAddresses())
+    app.migrations.add(AddGuestInfoToVM())
+
     // OAuth device grant for the strato CLI (issue #558): pending device
     // authorizations plus the access/refresh token sessions they mint.
     app.migrations.add(CreateDeviceAuthorization())

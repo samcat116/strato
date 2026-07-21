@@ -2439,6 +2439,20 @@ actor AgentService {
     private func applyObservedVMState(vm: VM, observed: ObservedVMState, on db: Database) async throws {
         let vmID = try vm.requireID()
 
+        // The guest-agent view (issue #563) is orthogonal to convergence and
+        // operation completion, so record it up front — before the converging
+        // early-return below. A present `guestInfo` is persisted; a nil one on a
+        // VM the agent observes definitively *not running* clears the stale view
+        // (a stopped VM also drops out of the agent's poll cache and reports
+        // nil, so without this its "guest agent connected" state would persist
+        // forever). A nil on a running/paused/transitional/unknown VM is left
+        // alone — that's a transient probe miss, and nil-preserves-last-known.
+        if let guestInfo = observed.guestInfo {
+            try await persistGuestInfo(vm: vm, guestInfo: guestInfo, on: db)
+        } else if Self.guestInfoClearedByStatus.contains(observed.status) {
+            try await clearGuestInfo(vm: vm, on: db)
+        }
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
@@ -2525,6 +2539,103 @@ actor AgentService {
                     try await vm.save(on: db)
                 }
             }
+        }
+    }
+
+    /// Persists a VM's observed guest-agent view (issue #563): the VM-level
+    /// hostname/availability flags and, per NIC (matched by MAC), the addresses
+    /// the guest actually configured. Best-effort and additive — it never
+    /// clears data on a nil report, so a momentary probe miss doesn't wipe the
+    /// last-known view; a NIC's rows are reconciled wholesale only when the
+    /// guest's set actually differs from what's stored, so unchanged reports do
+    /// no writes.
+    private func persistGuestInfo(vm: VM, guestInfo: GuestInfo, on db: Database) async throws {
+        let vmID = try vm.requireID()
+
+        var vmChanged = false
+        if vm.qgaAvailable != guestInfo.qgaAvailable {
+            vm.qgaAvailable = guestInfo.qgaAvailable
+            vmChanged = true
+        }
+        if vm.observedHostname != guestInfo.hostname {
+            vm.observedHostname = guestInfo.hostname
+            vmChanged = true
+        }
+        if vmChanged {
+            try await vm.save(on: db)
+        }
+
+        // Group the guest's addresses by MAC (lowercased for case-insensitive
+        // matching against the stored NIC MAC).
+        var addressesByMAC: [String: [GuestIPAddress]] = [:]
+        for iface in guestInfo.interfaces {
+            guard let mac = iface.hardwareAddress?.lowercased() else { continue }
+            addressesByMAC[mac, default: []].append(contentsOf: iface.addresses)
+        }
+
+        let interfaces = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id == vmID)
+            .with(\.$observedAddresses)
+            .all()
+
+        for nic in interfaces {
+            let nicID = try nic.requireID()
+            // Dedupe by (family, address): a guest can list link-local twice,
+            // and the unique index would reject the duplicate row.
+            var seen: Set<String> = []
+            let desired = (addressesByMAC[nic.macAddress.lowercased()] ?? []).filter {
+                seen.insert("\($0.family.rawValue)|\($0.address)").inserted
+            }
+
+            let storedKeys = Set(
+                nic.observedAddresses.map { "\($0.family)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+            let desiredKeys = Set(
+                desired.map { "\($0.family.rawValue)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+            if storedKeys == desiredKeys { continue }
+
+            // The set changed: replace this NIC's observed rows wholesale, in a
+            // transaction so a crash can't leave the NIC with the delete applied
+            // but the re-inserts missing.
+            try await db.transaction { db in
+                try await VMInterfaceObservedAddress.query(on: db)
+                    .filter(\.$interface.$id == nicID)
+                    .delete()
+                for address in desired {
+                    try await VMInterfaceObservedAddress(
+                        interfaceID: nicID,
+                        family: address.family,
+                        address: address.address,
+                        prefixLength: address.prefixLength
+                    ).save(on: db)
+                }
+            }
+        }
+    }
+
+    /// VM statuses for which a nil `guestInfo` should *clear* the stored qga
+    /// view rather than preserve it: the guest is definitively not running, so
+    /// its last-known hostname/addresses are stale. Running, paused,
+    /// transitional, and unknown are deliberately excluded — a nil there is a
+    /// transient probe miss, and nil-preserves-last-known keeps the UI stable.
+    private static let guestInfoClearedByStatus: Set<VMStatus> = [.shutdown, .created, .error]
+
+    /// Clears a VM's observed guest-agent state (hostname, availability, and all
+    /// per-NIC observed addresses). Short-circuits when there's nothing recorded
+    /// so it's a no-op on the steady stream of reports for a VM that never had a
+    /// guest agent.
+    private func clearGuestInfo(vm: VM, on db: Database) async throws {
+        guard vm.qgaAvailable != nil || vm.observedHostname != nil else { return }
+        vm.qgaAvailable = nil
+        vm.observedHostname = nil
+        try await vm.save(on: db)
+
+        let nicIDs = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id == vm.requireID())
+            .all(\.$id)
+        if !nicIDs.isEmpty {
+            try await VMInterfaceObservedAddress.query(on: db)
+                .filter(\.$interface.$id ~~ nicIDs)
+                .delete()
         }
     }
 
