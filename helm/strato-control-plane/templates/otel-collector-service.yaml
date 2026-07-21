@@ -6,6 +6,11 @@ metadata:
   labels:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
     app.kubernetes.io/component: otel-collector
+  {{- $ann := include "strato-control-plane.scrapeAnnotations" (dict "ctx" $ "port" .Values.opentelemetry.collector.service.prometheusPort) }}
+  {{- if and $ann (include "strato-control-plane.metricsExposed" .) }}
+  annotations:
+    {{- $ann | nindent 4 }}
+  {{- end }}
 spec:
   type: ClusterIP
   ports:
@@ -21,10 +26,12 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+    {{- if include "strato-control-plane.metricsExposed" . }}
     - port: {{ .Values.opentelemetry.collector.service.prometheusPort }}
       targetPort: prometheus
       protocol: TCP
       name: prometheus
+    {{- end }}
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: otel-collector

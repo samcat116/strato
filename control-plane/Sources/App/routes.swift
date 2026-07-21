@@ -5,6 +5,8 @@ func routes(_ app: Application) throws {
     // Register controllers
     try app.register(collection: HealthController())
     try app.register(collection: UserController())
+    // Self-service passkey management for the signed-in user
+    try app.register(collection: PasskeyController())
     try app.register(collection: VMController())
     // Sandboxes: OCI-image Firecracker microVMs (issue #413)
     try app.register(collection: SandboxController())

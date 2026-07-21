@@ -256,11 +256,62 @@ struct UserController: RouteCollection {
         }
 
         let updateUser = try req.content.decode(UpdateUserRequest.self)
-        user.displayName = updateUser.displayName ?? user.displayName
-        user.email = updateUser.email ?? user.email
+
+        // SCIM-provisioned accounts are owned by the identity provider: the
+        // next sync rewrites username/displayName/email from the IdP record, so
+        // accepting an edit here would silently discard it.
+        if user.scimProvisioned,
+            updateUser.username != nil || updateUser.displayName != nil || updateUser.email != nil
+        {
+            throw Abort(
+                .forbidden,
+                reason: "This account is provisioned by your identity provider and cannot be edited here"
+            )
+        }
+
+        if let username = updateUser.username {
+            let normalized = try Self.validateUsername(username)
+            if normalized != user.username {
+                try await requireUnusedIdentifier(
+                    normalized, field: "username", excluding: userID, on: req.db)
+                user.username = normalized
+            }
+        }
+
+        if let displayName = updateUser.displayName {
+            user.displayName = try Self.validateDisplayName(displayName)
+        }
+
+        if let email = updateUser.email {
+            let normalized = try Self.validateEmail(email)
+            if normalized != user.email {
+                try await requireUnusedIdentifier(
+                    normalized, field: "email", excluding: userID, on: req.db)
+                user.email = normalized
+            }
+        }
 
         try await user.save(on: req.db)
         return user.asPublic()
+    }
+
+    /// Rejects a username/email already taken by a different account. Both are
+    /// login identifiers (`/auth/login/begin` resolves users by username), so a
+    /// duplicate would make one of the two accounts unreachable.
+    private func requireUnusedIdentifier(
+        _ value: String,
+        field: String,
+        excluding userID: UUID,
+        on db: Database
+    ) async throws {
+        let query = User.query(on: db).filter(\.$id != userID)
+        switch field {
+        case "username": query.filter(\.$username == value)
+        default: query.filter(\.$email == value)
+        }
+        if try await query.first() != nil {
+            throw Abort(.conflict, reason: "That \(field) is already taken")
+        }
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
@@ -739,8 +790,15 @@ struct CreateUserRequest: Content {
 }
 
 struct UpdateUserRequest: Content {
+    let username: String?
     let displayName: String?
     let email: String?
+
+    init(username: String? = nil, displayName: String? = nil, email: String? = nil) {
+        self.username = username
+        self.displayName = displayName
+        self.email = email
+    }
 }
 
 struct AdminCreateUserRequest: Content {
@@ -923,6 +981,54 @@ extension UserController {
     /// first passkey enrollment via /auth/register/begin; cleared once the
     /// enrollment completes and the session is authenticated.
     static let pendingEnrollmentUserKey = "pending_enrollment_user_id"
+
+    /// Characters allowed in a username. Kept conservative (and free of `@`,
+    /// spaces, and path/URL punctuation) because the username is a login
+    /// identifier that travels through URLs and the WebAuthn user entity.
+    private static let usernameAllowedCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+    /// Trims and validates a username, returning the value to store.
+    static func validateUsername(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (3...64).contains(trimmed.count) else {
+            throw Abort(.badRequest, reason: "Username must be between 3 and 64 characters")
+        }
+        guard trimmed.unicodeScalars.allSatisfy(usernameAllowedCharacters.contains) else {
+            throw Abort(
+                .badRequest,
+                reason: "Username may only contain letters, numbers, dots, underscores and hyphens"
+            )
+        }
+        return trimmed
+    }
+
+    static func validateDisplayName(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...128).contains(trimmed.count) else {
+            throw Abort(.badRequest, reason: "Display name must be between 1 and 128 characters")
+        }
+        return trimmed
+    }
+
+    /// Structural email check only — there is no verification flow, so this
+    /// just rejects values that clearly aren't addresses (the field feeds
+    /// notifications and the Gravatar lookup).
+    static func validateEmail(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+        guard trimmed.count <= 254,
+            parts.count == 2,
+            !parts[0].isEmpty,
+            parts[1].contains("."),
+            !parts[1].hasPrefix("."),
+            !parts[1].hasSuffix("."),
+            !trimmed.contains(" ")
+        else {
+            throw Abort(.badRequest, reason: "Enter a valid email address")
+        }
+        return trimmed
+    }
 
     /// Build the user-facing claim URL from the canonical browser origin. This
     /// mirrors the WebAuthn relying-party origin (which must match the browser

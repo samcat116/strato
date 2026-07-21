@@ -106,7 +106,12 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     ca-certificates \
     tzdata \
     libcurl4 \
+    curl \
     && rm -r /var/lib/apt/lists/*
+# `curl` (the binary — libcurl4 above is the library the Swift runtime links)
+# exists so the container can probe its own /health/ready. Kubernetes probes are
+# run by the kubelet and need nothing in the image, but a Compose `healthcheck`
+# executes inside the container and has no HTTP client otherwise.
 
 # Copy Swift runtime libraries from build stage
 COPY --from=build /usr/lib/swift/linux/*.so /usr/lib/

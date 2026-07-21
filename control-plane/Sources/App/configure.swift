@@ -680,10 +680,21 @@ public func configure(_ app: Application) async throws {
     // it at shutdown.
     app.lifecycle.use(SSFPollLifecycleHandler())
 
+    // Blue/green drain: flip `/health/ready` to 503 on SIGTERM so a load
+    // balancer pulls this replica before Vapor stops accepting connections.
+    app.lifecycle.use(DrainSignalLifecycleHandler())
+
     // `App bootstrap`: seed a first admin + org + project and print an API key
     // once, for deployments that must be driven without a browser (CI, e2e).
     // Registered unconditionally; the command itself refuses if any user exists.
     app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+
+    // Open the readiness gate: every migration, schema load, and boot-time
+    // backfill above has finished. Vapor binds the port only after `configure`
+    // returns, so in the normal path a probe cannot arrive before this line —
+    // the gate exists so that stays true if boot work ever moves later, and so
+    // "ready" has an explicit meaning rather than an implicit one.
+    app.readiness.markMigrationsComplete()
 
     try routes(app)
 

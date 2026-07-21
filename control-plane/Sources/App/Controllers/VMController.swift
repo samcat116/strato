@@ -166,13 +166,6 @@ struct VMController: RouteCollection {
         }
     }
 
-    /// `202 Accepted` carrying the operation record for the client to poll.
-    private static func accepted(_ operation: ResourceOperation) throws -> Response {
-        let response = Response(status: .accepted)
-        try response.content.encode(OperationResponse(from: operation))
-        return response
-    }
-
     /// Records the verdict of an agent call on the operation row and resolves the
     /// VM status it left in flight. Every effect is gated on the operation still
     /// being pending, so whichever completes first — this path or the
@@ -815,7 +808,7 @@ struct VMController: RouteCollection {
                 "created_from": .string("image"),
             ])
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `create`: scheduling, reservation, and the placement
@@ -902,7 +895,7 @@ struct VMController: RouteCollection {
         } else {
             Self.runDirectVMDeletion(operation, vm: vm, app: req.application)
         }
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `delete` for VMs whose agent is gone (never
@@ -967,7 +960,7 @@ struct VMController: RouteCollection {
 
         Self.dispatchStateSync(operation, vm: vm, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func resume(req: Request) async throws -> Response {
@@ -984,7 +977,7 @@ struct VMController: RouteCollection {
 
         Self.dispatchStateSync(operation, vm: vm, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func status(req: Request) async throws -> VMDetailResponse {
@@ -1024,7 +1017,7 @@ struct VMController: RouteCollection {
 
         Self.dispatchStateSync(operation, vm: vm, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func stop(req: Request) async throws -> Response {
@@ -1042,7 +1035,7 @@ struct VMController: RouteCollection {
 
         Self.dispatchStateSync(operation, vm: vm, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func restart(req: Request) async throws -> Response {
@@ -1066,6 +1059,6 @@ struct VMController: RouteCollection {
             app: req.application
         )
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 }

@@ -36,9 +36,11 @@ spec:
             - name: metrics
               containerPort: {{ .Values.opentelemetry.collector.service.metricsPort }}
               protocol: TCP
+            {{- if include "strato-control-plane.metricsExposed" . }}
             - name: prometheus
               containerPort: {{ .Values.opentelemetry.collector.service.prometheusPort }}
               protocol: TCP
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/otel-collector

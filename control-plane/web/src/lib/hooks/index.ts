@@ -61,6 +61,13 @@ export {
   userErrorMessage,
 } from "./use-users";
 export {
+  usePasskeys,
+  useAddPasskey,
+  useRenamePasskey,
+  useDeletePasskey,
+  passkeyErrorMessage,
+} from "./use-passkeys";
+export {
   useSCIMTokens,
   useCreateSCIMToken,
   useUpdateSCIMToken,

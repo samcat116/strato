@@ -124,6 +124,13 @@ docker compose down                # stop (data persists)
 docker compose down -v             # stop and WIPE all data
 ```
 
+`docker compose ps` reports the control plane healthy only once
+`/health/ready` passes — that is, once Postgres, SpiceDB, and migrations are all
+good, not merely once the process started. On `down` and on `up -d` upgrades the
+control plane drains in-flight requests and agent WebSockets within
+`stop_grace_period` (60s). See
+[Health checks & zero-downtime deploys](/deployment/health-checks).
+
 ## Adding hypervisors
 
 See [Deploying agents](/deployment/agents). The control plane hands agents

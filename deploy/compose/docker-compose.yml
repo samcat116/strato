@@ -425,6 +425,20 @@ services:
         condition: service_completed_successfully
       spire-bootstrap:
         condition: service_completed_successfully
+    healthcheck:
+      # Readiness, not liveness: this is what `depends_on: service_healthy` and
+      # `docker compose ps` report, and a control plane that cannot reach
+      # Postgres or SpiceDB should not read as healthy. `start_period` covers
+      # migrations and boot-time backfills, during which :8080 is not yet bound.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    # Drain window: on `docker compose down`/`up -d` the control plane reports
+    # itself unready on SIGTERM and finishes in-flight requests and agent
+    # WebSockets. Docker's 10s default would SIGKILL through that.
+    stop_grace_period: 60s
     restart: unless-stopped
 
   # One-shot, manual: seed a first admin user + organization + project and
