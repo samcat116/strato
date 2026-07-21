@@ -19,10 +19,12 @@ struct WebAuthnService {
 
     // MARK: - Registration
 
-    func beginRegistration(
-        for user: User,
-        excludeCredentials: [PublicKeyCredentialDescriptor] = []
-    ) async throws -> PublicKeyCredentialCreationOptions {
+    /// Builds the creation options for a registration ceremony.
+    ///
+    /// Note that `excludeCredentials` is *not* produced here: swift-webauthn's
+    /// `PublicKeyCredentialCreationOptions` has no such field, so the list is
+    /// attached by `RegistrationBeginResponse` when the options are serialized.
+    func beginRegistration(for user: User) async throws -> PublicKeyCredentialCreationOptions {
         guard let userID = user.id else {
             throw Abort(.internalServerError, reason: "User ID is required for WebAuthn registration")
         }
@@ -42,6 +44,7 @@ struct WebAuthnService {
     func finishRegistration(
         challenge: String,
         credentialCreationData: RegistrationCredential,
+        transports: [String]? = nil,
         operation: String = "registration",
         on database: Database
     ) async throws -> UserCredential {
@@ -84,15 +87,19 @@ struct WebAuthnService {
         // Create user credential - store the actual binary credential ID, not the string
         let credentialIDData = URLEncodedBase64(credential.id).urlDecoded.decoded ?? Data()
 
+        // Transports come from `getTransports()` on the client. They are only
+        // hints — we echo them back in `allowCredentials`/`excludeCredentials` so
+        // the browser can steer the user to the right authenticator — but they
+        // arrive in a request body, so only spec-registered values are kept.
         let userCredential = UserCredential(
             userID: userID,
             credentialID: credentialIDData,
             publicKey: Data(credential.publicKey),
             signCount: Int32(credential.signCount),
-            transports: [],
+            transports: Self.sanitizedTransports(transports),
             backupEligible: credential.backupEligible,
             backupState: credential.isBackedUp,
-            deviceType: "platform"
+            deviceType: Self.deviceType(backupEligible: credential.backupEligible)
         )
 
         try await userCredential.save(on: database)
@@ -101,6 +108,33 @@ struct WebAuthnService {
         try await authChallenge.delete(on: database)
 
         return userCredential
+    }
+
+    /// Transport values registered in the WebAuthn spec, plus `cable` (the
+    /// pre-standard name for `hybrid` that older Chrome still reports).
+    /// Anything else is dropped rather than stored: these strings are handed
+    /// straight back to browsers in later ceremonies.
+    static let knownTransports: Set<String> = [
+        "usb", "nfc", "ble", "smart-card", "hybrid", "internal", "cable",
+    ]
+
+    /// Filters client-reported transports to known values, preserving the
+    /// authenticator's ordering and dropping duplicates.
+    static func sanitizedTransports(_ reported: [String]?) -> [String] {
+        guard let reported else { return [] }
+        var seen: Set<String> = []
+        return reported.filter { knownTransports.contains($0) && seen.insert($0).inserted }
+    }
+
+    /// The credential's device type, which is exactly what the backup-eligible
+    /// flag means: an eligible credential is a multi-device (syncable) passkey,
+    /// an ineligible one is bound to the authenticator that created it. Matches
+    /// the raw values swift-webauthn reports on assertions, so the registration
+    /// and login paths agree.
+    static func deviceType(backupEligible: Bool) -> String {
+        backupEligible
+            ? VerifiedAuthentication.CredentialDeviceType.multiDevice.rawValue
+            : VerifiedAuthentication.CredentialDeviceType.singleDevice.rawValue
     }
 
     // MARK: - Authentication
@@ -214,8 +248,17 @@ struct WebAuthnService {
             credentialCurrentSignCount: UInt32(credential.signCount)
         )
 
-        // Update sign count
+        // Update sign count.
         credential.signCount = Int32(verification.newSignCount)
+        // The backed-up flag is the one part of a credential record that
+        // legitimately changes after registration: a passkey created on a device
+        // can later be synced to a cloud keychain (or stop being synced), and the
+        // authenticator reports the current state on every assertion. Refresh it,
+        // along with the device type it implies, so the passkey management UI
+        // doesn't show a permanently stale "synced" state. Backup *eligibility*
+        // is immutable and deliberately left alone.
+        credential.backupState = verification.credentialBackedUp
+        credential.deviceType = verification.credentialDeviceType.rawValue
         credential.lastUsedAt = Date()
         try await credential.save(on: database)
 
