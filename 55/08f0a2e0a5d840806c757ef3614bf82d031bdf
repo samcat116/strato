@@ -1,0 +1,53 @@
+helm/strato-control-plane/templates/otel-collector-configmap.yaml
+  s_83912208f72ebc::t_d99d9f1f81de9c 57
+  s_83912208f72ebc::t_5c6f37b6815a82 42,44-47
+helm/strato-control-plane/ci/external-monitoring-values.yaml
+  s_83912208f72ebc::t_0a69d66868685f 1-51
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_83912208f72ebc::t_9bd0900eac2c27 109-110
+helm/strato-control-plane/templates/spire-server-configmap.yaml
+  s_83912208f72ebc::t_c01ac9769fcfde 112
+helm/strato-control-plane/templates/deployment.yaml
+  s_83912208f72ebc::t_06b83ea0e3ad1c 299,301-302,307
+helm/strato-control-plane/README.md
+  s_83912208f72ebc::t_92e2ab9b295023 188-193
+  s_83912208f72ebc::t_1f90329d44b9e6 323-326,330-331,334-344,347-350
+  s_83912208f72ebc::t_9dcd2d1bb85bee 351
+helm/strato-control-plane/templates/servicemonitor.yaml
+  s_83912208f72ebc::t_d93768cf48a2c8 1-114
+helm/strato-control-plane/templates/spire-server-statefulset.yaml
+  s_83912208f72ebc::t_c01ac9769fcfde 60
+helm/strato-control-plane/templates/otel-collector-service.yaml
+  s_83912208f72ebc::t_1e3e99675aad68 9-13
+  s_83912208f72ebc::t_bf34ac6689137e 29,34
+docs/deployment/observability.md
+  s_83912208f72ebc::t_85e12db0273b16 27-80
+helm/strato-control-plane/templates/_helpers.tpl
+  s_83912208f72ebc::t_81f1dcb2d50b49 445-487
+helm/strato-control-plane/templates/spire-server-service.yaml
+  s_83912208f72ebc::t_c7a7e55f1faaaf 38-41
+  s_83912208f72ebc::t_f2cb94a02d61b5 42-45
+  s_83912208f72ebc::t_c01ac9769fcfde 23
+helm/strato-control-plane/templates/otel-collector-deployment.yaml
+  s_83912208f72ebc::t_b99706a2d6cfd2 39,43
+helm/strato-control-plane/values.yaml
+  s_83912208f72ebc::t_68191603b57926 619-659,662-669
+.github/workflows/helm-test.yml
+  s_83912208f72ebc::t_f508b315694d72 152-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5508f0a2e0a5d840806c757ef3614bf82d031bdf",
+  "prompts": {},
+  "sessions": {
+    "s_83912208f72ebc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b12f53ea-6376-4877-ba26-a4b761984a1e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
