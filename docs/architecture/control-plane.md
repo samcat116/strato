@@ -200,21 +200,19 @@ what makes the test harness safe.
   intent doesn't replay).
 - `ResourceOperation` has a plain `resource_id` column, deliberately **not**
   a foreign key, so delete operations survive the resource row's removal.
-- Migrations must work on **both SQLite and Postgres**: one schema action per
-  `.update()` call (SQLite can't combine `ALTER TABLE` actions), raw-SQL
-  backfills gated on `as? SQLDatabase`, and never query live models in a
-  migration — snapshot the columns in a private model instead. Migration
-  ordering in `configure.swift` matters when models select newly added
-  columns.
+- Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),
+  and never query live models in a migration — snapshot the columns in a
+  private model instead. Migration ordering in `configure.swift` matters when
+  models select newly added columns.
 
 ## Testing
 
-`Tests/AppTests` runs against in-memory-style SQLite by default and the same
-suite against Postgres in CI (`STRATO_TEST_DATABASE=postgres`).
+`Tests/AppTests` runs against Postgres — the engine production uses — both
+locally (any reachable server via `DATABASE_*` env vars) and in CI.
 
 The harness (`TestUtilities.swift`) migrates **once per process into a
-template, then clones per test**: SQLite copies a template file; Postgres
-uses `CREATE DATABASE ... TEMPLATE ...`. `withApp { app in ... }` (from
+template database, then clones per test** with
+`CREATE DATABASE ... TEMPLATE ...`. `withApp { app in ... }` (from
 `BaseTestCase`) boots via `configure()` against the pre-migrated clone and
 tears down with `shutdownForTesting()`, which drops the clone.
 

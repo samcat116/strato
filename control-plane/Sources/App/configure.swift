@@ -212,8 +212,8 @@ public func configure(_ app: Application) async throws {
 
     // Configure database based on environment
     if app.environment == .testing {
-        // Testing environment already configured with in-memory SQLite in test setup
-        // Skip database configuration here
+        // Testing environment already configured with a per-test Postgres
+        // database clone in test setup — skip database configuration here
     } else {
         // TLS mode is configurable via DATABASE_TLS (disable|prefer|require) and
         // defaults to `require` outside development, so credentials and data are

@@ -52,9 +52,9 @@ final class IAMPolicySetVersionTests {
         try await withApp { app in
             let start = try await PolicySetVersionService.current(on: app.db)
 
-            // Serialized rather than truly parallel: SQLite is single-writer, so
-            // this covers the allocator's arithmetic, and the uniqueness
-            // constraint plus the retry loop covers the real race in Postgres.
+            // Serialized rather than truly parallel: this covers the
+            // allocator's arithmetic, and the uniqueness constraint plus the
+            // retry loop covers the real concurrent race.
             var versions: [Int] = []
             for index in 1...5 {
                 versions.append(

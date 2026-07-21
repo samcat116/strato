@@ -9,10 +9,8 @@ import SwiftSCIM
 /// Tests for SCIM search/filter handling.
 ///
 /// These exercise the `co`/`sw`/`ew`/`eq` operators through the real
-/// `UserSCIMHandler`/`GroupSCIMHandler` search paths. Case-insensitive matching must
-/// work on whichever database the test harness runs against (SQLite locally, and
-/// PostgreSQL when `STRATO_TEST_DATABASE` selects it) — the previous implementation
-/// used Postgres-only `ILIKE`, which is a syntax error on SQLite.
+/// `UserSCIMHandler`/`GroupSCIMHandler` search paths, asserting on
+/// case-insensitive matching semantics.
 @Suite("SCIM Filter Tests", .serialized)
 final class SCIMFilterTests: BaseTestCase {
 
