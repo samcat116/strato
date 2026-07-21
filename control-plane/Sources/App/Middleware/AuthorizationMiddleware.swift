@@ -34,7 +34,7 @@ import Vapor
 // activity lands in the decision log and tier-2 guardrails bind them too.
 struct AuthorizationMiddleware: AsyncMiddleware {
 
-    enum RouteClass {
+    enum RouteClass: Equatable {
         case isPublic
         case loginOnly
         case resource(GuardedResource)
@@ -45,7 +45,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     /// `/api/sandboxes` → `sandbox`. `actionVerbs` are the POST subpaths that
     /// map to a same-named permission (sandboxes have no pause/resume, for
     /// example).
-    struct GuardedResource {
+    struct GuardedResource: Equatable {
         let prefix: String
         let resourceType: String
         let actionVerbs: Set<String>

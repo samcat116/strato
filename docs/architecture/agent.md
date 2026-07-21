@@ -188,6 +188,27 @@ pre-qga behavior:
   hot path, caching the result the observed-state report reads. This is the only
   way DHCP/SLAAC addresses the control plane never allocated become visible.
 
+## Balloon memory stats (virtio-balloon)
+
+Every QEMU VM gets a `virtio-balloon-pci` device with `free-page-hint=on`
+(issue #567): inert until the guest's virtio_balloon driver binds it, after
+which free-page hinting lets KVM drop guest-freed pages (shrinking host RSS
+with no policy work) and the device's `guest-stats` expose real guest memory
+usage.
+
+Stats travel over QMP (`qom-set` to enable guest-stats polling, `qom-get` to
+read), which SwiftQEMU's closed command enum doesn't speak — and each QMP
+server socket admits one client at a time, with the spawning `QEMUManager`
+holding its private monitor and re-adoption owning `qmp.sock`. So every VM
+gets a *third* monitor at `<vmStoragePath>/<vmId>/qmp-stats.sock`, and
+`StratoAgentCore/QMP/QMPProbeClient` — a minimal QMP client reusing the QGA
+byte-channel/framer seam, so it unit-tests against the same in-memory fake —
+connects per probe, negotiates the greeting/`qmp_capabilities` handshake,
+and collects the stats. The same guest-info slow poll caches the result as
+`VMMemoryStats`, attached to each `ObservedVMState` (wire v16). Guests
+without the driver, or not yet reporting (`last-update == 0`, `-1`
+sentinels), yield nil — never a fabricated zero.
+
 ## The reconciler
 
 `StratoAgentCore/Reconciliation.swift` — two layers, generalized over

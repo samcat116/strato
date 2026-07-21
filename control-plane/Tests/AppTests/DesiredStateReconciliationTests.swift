@@ -732,4 +732,66 @@ final class DesiredStateReconciliationTests {
             #expect(rows.isEmpty)
         }
     }
+
+    // MARK: - Balloon memory stats (issue #567)
+
+    @Test("A report's memoryStats persist and stamp their report time")
+    func memoryStatsPersisted() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 16)
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 1,
+                        memoryStats: VMMemoryStats(
+                            totalBytes: 8_254_390_272, availableBytes: 6_442_450_944))
+                ]
+            )
+            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.guestMemoryTotalBytes == 8_254_390_272)
+            #expect(refreshed.guestMemoryAvailableBytes == 6_442_450_944)
+            #expect(refreshed.guestMemoryStatsAt != nil)
+        }
+    }
+
+    @Test("A nil memoryStats preserves the last-known values while running, and clears them once stopped")
+    func memoryStatsPreservedOnNilAndClearedWhenNotRunning() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 16)
+
+            func send(status: VMStatus, memoryStats: VMMemoryStats?) async throws {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [
+                        ObservedVMState(
+                            vmId: vm.id!, status: status, observedGeneration: 1,
+                            memoryStats: memoryStats)
+                    ]
+                )
+                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            }
+
+            try await send(
+                status: .running,
+                memoryStats: VMMemoryStats(totalBytes: 4_000_000_000, availableBytes: 3_000_000_000))
+
+            // A transient probe miss (nil stats on a running VM) must NOT wipe
+            // the last-known usage.
+            try await send(status: .running, memoryStats: nil)
+            var refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.guestMemoryTotalBytes == 4_000_000_000)
+            #expect(refreshed.guestMemoryAvailableBytes == 3_000_000_000)
+
+            // Observed shut down: a stopped guest's last-known usage is stale.
+            try await send(status: .shutdown, memoryStats: nil)
+            refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.guestMemoryTotalBytes == nil)
+            #expect(refreshed.guestMemoryAvailableBytes == nil)
+            #expect(refreshed.guestMemoryStatsAt == nil)
+        }
+    }
 }

@@ -578,7 +578,26 @@ rows.
 The system-admin bypass is re-expressed as the `platform-system-admin` tier-1
 policy, so it flows through the evaluator and appears in decision logs
 instead of skipping authorization entirely — which also means guardrail
-forbids bind system admins.
+forbids bind system admins. (Decision-log coverage of admin activity is near
+but not total: the deliberately admin-only surfaces gate via
+`req.requireSystemAdmin()`, which flags the audit trail but writes no
+decision row.)
+
+Two enforcement details worth naming:
+
+- **A truncated ancestor chain fails closed.** A chain that does not reach an
+  organization (an orphaned intermediate node, a scopeless legacy site)
+  under-grants harmlessly for tier 3, but is fail-*open* for tier-2
+  guardrails: a `forbid (… resource in Organization::"X")` silently stops
+  matching below the break while an in-chain binding still permits. The
+  evaluator denies such checks outright, loudly, before evaluation — system
+  admins included; repair goes through the admin-only hierarchy
+  validate/repair surface. The two rootless-by-design shapes — the
+  organization itself and a global network (no project, no site) — evaluate
+  normally.
+- **Unmatched paths return 403, not 404**: a request outside every route
+  class is denied by the middleware before Vapor's router can 404 it. A
+  deliberate default-deny consequence (and mild enumeration hardening).
 
 ## Migration plan
 

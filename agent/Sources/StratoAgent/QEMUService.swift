@@ -418,6 +418,10 @@ actor QEMUService: HypervisorService {
         try? FileManager.default.removeItem(
             atPath: Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
 
+        // Clean up the deterministic balloon-stats QMP socket (issue #567)
+        try? FileManager.default.removeItem(
+            atPath: Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
+
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
 
@@ -685,6 +689,44 @@ actor QEMUService: HypervisorService {
             logger.error(
                 "Guest fs-thaw failed; guest filesystems may remain frozen",
                 metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    // MARK: - Balloon memory stats (issue #567)
+
+    /// The QOM id every VM's virtio-balloon device is attached under, giving
+    /// the stats probe a deterministic `/machine/peripheral/<id>` path.
+    static let balloonDeviceID = "balloon0"
+
+    /// The deterministic QMP monitor socket dedicated to balloon-stats probes.
+    /// A QMP server socket admits one client at a time, and the other two
+    /// monitors are taken (QEMUManager holds its private one; re-adoption owns
+    /// `qmp.sock`), so stats polling gets its own. Derived only from
+    /// vmStoragePath+vmId, so it works for re-adopted VMs too.
+    static func statsSocketPath(vmStoragePath: String, vmId: String) -> String {
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        return (vmDir as NSString).appendingPathComponent("qmp-stats.sock")
+    }
+
+    /// Polls the VM's balloon device for guest memory usage over the dedicated
+    /// stats monitor. Returns nil for a VM this service does not manage, one
+    /// without the stats socket (created before issue #567), one without the
+    /// balloon device, or a guest whose virtio_balloon driver hasn't reported
+    /// yet — all normal "no stats" outcomes, not errors.
+    func memoryStats(vmId: String) async -> VMMemoryStats? {
+        guard activeVMs[vmId] != nil else { return nil }
+        let socketPath = Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
+        let transport = NIOQGATransport(socketPath: socketPath, logger: logger)
+        let client = QMPProbeClient(transport: transport, logger: logger)
+        do {
+            return try await StageBudget.run(
+                seconds: StageBudget.guestAgentSeconds, stage: "qmp-balloon-stats", onTimeout: .abandon
+            ) {
+                try await client.collectMemoryStats()
+            }
+        } catch {
+            return nil
         }
     }
 
@@ -1115,6 +1157,24 @@ actor QEMUService: HypervisorService {
         try? FileManager.default.removeItem(atPath: adoptionSocketPath)  // stale socket from a dead process
         qemuConfig.additionalArgs.append(contentsOf: [
             "-qmp", "unix:\(adoptionSocketPath),server,wait=off",
+        ])
+
+        // virtio-balloon with free-page hinting (issue #567). Attached
+        // unconditionally: the device is inert until a guest driver binds it,
+        // and once one does, free-page hinting lets the host drop guest-freed
+        // pages (shrinking host RSS) while `guest-stats` gives the agent real
+        // memory usage to report. `deflate-on-oom` stays at its default (off).
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-device", "virtio-balloon-pci,id=\(Self.balloonDeviceID),free-page-hint=on",
+        ])
+
+        // Third QMP monitor, dedicated to balloon-stats probes (issue #567):
+        // each QMP server socket admits one client at a time, and the two
+        // above are taken by lifecycle control and re-adoption respectively.
+        let statsSocketPath = Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        try? FileManager.default.removeItem(atPath: statsSocketPath)  // stale socket from a dead process
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-qmp", "unix:\(statsSocketPath),server,wait=off",
         ])
 
         // Store the socket path for later access

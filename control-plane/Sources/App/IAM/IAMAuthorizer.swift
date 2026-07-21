@@ -91,6 +91,46 @@ enum IAMAuthorizer {
 
         let slice = try await EntitySliceLoader.load(userID: userID, node: node, on: db)
 
+        // A truncated ancestor chain is fail-open for tier-2 guardrails: a
+        // forbid anchored above the break silently stops matching while an
+        // in-chain binding still permits. Deny before evaluating — this takes
+        // an inconsistent tree (an orphaned intermediate node), so a loud
+        // denial is diagnosis, not disruption. It binds system admins too
+        // (letting them through would evade the very ceilings the guard
+        // protects); repair goes through the admin-only hierarchy
+        // validate/repair surface, which gates on requireSystemAdmin rather
+        // than a per-object check.
+        guard slice.chainComplete else {
+            app.logger.error(
+                "IAM check denied: ancestor chain does not reach an organization; a guardrail anchored above the break could not apply",
+                metadata: [
+                    "action": .string(action),
+                    "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
+                    "chain": .string(
+                        slice.chain.map { "\($0.type.rawValue):\($0.id.uuidString)" }
+                            .joined(separator: " -> ")),
+                ])
+            let denial = CedarCheckDecision(
+                allowed: false,
+                determiningPolicyIDs: [],
+                evaluationErrors: ["ancestor chain truncated; denied without evaluation (fail closed)"]
+            )
+            state?.decisionEvaluated.withLockedValue { $0 = true }
+            app.iamDecisionRecorder.recordInBackground(
+                IAMDecisionRecord(
+                    subject: userID.uuidString,
+                    action: action,
+                    node: node,
+                    organizationID: nil,
+                    skippedConditionedBindings: slice.skippedConditionedBindings,
+                    decision: denial,
+                    policyVersion: built.version,
+                    spicedbEquivalent: spicedbEquivalent,
+                    context: context
+                ))
+            return denial
+        }
+
         let decision: CedarCheckDecision
         do {
             decision = try await built.artifact.authorize(
@@ -348,6 +388,11 @@ extension Request {
         guard user.isSystemAdmin else {
             throw Abort(.forbidden, reason: deniedReason)
         }
+        // Admin-privileged access outside the IAM tree still belongs in the
+        // admin audit trail (pre-cutover, the middleware bypass flagged every
+        // admin request; the evaluator now flags evaluator-gated ones, and
+        // this keeps the admin-only surfaces covered too).
+        iamAuthState.adminPolicyUsed.withLockedValue { $0 = true }
         return user
     }
 

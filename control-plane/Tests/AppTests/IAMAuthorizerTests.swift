@@ -372,3 +372,205 @@ final class IAMAuthorizerTests {
         }
     }
 }
+
+// MARK: - Review follow-ups (#482 PR review)
+
+/// The fail-loud backstops themselves, and the truncated-chain fail-closed
+/// rule the review called out: nets are only nets if a regression in them
+/// fails a test.
+@Suite("IAM Authorizer Backstop Tests", .serialized)
+final class IAMAuthorizerBackstopTests {
+
+    private func withApp(_ test: (Application) async throws -> Void) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+            app.iamShadowConfig.recordDecisions = true
+            try await test(app)
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("A truncated ancestor chain is denied outright — a ceiling must not silently detach")
+    func truncatedChainFailsClosed() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            // A site-scoped network whose site has no owning scope: the chain
+            // is [network, site] and never reaches an organization, so an
+            // org-anchored guardrail could not match it.
+            let scopelessSite = Site(name: "scopeless-dc", organizationScope: nil)
+            try await scopelessSite.save(on: app.db)
+            let network = LogicalNetwork(
+                name: "orphan-net", subnet: "10.99.0.0/24", gateway: "10.99.0.1",
+                projectID: nil, externalAccess: false)
+            network.$site.id = scopelessSite.id
+            try await network.save(on: app.db)
+
+            let user = try await builder.createUser(
+                username: "trunc-user", email: "trunc-user@example.com")
+            // Even a direct admin binding on the network itself must not win:
+            // the in-chain permit is exactly what would fire while the ceiling
+            // above the break could not.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .network, nodeID: network.id!, createdBy: nil, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+
+            let state = IAMRequestAuthState()
+            let decision = try await IAMAuthorizer.authorize(
+                userID: user.id!,
+                action: "network:read",
+                node: IAMNode(type: .network, id: network.id!),
+                spicedbEquivalent: nil,
+                context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
+                state: state,
+                app: app,
+                db: app.db
+            )
+            #expect(!decision.allowed)
+            #expect(decision.determiningPolicyIDs.isEmpty)
+            #expect(state.decisionEvaluated.withLockedValue { $0 })
+        }
+    }
+
+    @Test("A deliberately global network (no project, no site) still evaluates normally")
+    func globalNetworkChainIsCompleteByDesign() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let network = LogicalNetwork(
+                name: "global-net", subnet: "10.98.0.0/24", gateway: "10.98.0.1",
+                projectID: nil, externalAccess: false)
+            try await network.save(on: app.db)
+            let user = try await builder.createUser(
+                username: "global-net-user", email: "global-net-user@example.com")
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+
+            let decision = try await IAMAuthorizer.authorize(
+                userID: user.id!,
+                action: "network:read",
+                node: IAMNode(type: .network, id: network.id!),
+                spicedbEquivalent: nil,
+                context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
+                state: nil,
+                app: app,
+                db: app.db
+            )
+            // platform-open-network-read, not the truncation denial.
+            #expect(decision.allowed)
+            #expect(decision.determiningPolicyIDs == ["platform-open-network-read"])
+        }
+    }
+
+    @Test("A non-UUID subject through the decorator is denied, not evaluated")
+    func nonUUIDSubjectDenied() async throws {
+        try await withApp { app in
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let request = Request(application: app, method: .GET, url: "/api/vms", on: app.eventLoopGroup.next())
+            let allowed = try await request.spicedb.checkPermission(
+                subject: "not-a-user-id",
+                permission: "read",
+                resource: "virtual_machine",
+                resourceId: UUID().uuidString)
+            #expect(!allowed)
+        }
+    }
+
+    @Test("requireSystemAdmin denies non-admins, marks the decision, and flags admins for audit")
+    func requireSystemAdminBranches() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "rsa-user", email: "rsa-user@example.com")
+            let admin = try await builder.createUser(
+                username: "rsa-admin", email: "rsa-admin@example.com", isSystemAdmin: true)
+
+            let denied = Request(
+                application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
+            denied.auth.login(user)
+            var thrown: (any Error)?
+            do { _ = try denied.requireSystemAdmin() } catch { thrown = error }
+            #expect((thrown as? any AbortError)?.status == .forbidden)
+            #expect(denied.iamAuthState.decisionEvaluated.withLockedValue { $0 })
+            #expect(!denied.iamAuthState.adminPolicyUsed.withLockedValue { $0 })
+
+            let allowed = Request(
+                application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
+            allowed.auth.login(admin)
+            _ = try allowed.requireSystemAdmin()
+            #expect(allowed.iamAuthState.adminPolicyUsed.withLockedValue { $0 })
+
+            let anonymous = Request(
+                application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
+            var anonThrown: (any Error)?
+            do { _ = try anonymous.requireSystemAdmin() } catch { anonThrown = error }
+            #expect((anonThrown as? any AbortError)?.status == .unauthorized)
+        }
+    }
+
+    @Test("A handler-checked mutation that evaluates nothing is a hard 500 under .testing")
+    func handlerAssertionCatchesMissingCheck() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "forgetful-user", email: "forgetful-user@example.com")
+
+            struct SilentOK: AsyncResponder {
+                func respond(to request: Request) async throws -> Response {
+                    Response(status: .ok)  // a handler that forgot its check
+                }
+            }
+            let request = Request(
+                application: app, method: .POST, url: "/api/sites", on: app.eventLoopGroup.next())
+            request.auth.login(user)
+            var thrown: (any Error)?
+            do {
+                _ = try await AuthorizationMiddleware().respond(to: request, chainingTo: SilentOK())
+            } catch {
+                thrown = error
+            }
+            #expect((thrown as? any AbortError)?.status == .internalServerError)
+
+            // The same handler with a recorded decision passes through.
+            let checked = Request(
+                application: app, method: .POST, url: "/api/sites", on: app.eventLoopGroup.next())
+            checked.auth.login(user)
+            checked.markRowScopedAuthorization()
+            let res = try await AuthorizationMiddleware().respond(to: checked, chainingTo: SilentOK())
+            #expect(res.status == .ok)
+        }
+    }
+
+    @Test("Sensitive routes pin their classification")
+    func routeClassificationPinned() async throws {
+        let id = UUID().uuidString
+        typealias M = AuthorizationMiddleware
+        // Public stays exactly the audited allowlist.
+        #expect(M.classify(path: "/auth/login/begin") == .isPublic)
+        #expect(M.classify(path: "/api/users/register") == .isPublic)
+        #expect(M.classify(path: "/organizations/\(id)/scim/v2/Users") == .isPublic)
+        #expect(M.classify(path: "/api/projects/\(id)/images/\(id)/download") == .isPublic)
+        #expect(M.classify(path: "/api/sandboxes/\(id)/snapshots/\(id)/artifacts/rootfs") == .isPublic)
+        // Identity-plane.
+        #expect(M.classify(path: "/api/api-keys") == .loginOnly)
+        #expect(M.classify(path: "/api/authorization/check") == .loginOnly)
+        // Middleware-mapped resources.
+        if case .resource(let guarded)? = M.classify(path: "/api/vms/\(id)/start") {
+            #expect(guarded.resourceType == "virtual_machine")
+        } else {
+            Issue.record("expected /api/vms to be resource-mapped")
+        }
+        // Handler-checked (the evaluator runs in the handler).
+        #expect(M.classify(path: "/api/organizations/\(id)/members") == .handlerChecked)
+        #expect(M.classify(path: "/api/iam/guardrails") == .handlerChecked)
+        #expect(M.classify(path: "/organizations/\(id)/settings/scim-tokens") == .handlerChecked)
+        // Unknown paths classify as nothing — denied.
+        #expect(M.classify(path: "/vms/\(id)") == nil)
+        #expect(M.classify(path: "/this-route-does-not-exist") == nil)
+    }
+}

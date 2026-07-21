@@ -77,6 +77,11 @@ addresses, agent → control plane) and `VolumeSnapshotMessage.attachedVMId`
 snapshot). A nil from an older peer reads identically to "not known" and can
 never mean a destructive action, so no send-side gate is needed.
 
+Version 16 follows the same pattern: `ObservedVMState.memoryStats` (issue
+#567) carries the guest's virtio-balloon memory statistics on the
+observed-state report — optional, nil-tolerant both ways, informational only,
+so no gate.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -107,7 +112,7 @@ dual-mode rollout.
 | `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
-| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, and optional per-VM `guestInfo` from qga (issue #563) |
+| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567) |
 | `status_update` | Push notification of a VM status change |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
