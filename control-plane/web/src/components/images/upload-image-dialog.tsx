@@ -20,6 +20,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 import { useCreateImageFromURL, useUploadImage } from "@/lib/hooks/use-images";
 import {
   CLOUD_IMAGE_DISTROS,
@@ -28,7 +29,11 @@ import {
   type CloudImageVersion,
 } from "@/lib/cloud-images";
 import { cn } from "@/lib/utils";
-import type { CPUArchitecture, ImageFormat } from "@/types/api";
+import type {
+  CPUArchitecture,
+  CreateImageRequest,
+  ImageFormat,
+} from "@/types/api";
 
 const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
 const DISK_FORMATS: ImageFormat[] = ["qcow2", "raw", "vmdk", "vhd", "vhdx"];
@@ -196,7 +201,9 @@ export function UploadImageDialog({
 
   // --- Submit ----------------------------------------------------------------
 
-  const runSubmit = async (fn: () => Promise<unknown>) => {
+  // Upload path: the file streams through this request, so the dialog stays
+  // open and blocks — it's showing real upload progress the user is waiting on.
+  const runUpload = async (fn: () => Promise<unknown>) => {
     setIsSubmitting(true);
     setError(null);
     try {
@@ -211,12 +218,37 @@ export function UploadImageDialog({
     }
   };
 
+  // URL / popular-image path: the server creates a *pending* image and fetches
+  // it in the background, so there is nothing here to wait on. Dismiss the
+  // dialog immediately (the pending image shows up in the list and polls to
+  // ready on its own) and report the request via a toast — blocking the modal
+  // on the POST round-trip is what made the download button freeze the UI.
+  const startBackgroundDownload = (
+    displayName: string,
+    data: CreateImageRequest,
+  ) => {
+    resetForm();
+    setOpen(false);
+    toast.promise(
+      createFromURL.mutateAsync(data).then((image) => {
+        onSuccess?.();
+        return image;
+      }),
+      {
+        loading: `Starting download of ${displayName}…`,
+        success: `${displayName} is downloading — it'll appear in the list shortly.`,
+        error: (err) =>
+          err instanceof Error ? err.message : "Failed to start the download.",
+      },
+    );
+  };
+
   const handleSubmit = () => {
     if (disabled || isSubmitting) return;
 
     if (tab === "upload" && selectedFile) {
       setUploadProgress(0);
-      void runSubmit(() =>
+      void runUpload(() =>
         uploadImage.mutateAsync({
           file: selectedFile,
           metadata: {
@@ -233,26 +265,22 @@ export function UploadImageDialog({
     }
 
     if (tab === "url") {
-      void runSubmit(() =>
-        createFromURL.mutateAsync({
-          name,
-          architecture,
-          sourceURL: trimmedURL,
-          checksum: checksum.trim() ? checksum.trim().toLowerCase() : undefined,
-        }),
-      );
+      startBackgroundDownload(name, {
+        name,
+        architecture,
+        sourceURL: trimmedURL,
+        checksum: checksum.trim() ? checksum.trim().toLowerCase() : undefined,
+      });
       return;
     }
 
     if (selectedDistro && selectedVersion && selectedCatalogURL) {
-      void runSubmit(() =>
-        createFromURL.mutateAsync({
-          name: catalogImageName(selectedDistro, selectedVersion),
-          description: `${selectedDistro.name} ${selectedVersion.label}`,
-          architecture,
-          sourceURL: selectedCatalogURL,
-        }),
-      );
+      startBackgroundDownload(catalogImageName(selectedDistro, selectedVersion), {
+        name: catalogImageName(selectedDistro, selectedVersion),
+        description: `${selectedDistro.name} ${selectedVersion.label}`,
+        architecture,
+        sourceURL: selectedCatalogURL,
+      });
     }
   };
 
