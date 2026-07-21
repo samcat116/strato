@@ -27,14 +27,15 @@ enum CedarPolicyAssembler {
     // MARK: - Static policies (tier 1 + tier 3 role policies)
 
     /// The joined static policy text, for display and for tests asserting on
-    /// the assembled set. The engine compiles from `staticPolicies()`.
-    static func staticPolicyText() -> String {
-        staticPolicies().map(\.text).joined(separator: "\n\n") + "\n"
+    /// the assembled set. The engine compiles from `staticPolicies(roles:)`.
+    static func staticPolicyText(roles: [RoleDescriptor]) -> String {
+        staticPolicies(roles: roles).map(\.text).joined(separator: "\n\n") + "\n"
     }
 
-    /// The policies that depend on nothing but the registry. Every policy
-    /// carries an `@id` so decision logs (#481) can name what decided.
-    static func staticPolicies() -> [CedarPolicySource] {
+    /// The platform (tier-1) policies plus one permit per role-definition
+    /// row. Every policy carries an `@id` so decision logs (#481) can name
+    /// what decided.
+    static func staticPolicies(roles: [RoleDescriptor]) -> [CedarPolicySource] {
         var policies: [CedarPolicySource] = []
 
         // The system-admin bypass as a tier-1 platform policy — the design's
@@ -78,23 +79,18 @@ enum CedarPolicyAssembler {
                     when { resource in principal.memberOfOrgs };
                     """))
 
-        // One policy per role. The action side is the role's action group
-        // (nested, so `role:admin` reaches everything); the principal side is
-        // the flattened per-request grants the loader computed from
-        // `role_bindings`. `principal in <Set<Group>>` resolves through the
-        // principal's group parent edges, so a group grant covers its members.
-        for role in IAMRole.allCases {
-            policies.append(
-                CedarPolicySource(
-                    id: "role-\(role.rawValue)",
-                    text: """
-                        @id("role-\(role.rawValue)")
-                        permit (principal, action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(role))), resource)
-                        when {
-                            principal in context.grants[\(CedarText.stringLiteral(role.grantsUsersField))] ||
-                            principal in context.grants[\(CedarText.stringLiteral(role.grantsGroupsField))]
-                        };
-                        """))
+        // One permit per role-definition row, compiled from the row's Cedar
+        // text verbatim (the text's action side is an explicit action list;
+        // its principal side is the flattened per-request grants the loader
+        // computed from `role_bindings` — `principal in <Set<Group>>`
+        // resolves through the principal's group parent edges, so a group
+        // grant covers its members). Empty text means the role grants
+        // nothing yet — the state a freshly migrated seeded row is in until
+        // `RoleRegistrySync` writes it, never worth failing a compile over.
+        // Ordered by id for a deterministic set.
+        for role in roles.sorted(by: { $0.id.uuidString < $1.id.uuidString })
+        where !role.cedarText.isEmpty {
+            policies.append(CedarPolicySource(id: role.policyID, text: role.cedarText))
         }
 
         return policies

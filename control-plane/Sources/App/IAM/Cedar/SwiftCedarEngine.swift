@@ -77,6 +77,21 @@ struct SwiftCedarEngine: CedarEngine {
         }
     }
 
+    func policyIssue(schemaText: String, policy: CedarPolicySource) -> String? {
+        do {
+            let schema = try CedarPolicy.Schema(schemaText)
+            let parsed = try CedarPolicy.Policy(policy.text, id: policy.id)
+            let set = try CedarPolicy.PolicySet(policies: [parsed])
+            let validation = schema.validate(set, mode: .strict)
+            guard validation.passed else {
+                return validation.errors.map(\.message).joined(separator: "; ")
+            }
+            return nil
+        } catch {
+            return "\(error)"
+        }
+    }
+
     func compile(schemaText: String, policies: [CedarPolicySource]) throws -> any CedarCompiledPolicySet {
         let schema = try CedarPolicy.Schema(schemaText)
         // Each policy is parsed individually with its assembler-assigned id —

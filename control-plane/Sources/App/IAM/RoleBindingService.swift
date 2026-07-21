@@ -7,9 +7,8 @@ import Vapor
 /// they accompany so binding rows never diverge from the relational rows they
 /// mirror.
 enum RoleBindingService {
-    /// Idempotently grant `role` to a principal on a node. An existing row for
-    /// the same (principal, role, node) is refreshed (its `expires_at` takes
-    /// the new value) rather than duplicated.
+    /// Idempotently grant the seeded role `role` to a principal on a node —
+    /// the form nearly every code path uses.
     static func grant(
         principalType: IAMPrincipalType,
         principalID: UUID,
@@ -20,11 +19,41 @@ enum RoleBindingService {
         expiresAt: Date? = nil,
         on db: Database
     ) async throws {
+        try await grant(
+            principalType: principalType,
+            principalID: principalID,
+            roleID: role.seededID,
+            nodeType: nodeType,
+            nodeID: nodeID,
+            createdBy: createdBy,
+            expiresAt: expiresAt,
+            on: db
+        )
+    }
+
+    /// Idempotently grant the role with definition-row id `roleID` to a
+    /// principal on a node. An existing row for the same (principal, role,
+    /// node) is refreshed (its `expires_at` takes the new value) rather than
+    /// duplicated.
+    ///
+    /// Callers validate the id names a live, in-scope role *before* granting
+    /// (the member controllers' resolver, issue #608); the binding row itself
+    /// stores it blind — a dangling id is dropped by every read path.
+    static func grant(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleID: UUID,
+        nodeType: IAMNodeType,
+        nodeID: UUID,
+        createdBy: UUID?,
+        expiresAt: Date? = nil,
+        on db: Database
+    ) async throws {
         func find() async throws -> RoleBinding? {
             try await RoleBinding.query(on: db)
                 .filter(\.$principalType == principalType.rawValue)
                 .filter(\.$principalID == principalID)
-                .filter(\.$role == role.rawValue)
+                .filter(\.$role == roleID.uuidString)
                 .filter(\.$nodeType == nodeType.rawValue)
                 .filter(\.$nodeID == nodeID)
                 .first()
@@ -44,7 +73,7 @@ enum RoleBindingService {
             try await RoleBinding(
                 principalType: principalType,
                 principalID: principalID,
-                role: role,
+                roleID: roleID,
                 nodeType: nodeType,
                 nodeID: nodeID,
                 expiresAt: expiresAt,
@@ -63,12 +92,33 @@ enum RoleBindingService {
         }
     }
 
-    /// Revoke a principal's binding(s) on a node — one role, or all of the
-    /// principal's roles there when `role` is nil (e.g. membership removal).
+    /// Revoke a principal's binding(s) on a node — one seeded role, or all of
+    /// the principal's roles there when `role` is nil (e.g. membership
+    /// removal).
     static func revoke(
         principalType: IAMPrincipalType,
         principalID: UUID,
         role: IAMRole? = nil,
+        nodeType: IAMNodeType,
+        nodeID: UUID,
+        on db: Database
+    ) async throws {
+        try await revoke(
+            principalType: principalType,
+            principalID: principalID,
+            roleID: role?.seededID,
+            nodeType: nodeType,
+            nodeID: nodeID,
+            on: db
+        )
+    }
+
+    /// Revoke a principal's binding(s) on a node — one role by definition-row
+    /// id, or all of the principal's roles there when `roleID` is nil.
+    static func revoke(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleID: UUID?,
         nodeType: IAMNodeType,
         nodeID: UUID,
         on db: Database
@@ -78,8 +128,8 @@ enum RoleBindingService {
             .filter(\.$principalID == principalID)
             .filter(\.$nodeType == nodeType.rawValue)
             .filter(\.$nodeID == nodeID)
-        if let role {
-            query.filter(\.$role == role.rawValue)
+        if let roleID {
+            query.filter(\.$role == roleID.uuidString)
         }
         try await query.delete()
     }

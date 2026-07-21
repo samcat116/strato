@@ -1,24 +1,22 @@
 import Foundation
 
-// IAM phase 3 (issue #480): the Cedar schema, generated from the role
-// registry.
+// IAM phase 3 (issue #480), rebuilt for the unified role store (issue #604):
+// the Cedar schema, generated from the role-definition rows and the code-side
+// action registry.
 //
 // The registry (`IAMRoleRegistry`) stays the curated source of truth for the
-// action inventory and the role action-groups; the schema is derived from it
-// rather than hand-maintained in parallel, so an action added to a role can
-// never exist in one and not the other.
+// action *inventory*; the roles themselves are `iam_roles` rows (seeded
+// defaults included), threaded in as `RoleDescriptor`s. Role permits carry
+// explicit action lists, so the schema declares no role action-groups — only
+// the per-service groups guardrail wildcards compile to.
 
 /// Generates the Cedar schema: entity types, the per-operation action
-/// inventory, the nested role action-groups, per-service action groups (the
-/// compilation target for `service:*` guardrail patterns), and the fixed
-/// condition vocabulary as the request `Context`.
+/// inventory, per-service action groups (the compilation target for
+/// `service:*` guardrail patterns), the per-role `Grants` fields, and the
+/// fixed condition vocabulary as the request `Context`.
 enum CedarSchemaBuilder {
 
     // MARK: - Action groups
-
-    /// The action group holding a role's actions. A binding for role R becomes
-    /// `action in Action::"role:R"` in the role policies.
-    static func roleGroupName(_ role: IAMRole) -> String { "role:\(role.rawValue)" }
 
     /// The action group holding every action of one service (`vm`, `volume`,
     /// …). This is what a `vm:*` guardrail pattern compiles to, so a service
@@ -27,37 +25,18 @@ enum CedarSchemaBuilder {
     static func serviceGroupName(_ service: String) -> String { "svc:\(service)" }
 
     /// One action declaration. `resourceTypes` is nil for pure groups (the
-    /// role and service groups), which can never be the action of a request.
+    /// service groups), which can never be the action of a request.
     struct ActionDecl: Equatable, Sendable {
         let name: String
-        /// The groups this action (or group) is a *member of*. Direction is
-        /// the part that is easy to get backwards: the nesting
-        /// `viewer ⊂ operator ⊂ editor ⊂ admin` means the **lower** group is a
-        /// member of the **higher** one, so `action in Action::"role:admin"`
-        /// transitively matches every action, while `role:viewer` matches only
-        /// the viewer set. `CedarSchemaTests` verifies the closure of every
-        /// concrete action against `IAMRoleRegistry.roles(granting:)`.
+        /// The groups this action (or group) is a *member of*.
         let memberOf: [String]
         let resourceTypes: [CedarEntityType]?
     }
 
-    /// The full action inventory: role groups, service groups, then every
-    /// registry action, sorted for a deterministic schema.
+    /// The full action inventory: service groups, then every registry action,
+    /// sorted for a deterministic schema.
     static func actionDecls() -> [ActionDecl] {
         var decls: [ActionDecl] = []
-
-        // Role groups, highest first so each `memberOf` target is already
-        // declared when read top-to-bottom. `containedBy(role)` is the role
-        // whose action set is the next superset — admin for editor, and so on.
-        for role in IAMRole.allCases.reversed() {
-            let container = IAMRole.allCases.first { $0.implies == role }
-            decls.append(
-                ActionDecl(
-                    name: roleGroupName(role),
-                    memberOf: container.map { [roleGroupName($0)] } ?? [],
-                    resourceTypes: nil
-                ))
-        }
 
         for service in IAMRoleRegistry.actionServices.sorted() {
             decls.append(ActionDecl(name: serviceGroupName(service), memberOf: [], resourceTypes: nil))
@@ -65,12 +44,6 @@ enum CedarSchemaBuilder {
 
         for action in IAMRoleRegistry.allActions.sorted() {
             var memberOf: [String] = []
-            // The *lowest* role carrying the action — its direct home. Higher
-            // roles reach it through the group nesting, and the membership
-            // -derived actions (`project:create`) belong to no role at all.
-            if let lowest = IAMRole.allCases.first(where: { IAMRoleRegistry.actions(for: $0).contains(action) }) {
-                memberOf.append(roleGroupName(lowest))
-            }
             if let service = action.split(separator: ":", maxSplits: 1).first {
                 memberOf.append(serviceGroupName(String(service)))
             }
@@ -120,11 +93,12 @@ enum CedarSchemaBuilder {
 
     // MARK: - Schema text
 
-    /// The Cedar schema in the human-readable schema format.
-    static func schemaText() -> String {
+    /// The Cedar schema in the human-readable schema format, with one
+    /// `Grants` field pair per role-definition row.
+    static func schemaText(roles: [RoleDescriptor]) -> String {
         var lines: [String] = [
-            "// Generated by CedarSchemaBuilder from IAMRoleRegistry (issue #480).",
-            "// The registry is the curated source of truth; regenerate rather than edit.",
+            "// Generated by CedarSchemaBuilder from IAMRoleRegistry and the",
+            "// iam_roles rows (issues #480, #604). Regenerate rather than edit.",
             "",
         ]
 
@@ -132,9 +106,11 @@ enum CedarSchemaBuilder {
         // from `role_bindings`: bindings stay data read per-request from
         // Postgres (docs/architecture/iam.md), so they arrive in the request
         // context rather than in the compiled policy set. Users and groups are
-        // separate sets because Cedar sets are homogeneous.
+        // separate sets because Cedar sets are homogeneous. One field pair per
+        // role row, ordered by id: rebuilds on two replicas must produce
+        // identical text for the same version.
         lines.append("type Grants = {")
-        for role in IAMRole.allCases {
+        for role in roles.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
             lines.append("    \(CedarText.stringLiteral(role.grantsUsersField)): Set<User>,")
             lines.append("    \(CedarText.stringLiteral(role.grantsGroupsField)): Set<Group>,")
         }

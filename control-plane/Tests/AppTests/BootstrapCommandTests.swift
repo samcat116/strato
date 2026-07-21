@@ -58,10 +58,10 @@ struct BootstrapCommandTests {
             // IAM dual-write: explicit admin bindings on both the org and the project.
             let orgBindings = try await RoleBindingService.activeBindings(
                 nodeType: .organization, nodeID: org.id!, on: app.db)
-            #expect(orgBindings.map(\.role) == [IAMRole.admin.rawValue])
+            #expect(orgBindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
             let projectBindings = try await RoleBindingService.activeBindings(
                 nodeType: .project, nodeID: project.id!, on: app.db)
-            #expect(projectBindings.map(\.role) == [IAMRole.admin.rawValue])
+            #expect(projectBindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
 
             // --quiet prints exactly the key, and its hash matches the stored row.
             let printedKey = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)

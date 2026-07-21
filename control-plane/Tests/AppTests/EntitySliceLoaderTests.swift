@@ -6,6 +6,13 @@ import VaporTesting
 
 @testable import App
 
+/// Grants are keyed by role-definition id since the unified role store
+/// (issue #604); these seeded-role conveniences keep the assertions readable.
+extension CedarRoleGrants {
+    fileprivate func users(for role: IAMRole) -> Set<UUID> { users(for: role.seededID) }
+    fileprivate func groups(for role: IAMRole) -> Set<UUID> { groups(for: role.seededID) }
+}
+
 /// IAM phase 3 (issue #480): the entity-slice loader — the security-critical
 /// component of the Cedar integration, so this is where the test investment
 /// goes. Beyond the per-edge cases, `sliceCrossCheck*` compares what the
@@ -369,7 +376,8 @@ final class EntitySliceLoaderTests {
 
             let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
 
-            guard case .record(let context) = slice.baseContextValue,
+            let roleIDs = Set(IAMRole.allCases.map(\.seededID))
+            guard case .record(let context) = slice.baseContextValue(roleIDs: roleIDs),
                 case .record(let grants)? = context["grants"]
             else {
                 Issue.record("base context is not a record with grants")
@@ -378,11 +386,70 @@ final class EntitySliceLoaderTests {
             // The schema declares every field required, so every bucket must
             // be present even when empty.
             for role in IAMRole.allCases {
-                #expect(grants[role.grantsUsersField] != nil)
-                #expect(grants[role.grantsGroupsField] != nil)
+                #expect(grants[RoleDescriptor.grantsUsersField(role.seededID)] != nil)
+                #expect(grants[RoleDescriptor.grantsGroupsField(role.seededID)] != nil)
             }
-            let adminUsers = grants[IAMRole.admin.grantsUsersField]
+            let adminUsers = grants[RoleDescriptor.grantsUsersField(IAMRole.admin.seededID)]
             #expect(adminUsers == .set([.entity(CedarEntityUID(type: .user, id: user.id!))]))
+        }
+    }
+
+    @Test("Grants for roles outside the compiled set are dropped from the context, not emitted")
+    func staleSchemaGrantsDropped() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Stale")
+            let user = try await builder.createUser(username: "stale-user", email: "stale@example.com")
+
+            // A binding for a role the compiled set does not know — a role
+            // created after this replica's last rebuild, or deleted since.
+            let unknownRoleID = UUID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, roleID: unknownRoleID,
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            // The loader collected both grants…
+            #expect(slice.grants.roleIDs == [unknownRoleID, IAMRole.viewer.seededID])
+
+            // …but the context is shaped to the compiled schema: the unknown
+            // role's fields are absent (they would fail strict validation),
+            // the seeded ones all present.
+            let roleIDs = Set(IAMRole.allCases.map(\.seededID))
+            guard case .record(let context) = slice.baseContextValue(roleIDs: roleIDs),
+                case .record(let grants)? = context["grants"]
+            else {
+                Issue.record("base context is not a record with grants")
+                return
+            }
+            #expect(grants.count == IAMRole.allCases.count * 2)
+            #expect(grants[RoleDescriptor.grantsUsersField(unknownRoleID)] == nil)
+            #expect(
+                grants[RoleDescriptor.grantsUsersField(IAMRole.viewer.seededID)]
+                    == .set([.entity(CedarEntityUID(type: .user, id: user.id!))]))
+        }
+    }
+
+    @Test("A binding whose role value is not a UUID is dropped (under-grant, never crash)")
+    func nonUUIDRoleValueDropped() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Legacy")
+            let user = try await builder.createUser(username: "legacy-user", email: "legacy@example.com")
+
+            // A pre-backfill row shape: the role column holding a name. The
+            // migration rewrites these; any straggler must under-grant.
+            let row = RoleBinding(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .organization, nodeID: tree.org.id!)
+            row.role = "viewer"
+            try await row.save(on: app.db)
+
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            #expect(slice.grants.roleIDs.isEmpty)
         }
     }
 

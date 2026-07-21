@@ -106,7 +106,7 @@ final class IAMAuthorizerTests {
             #expect(entry.decisionsMatch == nil)
             #expect(entry.iamAction == "vm:read")
             #expect(entry.tier == "grant")
-            #expect(entry.determiningPolicies == ["role-viewer"])
+            #expect(entry.determiningPolicies == [RoleDescriptor.policyID(IAMRole.viewer.seededID)])
             #expect(entry.policyVersion == version)
             #expect(entry.organizationID == tree.org.id)
             #expect(entry.requestID == "test-request")

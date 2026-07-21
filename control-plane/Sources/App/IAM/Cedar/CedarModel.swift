@@ -167,11 +167,3 @@ enum CedarText {
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 }
-
-extension IAMRole {
-    /// The `Grants` field naming shared by the schema (`CedarSchemaBuilder`),
-    /// the role policies (`CedarPolicyAssembler`), and the loader
-    /// (`EntitySliceLoader`). One helper so the three can never disagree.
-    var grantsUsersField: String { "\(rawValue)Users" }
-    var grantsGroupsField: String { "\(rawValue)Groups" }
-}

@@ -2,16 +2,17 @@ import Fluent
 import Foundation
 import Vapor
 
-/// Reconciles the `iam_roles` / `iam_role_actions` tables with the code-side
-/// `IAMRoleRegistry` at boot. The code is the curated source of truth — an
-/// action joins or leaves a role via a reviewed change to `RoleRegistry.swift`,
-/// and this sync propagates it — so the tables are safe to rebuild
-/// incrementally on every startup.
+/// Reconciles the seeded (managed) rows of `iam_roles` with the code-side
+/// `IAMRoleRegistry` at boot. The code stays the curated source of truth for
+/// the *defaults* — an action joins or leaves a seeded role via a reviewed
+/// change to `RoleRegistry.swift`, and this sync propagates it — while
+/// user-created rows (`managed == false`) are never touched: they are policy
+/// data owned by their org or project.
 ///
-/// The registry is part of the policy set, so a sync that changes anything
+/// The role store is part of the policy set, so a sync that changes anything
 /// cuts a policy-set version. Reconciliation and bump run in **one
 /// transaction**: if they were separate, a deploy killed between them would
-/// leave a changed registry with no version behind it, and the failure would
+/// leave changed rows with no version behind them, and the failure would
 /// never repair itself — the next boot finds nothing left to reconcile and so
 /// bumps nothing, while every replica keeps its stale compiled policy set.
 enum RoleRegistrySync {
@@ -30,80 +31,61 @@ enum RoleRegistrySync {
     /// pass against a fresh transaction, where the other replica's row is
     /// visible and there is simply nothing left to insert.
     private static func reconcile(on db: Database, logger: Logger) async throws {
-        // Roles: upsert by name, keeping `implies` current.
-        let existingRoles = try await IAMRoleRecord.query(on: db).all()
-        var rolesByName = [String: IAMRoleRecord]()
-        for record in existingRoles {
-            rolesByName[record.name] = record
+        let managed = try await IAMRoleDefinition.query(on: db)
+            .filter(\.$managed == true)
+            .all()
+        var byID = [UUID: IAMRoleDefinition]()
+        for row in managed {
+            if let id = row.id { byID[id] = row }
         }
-        // Any change here is a policy-set change: the role registry is part of
-        // what the evaluator compiles, so replicas have to recompile.
-        var roleChanges = 0
-        for role in IAMRole.allCases {
-            if let record = rolesByName[role.rawValue] {
-                if record.implies != role.implies?.rawValue {
-                    record.implies = role.implies?.rawValue
-                    try await record.save(on: db)
-                    roleChanges += 1
+
+        var changes = 0
+        for desired in RoleDescriptor.seededDefaults() {
+            if let row = byID[desired.id] {
+                if row.name != desired.name || row.cedarText != desired.cedarText || row.actions != desired.actions {
+                    row.name = desired.name
+                    row.cedarText = desired.cedarText
+                    row.actions = desired.actions
+                    try await row.save(on: db)
+                    changes += 1
                 }
             } else {
-                try await IAMRoleRecord(name: role.rawValue, implies: role.implies?.rawValue).save(on: db)
-                roleChanges += 1
+                let row = IAMRoleDefinition(
+                    id: desired.id,
+                    name: desired.name,
+                    ownerType: .platform,
+                    ownerID: IAMRoleDefinition.platformOwnerID,
+                    cedarText: desired.cedarText,
+                    actions: desired.actions,
+                    managed: true
+                )
+                try await row.create(on: db)
+                changes += 1
             }
-        }
-        let knownRoles = Set(IAMRole.allCases.map(\.rawValue))
-        for record in existingRoles where !knownRoles.contains(record.name) {
-            try await record.delete(on: db)
-            roleChanges += 1
         }
 
-        // Actions: rows mirror each role's *expanded* action group. Insert
-        // what's missing, delete what the registry no longer contains.
-        let existingActions = try await IAMRoleAction.query(on: db).all()
-        var existingByRole = [String: Set<String>]()
-        for record in existingActions {
-            existingByRole[record.role, default: []].insert(record.action)
+        // A managed row whose id the code no longer seeds is a default that
+        // was removed by an upgrade.
+        for row in managed {
+            guard let id = row.id, IAMRole(seededID: id) == nil else { continue }
+            try await row.delete(on: db)
+            changes += 1
         }
-        var inserted = 0
-        var removed = 0
-        for role in IAMRole.allCases {
-            let desired = IAMRoleRegistry.actions(for: role)
-            let current = existingByRole[role.rawValue] ?? []
-            for action in desired.subtracting(current) {
-                try await IAMRoleAction(role: role, action: action).save(on: db)
-                inserted += 1
-            }
-            let stale = current.subtracting(desired)
-            if !stale.isEmpty {
-                try await IAMRoleAction.query(on: db)
-                    .filter(\.$role == role.rawValue)
-                    .filter(\.$action ~~ Array(stale))
-                    .delete()
-                removed += stale.count
-            }
-        }
-        for record in existingActions where !knownRoles.contains(record.role) {
-            try await record.delete(on: db)
-            removed += 1
-        }
-        guard inserted > 0 || removed > 0 || roleChanges > 0 else { return }
+
+        guard changes > 0 else { return }
 
         logger.info(
-            "IAM role registry synced",
-            metadata: [
-                "actions_added": .string(String(inserted)),
-                "actions_removed": .string(String(removed)),
-                "role_changes": .string(String(roleChanges)),
-            ])
+            "IAM seeded roles synced",
+            metadata: ["changes": .string(String(changes))])
 
-        // Bump after the tables are consistent, so a replica that reacts to the
-        // new version reads the finished registry. A replica that finds nothing
+        // Bump after the rows are consistent, so a replica that reacts to the
+        // new version reads the finished store. A replica that finds nothing
         // to reconcile bumps nothing — so a rolling deploy of an unchanged
-        // registry is silent, and the worst a simultaneous cold boot costs is a
-        // few redundant invalidations of a policy set nobody has compiled yet.
+        // registry is silent, and the worst a simultaneous cold boot costs is
+        // a few redundant invalidations of a policy set nobody has compiled
+        // yet.
         let version = try await PolicySetVersionService.bump(
-            reason:
-                "role registry synced (\(inserted) actions added, \(removed) removed, \(roleChanges) role changes)",
+            reason: "seeded roles synced (\(changes) changes)",
             on: db
         )
         logger.info("Policy set version bumped", metadata: ["version": .stringConvertible(version)])

@@ -516,6 +516,11 @@ public func configure(_ app: Application) async throws {
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 
+    // IAM roles/policies authoring phase 1 (issue #604): the unified role
+    // store — seeded defaults + user-created roles as rows, role identity by
+    // row uuid in role_bindings.
+    app.migrations.add(ReplaceIAMRoleRegistry())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
