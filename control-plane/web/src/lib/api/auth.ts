@@ -37,6 +37,7 @@ export const authApi = {
   async registerFinish(data: {
     challenge: string;
     response: unknown;
+    transports?: string[];
   }): Promise<{ success: boolean; user: User }> {
     return api.post("/auth/register/finish", data);
   },
@@ -71,6 +72,7 @@ export const authApi = {
     token: string;
     challenge: string;
     response: unknown;
+    transports?: string[];
   }): Promise<{ success: boolean; user: User }> {
     return api.post("/auth/claim/finish", data);
   },

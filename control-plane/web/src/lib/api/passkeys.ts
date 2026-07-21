@@ -23,6 +23,7 @@ export const passkeysApi = {
     challenge: string;
     response: unknown;
     name?: string;
+    transports?: string[];
   }): Promise<Passkey> {
     return api.post<Passkey>("/api/users/me/passkeys/finish", data);
   },

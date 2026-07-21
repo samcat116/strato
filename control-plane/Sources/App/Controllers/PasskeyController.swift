@@ -77,17 +77,14 @@ struct PasskeyController: RouteCollection {
             )
         }
 
-        let options = try await req.webAuthn.beginRegistration(
-            for: user,
-            excludeCredentials: excludeCredentials
-        )
+        let options = try await req.webAuthn.beginRegistration(for: user)
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
             for: user.id,
             operation: Self.addChallengeOperation,
             on: req.db
         )
-        return RegistrationBeginResponse(options: options)
+        return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
     }
 
     func addFinish(req: Request) async throws -> PasskeyResponse {
@@ -115,6 +112,7 @@ struct PasskeyController: RouteCollection {
         let credential = try await req.webAuthn.finishRegistration(
             challenge: body.challenge,
             credentialCreationData: body.response,
+            transports: body.transports,
             operation: Self.addChallengeOperation,
             on: req.db
         )
@@ -266,6 +264,8 @@ struct AddPasskeyFinishRequest: Content {
     let challenge: String
     let response: RegistrationCredential
     let name: String?
+    /// `getTransports()` from the client. Optional: older clients omit it.
+    let transports: [String]?
 
     func encode(to encoder: Encoder) throws {
         throw EncodingError.invalidValue(
@@ -276,6 +276,6 @@ struct AddPasskeyFinishRequest: Content {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case challenge, response, name
+        case challenge, response, name, transports
     }
 }
