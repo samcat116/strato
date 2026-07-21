@@ -216,8 +216,14 @@ struct VolumeController: RouteCollection {
         // its real storage path and hypervisor — or `.error` on failure.
         let volumeService = req.application.volumeService
         let volumeId = volume.id!
-        Task {
-            await volumeService.provisionVolume(volumeId: volumeId, sourceImage: sourceImage)
+        // Bind to a `let` so the `@Sendable` spawn closure captures an
+        // immutable copy rather than the mutable `sourceImage` var.
+        let provisionImage = sourceImage
+        // Register with the drain registry (like the VM/sandbox completion
+        // paths) so shutdown waits for and cancels this rather than racing
+        // Fluent teardown; `provisionVolume` guards its own `app.db` access.
+        req.application.backgroundTasks.spawn {
+            await volumeService.provisionVolume(volumeId: volumeId, sourceImage: provisionImage)
         }
 
         req.logger.info(
@@ -824,7 +830,10 @@ struct VolumeController: RouteCollection {
         let volumeService = req.application.volumeService
         let sourceVolumeId = sourceVolume.id!
         let targetVolumeId = newVolume.id!
-        Task {
+        // Register with the drain registry (like the VM/sandbox completion
+        // paths) so shutdown waits for and cancels this rather than racing
+        // Fluent teardown; `performClone` guards its own `app.db` access.
+        req.application.backgroundTasks.spawn {
             await volumeService.performClone(
                 sourceVolumeId: sourceVolumeId,
                 targetVolumeId: targetVolumeId,

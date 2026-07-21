@@ -31,8 +31,14 @@ actor VolumeService {
     /// after which the volume becomes `.available` (with its real storage
     /// path and hypervisor) or `.error`.
     func provisionVolume(volumeId: UUID, sourceImage: Image?) async {
+        // Registered with the drain registry: shutdown cancels this before
+        // Fluent tears down. Capture the database up front and bail if we were
+        // already cancelled (see `Application.liveDB`); a cancellation
+        // mid-flight then surfaces as a thrown error on the captured handle
+        // rather than a fatal `app.db` unwrap.
+        guard let db = app.liveDB else { return }
         do {
-            guard let volume = try await Volume.find(volumeId, on: app.db) else {
+            guard let volume = try await Volume.find(volumeId, on: db) else {
                 logger.warning(
                     "Volume deleted before provisioning started",
                     metadata: [
@@ -41,20 +47,23 @@ actor VolumeService {
                 return
             }
 
-            let pool = try await volume.$pool.get(on: app.db)
+            let pool = try await volume.$pool.get(on: db)
             let result = try await requestVolumeCreation(
                 volume: volume,
                 sourceImage: sourceImage,
                 memberAgentIds: pool?.memberAgentIds ?? []
             )
 
+            // The agent RPC above can span the drain; bail cleanly before the
+            // write-back rather than issue doomed queries during shutdown.
+            guard !Task.isCancelled else { return }
             try await recordReplica(volumeId: volumeId, agentId: result.agentId, datasetPath: result.storagePath)
 
             volume.hypervisorId = result.agentId
             volume.storagePath = result.storagePath
             volume.status = .available
             volume.errorMessage = nil
-            try await volume.save(on: app.db)
+            try await volume.save(on: db)
 
             logger.info(
                 "Volume provisioned on agent",
@@ -73,8 +82,11 @@ actor VolumeService {
     /// whether the clone succeeds or fails; the target becomes `.available`
     /// or `.error`.
     func performClone(sourceVolumeId: UUID, targetVolumeId: UUID, restoreSourceStatusTo: VolumeStatus) async {
-        guard let source = try? await Volume.find(sourceVolumeId, on: app.db),
-            let target = try? await Volume.find(targetVolumeId, on: app.db)
+        // Registered with the drain registry: bail if shutdown already
+        // cancelled us, and reuse the captured handle (see `Application.liveDB`).
+        guard let db = app.liveDB else { return }
+        guard let source = try? await Volume.find(sourceVolumeId, on: db),
+            let target = try? await Volume.find(targetVolumeId, on: db)
         else {
             logger.warning(
                 "Volume disappeared before clone started",
@@ -87,6 +99,9 @@ actor VolumeService {
 
         do {
             let storagePath = try await requestVolumeClone(sourceVolume: source, targetVolume: target)
+            // The agent RPC above can span the drain; bail cleanly before the
+            // write-back rather than issue doomed queries during shutdown.
+            guard !Task.isCancelled else { return }
             let sourcePlacement = try await placement(of: source)
             if let agentId = sourcePlacement?.agentId {
                 try await recordReplica(volumeId: targetVolumeId, agentId: agentId, datasetPath: storagePath)
@@ -95,7 +110,7 @@ actor VolumeService {
             target.storagePath = storagePath
             target.status = .available
             target.errorMessage = nil
-            try await target.save(on: app.db)
+            try await target.save(on: db)
 
             logger.info(
                 "Volume cloned on agent",
@@ -108,9 +123,10 @@ actor VolumeService {
         }
 
         // Whether the clone succeeded or failed, the source is no longer busy.
+        guard !Task.isCancelled else { return }
         source.status = restoreSourceStatusTo
         do {
-            try await source.save(on: app.db)
+            try await source.save(on: db)
         } catch {
             logger.error(
                 "Failed to restore source volume status after clone",
@@ -128,11 +144,14 @@ actor VolumeService {
                 "volumeId": .string(volumeId.uuidString),
                 "error": .string(error.localizedDescription),
             ])
+        // Skip the status write-back if shutdown cancelled us; the database may
+        // already be torn down (see `Application.liveDB`).
+        guard let db = app.liveDB else { return }
         do {
-            guard let volume = try await Volume.find(volumeId, on: app.db) else { return }
+            guard let volume = try await Volume.find(volumeId, on: db) else { return }
             volume.status = .error
             volume.errorMessage = error.localizedDescription
-            try await volume.save(on: app.db)
+            try await volume.save(on: db)
         } catch {
             logger.error(
                 "Failed to record volume error state",
@@ -150,7 +169,8 @@ actor VolumeService {
     /// replica (mid-provisioning races, pre-backfill data) fall back to the
     /// legacy hypervisor_id/storage_path columns, which are dual-written.
     private func placement(of volume: Volume) async throws -> (agentId: String, path: String?)? {
-        if let replica = try await VolumeReplica.query(on: app.db)
+        guard let db = app.liveDB else { return nil }
+        if let replica = try await VolumeReplica.query(on: db)
             .filter(\.$volume.$id == volume.id!)
             .sort(\.$createdAt)
             .first()
@@ -164,14 +184,15 @@ actor VolumeService {
     /// Record the physical copy an agent just confirmed it holds. Idempotent:
     /// a replica already recorded for that agent is updated in place.
     private func recordReplica(volumeId: UUID, agentId: String, datasetPath: String?) async throws {
-        if let existing = try await VolumeReplica.query(on: app.db)
+        guard let db = app.liveDB else { return }
+        if let existing = try await VolumeReplica.query(on: db)
             .filter(\.$volume.$id == volumeId)
             .filter(\.$agentId == agentId)
             .first()
         {
             existing.datasetPath = datasetPath
             existing.state = .healthy
-            try await existing.save(on: app.db)
+            try await existing.save(on: db)
             return
         }
         try await VolumeReplica(
@@ -179,7 +200,7 @@ actor VolumeService {
             agentId: agentId,
             datasetPath: datasetPath,
             state: .healthy
-        ).create(on: app.db)
+        ).create(on: db)
     }
 
     // MARK: - Volume Creation
@@ -207,7 +228,9 @@ actor VolumeService {
             // The artifact set drives which download URLs are emitted; load it
             // (no-op if already eager-loaded) so buildImageInfo doesn't fall back
             // to the legacy single-file branch and drop the typed artifacts.
-            try await image.$artifacts.load(on: app.db)
+            // Bail if shutdown's drain cancelled us first (see `Application.liveDB`).
+            guard let db = app.liveDB else { throw CancellationError() }
+            try await image.$artifacts.load(on: db)
             sourceImageInfo = try VMSpecBuilder.buildImageInfo(from: image)
         }
 

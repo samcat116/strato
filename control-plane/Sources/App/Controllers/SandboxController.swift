@@ -127,9 +127,13 @@ struct SandboxController: RouteCollection {
         settingSandboxStatus sandboxStatus: SandboxStatus?,
         app: Application
     ) async {
+        // Shutdown's drain cancels surviving background tasks before Vapor
+        // tears down Fluent; bail before the first database access so a
+        // cancelled task cannot dereference a torn-down `app.db`.
+        guard let db = app.liveDB else { return }
         do {
-            guard let operation = try await ResourceOperation.find(operationId, on: app.db),
-                try await operation.completeIfPending(as: status, error: error, on: app.db)
+            guard let operation = try await ResourceOperation.find(operationId, on: db),
+                try await operation.completeIfPending(as: status, error: error, on: db)
             else { return }
 
             if status == .failed {
@@ -143,7 +147,10 @@ struct SandboxController: RouteCollection {
                     ])
             }
 
-            if let sandbox = try await Sandbox.find(sandboxID, on: app.db) {
+            // The awaits above may have spanned the drain — re-check before the
+            // sandbox read/write.
+            guard !Task.isCancelled else { return }
+            if let sandbox = try await Sandbox.find(sandboxID, on: db) {
                 var changed = false
                 if let sandboxStatus {
                     sandbox.setStatus(sandboxStatus)
@@ -156,7 +163,7 @@ struct SandboxController: RouteCollection {
                     changed = true
                 }
                 if changed {
-                    try await sandbox.save(on: app.db)
+                    try await sandbox.save(on: db)
                 }
             }
         } catch {
@@ -672,8 +679,11 @@ struct SandboxController: RouteCollection {
         let sandboxID = operation.resourceID
 
         app.backgroundTasks.spawn {
+            // Bail if shutdown's drain already cancelled us — `createSandbox`
+            // dereferences `app.db` immediately (see `Application.liveDB`).
+            guard let db = app.liveDB else { return }
             do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
             } catch {
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .failed, error: error.localizedDescription,
@@ -918,10 +928,13 @@ struct SandboxController: RouteCollection {
                     metadata: ["sandbox_id": .string(sandboxID.uuidString)])
             }
 
+            // Bail if shutdown's drain already cancelled us (see
+            // `Application.liveDB`), and reuse the captured handle below.
+            guard let db = app.liveDB else { return }
             do {
                 // If the sweep already failed this operation, stop here:
                 // removing the row under a failed operation would contradict it.
-                guard let current = try await ResourceOperation.find(operationId, on: app.db),
+                guard let current = try await ResourceOperation.find(operationId, on: db),
                     current.status == .pending
                 else { return }
 
@@ -929,7 +942,8 @@ struct SandboxController: RouteCollection {
                 // with the sandbox row below (issue #428).
                 await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
-                try await app.db.transaction { db in
+                guard !Task.isCancelled else { return }
+                try await db.transaction { db in
                     try await sandbox.delete(on: db)
                     try await QuotaEnforcementService.release(for: sandbox, on: db)
                 }

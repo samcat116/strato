@@ -146,7 +146,10 @@ extension SandboxController {
                     sandboxId: sandboxID, snapshotId: snapshotID, uploads: uploads,
                     agentId: agentId, app: app)
 
-                guard let current = try await SandboxSnapshot.find(snapshotID, on: app.db) else {
+                // The agent RPC above can span shutdown's drain; bail before the
+                // completeness check if it cancelled us (see `Application.liveDB`).
+                guard let db = app.liveDB else { return }
+                guard let current = try await SandboxSnapshot.find(snapshotID, on: db) else {
                     throw Abort(.conflict, reason: "Snapshot was deleted while its export ran")
                 }
                 let recorded = Set((current.exportedArtifacts ?? []).map(\.kind))
@@ -159,7 +162,7 @@ extension SandboxController {
                     )
                 }
                 current.exportedAt = Date()
-                try await current.save(on: app.db)
+                try await current.save(on: db)
 
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .succeeded, error: nil,

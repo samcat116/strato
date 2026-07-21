@@ -185,9 +185,13 @@ struct VMController: RouteCollection {
         settingVMStatus vmStatus: VMStatus?,
         app: Application
     ) async {
+        // Shutdown's drain cancels surviving background tasks before Vapor
+        // tears down Fluent; bail before the first database access so a
+        // cancelled task cannot dereference a torn-down `app.db`.
+        guard let db = app.liveDB else { return }
         do {
-            guard let operation = try await ResourceOperation.find(operationId, on: app.db),
-                try await operation.completeIfPending(as: status, error: error, on: app.db)
+            guard let operation = try await ResourceOperation.find(operationId, on: db),
+                try await operation.completeIfPending(as: status, error: error, on: db)
             else { return }
 
             if status == .failed {
@@ -201,7 +205,11 @@ struct VMController: RouteCollection {
                     ])
             }
 
-            if let vm = try await VM.find(vmID, on: app.db) {
+            // The awaits above may have spanned the drain — re-check before the
+            // VM read/write. (This is the observed crash gap: the "VM operation
+            // failed" warning logged, then `VM.find` unwrapped a torn-down db.)
+            guard !Task.isCancelled else { return }
+            if let vm = try await VM.find(vmID, on: db) {
                 var changed = false
                 if let vmStatus {
                     vm.setStatus(vmStatus)
@@ -218,7 +226,7 @@ struct VMController: RouteCollection {
                     changed = true
                 }
                 if changed {
-                    try await vm.save(on: app.db)
+                    try await vm.save(on: db)
                 }
             }
         } catch {
@@ -823,10 +831,13 @@ struct VMController: RouteCollection {
         let vmID = operation.resourceID
 
         app.backgroundTasks.spawn {
+            // Bail if shutdown's drain already cancelled us — `createVM`
+            // dereferences `app.db` immediately (see `Application.liveDB`).
+            guard let db = app.liveDB else { return }
             do {
                 // The image constrains placement (architecture match); the
                 // sync itself re-reads everything it needs from the database.
-                try await app.agentService.createVM(vm: vm, db: app.db, image: image)
+                try await app.agentService.createVM(vm: vm, db: db, image: image)
             } catch {
                 await completeOperation(
                     operationId, vmID: vmID, as: .failed, error: error.localizedDescription,
@@ -905,11 +916,14 @@ struct VMController: RouteCollection {
                     metadata: ["vm_id": .string(vmID.uuidString)])
             }
 
+            // Bail if shutdown's drain already cancelled us (see
+            // `Application.liveDB`), and reuse the captured handle below.
+            guard let db = app.liveDB else { return }
             do {
                 // If the sweep already failed this operation, stop here: the
                 // user will retry, and removing the row under a failed
                 // operation would contradict it.
-                guard let current = try await ResourceOperation.find(operationId, on: app.db),
+                guard let current = try await ResourceOperation.find(operationId, on: db),
                     current.status == .pending
                 else { return }
 
@@ -917,7 +931,7 @@ struct VMController: RouteCollection {
                 // in one transaction so the reservation counters and the VM row stay
                 // consistent. Deletion happens first so the removed VM drops out of
                 // the recount.
-                try await app.db.transaction { db in
+                try await db.transaction { db in
                     try await vm.delete(on: db)
                     try await QuotaEnforcementService.release(for: vm, on: db)
                 }
