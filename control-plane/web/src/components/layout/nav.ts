@@ -3,6 +3,7 @@ import {
   Boxes,
   Building2,
   Camera,
+  CircleUser,
   Container,
   Cpu,
   Database,
@@ -92,6 +93,7 @@ export const navTree: NavItem[] = [
       // Deployed proxies (deploy/compose/nginx.conf, helm ingress) send the
       // whole /organizations/ prefix to the control plane for SCIM, so
       // frontend pages must not live under it.
+      { label: "Profile", href: "/settings/profile", icon: CircleUser },
       { label: "Organization", href: "/settings/organization", icon: Building2 },
       { label: "Audit Log", href: "/admin/audit", icon: ScrollText, adminOnly: true },
     ],

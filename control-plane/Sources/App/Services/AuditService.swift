@@ -19,6 +19,12 @@ enum AuditEventType: String, Sendable {
     case register = "auth.register"
     case oidcLogin = "auth.oidc_login"
     case oidcLoginFailed = "auth.oidc_login_failed"
+    /// Self-service passkey enrollment/removal (`/api/users/me/passkeys`).
+    /// Credential changes alter who can sign in, so they are audited
+    /// alongside the login events rather than left to the generic API-request
+    /// record.
+    case passkeyAdded = "auth.passkey_added"
+    case passkeyRemoved = "auth.passkey_removed"
 }
 
 // MARK: - Record
