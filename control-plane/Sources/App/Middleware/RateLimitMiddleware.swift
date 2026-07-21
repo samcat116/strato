@@ -219,6 +219,14 @@ struct RateLimitMiddleware: AsyncMiddleware {
         if path.hasPrefix("/auth/") || path == "/api/users/register" {
             return .auth
         }
+
+        // OAuth device grant: `/oauth/token` is polled every ~5s per login and
+        // must fit the roomy api bucket (device codes are 256-bit, and per-code
+        // interval enforcement returns slow_down); the endpoints that create
+        // rows or probe token hashes get the tight auth bucket.
+        if path == "/oauth/device_authorization" || path == "/oauth/revoke" {
+            return .auth
+        }
         return .api
     }
 

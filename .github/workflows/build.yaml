@@ -29,6 +29,7 @@ jobs:
       cp_backend: ${{ steps.filter.outputs.cp_backend }}
       agent: ${{ steps.filter.outputs.agent }}
       shared: ${{ steps.filter.outputs.shared }}
+      cli: ${{ steps.filter.outputs.cli }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       workflow: ${{ steps.filter.outputs.workflow }}
       code: ${{ steps.filter.outputs.code }}
@@ -57,6 +58,8 @@ jobs:
               - 'agent/**'
             shared:
               - 'shared/**'
+            cli:
+              - 'cli/**'
             firecracker:
               - 'SwiftFirecracker/**'
             workflow:
@@ -79,7 +82,7 @@ jobs:
     needs: changes
     # SwiftFirecracker/ is vendored and deliberately not linted, so
     # firecracker-only changes don't trigger this job.
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
     # Swift runner pool free for the heavy build+test job. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
@@ -99,7 +102,8 @@ jobs:
           swift format lint --strict --recursive --parallel \
             control-plane/Sources control-plane/Tests \
             agent/Sources agent/Tests \
-            shared/Sources shared/Tests
+            shared/Sources shared/Tests \
+            cli/Sources cli/Tests
 
   lint-and-build-frontend:
     name: Frontend Lint & Build
@@ -129,6 +133,28 @@ jobs:
         working-directory: control-plane/web
         run: bun run build
 
+  openapi-validate:
+    name: OpenAPI Spec Validation
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true'
+    # Lightweight validity check of the spec-first OpenAPI document (issue
+    # #557). The swift-openapi-generator build plugin is the authoritative
+    # validator (it fails the Swift build on an invalid spec); this job gives
+    # fast feedback without the multi-minute Swift build. Runs on a
+    # GitHub-hosted runner to keep the Swift runner pool free.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Lint OpenAPI document
+        run: bunx @redocly/cli@1 lint control-plane/Sources/App/openapi.yaml
+
   # The three Swift test jobs below run concurrently on the ARC scale set —
   # the wall-clock win that used to be impossible when everything shared one
   # job. Each keeps its own scratch dir under RUNNER_TOOL_CACHE (see the
@@ -148,7 +174,7 @@ jobs:
   test:
     name: Build and Test Swift Packages
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
     # Backstop for a hung build/test: the default 360-minute timeout would pin
     # a scarce runner-pool slot for six hours. Warm runs finish in ~15 minutes,
@@ -172,7 +198,7 @@ jobs:
       # in-flight build tree.
       - name: Prune build scratch dirs if oversized
         run: |
-          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent"; do
+          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent" "$RUNNER_TOOL_CACHE/strato-swift-build/cli"; do
             if [ -d "$scratch" ]; then
               size_kb=$(du -sk "$scratch" | cut -f1)
               if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -202,6 +228,19 @@ jobs:
         if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
         working-directory: agent
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+
+      - name: Build CLI
+        # Same always-report policy as the agent: CLI coverage runs even when
+        # an earlier package's tests failed.
+        id: build-cli
+        if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
+        working-directory: cli
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli"
+
+      - name: Test CLI
+        if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
+        working-directory: cli
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli"
 
   # One control-plane job running the identical suite twice: fast
   # engine-independent coverage on SQLite, then against the real engine
@@ -274,7 +313,7 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-sqlite.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
         # Run even if the SQLite leg failed (but not if the build did) —
@@ -302,7 +341,17 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This leg
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results-postgres.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      # Surface the exact failing test (and its message) as a JUnit report,
+      # since the raw job log is dominated by per-request debug output.
+      - name: Upload control-plane test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-test-results
+          path: control-plane/test-results-*.xml
+          if-no-files-found: warn
 
   test-agent-macos:
     name: Build & Test Agent (macOS)

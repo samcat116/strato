@@ -45,13 +45,15 @@ spec:
       tls:
         mode: Terminate
         certificateRefs:
-          - kind: Secret
+          - group: ""
+            kind: Secret
             name: {{ include "strato-control-plane.gateway.tlsSecretName" . }}
       allowedRoutes:
         namespaces:
           from: Same
         kinds:
-          - kind: HTTPRoute
+          - group: gateway.networking.k8s.io
+            kind: HTTPRoute
     {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
     # Agent WebSocket + telemetry ingest: passthrough so the Envoy sidecar
     # sees the agent SVID client cert (must not be terminated at the edge).
@@ -65,7 +67,8 @@ spec:
         namespaces:
           from: Same
         kinds:
-          - kind: TLSRoute
+          - group: gateway.networking.k8s.io
+            kind: TLSRoute
     {{- end }}
     {{- if .Values.spire.enabled }}
     # SPIRE server node-attestation API: passthrough, SPIRE does its own TLS.
@@ -79,6 +82,7 @@ spec:
         namespaces:
           from: Same
         kinds:
-          - kind: TLSRoute
+          - group: gateway.networking.k8s.io
+            kind: TLSRoute
     {{- end }}
 {{- end }}

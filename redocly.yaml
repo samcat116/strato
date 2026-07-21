@@ -1,0 +1,17 @@
+# Redocly configuration for validating the control-plane OpenAPI document
+# (control-plane/Sources/App/openapi.yaml), consumed by the `openapi-validate`
+# CI job (issue #557).
+#
+# The build-time swift-openapi-generator plugin is the authoritative validator
+# (it fails the Swift build on an invalid spec). This standalone lint gives fast
+# feedback without a full Swift build, so it focuses on structural validity
+# rather than style opinions: `minimal` turns the styleguide rules off, and the
+# rules below are kept as hard errors.
+extends:
+  - minimal
+rules:
+  spec: error
+  no-unresolved-refs: error
+  operation-operationId-unique: error
+  path-params-defined: error
+  no-identical-paths: error
