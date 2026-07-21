@@ -1,14 +1,13 @@
 import Fluent
-import FluentSQLiteDriver
 import Testing
 import Vapor
 
 @testable import App
 
 /// Backfill behavior of `CreateVMInterfaceAddresses`, exercised against a bare
-/// in-memory SQLite database with hand-built prerequisite tables so legacy
-/// rows can exist before the migration runs (the shared template harness has
-/// every migration pre-applied, which makes before/after tests impossible).
+/// empty database with hand-built prerequisite tables so legacy rows can exist
+/// before the migration runs (the shared template harness has every migration
+/// pre-applied, which makes before/after tests impossible).
 @Suite("VMInterfaceAddress backfill migration")
 struct VMInterfaceAddressMigrationTests {
     private final class LegacyInterface: Model, @unchecked Sendable {
@@ -62,11 +61,8 @@ struct VMInterfaceAddressMigrationTests {
     }
 
     private func withBareApp(_ body: (Application) async throws -> Void) async throws {
-        var env = Environment.testing
-        env.arguments = ["vapor"]
-        let app = try await Application.make(env)
+        let app = try await Application.makeForBareDatabaseTesting()
         app.logger.logLevel = .error
-        app.databases.use(.sqlite(.memory), as: .sqlite)
         do {
             try await app.db.schema("vm_network_interfaces")
                 .id()
@@ -81,9 +77,9 @@ struct VMInterfaceAddressMigrationTests {
                 .field("subnet", .string, .required)
                 .create()
             try await body(app)
-            try await app.asyncShutdown()
+            try await app.shutdownForTesting()
         } catch {
-            try? await app.asyncShutdown()
+            try? await app.shutdownForTesting()
             throw error
         }
     }

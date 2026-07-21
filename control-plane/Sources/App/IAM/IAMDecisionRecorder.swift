@@ -18,9 +18,9 @@ import Vapor
 struct IAMDecisionLogConfig: Sendable {
     /// Whether decision rows are written at all (`IAM_DECISION_LOG_ENABLED`).
     /// On by default in every environment except `.testing`: hundreds of
-    /// unrelated controller tests run against per-test SQLite files, where a
-    /// background insert per check contends with handler writes for the
-    /// single writer lock. The IAM suites that assert on rows opt in.
+    /// unrelated controller tests would each pay a background insert per
+    /// check for rows nothing reads. The IAM suites that assert on rows opt
+    /// in.
     var recordDecisions: Bool
     /// Days to keep decision rows (`IAM_DECISION_LOG_RETENTION_DAYS`); the
     /// log records every authorization decision, so unbounded growth is the

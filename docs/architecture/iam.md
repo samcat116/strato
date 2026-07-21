@@ -439,9 +439,8 @@ legacy-vocabulary question as asked at the check site, the latter is always
   Cedar-native form — is recorded off the request path in a background task.
   `IAM_DECISION_LOG_ENABLED` controls whether rows are written at all; it
   defaults on everywhere except `.testing`, where hundreds of unrelated
-  controller tests run against per-test SQLite files and a background insert
-  per check would contend for the single writer lock (the IAM suites that
-  assert on rows opt in).
+  controller tests would each pay a background insert per check for rows
+  nothing reads (the IAM suites that assert on rows opt in).
 - **The vocabulary bridge is explicit, audited, and load-bearing.**
   `IAMActionTranslator` maps each legacy-vocabulary check (`read` on
   `virtual_machine`, `manage_project` on `project`, …) to the IAM action

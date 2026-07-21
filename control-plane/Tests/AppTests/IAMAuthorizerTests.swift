@@ -1,5 +1,4 @@
 import Fluent
-import FluentSQLiteDriver
 import Foundation
 import Testing
 import Vapor
@@ -194,8 +193,7 @@ final class IAMAuthorizerTests {
         // build it): the evaluator must refuse to answer rather than deny —
         // or worse, allow. The policy-set check precedes every database read,
         // so no migrations are needed here.
-        let app = try await Application.make(.testing)
-        app.databases.use(.sqlite(.memory), as: .sqlite)
+        let app = try await Application.makeForBareDatabaseTesting()
         var thrown: (any Error)?
         do {
             _ = try await IAMAuthorizer.authorize(
@@ -212,7 +210,7 @@ final class IAMAuthorizerTests {
             thrown = error
         }
         #expect((thrown as? any AbortError)?.status == .serviceUnavailable)
-        try await app.asyncShutdown()
+        try await app.shutdownForTesting()
     }
 
     @Test("Bare org membership allows org:read through the org-membership platform policy")

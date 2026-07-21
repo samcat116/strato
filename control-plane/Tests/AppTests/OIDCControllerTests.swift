@@ -377,7 +377,7 @@ final class OIDCControllerTests: BaseTestCase {
                 try await makeProvider(on: app.db, organizationID: org, name: name, discoveryURL: url)
             }
             // Providers created after startup have issuer NULL; run the real
-            // backfill SQL against them (exercises it on SQLite).
+            // backfill SQL against them.
             let google = try await mk("g", "https://accounts.google.com/.well-known/openid-configuration")
             let common = try await mk(
                 "c", "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration")
