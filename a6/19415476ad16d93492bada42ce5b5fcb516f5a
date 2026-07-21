@@ -1,0 +1,44 @@
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_23079c34efcb77::t_821716ab567942 81,150,170,189,209,231,241,264,298,329,358,380,406,498,512,519
+redocly.yaml
+  s_23079c34efcb77::t_f4c266ac578f1c 18-20
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_23079c34efcb77::t_cc666feb0c6488 90
+control-plane/Sources/App/openapi.yaml
+  s_23079c34efcb77::t_e7d6f3be4f0fdb 3783,3857
+agent/scripts/spawn-sim-fleet.sh
+  s_23079c34efcb77::t_821716ab567942 113,444,528
+README.md
+  s_23079c34efcb77::t_821716ab567942 55
+docs/deployment/agents.md
+  s_23079c34efcb77::t_821716ab567942 18,28-29,342
+CLAUDE.md
+  s_23079c34efcb77::t_821716ab567942 51
+deploy/agent/install.sh
+  s_23079c34efcb77::t_821716ab567942 18
+cli/Sources/StratoCLI/Commands/AgentCommand.swift
+  s_23079c34efcb77::t_821716ab567942 104
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_23079c34efcb77::t_821716ab567942 57,283,290,323,331,361,585,704
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_23079c34efcb77::t_cf264aaeae62fe 9-14
+  s_23079c34efcb77::t_1a63333ccb88f8 379
+control-plane/web/src/lib/api/agents.ts
+  s_23079c34efcb77::t_821716ab567942 45,51,55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a619415476ad16d93492bada42ce5b5fcb516f5a",
+  "prompts": {},
+  "sessions": {
+    "s_23079c34efcb77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2585c1ff-4912-4eb7-9d89-6c93ff60435b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
