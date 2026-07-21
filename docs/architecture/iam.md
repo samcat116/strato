@@ -484,11 +484,23 @@ Since cutover the system-admin bypass is gone from the middleware and
 `req.can`: admins are allowed by the `platform-system-admin` policy inside the
 evaluator, so their decisions appear in the log (`AuditMiddleware` derives its
 admin-bypass marker from the determining policy ids) and tier-2 guardrail
-forbids bind them like everyone else. A handful of controller-local admin
-fast paths (list widenings and object-check skips) survive the cutover and
-are removed with #483's call-site conversion; the deliberately admin-only
-platform surfaces (hierarchy repair, audit events, decision logs, workload
-identity) gate through `req.requireSystemAdmin()`, which can only deny.
+forbids bind them like everyone else. The controller-local admin
+*object-check* skips that briefly survived the cutover are gone too, so every
+per-object decision — admin or not — flows through the evaluator, and the
+middleware's handler-evaluated assertion covers all users. What legitimately
+remains admin-conditional in controllers:
+
+- **Query-level list widenings** (the "list twins" of `platform-system-admin`):
+  list endpoints skip per-row checks for admins at query level. Same rule the
+  evaluator would apply per row, expressed as a filter.
+- **Admin-only platform surfaces** (hierarchy validate/repair, audit events,
+  decision logs, workload identity, scopeless quota/pool/enrollment rows,
+  agent org reassignment, explicit agent-artifact overrides): these gate
+  through `req.requireSystemAdmin()` — or a plain admin guard on read-only
+  routes — which can only deny, never widen.
+- **Business-rule admin exemptions** that gate no evaluator check, e.g.
+  destructive agent actions fall back to admin-only while foreign-org
+  workloads live on the agent (`requireNoForeignWorkloads`).
 
 ### Pre-cutover audit of handler-level allows (gate on phase 5)
 
@@ -566,11 +578,10 @@ rows.
 The system-admin bypass is re-expressed as the `platform-system-admin` tier-1
 policy, so it flows through the evaluator and appears in decision logs
 instead of skipping authorization entirely — which also means guardrail
-forbids bind system admins. (Decision-log coverage of admin activity is not
-yet total: the deliberately admin-only surfaces gate via
-`req.requireSystemAdmin()` — which flags the audit trail but writes no
-decision row — and the controller-local admin fast paths kept until #483
-bypass the evaluator entirely on their routes.)
+forbids bind system admins. (Decision-log coverage of admin activity is near
+but not total: the deliberately admin-only surfaces gate via
+`req.requireSystemAdmin()`, which flags the audit trail but writes no
+decision row.)
 
 Two enforcement details worth naming:
 
@@ -579,9 +590,11 @@ Two enforcement details worth naming:
   under-grants harmlessly for tier 3, but is fail-*open* for tier-2
   guardrails: a `forbid (… resource in Organization::"X")` silently stops
   matching below the break while an in-chain binding still permits. The
-  evaluator denies such checks outright, loudly, before evaluation. The two
-  rootless-by-design shapes — the organization itself and a global network
-  (no project, no site) — evaluate normally.
+  evaluator denies such checks outright, loudly, before evaluation — system
+  admins included; repair goes through the admin-only hierarchy
+  validate/repair surface. The two rootless-by-design shapes — the
+  organization itself and a global network (no project, no site) — evaluate
+  normally.
 - **Unmatched paths return 403, not 404**: a request outside every route
   class is denied by the middleware before Vapor's router can 404 it. A
   deliberate default-deny consequence (and mild enumeration hardening).

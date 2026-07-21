@@ -40,16 +40,16 @@ struct AgentController: RouteCollection {
     }
 
     private func requireSystemAdmin(_ req: Request) throws {
-        let user = try requireUser(req)
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
+        // The decision-marking gate, so admin-only mutations (scopeless
+        // enrollments, org reassignment) satisfy the middleware's
+        // handler-evaluated assertion.
+        _ = try req.requireSystemAdmin()
     }
 
-    /// System admin, or `manage_agents` on the given org/OU scope.
+    /// `manage_agents` on the given org/OU scope (system admins pass through
+    /// the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
         let user = try requireUser(req)
-        if user.isSystemAdmin { return }
         let ref = scope.spiceDBParentRef
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
@@ -62,11 +62,19 @@ struct AgentController: RouteCollection {
         }
     }
 
-    /// System admin, or the given permission on the agent itself (resolved
-    /// through `agent#parent` in SpiceDB).
+    /// The given permission on the agent itself (resolved through the
+    /// agent's parent scope in the IAM tree).
     private func requireAgentPermission(_ req: Request, agent: Agent, permission: String) async throws {
+        // A pre-scoping agent belongs to no org: there is nothing to evaluate
+        // against (the evaluator fails closed on its truncated ancestor
+        // chain), so only system admins may touch it — the decision-marking
+        // gate, mirroring scopeless enrollments. This is what keeps orphaned
+        // agents repairable (deregister, reassign) at all.
+        guard agent.organizationScope != nil else {
+            _ = try req.requireSystemAdmin("This agent has no owning organization")
+            return
+        }
         let user = try requireUser(req)
-        if user.isSystemAdmin { return }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: permission,
@@ -283,16 +291,14 @@ struct AgentController: RouteCollection {
                     reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
             }
             let user = try requireUser(req)
-            if !user.isSystemAdmin {
-                let allowed = try await req.spicedb.checkPermission(
-                    subject: user.id!.uuidString,
-                    permission: "manage",
-                    resource: "site",
-                    resourceId: siteId.uuidString
-                )
-                guard allowed else {
-                    throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
-                }
+            let allowed = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "manage",
+                resource: "site",
+                resourceId: siteId.uuidString
+            )
+            guard allowed else {
+                throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
             }
         }
 

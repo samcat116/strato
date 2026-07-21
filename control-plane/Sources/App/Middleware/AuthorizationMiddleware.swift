@@ -226,12 +226,6 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         }
         guard response.status.code < 400, response.status != .switchingProtocols else { return }
         guard !request.iamAuthState.decisionEvaluated.withLockedValue({ $0 }) else { return }
-        // Controller-local admin fast paths (list widenings and object-check
-        // skips kept through cutover; see the enforcement-path notes in
-        // docs/architecture/iam.md) legitimately serve admins without a
-        // decision. The assertion covers everyone else and tightens to all
-        // users when those fast paths are removed with #483.
-        if request.auth.get(User.self)?.isSystemAdmin == true { return }
 
         request.logger.error(
             "Mutating handler served without an authorization decision",

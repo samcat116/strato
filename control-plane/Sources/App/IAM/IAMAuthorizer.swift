@@ -95,9 +95,11 @@ enum IAMAuthorizer {
         // forbid anchored above the break silently stops matching while an
         // in-chain binding still permits. Deny before evaluating — this takes
         // an inconsistent tree (an orphaned intermediate node), so a loud
-        // denial is diagnosis, not disruption. System admins can still reach
-        // the resource through the controller fast paths to repair it until
-        // #483 removes those.
+        // denial is diagnosis, not disruption. It binds system admins too
+        // (letting them through would evade the very ceilings the guard
+        // protects); repair goes through the admin-only hierarchy
+        // validate/repair surface, which gates on requireSystemAdmin rather
+        // than a per-object check.
         guard slice.chainComplete else {
             app.logger.error(
                 "IAM check denied: ancestor chain does not reach an organization; a guardrail anchored above the break could not apply",

@@ -402,18 +402,16 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "VM not found")
         }
 
-        // Check user has permission to the VM (system admins bypass)
-        if !user.isSystemAdmin {
-            let hasVMPermission = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "update",
-                resource: "virtual_machine",
-                resourceId: vm.id!.uuidString
-            )
+        // Attaching changes the VM, so the caller needs update on it too.
+        let hasVMPermission = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "update",
+            resource: "virtual_machine",
+            resourceId: vm.id!.uuidString
+        )
 
-            guard hasVMPermission else {
-                throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
-            }
+        guard hasVMPermission else {
+            throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
 
         // IMPORTANT: Check that VM is QEMU type - volumes not supported for Firecracker
@@ -982,12 +980,6 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "Volume not found")
         }
 
-        // System admins bypass permission checks
-        if user.isSystemAdmin {
-            return volume
-        }
-
-        // Check SpiceDB permission
         let hasPermission = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: permission,

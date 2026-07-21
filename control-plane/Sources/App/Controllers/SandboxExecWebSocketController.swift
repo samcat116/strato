@@ -210,7 +210,7 @@ struct SandboxExecWebSocketController: RouteCollection {
     /// on the sandbox. Returns the user ID on success; on any failure it
     /// reports the error over the socket, closes it, and returns nil.
     /// Mirrors `ConsoleWebSocketController.validateConsoleAccess`: authorize
-    /// before loading the resource, with system-admin parity.
+    /// before loading the resource.
     private func validateExecAccess(
         req: Request,
         ws: WebSocket,
@@ -232,19 +232,12 @@ struct SandboxExecWebSocketController: RouteCollection {
 
             // Authorize before loading the sandbox, so unauthorized users
             // cannot probe arbitrary sandbox UUIDs via distinct errors.
-            // Consistent with SpiceDBAuthMiddleware: system admins skip the
-            // permission check.
-            let hasPermission: Bool
-            if user.isSystemAdmin {
-                hasPermission = true
-            } else {
-                hasPermission = try await req.spicedb.checkPermission(
-                    subject: userId,
-                    permission: "exec",
-                    resource: "sandbox",
-                    resourceId: sandboxId.uuidString
-                )
-            }
+            let hasPermission = try await req.spicedb.checkPermission(
+                subject: userId,
+                permission: "exec",
+                resource: "sandbox",
+                resourceId: sandboxId.uuidString
+            )
 
             guard hasPermission else {
                 req.logger.warning(
