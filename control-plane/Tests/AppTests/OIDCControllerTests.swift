@@ -123,6 +123,11 @@ final class OIDCControllerTests: BaseTestCase {
             try await memberOrg.save(on: app.db)
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
 
+            // Provider management authorizes through SpiceDB (issue #482
+            // pre-cutover audit); the mock default-allows, so withhold the
+            // org-admin permission to model a plain member.
+            app.spicedbMockDeniedPermissions = ["manage_members"]
+
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(
@@ -171,7 +176,10 @@ final class OIDCControllerTests: BaseTestCase {
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
 
             // A plain member can list providers but must not see which IdP
-            // claims map groups or grant admin.
+            // claims map groups or grant admin. The admin/member distinction
+            // now comes from SpiceDB (issue #482 pre-cutover audit), so
+            // withhold the org-admin permission for the member's call.
+            app.spicedbMockDeniedPermissions = ["manage_members"]
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
             } afterResponse: { res in
@@ -184,6 +192,7 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             // Admins see the full configuration.
+            app.spicedbMockDeniedPermissions = []
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in

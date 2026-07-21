@@ -612,37 +612,28 @@ struct OIDCController: RouteCollection {
 
     // MARK: - Helper Methods
 
+    // Provider management goes through SpiceDB like every other org-scoped
+    // surface (issue #482 pre-cutover audit: the inline relational reads here
+    // were allow decisions invisible to shadow evaluation). Only the error
+    // messages remain OIDC-specific; `req.can` applies the system-admin
+    // bypass. Managing a provider is org administration — it maps to
+    // `org:update` at the Cedar cutover rather than growing an `oidc:*`
+    // action family.
+
     private func verifyOrganizationAccess(req: Request, organizationID: UUID) async throws {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-
-        // Check if user belongs to this organization
-        try await user.$organizations.load(on: req.db)
-        let hasAccess = user.organizations.contains { $0.id == organizationID }
-
-        if !hasAccess && !user.isSystemAdmin {
+        guard try await req.can("view_organization", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Access denied to organization")
         }
     }
 
     private func verifyOrganizationAdminAccess(req: Request, organizationID: UUID) async throws {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-
-        if user.isSystemAdmin {
-            return  // System admins can manage all organizations
-        }
-
-        // Check if user is an admin of this organization
-        let membership = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$role == "admin")
-            .first()
-
-        guard membership != nil else {
+        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }

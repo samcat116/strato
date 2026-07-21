@@ -476,6 +476,57 @@ The admin bypass and public-route allowlist still short-circuit *before*
 SpiceDB, so those decisions do not appear yet; they flow through the evaluator
 (and thus the log) at cutover.
 
+### Pre-cutover audit of handler-level allows (gate on phase 5)
+
+Default-deny silently starts denying any allow decision that lives as code in
+a handler rather than as a tuple, binding, or policy. A full-controller sweep
+(2026-07-20) found and dispositioned every such decision; each is either
+re-expressed where the evaluator can see it or consciously kept with a test
+pinning it. This inventory is the input to the cutover middleware's allowlist.
+
+**Already expressed as tier-1 policy or bindings data** (nothing to do at
+cutover beyond flipping enforcement):
+
+- System admin → `platform-system-admin`; bare org membership →
+  `org-membership`; project-less network read → `platform-open-network-read`
+  (its list twin: `listNetworks` ORs project-less networks into every result
+  at query level — same rule, expressed as a filter).
+- Resource-level `owner`/`editor`/`viewer` tuples → per-create dual-writes
+  plus the boot export, whose type list covers every owner-bearing type
+  including `floating_ip` and `sandbox_snapshot`.
+
+**Re-expressed through the SpiceDB path during the audit** (previously inline
+`UserOrganization` reads — allow decisions invisible to shadow evaluation):
+
+- Org member management, org show/update/delete/switch, and the member list
+  (`OrganizationController`) now authorize via `OrganizationAccessService`;
+  `manage_members` maps to `org:update`, `view_organization` to `org:read`.
+- OIDC provider management (`OIDCController`) authorizes via `req.can` with
+  its own error messages. Managing a provider is org administration — it maps
+  to `org:update` rather than growing an `oidc:*` action family.
+
+**Identity-plane, deliberately outside the IAM tree** (login + row scoping;
+the default-deny allowlist keeps these login-only):
+
+- `/api/api-keys` — self-scoped by construction (phase-0 decision: API keys
+  unchanged for now); another user's key is a 404. Pinned by
+  `APIKeyOwnershipTests`.
+- `/api/users/:id` — self-or-system-admin. Pinned by `UserControllerTests`.
+- `/api/operations/:id` — falls back to "initiator may read" when the
+  operation's resource is gone (delete operations outlive their resource);
+  non-initiators get 404. Pinned by `VMOperationTests`.
+
+**Defensive denies added by the audit:**
+
+- A `ResourceQuota` with no scope FK (corrupt data — every create path sets
+  exactly one) previously fell through the scope-dispatch chains and was
+  readable and mutable by any authenticated user; it now requires system
+  admin. Pinned by `ResourceQuotaTests`.
+- The SCIM data plane (`/organizations/*/scim/v2`) authenticates an
+  org-scoped bearer token in-handler with no `User` in `request.auth`; it
+  needs its explicit middleware carve-out preserved by the cutover allowlist,
+  like `/ssf/events/` and the agent mTLS endpoints.
+
 ### Enforcement path
 
 Authorization becomes **structurally default-deny** at the middleware with an

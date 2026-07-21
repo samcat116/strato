@@ -497,6 +497,8 @@ struct ResourceQuotaController: RouteCollection {
                 throw Abort(.notFound, reason: "Project not found")
             }
             try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        } else {
+            try requireSystemAdminForScopelessQuota(on: req)
         }
     }
 
@@ -513,6 +515,20 @@ struct ResourceQuotaController: RouteCollection {
                 throw Abort(.notFound, reason: "Project not found")
             }
             try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        } else {
+            try requireSystemAdminForScopelessQuota(on: req)
+        }
+    }
+
+    /// A quota with no scope is corrupt data, not a shared resource: every
+    /// create path sets exactly one scope FK. Without an explicit branch the
+    /// `if/else if` chains above fell through and *allowed*, so any
+    /// authenticated user could read and mutate such a row (issue #482
+    /// pre-cutover audit). Only system admins may touch it — enough to
+    /// inspect and delete a corrupt row without widening access.
+    private func requireSystemAdminForScopelessQuota(on req: Request) throws {
+        guard let user = req.auth.get(User.self), user.isSystemAdmin else {
+            throw Abort(.forbidden, reason: "Quota has no scope")
         }
     }
 
