@@ -259,3 +259,13 @@ struct OperationResponse: Content {
         self.completedAt = operation.completedAt
     }
 }
+
+extension ResourceOperation {
+    /// `202 Accepted` carrying the operation record for the client to poll.
+    /// Every async mutation endpoint — VM or sandbox — returns this shape.
+    func acceptedResponse() throws -> Response {
+        let response = Response(status: .accepted)
+        try response.content.encode(OperationResponse(from: self))
+        return response
+    }
+}

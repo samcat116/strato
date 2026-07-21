@@ -122,7 +122,7 @@ extension SandboxController {
                 "snapshot_id": .string(snapshotID.uuidString),
                 "agent_id": .string(agentId),
             ])
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `exportSnapshot`: the agent RPC, then the
