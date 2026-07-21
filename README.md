@@ -52,15 +52,25 @@ for production values (ingress, TLS, WebAuthn hostname).
 
 ### Adding a hypervisor
 
-In the web UI: **Agents → Create Registration Token**, then run the shown
-command on the hypervisor host:
+In the web UI: **Agents → Enroll node** (or `POST /api/agents/enrollments`),
+which provisions the node's identity in SPIRE and returns a
+`bootstrapCommand` — a single pre-filled line to run on the hypervisor host:
 
 ```bash
-strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
+  | sudo bash -s -- \
+  --control-plane-url 'wss://your-control-plane/agent/ws' \
+  --agent-name 'hv-01' \
+  --spire-join-token '...' \
+  --spire-server-address 'your-control-plane:8085' \
+  --trust-domain 'strato.local'
 ```
 
-The agent registers, persists its rotated reconnect token, and reconnects
-automatically after restarts.
+The script installs the agent and its host dependencies, attests the node to
+SPIRE, and enables `strato-agent.service`. Agents authenticate only with
+SPIFFE/SPIRE X.509 SVIDs over mTLS — there is no token or password join, and
+no credential is stored on disk, so restarts and reboots just work. See the
+[agent deployment guide](docs/deployment/agents.md).
 
 ### Local development
 
