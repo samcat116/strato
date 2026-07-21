@@ -22,7 +22,7 @@ features:
     details: Leverages Swift's performance and safety for both Control Plane (Vapor) and Agent components
   - icon: 🔒
     title: Secure by Design
-    details: WebAuthn/Passkeys authentication, SpiceDB authorization, and fine-grained access control
+    details: WebAuthn/Passkeys authentication and a built-in Cedar-based IAM system with roles, guardrails, and decision logs
   - icon: ⚡
     title: Hardware Accelerated
     details: KVM on Linux and Hypervisor.framework on macOS for near-native VM performance

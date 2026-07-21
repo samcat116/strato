@@ -6,7 +6,7 @@ import VaporTesting
 
 /// Regression tests for the Codex finding on PR #293: `createVolume` accepted
 /// `sourceImageId` after checking only that the image exists and is ready, never
-/// asking SpiceDB whether the caller can read it. A user could therefore create a
+/// asking the authorization layer whether the caller can read it. A user could therefore create a
 /// volume from another project's image and have `provisionVolume` sign a download
 /// URL for it. These tests pin the fix: image read is withheld while project
 /// `create_volume` is still granted, and the request must fail with 403.

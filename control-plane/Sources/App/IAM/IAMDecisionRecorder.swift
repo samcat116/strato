@@ -3,51 +3,44 @@ import Foundation
 import NIOConcurrencyHelpers
 import Vapor
 
-// IAM phase 5 (issue #482): the decision log, now recording the authoritative
-// Cedar verdicts, with SpiceDB demoted to the *reverse* of the phase-4 shadow.
+// IAM phase 5 (issue #482): the decision log, recording the authoritative
+// Cedar verdicts.
 //
 // Every check `IAMAuthorizer` evaluates is recorded in `iam_decision_logs` —
 // off the request path, in a background task — with the deciding policy, the
-// tier, and the policy-set version. While SpiceDB is still deployed (until
-// #483 removes it), each recorded check that has a SpiceDB-vocabulary
-// equivalent also asks SpiceDB in the background and logs both verdicts, so
-// the mismatch surface that gated cutover keeps watching for regressions
-// during the rollback window.
+// tier, and the policy-set version. The reverse-shadow comparison that watched
+// SpiceDB for disagreement during the cutover rollback window went with
+// SpiceDB itself (issue #483); the `spicedb_*` columns keep their historical
+// names and now carry the legacy-vocabulary question ("none" for the retired
+// comparison verdict).
 
 /// Decision-log configuration, from the environment.
-struct IAMShadowConfig: Sendable {
+struct IAMDecisionLogConfig: Sendable {
     /// Whether decision rows are written at all (`IAM_DECISION_LOG_ENABLED`).
     /// On by default in every environment except `.testing`: hundreds of
     /// unrelated controller tests run against per-test SQLite files, where a
     /// background insert per check contends with handler writes for the
     /// single writer lock. The IAM suites that assert on rows opt in.
     var recordDecisions: Bool
-    /// Whether the background SpiceDB comparison runs (`IAM_SHADOW_EVAL_ENABLED`).
-    /// This switch only controls the reverse shadow, not the rows. Off by
-    /// default under `.testing`, where SpiceDB is a mock and the comparison
-    /// would be noise.
-    var enabled: Bool
     /// Days to keep decision rows (`IAM_DECISION_LOG_RETENTION_DAYS`); the
     /// log records every authorization decision, so unbounded growth is the
     /// default failure mode. Non-positive disables the sweep.
     var retentionDays: Int
     /// How many recordings may hold database connections at once
-    /// (`IAM_SHADOW_EVAL_MAX_CONCURRENCY`). See `IAMShadowGate`.
+    /// (`IAM_DECISION_LOG_MAX_CONCURRENCY`). See `IAMRecordingGate`.
     var maxConcurrentEvaluations: Int
     /// How many recordings may queue for a slot before the excess is shed
-    /// (`IAM_SHADOW_EVAL_MAX_QUEUE_DEPTH`). See `IAMShadowGate`.
+    /// (`IAM_DECISION_LOG_MAX_QUEUE_DEPTH`). See `IAMRecordingGate`.
     var maxQueueDepth: Int
 
-    static func fromEnvironment(_ environment: Environment) -> IAMShadowConfig {
-        IAMShadowConfig(
+    static func fromEnvironment(_ environment: Environment) -> IAMDecisionLogConfig {
+        IAMDecisionLogConfig(
             recordDecisions: Environment.get("IAM_DECISION_LOG_ENABLED").flatMap(Bool.init)
                 ?? (environment != .testing),
-            enabled: Environment.get("IAM_SHADOW_EVAL_ENABLED").flatMap(Bool.init)
-                ?? (environment != .testing),
             retentionDays: Environment.get("IAM_DECISION_LOG_RETENTION_DAYS").flatMap(Int.init) ?? 30,
-            maxConcurrentEvaluations: Environment.get("IAM_SHADOW_EVAL_MAX_CONCURRENCY")
+            maxConcurrentEvaluations: Environment.get("IAM_DECISION_LOG_MAX_CONCURRENCY")
                 .flatMap(Int.init) ?? 4,
-            maxQueueDepth: Environment.get("IAM_SHADOW_EVAL_MAX_QUEUE_DEPTH")
+            maxQueueDepth: Environment.get("IAM_DECISION_LOG_MAX_QUEUE_DEPTH")
                 .flatMap(Int.init) ?? 512
         )
     }
@@ -56,17 +49,16 @@ struct IAMShadowConfig: Sendable {
 /// Bounds how much of the database decision recording may occupy at once.
 ///
 /// Recording is off the request path but *not* off the connection pool: each
-/// record is an insert plus (with the reverse shadow on) a SpiceDB HTTP round
-/// trip, while Fluent's Postgres pool defaults to one connection per event
-/// loop. Unbounded fan-out therefore starves the handlers recording is
-/// supposed to be invisible to.
+/// record holds a connection for its insert, while Fluent's Postgres pool
+/// defaults to one connection per event loop. Unbounded fan-out therefore
+/// starves the handlers recording is supposed to be invisible to.
 ///
 /// `maxConcurrent` caps the recordings holding connections simultaneously.
 /// `maxQueueDepth` caps the ones waiting, because a queue that grows without
 /// limit only moves the unboundedness from connections to memory. Overflow is
 /// shed and counted, never silently dropped: a decision log that sheds is a
 /// log whose coverage has a number attached to it.
-actor IAMShadowGate {
+actor IAMRecordingGate {
     /// Whether a recording got a slot, and if not, how many have been shed.
     enum Outcome: Equatable, Sendable {
         case admitted
@@ -127,31 +119,31 @@ struct IAMDecisionRecord: Sendable {
     let skippedConditionedBindings: Int
     let decision: CedarCheckDecision
     let policyVersion: Int
-    /// The SpiceDB question this check corresponds to, when it has one — what
-    /// the reverse shadow asks. Checks born in the IAM action vocabulary may
-    /// have none.
-    let spicedbEquivalent: SpiceDBCheckEquivalent?
+    /// The legacy-vocabulary question the check was phrased in, when it has
+    /// one. Checks born in the IAM action vocabulary have none.
+    let legacyEquivalent: LegacyCheckEquivalent?
     let context: IAMCheckContext
 }
 
-/// Writes the decision log and runs the reverse SpiceDB shadow.
+/// Writes the decision log.
 final class IAMDecisionRecorder: Sendable {
-    /// `spicedb_decision` value for rows with no SpiceDB verdict: the reverse
-    /// shadow is off, or the check has no SpiceDB-vocabulary equivalent.
+    /// `spicedb_decision` value for every row since the reverse-shadow
+    /// comparison retired with SpiceDB (#483); the column keeps its historical
+    /// name so existing rows and API consumers stay readable.
     static let noComparison = "none"
 
     private let app: Application
-    let config: IAMShadowConfig
+    let config: IAMDecisionLogConfig
     private let logger: Logger
     private let retentionTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
     /// Keeps decision recording from starving request handlers of connections.
-    let gate: IAMShadowGate
+    let gate: IAMRecordingGate
 
-    init(app: Application, config: IAMShadowConfig) {
+    init(app: Application, config: IAMDecisionLogConfig) {
         self.app = app
         self.config = config
         self.logger = app.logger
-        self.gate = IAMShadowGate(
+        self.gate = IAMRecordingGate(
             maxConcurrent: config.maxConcurrentEvaluations,
             maxQueueDepth: config.maxQueueDepth)
     }
@@ -169,7 +161,7 @@ final class IAMDecisionRecorder: Sendable {
     /// gap visible and countable, exactly as untranslated checks were during
     /// the forward-shadow phase.
     func recordUntranslatedDenial(
-        subject: String, equivalent: SpiceDBCheckEquivalent, context: IAMCheckContext
+        subject: String, equivalent: LegacyCheckEquivalent, context: IAMCheckContext
     ) {
         guard config.recordDecisions else { return }
         spawnGated {
@@ -216,9 +208,9 @@ final class IAMDecisionRecorder: Sendable {
         }
     }
 
-    /// Build the decision row, run the reverse SpiceDB shadow when it applies,
-    /// and save. Never throws: a recording failure is a log line, never a
-    /// request failure (the request's verdict was already enforced inline).
+    /// Build the decision row and save it. Never throws: a recording failure
+    /// is a log line, never a request failure (the request's verdict was
+    /// already enforced inline).
     func record(_ record: IAMDecisionRecord) async {
         let entry = IAMDecisionLog()
         entry.requestID = record.context.requestID
@@ -249,62 +241,15 @@ final class IAMDecisionRecorder: Sendable {
             entry.cedarErrors = record.decision.evaluationErrors.joined(separator: "; ")
         }
 
-        // The SpiceDB columns carry the original question when there was one;
-        // for native-vocabulary checks they mirror the tree coordinates so the
-        // row is still self-describing.
-        entry.spicedbPermission = record.spicedbEquivalent?.permission ?? record.action
-        entry.resourceType = record.spicedbEquivalent?.resourceType ?? record.node.type.rawValue
-        entry.resourceID = record.spicedbEquivalent?.resourceID ?? record.node.id.uuidString
+        // The historically named spicedb_* columns carry the legacy-vocabulary
+        // question when there was one; for native-vocabulary checks they
+        // mirror the tree coordinates so the row is still self-describing.
+        entry.spicedbPermission = record.legacyEquivalent?.permission ?? record.action
+        entry.resourceType = record.legacyEquivalent?.resourceType ?? record.node.type.rawValue
+        entry.resourceID = record.legacyEquivalent?.resourceID ?? record.node.id.uuidString
         entry.spicedbDecision = Self.noComparison
 
-        if config.enabled, let equivalent = record.spicedbEquivalent {
-            await reverseShadow(record, equivalent: equivalent, into: entry)
-        }
-
         await save(entry)
-    }
-
-    /// Ask SpiceDB the original question and fill the comparison fields. A
-    /// mismatch after cutover means the retired engine disagrees with the
-    /// authoritative one — the regression signal for the rollback window.
-    private func reverseShadow(
-        _ record: IAMDecisionRecord, equivalent: SpiceDBCheckEquivalent, into entry: IAMDecisionLog
-    ) async {
-        do {
-            let spicedbAllowed = try await app.spicedb.checkPermission(
-                subject: record.subject,
-                permission: equivalent.permission,
-                resource: equivalent.resourceType,
-                resourceId: equivalent.resourceID
-            )
-            entry.spicedbDecision = spicedbAllowed ? "allow" : "deny"
-            entry.decisionsMatch = spicedbAllowed == record.decision.allowed
-        } catch {
-            entry.spicedbDecision = "error"
-            entry.cedarErrors = [entry.cedarErrors, "spicedb: \(error)"]
-                .compactMap { $0 }.joined(separator: "; ")
-            return
-        }
-
-        if entry.decisionsMatch == false {
-            // The mismatch line carries everything triage needs without
-            // opening the database: both verdicts, what decided, and which
-            // policy-set version decided it.
-            logger.warning(
-                "IAM reverse-shadow mismatch (SpiceDB disagrees with the authoritative Cedar verdict)",
-                metadata: [
-                    "permission": .string(equivalent.permission),
-                    "iam_action": .string(record.action),
-                    "resource": .string("\(equivalent.resourceType):\(equivalent.resourceID)"),
-                    "subject": .string(record.subject),
-                    "cedar": .string(entry.cedarDecision),
-                    "spicedb": .string(entry.spicedbDecision),
-                    "determining_policies": .string(entry.determiningPoliciesJSON ?? "[]"),
-                    "tier": .string(entry.tier ?? "-"),
-                    "policy_version": .string(entry.policyVersion.map(String.init) ?? "-"),
-                    "path": .string(record.context.path),
-                ])
-        }
     }
 
     private func save(_ entry: IAMDecisionLog) async {
@@ -382,16 +327,15 @@ final class IAMDecisionRecorder: Sendable {
 // MARK: - Application accessors
 
 extension Application {
-    private struct IAMShadowConfigKey: StorageKey {
-        typealias Value = IAMShadowConfig
+    private struct IAMDecisionLogConfigKey: StorageKey {
+        typealias Value = IAMDecisionLogConfig
     }
 
-    /// Decision-log configuration. Settable so tests can enable the reverse
-    /// shadow (off by default under `.testing`) before the recorder is first
-    /// built.
-    var iamShadowConfig: IAMShadowConfig {
-        get { storage[IAMShadowConfigKey.self] ?? .fromEnvironment(environment) }
-        set { storage[IAMShadowConfigKey.self] = newValue }
+    /// Decision-log configuration. Settable so tests can enable recording
+    /// (off by default under `.testing`) before the recorder is first built.
+    var iamDecisionLogConfig: IAMDecisionLogConfig {
+        get { storage[IAMDecisionLogConfigKey.self] ?? .fromEnvironment(environment) }
+        set { storage[IAMDecisionLogConfigKey.self] = newValue }
     }
 
     private struct IAMDecisionRecorderKey: StorageKey, LockKey {
@@ -401,7 +345,7 @@ extension Application {
     /// The decision recorder, created on first use with the current config.
     var iamDecisionRecorder: IAMDecisionRecorder {
         lazyService(IAMDecisionRecorderKey.self) {
-            IAMDecisionRecorder(app: self, config: iamShadowConfig)
+            IAMDecisionRecorder(app: self, config: iamDecisionLogConfig)
         }
     }
 
@@ -413,13 +357,12 @@ extension Application {
 }
 
 /// Arms the decision-log retention sweep at boot and cancels it at shutdown.
-struct IAMShadowLifecycleHandler: LifecycleHandler {
+struct IAMDecisionLogLifecycleHandler: LifecycleHandler {
     func didBootAsync(_ application: Application) async throws {
-        // Armed regardless of `enabled`: the reverse-shadow switch stops the
-        // SpiceDB comparison, not the rows, and an operator who reaches for it
-        // because the table has grown is the last person who should also lose
-        // the sweep that prunes it. The sweep no-ops on its own when retention
-        // is disabled.
+        // Armed even when recording is off: an operator who disables
+        // recording because the table has grown is the last person who should
+        // also lose the sweep that prunes it. The sweep no-ops on its own when
+        // retention is disabled.
         application.iamDecisionRecorder.startRetentionSweep()
     }
 

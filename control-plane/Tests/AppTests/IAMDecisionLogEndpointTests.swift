@@ -11,8 +11,8 @@ import VaporTesting
 /// These rows span organizations — a decision names whatever the caller
 /// touched — so the system-admin gate is the only thing between a normal user
 /// and a cross-tenant record of who checked what. `/api/iam` is not one of
-/// `SpiceDBAuthMiddleware`'s guarded prefixes, which makes the controller's own
-/// `requireSystemAdmin` the sole gate and worth pinning here.
+/// `AuthorizationMiddleware`'s guarded prefixes, which makes the controller's
+/// own `requireSystemAdmin` the sole gate and worth pinning here.
 @Suite("IAM Decision Log Endpoint Tests", .serialized)
 final class IAMDecisionLogEndpointTests {
 
@@ -29,7 +29,6 @@ final class IAMDecisionLogEndpointTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            app.spicedbMockAllows = true
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -54,6 +53,8 @@ final class IAMDecisionLogEndpointTests {
 
     /// Insert one row, optionally backdated. `@Timestamp(on: .create)` stamps
     /// `createdAt` on insert, so an explicit age is a second save.
+    /// The `spicedb*`-named fields are historical column names kept on the
+    /// model; the API filters on them regardless of who wrote the row.
     @discardableResult
     private func insert(
         _ app: Application,

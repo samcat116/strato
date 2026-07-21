@@ -46,17 +46,14 @@ struct AgentController: RouteCollection {
         _ = try req.requireSystemAdmin()
     }
 
+    /// The (resourceType, id) pair naming the scope's owning node for
+    /// permission checks against the IAM hierarchy.
+
     /// `manage_agents` on the given org/OU scope (system admins pass through
     /// the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let user = try requireUser(req)
-        let ref = scope.spiceDBParentRef
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "manage_agents",
-            resource: ref.subjectType,
-            resourceId: ref.subjectId.uuidString
-        )
+        let resource = scope.checkResource
+        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to manage agents for this organization")
         }
@@ -74,13 +71,7 @@ struct AgentController: RouteCollection {
             _ = try req.requireSystemAdmin("This agent has no owning organization")
             return
         }
-        let user = try requireUser(req)
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "agent",
-            resourceId: try agent.requireID().uuidString
-        )
+        let allowed = try await req.can(permission, on: "agent", id: try agent.requireID().uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this agent")
         }
@@ -290,13 +281,7 @@ struct AgentController: RouteCollection {
                     .badRequest,
                     reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
             }
-            let user = try requireUser(req)
-            let allowed = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "manage",
-                resource: "site",
-                resourceId: siteId.uuidString
-            )
+            let allowed = try await req.can("manage", on: "site", id: siteId.uuidString)
             guard allowed else {
                 throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
             }
@@ -415,13 +400,9 @@ struct AgentController: RouteCollection {
         } else {
             var allowed: [AgentEnrollment] = []
             for enrollment in enrollments {
-                guard let ref = enrollment.organizationScope?.spiceDBParentRef else { continue }
-                let ok = try await req.spicedb.checkPermission(
-                    subject: user.id!.uuidString,
-                    permission: "manage_agents",
-                    resource: ref.subjectType,
-                    resourceId: ref.subjectId.uuidString
-                )
+                guard let scope = enrollment.organizationScope else { continue }
+                let resource = scope.checkResource
+                let ok = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
                 if ok { allowed.append(enrollment) }
             }
             visible = allowed
@@ -532,12 +513,7 @@ struct AgentController: RouteCollection {
             var allowed: [Agent] = []
             for agent in agents {
                 guard let agentId = agent.id else { continue }
-                let ok = try await req.spicedb.checkPermission(
-                    subject: user.id!.uuidString,
-                    permission: "view",
-                    resource: "agent",
-                    resourceId: agentId.uuidString
-                )
+                let ok = try await req.can("view", on: "agent", id: agentId.uuidString)
                 if ok { allowed.append(agent) }
             }
             visible = allowed
@@ -632,16 +608,6 @@ struct AgentController: RouteCollection {
 
         // Delete from database
         try await agent.delete(on: req.db)
-
-        // Drop the ownership tuple; a leftover would re-grant access if the
-        // UUID were ever reused. Best-effort — a failure leaves a tuple for a
-        // row that no longer exists, which grants nothing by itself.
-        if let ref = agent.organizationScope?.spiceDBParentRef {
-            try? await req.spicedb.deleteRelationship(
-                entity: "agent", entityId: agentId.uuidString,
-                relation: "parent",
-                subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
-        }
 
         // Deregistration retires the node: delete its enrollment so the name can
         // be enrolled again. Left behind, the row would block a fresh enrollment
@@ -1003,19 +969,8 @@ struct AgentController: RouteCollection {
         try await scope.validateExists(on: req.db)
 
         let previousScope = agent.organizationScope
-        let ref = scope.spiceDBParentRef
-        let parentTuple = RelationshipTuple(
-            entity: "agent",
-            entityId: agentId.uuidString,
-            relation: "parent",
-            subject: ref.subjectType,
-            subjectId: ref.subjectId.uuidString
-        )
 
         if scope == previousScope {
-            // Re-touch the tuple so retrying after a partial failure below
-            // (DB committed, tuple write lost) converges instead of no-oping.
-            try await req.spicedb.touchRelationships([parentTuple])
             return try AgentResponse(from: agent)
         }
 
@@ -1056,19 +1011,6 @@ struct AgentController: RouteCollection {
                 reason:
                     "Agent stores \(storedVolumes) volume(s); migrate or delete them before changing its organization"
             )
-        }
-
-        // SpiceDB first, DB last: both tuple operations are idempotent
-        // (touch, and delete-if-present), so a failure at any step leaves the
-        // request retryable — whereas committing the DB first would make a
-        // retry short-circuit on the no-op path above with the tuples still
-        // pointing at the old org.
-        try await req.spicedb.touchRelationships([parentTuple])
-        if let oldRef = previousScope?.spiceDBParentRef {
-            try await req.spicedb.deleteRelationship(
-                entity: "agent", entityId: agentId.uuidString,
-                relation: "parent",
-                subject: oldRef.subjectType, subjectId: oldRef.subjectId.uuidString)
         }
 
         agent.organizationScope = scope

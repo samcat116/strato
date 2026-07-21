@@ -291,7 +291,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             }
         }
 
-        guard let userId = user.id?.uuidString, !userId.isEmpty else {
+        guard let userID = user.id else {
             throw Abort(.forbidden, reason: "Invalid user session")
         }
 
@@ -299,36 +299,33 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // current organization — bare membership grants `org:read`, so this is
         // "are you anyone here at all"; the handler does the real
         // project-scoped check for creates.
+        let check: (permission: String, resourceType: String, resourceID: String)
         if (permission == "read" && resourceId == "*")
             || (permission == "create" && resourceId == "*")
         {
             guard let currentOrgId = user.currentOrganizationId else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
-
-            let hasPermission = try await request.spicedb.checkPermission(
-                subject: userId,
-                permission: "view_organization",
-                resource: "organization",
-                resourceId: currentOrgId.uuidString
-            )
-
-            if !hasPermission {
-                throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
-            }
+            check = ("view_organization", "organization", currentOrgId.uuidString)
         } else {
             // Object-level: the method/path-derived permission on the resource
-            // itself, evaluated through the Cedar policy set.
-            let hasPermission = try await request.spicedb.checkPermission(
-                subject: userId,
-                permission: permission,
-                resource: resource.resourceType,
-                resourceId: resourceId
-            )
+            // itself.
+            check = (permission, resource.resourceType, resourceId)
+        }
 
-            if !hasPermission {
-                throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
-            }
+        let allowed = try await IAMAuthorizer.checkLegacyVocabulary(
+            userID: userID,
+            permission: check.permission,
+            resourceType: check.resourceType,
+            resourceID: check.resourceID,
+            context: IAMCheckContext(
+                path: request.url.path, method: request.method.rawValue, requestID: request.id),
+            state: request.iamAuthState,
+            app: request.application,
+            db: request.db
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }
 }

@@ -2,7 +2,7 @@ import Foundation
 import Vapor
 
 /// Pure helpers for volume request parsing and device naming, extracted from
-/// `VolumeController` so they can be unit-tested without a database or SpiceDB.
+/// `VolumeController` so they can be unit-tested without a database.
 struct VolumeNaming {
     /// Parses the optional format string, defaulting to `.qcow2`.
     static func parseFormat(_ raw: String?) throws -> VolumeFormat {

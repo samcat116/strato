@@ -52,18 +52,6 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-    {{- if .Values.spicedb.enabled }}
-    # Allow SpiceDB access
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: 50051
-        - protocol: TCP
-          port: 8080
-    {{- end }}
     {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
     # Allow Valkey/Redis access (wait-for-valkey init container and runtime)
     - to: []
@@ -117,58 +105,4 @@ spec:
         - protocol: TCP
           port: {{ .Values.opentelemetry.prometheus.service.port }}
     {{- end }}
-{{- end }}
----
-{{- if and .Values.spicedb.enabled .Values.networkPolicy.enabled }}
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "strato-control-plane.spicedb.fullname" . }}
-  labels:
-    {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # Allow control plane to access SpiceDB
-    - from:
-        - podSelector:
-            matchLabels:
-              {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: control-plane
-      ports:
-        - protocol: TCP
-          port: 50051
-        - protocol: TCP
-          port: 8080
-    # Allow schema job to access SpiceDB
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: spicedb-schema
-      ports:
-        - protocol: TCP
-          port: 50051
-        - protocol: TCP
-          port: 8080
-  egress:
-    # Allow DNS resolution
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 53
-        - protocol: UDP
-          port: 53
-    # Allow database access
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
 {{- end }}

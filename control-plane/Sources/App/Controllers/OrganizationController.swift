@@ -81,10 +81,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Authorization goes through SpiceDB (issue #482 pre-cutover audit:
-        // inline relational reads were allow decisions invisible to shadow
-        // evaluation). The membership row survives only to display the
-        // caller's role — nil for a system admin who isn't a member.
+        // Authorization goes through the Cedar evaluator (via
+        // OrganizationAccessService). The membership row survives only to
+        // display the caller's role — nil for a system admin who isn't a member.
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let userOrg = try await UserOrganization.query(on: req.db)
@@ -122,9 +121,8 @@ struct OrganizationController: RouteCollection {
 
         try await organization.save(on: req.db)
 
-        // Add creator as admin. IAM dual-write (issue #477): the admin role
-        // binding lands in the same transaction as the mirror row; SpiceDB
-        // stays authoritative.
+        // Add creator as admin: the admin role binding lands in the same
+        // transaction as the mirror row.
         let userOrganization = UserOrganization(
             userID: user.id!,
             organizationID: organization.id!,
@@ -148,16 +146,6 @@ struct OrganizationController: RouteCollection {
             user.currentOrganizationId = organization.id
             try await user.save(on: req.db)
         }
-
-        // Create organization in SpiceDB. Route the admin grant through the shared
-        // helper (with no previous role) so every org-role write goes through the
-        // same delete-old-then-write path and can never leave a stale tuple.
-        try await req.spicedb.setOrganizationRole(
-            userID: user.id?.uuidString ?? "",
-            organizationID: organization.id?.uuidString ?? "",
-            oldRole: nil,
-            newRole: "admin"
-        )
 
         // Create default project for the organization
         let defaultProject = Project(
@@ -184,15 +172,6 @@ struct OrganizationController: RouteCollection {
             on: req.db
         )
 
-        // Link the default project to its parent organization in SpiceDB.
-        try await req.spicedb.writeRelationship(
-            entity: "project",
-            entityId: defaultProject.id?.uuidString ?? "",
-            relation: "parent",
-            subject: "organization",
-            subjectId: organization.id?.uuidString ?? ""
-        )
-
         return OrganizationResponse(from: organization, userRole: "admin")
     }
 
@@ -209,8 +188,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
-        // maps to `org:update` at the Cedar cutover.
+        // Org-admin check through the Cedar evaluator (`org:update`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         let updateRequest = try req.content.decode(UpdateOrganizationRequest.self)
@@ -251,8 +229,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
-        // maps to `org:delete` at the Cedar cutover.
+        // Org-admin check through the Cedar evaluator (`org:delete`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Check if this is the default organization
@@ -270,9 +247,9 @@ struct OrganizationController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        // IAM dual-write (issue #477): bindings have no FK to the nodes they
-        // protect, so drop the org node's bindings — and those of every
-        // project that cascades away with it — alongside the row.
+        // Bindings have no FK to the nodes they protect, so drop the org
+        // node's bindings — and those of every project that cascades away
+        // with it — alongside the row.
         let orgProjectIDs = try await Project.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .all()
@@ -313,9 +290,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Membership check through SpiceDB (issue #482 pre-cutover audit).
-        // System admins may switch to any organization — the same bypass the
-        // rest of the API applies.
+        // Membership check through the Cedar evaluator. System admins may
+        // switch to any organization — the same bypass the rest of the API
+        // applies.
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         user.currentOrganizationId = organizationID
@@ -335,8 +312,8 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Membership check through SpiceDB (issue #482 pre-cutover audit);
-        // the member list stays member-visible, mapping to `org:read`.
+        // Membership check through the Cedar evaluator; the member list stays
+        // member-visible (`org:read`).
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let members = try await UserOrganization.query(on: req.db)
@@ -365,8 +342,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        // Org-admin check through SpiceDB (issue #482 pre-cutover audit);
-        // `manage_members` maps to `org:update` at the Cedar cutover.
+        // Org-admin check through the Cedar evaluator (`org:update`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         struct AddMemberRequest: Content {
@@ -399,8 +375,8 @@ struct OrganizationController: RouteCollection {
             organizationID: organizationID,
             role: addRequest.role
         )
-        // IAM dual-write (issue #477): org admins get an admin binding on the
-        // org node; bare membership maps to no binding.
+        // Org admins get an admin binding on the org node; bare membership
+        // maps to no binding.
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
@@ -416,14 +392,6 @@ struct OrganizationController: RouteCollection {
                 )
             }
         }
-
-        // Create SpiceDB relationship (no previous role for a brand-new member).
-        try await req.spicedb.setOrganizationRole(
-            userID: targetUser.id?.uuidString ?? "",
-            organizationID: organizationID.uuidString,
-            oldRole: nil,
-            newRole: addRequest.role
-        )
 
         return .created
     }
@@ -441,7 +409,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Org-admin check through SpiceDB (issue #482 pre-cutover audit).
+        // Org-admin check through the Cedar evaluator.
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard
@@ -465,10 +433,9 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        let removedRole = membership.role
         try await req.db.transaction { db in
             try await membership.delete(on: db)
-            // IAM dual-write: drop the departing member's bindings on the org node.
+            // Drop the departing member's bindings on the org node.
             try await RoleBindingService.revoke(
                 principalType: .user,
                 principalID: userID,
@@ -477,14 +444,6 @@ struct OrganizationController: RouteCollection {
                 on: db
             )
         }
-
-        // Delete the SpiceDB tuple too, or the removed user keeps SpiceDB-granted
-        // access even though their relational membership is gone.
-        try await req.spicedb.removeOrganizationMember(
-            userID: userID.uuidString,
-            organizationID: organizationID.uuidString,
-            role: removedRole
-        )
 
         return .noContent
     }
@@ -502,7 +461,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Org-admin check through SpiceDB (issue #482 pre-cutover audit).
+        // Org-admin check through the Cedar evaluator.
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         struct UpdateRoleRequest: Content {
@@ -537,9 +496,9 @@ struct OrganizationController: RouteCollection {
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
-            // IAM dual-write: swap the role's binding atomically with the
-            // mirror-row update (admin↔member changes add/remove the admin
-            // binding; bare membership has none).
+            // Swap the role's binding atomically with the mirror-row update
+            // (admin↔member changes add/remove the admin binding; bare
+            // membership has none).
             if let oldBinding = IAMRole.fromOrganizationRole(previousRole) {
                 try await RoleBindingService.revoke(
                     principalType: .user,
@@ -562,15 +521,6 @@ struct OrganizationController: RouteCollection {
                 )
             }
         }
-
-        // Update SpiceDB: delete the old role tuple before writing the new one, or
-        // the stale tuple lingers and a demoted admin keeps admin permissions.
-        try await req.spicedb.setOrganizationRole(
-            userID: userID.uuidString,
-            organizationID: organizationID.uuidString,
-            oldRole: previousRole,
-            newRole: updateRequest.role
-        )
 
         return .ok
     }

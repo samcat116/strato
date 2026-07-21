@@ -1,8 +1,7 @@
 import Foundation
 
-// IAM phase 1 (issue #477): the engine-independent role model. SpiceDB remains
-// the authorization source of truth for now; these types define the bindings
-// vocabulary that the Cedar-based evaluator will consume after cutover (see
+// IAM phase 1 (issue #477): the engine-independent role model — the bindings
+// vocabulary the Cedar-based evaluator consumes (see
 // docs/architecture/iam.md).
 
 /// The kinds of principal a role binding can name. Workloads and service
@@ -13,8 +12,8 @@ enum IAMPrincipalType: String, Codable, Sendable, CaseIterable {
 }
 
 /// The tree nodes a role binding can attach to: the org hierarchy plus any
-/// individual resource. Raw values match the SpiceDB object-type names so the
-/// backfill from a SpiceDB relationship export maps 1:1.
+/// individual resource. Raw values are the wire resource-type names (also the
+/// legacy check vocabulary's resource types).
 enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case organization
     case organizationalUnit = "organizational_unit"
@@ -167,10 +166,9 @@ extension IAMRole {
         }
     }
 
-    /// The binding role for a resource-level SpiceDB relation
-    /// (`owner`/`editor`/`viewer` tuples on individual resources). Used by the
-    /// one-time SpiceDB export backfill; `owner` becomes an explicit,
-    /// revocable `admin` binding on the resource.
+    /// The binding role for a legacy resource-level relation
+    /// (`owner`/`editor`/`viewer` on individual resources); `owner` maps to an
+    /// explicit, revocable `admin` binding on the resource.
     static func fromResourceRelation(_ relation: String) -> IAMRole? {
         switch relation {
         case "owner": return .admin

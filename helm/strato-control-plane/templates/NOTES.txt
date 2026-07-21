@@ -42,18 +42,9 @@
    - Database: {{ .Values.externalDatabase.database }}
 {{- end }}
 
-3. SpiceDB Authorization:
-{{- if .Values.spicedb.enabled }}
-   - SpiceDB is deployed as part of this release
-   - HTTP endpoint: http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}
-   - gRPC endpoint: {{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.grpcPort }}
-{{- if not .Values.spicedb.presharedKey }}
-   - Preshared key (auto-generated on first install):
-     kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-strato-credentials -o jsonpath='{.data.spicedb-preshared-key}' | base64 -d
-{{- end }}
-{{- else }}
-   - SpiceDB is disabled. Authorization features will not be available.
-{{- end }}
+3. Authorization:
+   - Handled by the control plane's built-in Cedar policy engine (no external
+     authorization service is deployed).
 
 4. WebAuthn Configuration:
    - Relying Party ID: {{ .Values.strato.webauthn.relyingPartyId }}
@@ -84,18 +75,12 @@
 
 7. Health Checks:
    - Control Plane Health: kubectl get pods -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
-{{- if .Values.spicedb.enabled }}
-   - SpiceDB Health: kubectl get pods -l app.kubernetes.io/component=spicedb
-{{- end }}
 {{- if .Values.postgresql.enabled }}
    - PostgreSQL Health: kubectl get pods -l app.kubernetes.io/name=postgresql
 {{- end }}
 
 8. Troubleshooting:
    - View logs: kubectl logs -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
-{{- if .Values.spicedb.enabled }}
-   - SpiceDB logs: kubectl logs -l app.kubernetes.io/component=spicedb
-{{- end }}
    - Describe pod: kubectl describe pod -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
    - Check events: kubectl get events --sort-by=.metadata.creationTimestamp
 
@@ -105,15 +90,11 @@
    - Resources:
      * Control Plane CPU: {{ .Values.resources.requests.cpu }}/{{ .Values.resources.limits.cpu }}
      * Control Plane Memory: {{ .Values.resources.requests.memory }}/{{ .Values.resources.limits.memory }}
-{{- if .Values.spicedb.enabled }}
-     * SpiceDB CPU: {{ .Values.spicedb.resources.requests.cpu }}/{{ .Values.spicedb.resources.limits.cpu }}
-     * SpiceDB Memory: {{ .Values.spicedb.resources.requests.memory }}/{{ .Values.spicedb.resources.limits.memory }}
-{{- end }}
 
 For more information about Strato, visit: https://github.com/samcat116/strato
 
 🔐 Credentials:
-   - Database and SpiceDB credentials are auto-generated on first install
+   - Database credentials are auto-generated on first install
      (unless provided via values) and stored in the
      {{ .Release.Name }}-strato-credentials secret. The secret is kept on
      uninstall so a reinstall keeps matching any retained database volume.

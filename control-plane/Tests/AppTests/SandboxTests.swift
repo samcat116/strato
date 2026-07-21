@@ -7,15 +7,16 @@ import StratoShared
 
 /// Tests for the sandbox resource surface (issue #413): `/api/sandboxes` CRUD
 /// and lifecycle endpoints return 202-Accepted async operations, mutations
-/// write desired state atomically with the operation row, SpiceDB guards the
-/// routes through the generalized prefix mapping, desired-state syncs carry
+/// write desired state atomically with the operation row, the Cedar evaluator
+/// guards the routes through the generalized prefix mapping, desired-state syncs carry
 /// sandboxes, and observed-state reports complete operations by generation —
 /// all mirroring the VM contracts.
 @Suite("Sandbox Tests", .serialized)
 final class SandboxTests {
 
-    /// Same harness shape as `VMOperationTests`: full middleware stack, mock
-    /// SpiceDB, API-key auth, one org/project and one pre-created sandbox.
+    /// Same harness shape as `VMOperationTests`: full middleware stack,
+    /// role-binding-backed authorization, API-key auth, one org/project and
+    /// one pre-created sandbox.
     private func withSandboxTestApp(
         _ test: (Application, User, Project, Sandbox, String) async throws -> Void
     ) async throws {
@@ -226,9 +227,6 @@ final class SandboxTests {
     @Test("POST /api/sandboxes returns 202 with a pending create operation")
     func createReturnsAccepted() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
             var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -252,19 +250,18 @@ final class SandboxTests {
             #expect(sandbox.desiredStatus == .stopped)
             #expect(sandbox.generation == 1)
             #expect(sandbox.observedGeneration == 0)
+            #expect(sandbox.$project.id == project.id)
 
-            // Ownership tuples: owner (creator) and project.
-            let writes = await recorder.writes.filter { $0.entity == "sandbox" }
-            #expect(
-                writes.contains(
-                    SpiceDBMockRecorder.RelationshipWrite(
-                        entity: "sandbox", entityId: accepted.resourceId.uuidString,
-                        relation: "owner", subject: "user", subjectId: user.id!.uuidString)))
-            #expect(
-                writes.contains(
-                    SpiceDBMockRecorder.RelationshipWrite(
-                        entity: "sandbox", entityId: accepted.resourceId.uuidString,
-                        relation: "project", subject: "project", subjectId: project.id!.uuidString)))
+            // Ownership: the creator gets an admin binding on the sandbox node
+            // in the create transaction.
+            let ownerBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == user.id!)
+                .filter(\.$role == IAMRole.admin.rawValue)
+                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
+                .filter(\.$nodeID == accepted.resourceId)
+                .count()
+            #expect(ownerBindings == 1)
 
             // No schedulable agent exists, so background placement must fail
             // the operation and surface the sandbox as error.

@@ -1,8 +1,8 @@
 import Fluent
 import SQLKit
 
-/// IAM phase 1 (issue #477): the `role_bindings` policy store, dual-written
-/// alongside SpiceDB tuples until the Cedar cutover.
+/// IAM phase 1 (issue #477): the `role_bindings` policy store the Cedar
+/// evaluator answers from.
 struct CreateRoleBinding: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("role_bindings")

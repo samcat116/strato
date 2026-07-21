@@ -304,7 +304,7 @@ struct VMController: RouteCollection {
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func index(req: Request) async throws -> [VMDetailResponse] {
         // Get user from middleware
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -326,12 +326,7 @@ struct VMController: RouteCollection {
         var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: user.id?.uuidString ?? "",
-                permission: "read",
-                resource: "virtual_machine",
-                resourceId: vm.id?.uuidString ?? ""
-            )
+            let hasPermission = try await req.can("read", on: "virtual_machine", id: vm.id?.uuidString ?? "")
 
             if hasPermission {
                 authorizedVMs.append(VMDetailResponse(from: vm))
@@ -341,7 +336,7 @@ struct VMController: RouteCollection {
         return authorizedVMs
     }
 
-    /// Fetch a VM by its :vmID route parameter and enforce a SpiceDB permission on it.
+    /// Fetch a VM by its :vmID route parameter and enforce a permission on it.
     ///
     /// Delegates to the shared `Request.authorizedVM(_:permission:)` helper so the
     /// per-object authorization logic lives in one place (also used by other VM-scoped
@@ -415,12 +410,7 @@ struct VMController: RouteCollection {
         }
 
         // Check user permission on image
-        let hasImagePermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "read",
-            resource: "image",
-            resourceId: imageId.uuidString
-        )
+        let hasImagePermission = try await req.can("read", on: "image", id: imageId.uuidString)
 
         guard hasImagePermission else {
             throw Abort(.forbidden, reason: "Access denied to image")
@@ -471,12 +461,7 @@ struct VMController: RouteCollection {
         // as an org member — with no role in this project — must not be able to
         // create VMs here. Mirrors the create_volume/create_network gates on the
         // sibling controllers.
-        let canCreate = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "create_resources",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
+        let canCreate = try await req.can("create_resources", on: "project", id: projectId.uuidString)
         guard canCreate else {
             throw Abort(.forbidden, reason: "You don't have permission to create VMs in this project")
         }
@@ -517,7 +502,7 @@ struct VMController: RouteCollection {
             }
 
             // The caller already proved membership in this VM's project above, so
-            // no extra SpiceDB check is needed: a global network (nil project) is
+            // no extra permission check is needed: a global network (nil project) is
             // usable by anyone, and a project-scoped network is usable only by the
             // project it belongs to.
             if let networkProjectId = network.$project.id, networkProjectId != projectId {
@@ -745,10 +730,9 @@ struct VMController: RouteCollection {
                     let operation = ResourceOperation(vmID: vmID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
-                    // IAM dual-write (issue #477): the creator's explicit,
-                    // revocable binding on the VM, in the create transaction.
-                    // The SpiceDB owner tuple (still authoritative) is written
-                    // after commit, as before.
+                    // The creator's explicit, revocable binding on the VM, in
+                    // the create transaction — the authoritative grant Cedar
+                    // evaluates (issue #477).
                     try await RoleBindingService.grant(
                         principalType: .user,
                         principalID: userID,
@@ -769,30 +753,6 @@ struct VMController: RouteCollection {
         }
 
         let vmID = try vm.requireID()
-
-        // Create relationships in SpiceDB
-        let vmId = vm.id?.uuidString ?? ""
-        let userId = user.id?.uuidString ?? ""
-
-        // Create ownership relationship
-        try await req.spicedb.writeRelationship(
-            entity: "virtual_machine",
-            entityId: vmId,
-            relation: "owner",
-            subject: "user",
-            subjectId: userId
-        )
-
-        // Link VM to its project. Org/OU admins reach the VM transitively via
-        // vm#project → project#parent → organization#admin, so there is no separate
-        // vm→organization tuple to maintain.
-        try await req.spicedb.writeRelationship(
-            entity: "virtual_machine",
-            entityId: vmId,
-            relation: "project",
-            subject: "project",
-            subjectId: projectId.uuidString
-        )
 
         // Place the VM in the background: the scheduler selects a hypervisor
         // and persists hypervisorId, and the desired-state sync carries the

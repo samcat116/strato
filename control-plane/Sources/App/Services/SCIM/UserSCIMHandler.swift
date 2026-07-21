@@ -10,7 +10,6 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
 
     let db: Database
     let organizationID: UUID
-    let spicedb: SpiceDBServiceProtocol
 
     // MARK: - Create
 
@@ -51,15 +50,6 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             role: "member"
         )
         try await membership.save(on: db)
-
-        // Create SpiceDB relationship
-        try await spicedb.writeRelationship(
-            entity: "organization",
-            entityId: organizationID.uuidString,
-            relation: "member",
-            subject: "user",
-            subjectId: userID.uuidString
-        )
 
         // Store external ID mapping if provided
         if let externalId = resource.externalId {
@@ -220,35 +210,14 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         try await user.save(on: db)
 
         // Remove user from all groups in this organization
-        let groupMemberships = try await App.UserGroup.query(on: db)
-            .join(App.Group.self, on: \App.UserGroup.$group.$id == \App.Group.$id)
-            .filter(App.Group.self, \.$organization.$id == organizationID)
-            .filter(\.$user.$id == uuid)
-            .all()
-
-        for groupMembership in groupMemberships {
-            try await spicedb.removeUserFromGroup(
-                userID: uuid.uuidString,
-                groupID: groupMembership.$group.id.uuidString
-            )
-        }
         try await App.UserGroup.query(on: db)
             .join(App.Group.self, on: \App.UserGroup.$group.$id == \App.Group.$id)
             .filter(App.Group.self, \.$organization.$id == organizationID)
             .filter(\.$user.$id == uuid)
             .delete()
 
-        // Remove the SpiceDB organization tuple for the role the user actually
-        // holds — an OIDC role sync may have promoted a SCIM user to admin, and
-        // deleting a hardcoded "member" tuple would leave that admin tuple live.
-        try await spicedb.removeOrganizationMember(
-            userID: uuid.uuidString,
-            organizationID: organizationID.uuidString,
-            role: membership.role
-        )
-
         // Remove organization membership from database, and any role bindings
-        // the user held on the org node (IAM dual-write, issue #477).
+        // the user held on the org node.
         try await db.transaction { transaction in
             try await membership.delete(on: transaction)
             try await RoleBindingService.revoke(

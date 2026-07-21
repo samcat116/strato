@@ -10,14 +10,14 @@ import VaporTesting
 
 /// Tests for organization-scoped infrastructure: agents, sites, and
 /// enrollments carry a mandatory org-or-OU owner. Covers scope stamping at
-/// registration (and its refusal/durability rules), the SpiceDB
-/// `agent#parent`/`site#parent` tuple lifecycle, the org-delegated enrollment
-/// API, and the system-admin reassignment endpoint.
+/// registration (and its refusal/durability rules), the persisted
+/// agent/site parentage the Cedar hierarchy is built from, the org-delegated
+/// enrollment API, and the system-admin reassignment endpoint.
 @Suite("Agent Organization Scope Tests", .serialized)
 final class AgentOrganizationScopeTests {
 
     private func withScopedApp(
-        _ test: (Application, Organization, SpiceDBMockRecorder) async throws -> Void
+        _ test: (Application, Organization) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -25,13 +25,10 @@ final class AgentOrganizationScopeTests {
             try await configure(app)
             try await app.autoMigrate()
 
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Scope Org")
 
-            try await test(app, org, recorder)
+            try await test(app, org)
 
         } catch {
             try await app.shutdownForTesting()
@@ -89,9 +86,9 @@ final class AgentOrganizationScopeTests {
 
     // MARK: - Registration scope stamping
 
-    @Test("Registration stamps the caller-supplied org scope and writes the agent#parent tuple")
+    @Test("Registration stamps the caller-supplied org scope")
     func registrationStampsScope() async throws {
-        try await withScopedApp { app, org, recorder in
+        try await withScopedApp { app, org in
             let agentUUID = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "scoped-agent"),
                 agentName: "scoped-agent",
@@ -100,19 +97,12 @@ final class AgentOrganizationScopeTests {
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
             #expect(agent.$organization.id == org.id)
             #expect(agent.$organizationalUnit.id == nil)
-
-            let writes = await recorder.writes
-            let tuple = try #require(
-                writes.first { $0.entity == "agent" && $0.relation == "parent" })
-            #expect(tuple.entityId == agentUUID.uuidString)
-            #expect(tuple.subject == "organization")
-            #expect(tuple.subjectId == org.id!.uuidString)
         }
     }
 
     @Test("A brand-new agent with no organization scope is refused")
     func newAgentWithoutScopeRefused() async throws {
-        try await withScopedApp { app, _, _ in
+        try await withScopedApp { app, _ in
             await #expect(throws: AgentServiceError.self) {
                 _ = try await app.agentService.registerAgent(
                     self.makeRegisterMessage(agentName: "unowned-agent"),
@@ -125,7 +115,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("A brand-new agent takes its scope and site from its enrollment row")
     func newAgentReadsEnrollmentScopeAndSite() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             // An SVID authenticates the node's identity but carries neither the
             // owning org nor the site: the enrollment an operator created for
             // this name is the only source of both, and the WebSocket controller
@@ -154,7 +144,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("Reconnecting without a scope preserves the org assignment")
     func reconnectPreservesScope() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let agentUUID = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "sticky-agent"),
                 agentName: "sticky-agent",
@@ -172,7 +162,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("An existing agent does not re-read its enrollment on reconnect")
     func existingAgentIgnoresEnrollmentOnReconnect() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let otherOrg = try await builder.createOrganization(name: "Enrollment Drift Org")
 
@@ -206,7 +196,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("An org change is refused while the agent hosts VMs")
     func orgChangeRefusedWhileHostingVMs() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let project = try await builder.createProject(
@@ -234,7 +224,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("A site assignment in a different org than the agent is ignored")
     func crossOrgSiteAssignmentIgnored() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let otherOrg = try await builder.createOrganization(name: "Foreign Org")
             let foreignSite = Site(name: "foreign-dc", organizationScope: .organization(otherOrg.id!))
@@ -277,7 +267,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("Creating an enrollment requires an organization scope")
     func enrollmentCreationRequiresScope() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -315,7 +305,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("A non-admin without manage_agents cannot create or list enrollments")
     func enrollmentCreationDeniedWithoutManageAgents() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -328,9 +318,8 @@ final class AgentOrganizationScopeTests {
                 let organizationId: UUID?
             }
 
-            app.spicedbMockAllows = false
-            defer { app.spicedbMockAllows = true }
-
+            // The user holds no binding or membership anywhere, so agent
+            // management on the org is denied.
             try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-y", organizationId: org.id))
@@ -351,7 +340,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("An enrollment's site must belong to the enrollment's organization")
     func enrollmentSiteMustMatchOrg() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -379,11 +368,11 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    // MARK: - Site tuples
+    // MARK: - Site parentage
 
-    @Test("Site create writes site#parent; delete removes it")
-    func siteTupleLifecycle() async throws {
-        try await withScopedApp { app, org, recorder in
+    @Test("Site create persists the org parent; delete removes the row")
+    func siteParentageLifecycle() async throws {
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "site-scope-admin", email: "site-scope-admin@example.com",
@@ -402,11 +391,10 @@ final class AgentOrganizationScopeTests {
                 siteId = try res.content.decode(SiteResponse.self).id
             }
 
-            let writes = await recorder.writes
-            let parent = try #require(
-                writes.first { $0.entity == "site" && $0.relation == "parent" })
-            #expect(parent.entityId == siteId!.uuidString)
-            #expect(parent.subjectId == org.id!.uuidString)
+            let createdSite = try await Site.find(siteId!, on: app.db)
+            let site = try #require(createdSite)
+            #expect(site.$organization.id == org.id)
+            #expect(site.$organizationalUnit.id == nil)
 
             try await app.test(.DELETE, "/api/sites/\(siteId!.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -414,16 +402,16 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let deletes = await recorder.deletes
-            #expect(deletes.contains { $0.entity == "site" && $0.entityId == siteId!.uuidString })
+            let remaining = try await Site.find(siteId!, on: app.db)
+            #expect(remaining == nil)
         }
     }
 
     // MARK: - Reassignment endpoint
 
-    @Test("Org reassignment moves the scope and rewrites the tuple; drain guards hold")
+    @Test("Org reassignment moves the scope; drain guards hold")
     func reassignOrganization() async throws {
-        try await withScopedApp { app, org, recorder in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "reassign-admin", email: "reassign-admin@example.com",
@@ -451,19 +439,6 @@ final class AgentOrganizationScopeTests {
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
             #expect(agent.$organization.id == otherOrg.id)
-
-            // Old tuple deleted, new one written.
-            let deletes = await recorder.deletes
-            #expect(
-                deletes.contains {
-                    $0.entity == "agent" && $0.subjectId == org.id!.uuidString
-                })
-            let writes = await recorder.writes
-            #expect(
-                writes.contains {
-                    $0.entity == "agent" && $0.relation == "parent"
-                        && $0.subjectId == otherOrg.id!.uuidString
-                })
 
             // With a hosted VM, the move is refused.
             let project = try await builder.createProject(
@@ -511,7 +486,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("Destructive agent actions require a system admin while foreign-org VMs are hosted")
     func destructiveActionsGuardForeignVMs() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             // Delegated org admin: not a system admin; their org-admin binding
             // grants agent:manage, so only the foreign-VM guard stands in the
@@ -575,7 +550,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("Deregistration deletes the agent's enrollment so the name is reusable")
     func deregistrationClearsEnrollment() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -618,7 +593,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("A network cannot pin to a site in a different organization")
     func networkSitePinRequiresSameOrg() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "net-pinner", email: "net-pinner@example.com",
@@ -698,31 +673,38 @@ final class AgentOrganizationScopeTests {
 
     @Test("Enrolling with a site pin requires manage on the site")
     func enrollmentSitePinRequiresSiteManage() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "agents-only-admin", email: "agents-only-admin@example.com",
                 displayName: "Agents Only Admin", isSystemAdmin: false)
             let token = try await user.generateAPIKey(on: app.db)
+
+            // The delegated-subtree scenario: the caller admins one OU (so
+            // manage_agents on the enrollment's OU scope passes), but the
+            // pinned site is owned at the org level, where the caller holds no
+            // binding — so site manage is denied.
+            let ou = OrganizationalUnit(
+                name: "Pin Gated OU", description: "ou", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ou.save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+
             let site = Site(name: "pin-gated-dc", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
 
-            // The sibling-OU scenario: SpiceDB grants manage_agents on the
-            // enrollment's scope but denies site#manage (same root org,
-            // different delegated subtree).
-            app.spicedbMockDeniedResources = ["site"]
-            defer { app.spicedbMockDeniedResources = [] }
-
             struct Body: Content {
                 let agentName: String
-                let organizationId: UUID?
+                let organizationalUnitId: UUID?
                 let siteId: UUID?
             }
             try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    Body(agentName: "pin-gated-agent", organizationId: org.id, siteId: site.id))
+                    Body(agentName: "pin-gated-agent", organizationalUnitId: ou.id, siteId: site.id))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -731,24 +713,31 @@ final class AgentOrganizationScopeTests {
 
     @Test("Site membership changes require manage on the agent, not just the site")
     func siteMembershipRequiresAgentManage() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "site-only-admin", email: "site-only-admin@example.com",
                 displayName: "Site Only Admin", isSystemAdmin: false)
             let token = try await user.generateAPIKey(on: app.db)
 
-            let site = Site(name: "membership-dc", organizationScope: .organization(org.id!))
+            // The delegated-subtree scenario: the site lives in an OU the
+            // caller admins (site manage passes), but the agent is owned at
+            // the org level, where the caller holds no binding — so agent
+            // manage is denied.
+            let ou = OrganizationalUnit(
+                name: "Membership OU", description: "ou", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ou.save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+
+            let site = Site(name: "membership-dc", organizationScope: .organizationalUnit(ou.id!))
             try await site.save(on: app.db)
             let agentUUID = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "membership-agent"),
                 agentName: "membership-agent",
                 organizationScope: .organization(org.id!))
-
-            // The sibling-OU scenario: SpiceDB grants site#manage but denies
-            // agent#manage (same root org, different delegated subtree).
-            app.spicedbMockDeniedResources = ["agent"]
-            defer { app.spicedbMockDeniedResources = [] }
 
             try await app.test(.POST, "/api/sites/\(site.id!.uuidString)/agents/\(agentUUID.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -765,7 +754,7 @@ final class AgentOrganizationScopeTests {
 
     @Test("An OU-scoped agent resolves its root organization through the OU")
     func ouScopeResolvesRootOrg() async throws {
-        try await withScopedApp { app, org, _ in
+        try await withScopedApp { app, org in
             let ou = OrganizationalUnit(
                 name: "Scope OU", description: "ou", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)

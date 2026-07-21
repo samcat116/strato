@@ -166,12 +166,7 @@ struct ConsoleWebSocketController: RouteCollection {
 
             // Authorize before loading the VM, so unauthorized users cannot probe
             // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: userId,
-                permission: "view_console",
-                resource: "virtual_machine",
-                resourceId: vmId.uuidString
-            )
+            let hasPermission = try await req.can("view_console", on: "virtual_machine", id: vmId.uuidString)
 
             guard hasPermission else {
                 req.logger.warning(

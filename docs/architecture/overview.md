@@ -27,7 +27,7 @@ Three independently built Swift packages plus a frontend:
 └────────────┘               │                  │               │              │
                              │  PostgreSQL ◀────│── truth       │  QEMU        │
                              │  Valkey     ◀────│── coordination│  Firecracker │
-                             │  SpiceDB    ◀────│── authz       │  OVN/OVS     │
+                             │                  │               │  OVN/OVS     │
                              └─────────────────┘               └──────────────┘
 ```
 
@@ -140,68 +140,50 @@ listener authenticated by their SPIFFE SVID (issue #493).
 - Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated
   by Envoy in front of the control plane.
 
-### Authorization (SpiceDB)
+### Authorization (built-in Cedar IAM)
 
-[SpiceDB](https://authzed.com/spicedb) enforces relationship-based access
-control (the Zanzibar model); the schema lives in `spicedb/schema.zed`.
+Authorization is a built-in IAM system evaluated **in-process** by an
+embedded [Cedar](https://www.cedarpolicy.com/) policy engine — there is no
+external authorization service. Postgres is the only authorization store
+(role bindings, guardrails, the resource tree), which makes grants
+transactional with the resources they protect. The full design — including
+why it replaced the earlier SpiceDB deployment — is the
+[iam](./iam.md) decision record.
 
-> A migration to an embedded Cedar policy engine is designed and in
-> progress — see [iam](./iam.md) for the decision record. This section
-> describes the current implementation.
-
-The schema defines a hierarchy — `organization` → `organizational_unit` →
-`project` → resources — plus `user`, `group`, `environment`,
-`virtual_machine`, `sandbox`, `image`, `volume`, and related object types.
-The SpiceDB type `organizational_unit` is the **folder** type; the wire-level
-rename lands with the Cedar migration.
-Permissions inherit down the hierarchy: a `project` attaches to its
-`parent` (an organization or folder), and resource permissions resolve through
-the project. Abridged excerpt:
-
-```zed
-definition project {
-    relation parent: organization | organizational_unit
-    relation admin: user
-    relation member: user
-    relation viewer: user
-
-    permission manage_project = admin + inherited_admin
-    permission create_resources = admin + member + inherited_admin
-    permission view_project = admin + member + viewer + inherited_admin + inherited_member
-}
-
-definition virtual_machine {
-    relation owner: user
-    relation project: project
-    relation viewer: user
-    relation editor: user
-
-    permission read = owner + viewer + editor + project->view_project
-    permission update = owner + editor + project->manage_project
-    permission delete = owner + project->manage_project
-    permission start = owner + editor + project->create_resources
-}
-```
+Access derives from walking up the resource hierarchy — `organization` →
+folder (`organizational_unit` on the wire, pending rename) → `project` →
+resource — with hierarchy inheritance a Cedar language primitive rather than
+hand-rolled recursion. Explicit `forbid` beats explicit `permit` beats
+default deny.
 
 Integration points:
 
-- `SpiceDBAuthMiddleware` (registered globally, including in tests)
-  intercepts all HTTP requests: it skips a public allowlist (health
-  checks, `/auth/*`, the agent WebSocket, image download URLs — which
-  authenticate the agent's SVID or a user session in-handler), requires
-  an authenticated user for everything else, lets system admins bypass
-  permission checks, and for the prefix-guarded resource APIs maps HTTP
-  method + path to a permission (`read`, `create`, `update`, `delete`,
-  plus lifecycle verbs such as `start`, `stop`, `restart`, `pause`,
-  `resume`, and sandbox `exec`) checked against that resource.
-- `SpiceDBService` wraps the SpiceDB HTTP API (checks with full
-  consistency, relationship writes, schema writes), authenticated with a
-  preshared key.
-- Controllers write ownership relationships automatically on resource
-  creation (`owner` and `project` tuples), so org/folder admins inherit access
-  transitively, and perform additional per-object checks in handlers.
-- Schema loading: a Helm post-install/upgrade Job runs `zed schema write`;
-  local development posts the schema via the HTTP API.
+- `AuthorizationMiddleware` (registered globally, including in tests) is
+  **structurally default-deny**: every registered route must fall into
+  exactly one class — public allowlist (health checks, `/auth/*`, the agent
+  mTLS surfaces, the SCIM data plane), login-only identity-plane surfaces,
+  resource-mapped (`/api/vms`, `/api/sandboxes` — the middleware maps HTTP
+  method + path to the checked action, including lifecycle verbs such as
+  `start`, `stop`, `restart`, `pause`, `resume`, and sandbox `exec`), or
+  handler-checked. An unclassified route fails boot; an unmatched path is
+  denied.
+- Checks funnel into `IAMAuthorizer`, which evaluates the compiled Cedar
+  policy set against `role_bindings` rows and the relational
+  org/folder/project hierarchy. Handlers use `req.can` / `req.authorize`
+  for per-object checks. System admins are allowed by a tier-1 policy
+  inside the evaluator, not by a bypass.
+- **Roles** are nested global action groups
+  (`viewer ⊂ operator ⊂ editor ⊂ admin`); bindings attach a principal
+  (user or group) with a role to an org, folder, project, or individual
+  resource. Creating a resource writes an ordinary binding for the creator
+  in the same transaction — visible, listable, revocable.
+- **Guardrails** are forbid-only ceilings authored by org/folder admins;
+  they inherit downward, intersect along the ancestry chain, and bind
+  system admins like everyone else.
+- Every decision lands in the `iam_decision_logs` decision log with the
+  deciding policy ids, the policy-set version, and the tier; the
+  **can-i / who-can** API (`/api/authorization/*`) answers hypothetical and
+  reverse queries.
 
 ### Hierarchy, groups, and quotas
 

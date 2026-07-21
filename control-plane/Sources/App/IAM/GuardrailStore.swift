@@ -14,10 +14,10 @@ import Vapor
 ///   collecting every guardrail along the resource's ancestry chain. They
 ///   intersect: the answer is a *list*, and any non-empty list is a denial.
 ///
-/// Enforcement is not wired into request gating yet — SpiceDB still gates
-/// requests through phase 1, and the evaluator lands with #480/#482. What
-/// ships here is the store and the semantics, so the Cedar integration and the
-/// symcc write-time check (#484) build on something already tested.
+/// Shipped ahead of the evaluator (#480/#482) as the store and the semantics,
+/// so the Cedar integration and the symcc write-time check (#484) build on
+/// something already tested; since cutover the evaluator enforces these
+/// ceilings on every request.
 enum GuardrailStore {
 
     /// The node types a guardrail may attach to.

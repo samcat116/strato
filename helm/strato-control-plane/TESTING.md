@@ -42,7 +42,6 @@ The CI tests validate:
 - ✅ Kubernetes resource validation
 - ✅ Real deployment in kind cluster
 - ✅ Database connectivity
-- ✅ SpiceDB service availability
 - ✅ Security best practices
 - ✅ Chart upgrade scenarios
 
@@ -125,7 +124,6 @@ kubectl get secrets
 
 # Test connectivity
 kubectl port-forward svc/strato-test-postgresql 5432:5432 &
-kubectl port-forward svc/strato-test-strato-control-plane-spicedb 8080:8080 &
 
 # Cleanup
 helm uninstall strato-test
@@ -147,7 +145,6 @@ kind delete cluster --name strato-test
 
 #### Scenario 1: Default Deployment
 - PostgreSQL enabled
-- SpiceDB enabled with schema
 - Standard resource limits
 - Basic security configuration
 

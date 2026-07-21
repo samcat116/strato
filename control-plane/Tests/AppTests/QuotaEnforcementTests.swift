@@ -34,7 +34,6 @@ final class QuotaEnforcementTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            app.spicedbMockAllows = true
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "quotauser", email: "quota@example.com")

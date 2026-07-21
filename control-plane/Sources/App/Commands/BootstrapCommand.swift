@@ -14,8 +14,8 @@ import Vapor
 /// The seeded user has no WebAuthn credential and cannot log in to the UI; it
 /// is an automation identity. Note that it consumes the first-user slot: a
 /// person who registers in the browser afterwards will NOT become system
-/// admin. Runs after `configure`, so migrations, the SpiceDB schema, and the
-/// IAM role registry are already in place.
+/// admin. Runs after `configure`, so migrations and the IAM role registry are
+/// already in place.
 struct BootstrapCommand: AsyncCommand {
     struct Signature: CommandSignature {
         @Option(name: "username", help: "Username for the seeded admin user (default: bootstrap)")
@@ -66,16 +66,11 @@ struct BootstrapCommand: AsyncCommand {
         // Mirrors UserController.finishRegistration (first user ⇒ system admin)
         // followed by OrganizationController.create — but as ONE transaction
         // covering every relational row including the API key. A failure at any
-        // point (a transient SpiceDB error included: the tuple writes run inside
-        // the closure, so their throw aborts it) rolls everything back, keeping
-        // `isFirstUser` true so the command can simply be re-run. SpiceDB tuples
-        // written before such a rollback reference UUIDs that no longer exist
-        // anywhere — inert, and the idempotent boot-time backfills own repairing
-        // SpiceDB from relational state regardless.
+        // point rolls everything back, keeping `isFirstUser` true so the
+        // command can simply be re-run.
         let user = User(username: username, email: email, displayName: username, isSystemAdmin: true)
         let organization = Organization(name: orgName, description: "Created by `App bootstrap`")
         let fullKey = APIKey.generateAPIKey()
-        let spicedb = try app.spicedb
 
         let project = try await app.db.transaction { db -> Project in
             try await user.save(on: db)
@@ -99,13 +94,6 @@ struct BootstrapCommand: AsyncCommand {
             user.currentOrganizationId = orgID
             try await user.save(on: db)
 
-            try await spicedb.setOrganizationRole(
-                userID: userID.uuidString,
-                organizationID: orgID.uuidString,
-                oldRole: nil,
-                newRole: "admin"
-            )
-
             let project = Project(
                 name: projectName,
                 description: "Created by `App bootstrap`",
@@ -125,14 +113,6 @@ struct BootstrapCommand: AsyncCommand {
                 nodeID: projectID,
                 createdBy: userID,
                 on: db
-            )
-
-            try await spicedb.writeRelationship(
-                entity: "project",
-                entityId: projectID.uuidString,
-                relation: "parent",
-                subject: "organization",
-                subjectId: orgID.uuidString
             )
 
             let apiKey = APIKey(

@@ -2,7 +2,7 @@
 
 Strato's control plane ships as a Helm chart at
 [`helm/strato-control-plane/`](https://github.com/samcat116/strato/tree/main/helm/strato-control-plane),
-bundling PostgreSQL, SpiceDB, and Valkey. It is secure by default: a bare
+bundling PostgreSQL and Valkey. It is secure by default: a bare
 `helm install` generates strong random credentials — there are no default
 passwords to remember to change.
 
@@ -15,8 +15,7 @@ helm dependency build
 helm install strato .
 ```
 
-Database migrations and authorization schema loading run automatically as
-Helm hooks.
+Database migrations run automatically as a Helm hook.
 
 ## Generated credentials
 
@@ -25,9 +24,8 @@ with:
 
 | Key | Used by |
 |---|---|
-| `db-password` | PostgreSQL, control plane, migration job, SpiceDB datastore |
+| `db-password` | PostgreSQL, control plane, migration job |
 | `postgres-admin-password` | PostgreSQL superuser |
-| `spicedb-preshared-key` | SpiceDB, schema job, control plane |
 
 The same values are reused on every upgrade, and the secret is kept on
 `helm uninstall` so a reinstall keeps matching a retained database volume.
@@ -39,10 +37,9 @@ kubectl get secret strato-strato-credentials \
   -o jsonpath='{.data.db-password}' | base64 -d
 ```
 
-To supply your own instead, set `postgresql.auth.password`,
-`postgresql.auth.postgresPassword`, and/or `spicedb.presharedKey` — explicit
-values always win and are stored in the same secret so every consumer stays
-in sync.
+To supply your own instead, set `postgresql.auth.password` and/or
+`postgresql.auth.postgresPassword` — explicit values always win and are
+stored in the same secret so every consumer stays in sync.
 
 ## Production configuration
 

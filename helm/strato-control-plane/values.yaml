@@ -210,7 +210,7 @@ resources:
 # Health check probes configuration
 #
 # /health/live is dependency-free — it fails only if the process is wedged, so
-# a Postgres or SpiceDB outage never triggers a restart loop. /health/ready
+# a Postgres outage never triggers a restart loop. /health/ready
 # probes those dependencies and returns 503 when one a request cannot survive
 # without is unreachable, so an unhealthy replica leaves the Service endpoints
 # instead of black-holing traffic.
@@ -351,8 +351,7 @@ strato:
     username: vapor_username
     # password is stored in secret
 
-    # TLS mode for the Postgres connection, applied to BOTH the control plane
-    # (DATABASE_TLS) and SpiceDB (sslmode) — issue #56:
+    # TLS mode for the Postgres connection (DATABASE_TLS) — issue #56:
     #   require  - encrypt and fail if the server won't negotiate TLS
     #   prefer   - encrypt if offered, fall back to plaintext otherwise
     #   disable  - plaintext only (trusted network)
@@ -362,10 +361,9 @@ strato:
     # explicitly to override.
     tls: ""
     # Optional PEM CA bundle used to verify the database server certificate.
-    # When set, its contents are mounted into the control plane and SpiceDB and
-    # the server cert is verified against it under require/verify-* modes
-    # (SpiceDB maps `require` to verify-full). It has no effect under `prefer`,
-    # which keeps its fall-back-to-plaintext semantics.
+    # When set, its contents are mounted into the control plane and the server
+    # cert is verified against it under require/verify-* modes. It has no
+    # effect under `prefer`, which keeps its fall-back-to-plaintext semantics.
     # Leave empty to use the image's system trust store (correct for a
     # publicly-rooted managed database).
     #   tlsCACert: |
@@ -422,87 +420,6 @@ strato:
   # by an external gateway/LoadBalancer that this chart's ingress.tls doesn't cover.
   httpTlsEnabled: null
 
-# SpiceDB configuration
-spicedb:
-  enabled: true
-  nameOverride: ""
-  fullnameOverride: ""
-  # The spicedb-operator subchart. Nothing in this chart creates a
-  # SpiceDBCluster CR — SpiceDB runs as the chart's own StatefulSet — so the
-  # operator (a Deployment plus cluster-scoped RBAC) is dead weight unless you
-  # manage your own CRs. Off by default.
-  operator:
-    enabled: false
-  image:
-    repository: authzed/spicedb
-    tag: v1.35.3
-    pullPolicy: IfNotPresent
-  
-  replicaCount: 1
-
-  # Postgres connection-pool sizing for the SpiceDB datastore. SpiceDB's
-  # upstream defaults (read 20/20, write 10/10 — min pinned equal to max) hold
-  # 30 connections open even when idle, which exhausts small managed databases
-  # (e.g. DigitalOcean's 1GB tier caps at 25 connections, ~22 usable for
-  # non-superuser roles) and starves the control plane out of booting. These
-  # defaults fit a small shared database while leaving headroom for the
-  # control plane; raise them for high-throughput installs with a dedicated
-  # or larger Postgres. Budgets are per SpiceDB replica — multiply by
-  # spicedb.replicaCount.
-  datastore:
-    connPool:
-      read:
-        maxOpen: 8
-        minOpen: 2
-      write:
-        maxOpen: 2
-        minOpen: 1
-
-  service:
-    grpcPort: 50051
-    httpPort: 8080
-    metricsPort: 9090
-    
-  # NOTE: SpiceDB's datastore is Postgres; the /data PVC this provisions is
-  # unused. It stays enabled by default only because volumeClaimTemplates are
-  # immutable — flipping it would break upgrades of existing installs. Safe
-  # (and recommended) to set false on fresh installs.
-  persistence:
-    enabled: true
-    size: 10Gi
-    storageClass: ""
-
-  resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 256Mi
-
-  # Pre-shared key for authentication.
-  # Leave empty to auto-generate a strong key on first install; it is stored
-  # in the <release>-strato-credentials secret and reused across upgrades.
-  # Retrieve it with:
-  #   kubectl get secret <release>-strato-credentials -o jsonpath='{.data.spicedb-preshared-key}' | base64 -d
-  presharedKey: ""
-  
-  # Network policies
-  networkPolicy:
-    enabled: false
-    ingress: []
-    egress: []
-  
-  # Pod disruption budget
-  podDisruptionBudget:
-    enabled: false
-    minAvailable: 1
-  
-  # Schema initialization
-  schema:
-    enabled: true
-    # Schema content will be loaded from ConfigMap
-
 # PostgreSQL configuration
 postgresql:
   enabled: true
@@ -517,8 +434,8 @@ postgresql:
     postgresPassword: ""
     # The bitnami subchart reads all passwords from the release credentials
     # secret owned by this chart (see templates/credentials-secret.yaml), so
-    # the database, the SpiceDB datastore URI, and DATABASE_PASSWORD always
-    # stay in sync. Do not change these unless you manage the secret yourself.
+    # the database and DATABASE_PASSWORD always stay in sync. Do not change
+    # these unless you manage the secret yourself.
     existingSecret: '{{ printf "%s-strato-credentials" .Release.Name }}'
     secretKeys:
       adminPasswordKey: postgres-admin-password
@@ -555,14 +472,8 @@ externalDatabase:
   # The referenced Secret must contain:
   #   - existingSecretPasswordKey: the raw DB password (control plane reads it as
   #     DATABASE_PASSWORD and builds its own verified TLS connection).
-  #   - existingSecretDatastoreUriKey (only when spicedb.enabled): a complete
-  #     SpiceDB/pgx datastore connection string, password included, e.g.
-  #       host=db port=5432 user=u password='...' dbname=d sslmode=verify-full sslrootcert=/etc/spicedb/db-tls/ca.crt
-  #     (Server-cert verification still uses strato.database.tlsCACert / the CA
-  #     mounted at /etc/spicedb/db-tls/ca.crt — the CA is public, not a secret.)
   existingSecret: ""
   existingSecretPasswordKey: "password"
-  existingSecretDatastoreUriKey: "datastore-conn-uri"
   
 # Migration job configuration
 migration:
@@ -572,10 +483,6 @@ migration:
 # Init containers
 initContainers:
   waitForDB:
-    enabled: true
-    image: busybox:1.35
-    
-  waitForSpiceDB:
     enabled: true
     image: busybox:1.35
 
@@ -602,10 +509,6 @@ networkPolicy:
       ports:
         - protocol: TCP
           port: 5432  # PostgreSQL
-        - protocol: TCP
-          port: 50051  # SpiceDB gRPC
-        - protocol: TCP
-          port: 8080   # SpiceDB HTTP
         - protocol: TCP
           port: 6379   # Valkey/Redis
         - protocol: TCP

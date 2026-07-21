@@ -4,10 +4,10 @@ import Fluent
 
 /// Centralized organization- and project-scoped access checks shared by controllers.
 ///
-/// SpiceDB is the single source of truth for authorization: these helpers delegate to
-/// `Request.can` (which applies the system-admin bypass and calls SpiceDB) rather than
-/// reading the relational `UserOrganization.role`. The relational role survives only as
-/// a display mirror written alongside the SpiceDB tuple.
+/// The Cedar evaluator is the single source of truth for authorization: these helpers
+/// delegate to `Request.can` rather than reading the relational
+/// `UserOrganization.role`. The relational role survives only as a display mirror
+/// written alongside the authoritative role binding.
 ///
 /// Org-scoped checks map to the `organization` object's `view_organization` /
 /// `manage_members` permissions; project-scoped checks map to the `project` object's

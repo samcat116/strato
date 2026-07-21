@@ -619,7 +619,6 @@ final class IAMWhoCanTests {
             let caller = try await builder.createUser(username: "epuser", email: "epuser@example.com")
             try await builder.addUserToOrganization(user: caller, organization: tree.org, role: "member")
             let token = try await caller.generateAPIKey(on: app.db)
-            app.spicedbMockAllows = false
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

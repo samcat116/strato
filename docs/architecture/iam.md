@@ -1,16 +1,18 @@
 # IAM: Cedar-based Authorization
 
-**Status:** design accepted (2026-07-16), implementation starting. This document is
-the decision record for replacing SpiceDB with an embedded [Cedar](https://www.cedarpolicy.com/)
-policy engine and filling the IAM gaps around it. Where something is marked
-**INVARIANT**, it is load-bearing: violating it breaks properties the rest of the
-design depends on.
+**Status:** design accepted 2026-07-16; migration complete. Phases 1–6 have
+shipped: the embedded [Cedar](https://www.cedarpolicy.com/) evaluator is the
+authoritative — and only — authorization engine, and SpiceDB is deleted
+(#483). This document is the decision record for that replacement and for the
+IAM design around it. Where something is marked **INVARIANT**, it is
+load-bearing: violating it breaks properties the rest of the design depends
+on.
 
-For the current (pre-migration) SpiceDB implementation, see the AuthZ section of
-[overview](./overview.md); this document describes the target state and the path
-to it.
+The shipped system is summarized in the AuthZ section of
+[overview](./overview.md); this document records why it is shaped the way it
+is and the migration that produced it.
 
-## Why we are replacing SpiceDB
+## Why we replaced SpiceDB
 
 Strato's authorization model is **hierarchical and attribute-hungry, not
 relational**. Access derives from walking *up* a shallow tree (resource →
@@ -18,14 +20,14 @@ project → folder → org). There is no user-to-user sharing graph and no
 arbitrary resource-to-resource reference graph — the Zanzibar use case SpiceDB
 is built for is one we don't have.
 
-The concrete failures that motivated the decision were found in the deployed
-`spicedb/schema.zed`:
+The concrete failures that motivated the decision were found in the
+then-deployed SpiceDB schema (`spicedb/schema.zed`, deleted with #483):
 
 1. **Nested-folder admins did not inherit downward.** `inherited_admin =
    parent->manage_organization + parent->inherited_admin` never includes the
    parent folder's direct `admin` relation, so an admin of a parent folder had
-   no rights over child folders or the projects beneath them. (In
-   `spicedb/schema.zed` the folder type is still named `organizational_unit`.)
+   no rights over child folders or the projects beneath them. (In the
+   SpiceDB schema the folder type was named `organizational_unit`.)
 2. **Every org member could view every project**, via `inherited_member`
    chaining through `view_organization = admin + member`.
 
@@ -42,8 +44,8 @@ Cedar additionally gives us what SpiceDB structurally cannot:
   compiles policy sets to SMT and decides subsumption/equivalence, with the
   compiler formally verified in Lean.
 - **A formally verified evaluator**, differentially fuzzed against the spec.
-- **`forbid` semantics** with a fixed evaluation rule (below). The current
-  SpiceDB schema is 100% additive; there is no way to express a ceiling.
+- **`forbid` semantics** with a fixed evaluation rule (below). Our SpiceDB
+  schema was 100% additive; there was no way to express a ceiling.
 
 ### What we give up, and how we cover it
 
@@ -51,11 +53,11 @@ Cedar additionally gives us what SpiceDB structurally cannot:
   can Alice see?" We answer it ourselves from the bindings table plus the
   resource tree — ordinary SQL against tables we own. This stays cheap only
   while the one-parent invariant holds.
-- **A second stateful store.** We stop operating one. Postgres becomes the
+- **A second stateful store.** We stopped operating one. Postgres is now the
   only source of truth for authorization data, which also makes grants
-  transactional with the resources they protect — something the current
-  SpiceDB dual-write cannot offer — and deletes the reconciliation services
-  that exist to repair drift between the stores.
+  transactional with the resources they protect — something the SpiceDB
+  dual-write could not offer — and the reconciliation services that existed
+  to repair drift between the stores are deleted.
 
 ## The shape
 
@@ -85,7 +87,7 @@ Org
   `ResourceQuota.validate()` already behaves this way.)
 - **`environment` is an attribute on resources, not a container.** It has no
   inheritance of its own. (The vestigial `environment` object type in the
-  SpiceDB schema is never populated and dies with the migration.)
+  SpiceDB schema was never populated and died with the migration.)
 - Agents and Sites remain org/folder-scoped resources, as today.
 
 **Evaluation rule — never add a clause:**
@@ -165,10 +167,10 @@ Notes on the shape, each of which is load-bearing:
 
 Evaluation (`GuardrailStore.forbidding`) returns *every* ceiling in the way,
 not the first: otherwise removing one guardrail looks like it will unblock a
-request the next one still blocks. Guardrails are not yet wired into request
-gating — SpiceDB gates requests until cutover — so what ships in phase 2 is the
-store and the semantics the evaluator (#480) and the symcc write-time check
-(#484) build on.
+request the next one still blocks. What shipped in phase 2 was the store and
+these semantics; since cutover, guardrails compile into the evaluator's
+policy set (#480) and sit on the enforcement path of every request. The
+symcc write-time check remains the #484 track.
 
 ### The write-time ceiling check
 
@@ -290,8 +292,8 @@ impersonation permission.
 
 ## Architecture: the evaluator is in-process
 
-SpiceDB is a stateful network service; Cedar is a library. The migration
-inverts the data flow:
+SpiceDB was a stateful network service; Cedar is a library. The migration
+inverted the data flow:
 
 - **Postgres is the only authorization store** (bindings, roles, guardrails,
   the resource tree). Consistent with the multi-replica model where Postgres
@@ -388,7 +390,7 @@ The schema, the static policies, the loader, and the compiled-set cache are in
 4. **Decision logs** — every authz decision with the reason, the policy
    version, and the tier that produced it. Distinct from the mutation audit
    log; this is what makes guardrail denials debuggable. **Shipped** (#481) —
-   see "Shadow evaluation and decision logs" below.
+   see "Decision logs" below.
 
 `who-can` answers from `role_bindings` plus the resource tree — an ancestor
 walk (`IAMResourceTree`) and a group expansion — never from the policy engine.
@@ -410,40 +412,47 @@ admin over the resource or a container above it.
 Since cutover the caller-scoped form of `can-i` answers from the evaluator —
 exactly what gates requests, guardrails included, with no admin fast path
 (a forbid can deny an admin, so short-circuiting to "true" could lie). It
-accepts IAM action names, plus legacy SpiceDB permission names translated the
-same way `req.can` translates, until clients finish migrating. The
+accepts IAM action names, plus legacy (SpiceDB-era) permission names
+translated the same way `req.can` translates, until clients finish migrating. The
 arbitrary-principal form still answers from the bindings table so it agrees
 with `who-can`.
 
-### Decision logs and the reverse shadow (shipped with #481, flipped with #482)
+### Decision logs (shipped with #481; the reverse shadow retired with #483)
 
-Before cutover, SpiceDB gated requests and Cedar shadowed it. Since cutover
-the direction is reversed: **Cedar gates requests inline**
-(`IAMAuthorizer`), every decision lands in `iam_decision_logs` with the
-deciding policy ids, the policy-set version, and the tier — and while SpiceDB
-remains deployed (until #483), each check that has a SpiceDB-vocabulary
-equivalent also asks SpiceDB in a background task and records both verdicts,
-so the mismatch surface keeps watching for regressions through the rollback
-window. The pieces that matter:
+Before cutover, SpiceDB gated requests and Cedar shadowed it. Cutover (#482)
+reversed the direction: **Cedar gates requests inline** (`IAMAuthorizer`),
+and every decision lands in `iam_decision_logs` with the deciding policy
+ids, the policy-set version, and the tier. Through the rollback window —
+while SpiceDB remained deployed — each check with a SpiceDB-vocabulary
+equivalent also asked SpiceDB in a background task and recorded both
+verdicts, so the mismatch surface kept watching for regressions. That
+reverse shadow ended when #483 deleted SpiceDB (its kill switch,
+`IAM_SHADOW_EVAL_ENABLED`, went with it); the decision log stays, recording
+the Cedar verdict alone. The `spicedb_permission`/`spicedb_decision` columns
+— and the `spicedbPermission`/`spicedbDecision` API fields — keep their
+historical names for compatibility: the former carries the
+legacy-vocabulary question as asked at the check site, the latter is always
+`none` on rows written after the removal. The pieces that matter:
 
-- **Coverage is total by construction.** The authoritative check lives in a
-  decorator returned by `Request.spicedb`
-  (`CedarAuthoritativeSpiceDBService`), which is the one accessor every
-  legacy-vocabulary check site goes through — no call sites changed, and new
-  check sites are covered automatically. Relationship *writes* still forward
-  to SpiceDB (the dual-write keeps rollback open). Decision rows are written
-  in every environment; `IAM_SHADOW_EVAL_ENABLED=false` switches off only the
-  background SpiceDB comparison (and is the default under `.testing`, where
-  SpiceDB is a mock).
-- **The vocabulary bridge is explicit, audited, and now load-bearing.**
-  `IAMActionTranslator` maps each SpiceDB-vocabulary check (`read` on
+- **Coverage is total by construction.** Every check `IAMAuthorizer`
+  evaluates — the middleware's route-mapped checks, `req.can`, and the
+  Cedar-native form — is recorded off the request path in a background task.
+  `IAM_DECISION_LOG_ENABLED` controls whether rows are written at all; it
+  defaults on everywhere except `.testing`, where hundreds of unrelated
+  controller tests run against per-test SQLite files and a background insert
+  per check would contend for the single writer lock (the IAM suites that
+  assert on rows opt in).
+- **The vocabulary bridge is explicit, audited, and load-bearing.**
+  `IAMActionTranslator` maps each legacy-vocabulary check (`read` on
   `virtual_machine`, `manage_project` on `project`, …) to the IAM action
   naming the act being gated (`vm:read`, `project:update`). A check with no
   faithful mapping **fails closed** — denied, logged, and recorded as
   `untranslated` — because an unmapped pair is a check site nobody mapped,
   not an allowance; a mapping is only emitted if the action exists in the
-  registry and is schema-applicable to the node. The translator (and the
-  legacy vocabulary itself) goes away when #483 converts the call sites.
+  registry and is schema-applicable to the node. The legacy vocabulary
+  outlived SpiceDB itself: `req.can` still speaks it so the ~55 handler call
+  sites need not churn, and converting them to IAM action names is the
+  remaining cleanup.
 - **Decision rows record why, not just what**: the determining policy ids
   (which is why the engine compiles policies under their assembler ids), the
   derived tier (`platform` / `guardrail` / `grant` / `default-deny`), the
@@ -451,34 +460,30 @@ window. The pieces that matter:
   bindings the slice deliberately skipped. Cedar-side failures are verdicts of
   their own (`skipped`, `error`) — a replica that never compiled its set shows
   up as a wall of `skipped` rows, not silence.
-- **Burn-down runs off `GET /api/iam/decision-logs`** (`?mismatchesOnly=true`,
-  system-admin only) and `/summary`, which buckets decisions by permission,
-  action, both verdicts, and tier over a bounded window (`?sinceHours`, default
-  24 — the log takes a row per check, so an unbounded `GROUP BY` would scan the
-  whole retention window). Mismatches also log a warning carrying the full
-  comparison. Three mismatch classes are *expected* and confirm the target
-  semantics rather than refuting them:
-  1. org members losing implicit project visibility;
-  2. nested-folder admin inheritance being fixed;
-  3. **conditioned bindings**, which the entity slice deliberately does not
-     flatten. No write path can create one yet, so nothing regressed at
-     cutover; the ambient half of the context (`mfa`, `sourceIP`) ships with
-     the condition vocabulary (the #484 track) rather than as dead code here.
-     Such rows would carry a non-zero `skipped_conditioned_bindings`, which
-     is how they are separated from genuine mismatches.
+- **`GET /api/iam/decision-logs`** (system-admin only) and `/summary`, which
+  buckets decisions by permission, action, verdict, and tier over a bounded
+  window (`?sinceHours`, default 24 — the log takes a row per check, so an
+  unbounded `GROUP BY` would scan the whole retention window), are how the
+  log is read. During the rollback window this is where the mismatch
+  burn-down ran (`?mismatchesOnly=true`); the three *expected* mismatch
+  classes — org members losing implicit project visibility, nested-folder
+  admin inheritance being fixed, and conditioned bindings (which the entity
+  slice deliberately does not flatten, surfacing as a non-zero
+  `skipped_conditioned_bindings`) — confirmed the target semantics rather
+  than refuting them.
 - Rows are append-only, FK-free (decisions outlive what they describe), and
   pruned by a retention sweep (`IAM_DECISION_LOG_RETENTION_DAYS`, default 30,
   cluster-singleton via the coordination sweep lock). The sweep is armed even
-  when shadowing is switched off, so the kill switch stops new rows without
+  when recording is switched off, so the kill switch stops new rows without
   stranding the ones already written.
-- **Shadowing is bounded, not free.** Each check costs roughly ten sequential
-  queries (the ancestor walk, group and org memberships, bindings) plus the row
-  insert, against a Fluent pool that defaults to one connection per event loop.
-  `IAMShadowGate` caps concurrent evaluations
-  (`IAM_SHADOW_EVAL_MAX_CONCURRENCY`, default 4) and the queue behind them
-  (`IAM_SHADOW_EVAL_MAX_QUEUE_DEPTH`, default 512); overflow is shed and
-  counted in the logs rather than queued without limit, so a saturated gate is
-  a number rather than a latency regression in the request path.
+- **Recording is bounded, not free.** Recording is off the request path but
+  not off the connection pool: each record holds a connection for its insert,
+  against a Fluent pool that defaults to one connection per event loop.
+  `IAMRecordingGate` caps concurrent recordings
+  (`IAM_DECISION_LOG_MAX_CONCURRENCY`, default 4) and the queue behind them
+  (`IAM_DECISION_LOG_MAX_QUEUE_DEPTH`, default 512); overflow is shed and
+  counted rather than queued without limit, so a saturated gate is a number
+  rather than a latency regression in the request path.
 
 Since cutover the system-admin bypass is gone from the middleware and
 `req.can`: admins are allowed by the `platform-system-admin` policy inside the
@@ -521,8 +526,9 @@ cutover beyond flipping enforcement):
   plus the boot export, whose type list covers every owner-bearing type
   including `floating_ip` and `sandbox_snapshot`.
 
-**Re-expressed through the SpiceDB path during the audit** (previously inline
-`UserOrganization` reads — allow decisions invisible to shadow evaluation):
+**Re-expressed through the authorization path during the audit** (previously
+inline `UserOrganization` reads — allow decisions invisible to shadow
+evaluation):
 
 - Org member management, org show/update/delete/switch, and the member list
   (`OrganizationController`) now authorize via `OrganizationAccessService`;
@@ -601,14 +607,14 @@ Two enforcement details worth naming:
 
 ## Migration plan
 
-Phases; each lands independently:
+Phases; each landed independently:
 
 1. **Bindings groundwork (engine-independent).** Bindings table + role
    registry in Postgres, dual-written alongside SpiceDB tuples (SpiceDB
-   remains authoritative). Backfill from the existing Postgres mirrors plus a
-   one-time SpiceDB relationship export — resource-level
-   `owner`/`viewer`/`editor` tuples exist **only** in SpiceDB and must be
-   exported before any cutover. Ships `who-can` and `expires_at` early.
+   remained authoritative). Backfill from the existing Postgres mirrors plus
+   a one-time SpiceDB relationship export — resource-level
+   `owner`/`viewer`/`editor` tuples existed **only** in SpiceDB and had to
+   be exported before any cutover. Shipped `who-can` and `expires_at` early.
 2. **Guardrail store + policy versioning.** Forbid-only by construction;
    versioned policy sets. **Shipped** — see "The store" under Guardrails and
    "Versioning" above. Guardrails are stored and evaluable but not yet on the
@@ -617,28 +623,44 @@ Phases; each lands independently:
    types, action groups, binding templates), entity-slice loader, compiled
    policy-set cache with Valkey invalidation. **Shipped** — see "The Cedar
    encoding" above.
-4. **Shadow evaluation + decision logs.** Every check runs through both
-   engines; mismatches are logged with both verdicts and burned down against
-   this document's semantics. The decision-log infrastructure is built here.
+4. **Shadow evaluation + decision logs.** Every check ran through both
+   engines; mismatches were logged with both verdicts and burned down against
+   this document's semantics. The decision-log infrastructure was built here.
    **Shipped** (#481, including the real engine behind `CedarEngine`) — see
-   "Shadow evaluation and decision logs" above. The burn-down itself is the
-   gate on phase 5, not part of this phase.
+   "Decision logs" above. The burn-down itself was the gate on phase 5, not
+   part of this phase.
 5. **Cutover.** Flip `req.can` and the middleware to Cedar; default-deny
    middleware; admin bypass through the evaluator; creator bindings at create.
-   **Shipped** (#482) — see "Enforcement path" above. Call sites keep the
-   SpiceDB vocabulary through `IAMActionTranslator` (fail-closed) until #483
-   converts them; SpiceDB keeps receiving writes and answers the background
-   reverse shadow, which is the regression watch for the rollback window.
-6. **Deletion.** Remove tuple writes, the SpiceDB reconciliation services,
-   `SpiceDBService`, `schema.zed`; drop SpiceDB from compose/helm/CI.
-   Keep a read-only rollback window first.
+   **Shipped** (#482) — see "Enforcement path" above. During the rollback
+   window SpiceDB kept receiving writes and answered the background reverse
+   shadow, the regression watch for the cutover. The cutover release also
+   exported the resource-level `owner`/`editor`/`viewer` tuples into
+   `role_bindings` at boot — which is why the upgrade constraint below
+   exists.
+6. **Deletion.** **Done** (#483). Tuple writes, the reverse shadow (and its
+   `IAM_SHADOW_EVAL_ENABLED` switch), the SpiceDB reconciliation services,
+   `SpiceDBService`, and `schema.zed` are gone; compose/helm/CI no longer
+   run SpiceDB. The decision log keeps its own knobs
+   (`IAM_DECISION_LOG_ENABLED` / `IAM_DECISION_LOG_RETENTION_DAYS` /
+   `IAM_DECISION_LOG_MAX_CONCURRENCY` / `IAM_DECISION_LOG_MAX_QUEUE_DEPTH`),
+   and the decision-log API keeps the historical
+   `spicedbPermission`/`spicedbDecision` field names for compatibility
+   (`spicedbDecision` is always `none` on new rows).
+
+   **Upgrade constraint:** a deployment must pass through the phase-5
+   cutover release — whose boot-time backfill exported the resource-level
+   `owner`/`editor`/`viewer` tuples from SpiceDB into `role_bindings` —
+   before upgrading past #483. Releases after #483 no longer carry the
+   SpiceDB export, so skipping the cutover release would silently drop
+   resource-level grants that existed only in SpiceDB.
 7. **Payoff features.** symcc write-time guardrail check (`403
    GuardrailViolation` naming the guardrail), policy simulator, workload
    registry/principals, service accounts.
 
 The **folder rename** (OU → folder) happens in two steps: UI/docs copy
-anytime; the API/database/entity rename lands with the Cedar schema rather
-than churning SpiceDB types mid-flight.
+anytime; the API/database rename is still pending (the Cedar vocabulary
+already says `Folder`) — it was deliberately kept out of the migration
+rather than churning the authorization types mid-flight.
 
 ## Explicitly rejected
 
@@ -647,9 +669,9 @@ than churning SpiceDB types mid-flight.
 | Primitive roles that auto-absorb all new permissions | GCP basic roles |
 | A separate policy language for org-level ceilings | AWS SCPs |
 | Silent `AccessDenied` with no indication a ceiling caused it | AWS |
-| A bypass control plane that skips the evaluator | Azure storage keys, AWS root; our current system-admin bypass |
+| A bypass control plane that skips the evaluator | Azure storage keys, AWS root; our former system-admin bypass |
 | Roles or claims carried in identity tokens / SVIDs | — |
-| Additive-only evaluation with deny bolted on later | GCP; our current SpiceDB schema |
+| Additive-only evaluation with deny bolted on later | GCP; our former SpiceDB schema |
 | Nested projects; multi-parent resources | — |
 | Free-form customer-authored Cedar | — |
 | Silent eventual consistency on grant/revoke | — |

@@ -209,9 +209,8 @@ struct HealthControllerTests {
             let names = Set(health.checks.map(\.name))
 
             // A readiness probe that only knows about Postgres would keep a
-            // replica in rotation while SpiceDB is unreachable and every
-            // authorized request 500s.
-            #expect(names == ["database", "migrations", "spicedb", "valkey"])
+            // replica in rotation while another gating dependency is down.
+            #expect(names == ["database", "migrations", "valkey"])
         }
         try await app.shutdownForTesting()
     }

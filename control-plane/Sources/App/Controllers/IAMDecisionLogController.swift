@@ -3,10 +3,13 @@ import Foundation
 import SQLKit
 import Vapor
 
-/// The decision-log read API (IAM phase 4, issue #481) — what the mismatch
-/// burn-down works from. System-admin only: decision rows span organizations
-/// (a check names whatever the caller touched), and pre-cutover this is an
-/// operator tool, not a customer surface.
+/// The decision-log read API (IAM phase 4, issue #481). Originally what the
+/// SpiceDB/Cedar mismatch burn-down worked from; that comparison ended when
+/// #483 removed SpiceDB — the spicedb-named DTO fields survive for API
+/// compatibility, and new rows always carry a spicedbDecision of "none".
+/// System-admin only: decision rows span organizations (a check names
+/// whatever the caller touched), and this is an operator tool, not a
+/// customer surface.
 struct IAMDecisionLogController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let logs = routes.grouped("api", "iam", "decision-logs")

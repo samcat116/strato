@@ -2,12 +2,12 @@ import Fluent
 import Vapor
 import Foundation
 
-/// Manages project-level role grants for users and groups. SpiceDB is the source of
-/// truth for authorization; the `ProjectMember` / `ProjectGroupGrant` tables mirror
-/// the grants so the members list renders from a fast relational query.
+/// Manages project-level role grants for users and groups. Role bindings are the
+/// source of truth for authorization; the `ProjectMember` / `ProjectGroupGrant`
+/// tables mirror the grants so the members list renders from a fast relational query.
 ///
 /// Listing requires `view_project`; all mutations require `manage_project` (enforced
-/// via `OrganizationAccessService`, which delegates to SpiceDB).
+/// via `OrganizationAccessService`, which delegates to the Cedar evaluator).
 struct ProjectMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let members = routes.grouped("api", "projects", ":projectID", "members")
@@ -118,8 +118,7 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "User already has a role on this project")
         }
 
-        // IAM dual-write (issue #477): the role binding lands in the same
-        // transaction as the mirror row; SpiceDB stays authoritative.
+        // The role binding lands in the same transaction as the mirror row.
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
             try await ProjectMember(projectID: projectID, userID: userID, role: role.rawValue).save(on: db)
@@ -133,12 +132,6 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
-        try await req.spicedb.setProjectRole(
-            userID: userID.uuidString,
-            projectID: projectID.uuidString,
-            oldRole: nil,
-            newRole: role.rawValue
-        )
         return .created
     }
 
@@ -190,13 +183,6 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
-
-        try await req.spicedb.setProjectRole(
-            userID: userID.uuidString,
-            projectID: projectID.uuidString,
-            oldRole: previousRole,
-            newRole: role.rawValue
-        )
         return .ok
     }
 
@@ -219,7 +205,6 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.notFound, reason: "User has no role on this project")
         }
 
-        let role = membership.role
         try await req.db.transaction { db in
             try await membership.delete(on: db)
             try await RoleBindingService.revoke(
@@ -230,11 +215,6 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
-        try await req.spicedb.removeProjectMember(
-            userID: userID.uuidString,
-            projectID: projectID.uuidString,
-            role: role
-        )
         return .noContent
     }
 
@@ -279,11 +259,6 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
-        try await req.spicedb.addGroupToProject(
-            groupID: body.groupID.uuidString,
-            projectID: projectID.uuidString,
-            role: role.groupRelation
-        )
         return .created
     }
 
@@ -306,7 +281,6 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.notFound, reason: "Group has no role on this project")
         }
 
-        let role = ProjectRole(rawValue: grant.role) ?? .viewer
         try await req.db.transaction { db in
             try await grant.delete(on: db)
             try await RoleBindingService.revoke(
@@ -317,11 +291,6 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
-        try await req.spicedb.removeGroupFromProject(
-            groupID: groupID.uuidString,
-            projectID: projectID.uuidString,
-            role: role.groupRelation
-        )
         return .noContent
     }
 

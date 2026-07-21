@@ -17,22 +17,3 @@ spec:
       {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: control-plane
 {{- end }}
----
-{{- if and .Values.spicedb.enabled .Values.spicedb.podDisruptionBudget.enabled }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "strato-control-plane.spicedb.fullname" . }}
-  labels:
-    {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
-spec:
-  {{- if .Values.spicedb.podDisruptionBudget.minAvailable }}
-  minAvailable: {{ .Values.spicedb.podDisruptionBudget.minAvailable }}
-  {{- end }}
-  {{- if .Values.spicedb.podDisruptionBudget.maxUnavailable }}
-  maxUnavailable: {{ .Values.spicedb.podDisruptionBudget.maxUnavailable }}
-  {{- end }}
-  selector:
-    matchLabels:
-      {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 6 }}
-{{- end }}

@@ -93,8 +93,8 @@ cd deploy/compose
 docker compose up -d
 ```
 
-This starts PostgreSQL, SpiceDB (schema loaded automatically), Valkey, Loki,
-Prometheus, SPIRE, the control plane, the frontend, and an nginx proxy.
+This starts PostgreSQL, Valkey, Loki, Prometheus, SPIRE, the control plane,
+the frontend, and an nginx proxy.
 Database migrations run automatically at control-plane startup — there is no
 separate migrate step. Visit `http://localhost` and register; the first user
 becomes the system administrator.
@@ -123,9 +123,9 @@ The `frontend` service takes the same treatment with
 compose file.
 
 ::: warning Backing services are not reachable from the host
-`deploy/compose` deliberately publishes only the proxy's port — PostgreSQL,
-SpiceDB, and Valkey stay on the internal network. Running the control plane
-natively (`swift run`) against them therefore requires publishing those ports
+`deploy/compose` deliberately publishes only the proxy's port — PostgreSQL
+and Valkey stay on the internal network. Running the control plane natively
+(`swift run`) against them therefore requires publishing those ports
 yourself in an override file.
 :::
 

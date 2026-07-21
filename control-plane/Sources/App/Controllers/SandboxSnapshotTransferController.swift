@@ -10,7 +10,7 @@ import Vapor
 ///
 /// Transfer routes are agent routes, not user routes: like image downloads
 /// (issue #493) they authenticate the SPIFFE SVID forwarded by the Envoy
-/// mTLS sidecar (`AgentMTLSAuthenticator`; see the `SpiceDBAuthMiddleware`
+/// mTLS sidecar (`AgentMTLSAuthenticator`; see the `AuthorizationMiddleware`
 /// carve-out), and there is deliberately no user-session fallback — a
 /// browser has no business streaming raw snapshot artifacts. Authorization
 /// is the same coarse model as image downloads: any enrolled agent identity
@@ -42,11 +42,7 @@ extension SandboxController {
         // storage and occupies the snapshot's agent for the duration, so it
         // is a mutation, not a view. Gating it on `read` let any project
         // viewer trigger unbounded writes (issue #428 review).
-        let canExport = try await req.spicedb.checkPermission(
-            subject: try user.requireID().uuidString,
-            permission: "export",
-            resource: "sandbox_snapshot",
-            resourceId: snapshotID.uuidString)
+        let canExport = try await req.can("export", on: "sandbox_snapshot", id: snapshotID.uuidString)
         guard canExport else {
             throw Abort(.forbidden, reason: "You don't have permission to export this snapshot")
         }
