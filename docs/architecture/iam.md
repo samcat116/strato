@@ -484,11 +484,23 @@ Since cutover the system-admin bypass is gone from the middleware and
 `req.can`: admins are allowed by the `platform-system-admin` policy inside the
 evaluator, so their decisions appear in the log (`AuditMiddleware` derives its
 admin-bypass marker from the determining policy ids) and tier-2 guardrail
-forbids bind them like everyone else. A handful of controller-local admin
-fast paths (list widenings and object-check skips) survive the cutover and
-are removed with #483's call-site conversion; the deliberately admin-only
-platform surfaces (hierarchy repair, audit events, decision logs, workload
-identity) gate through `req.requireSystemAdmin()`, which can only deny.
+forbids bind them like everyone else. The controller-local admin
+*object-check* skips that briefly survived the cutover are gone too, so every
+per-object decision — admin or not — flows through the evaluator, and the
+middleware's handler-evaluated assertion covers all users. What legitimately
+remains admin-conditional in controllers:
+
+- **Query-level list widenings** (the "list twins" of `platform-system-admin`):
+  list endpoints skip per-row checks for admins at query level. Same rule the
+  evaluator would apply per row, expressed as a filter.
+- **Admin-only platform surfaces** (hierarchy validate/repair, audit events,
+  decision logs, workload identity, scopeless quota/pool/enrollment rows,
+  agent org reassignment, explicit agent-artifact overrides): these gate
+  through `req.requireSystemAdmin()` — or a plain admin guard on read-only
+  routes — which can only deny, never widen.
+- **Business-rule admin exemptions** that gate no evaluator check, e.g.
+  destructive agent actions fall back to admin-only while foreign-org
+  workloads live on the agent (`requireNoForeignWorkloads`).
 
 ### Pre-cutover audit of handler-level allows (gate on phase 5)
 

@@ -29,11 +29,10 @@ struct SiteController: RouteCollection {
         return user
     }
 
-    /// System admin, or `manage_agents` on the org/OU scope a new site is
-    /// being created under.
+    /// `manage_agents` on the org/OU scope a new site is being created under
+    /// (system admins pass through the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
         let user = try requireUser(req)
-        if user.isSystemAdmin { return }
         let ref = scope.spiceDBParentRef
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
@@ -46,11 +45,10 @@ struct SiteController: RouteCollection {
         }
     }
 
-    /// System admin, or the given permission on the site itself (resolved
-    /// through `site#parent` in SpiceDB).
+    /// The given permission on the site itself (resolved through the site's
+    /// parent scope in the IAM tree).
     private func requireSitePermission(_ req: Request, site: Site, permission: String) async throws {
         let user = try requireUser(req)
-        if user.isSystemAdmin { return }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: permission,
@@ -62,14 +60,13 @@ struct SiteController: RouteCollection {
         }
     }
 
-    /// System admin, or `manage` on the agent (via `agent#parent`). Site
+    /// `manage` on the agent (via `agent#parent`). Site
     /// membership changes need this ON TOP of site#manage: with agents and
     /// sites delegated to different OUs of one org, a sibling-OU site admin
     /// shares the root org but must not move an agent SpiceDB wouldn't let
     /// them manage.
     private func requireAgentManage(_ req: Request, agent: Agent) async throws {
         let user = try requireUser(req)
-        if user.isSystemAdmin { return }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: "manage",

@@ -29,12 +29,11 @@ struct FloatingIPController: RouteCollection {
 
     // MARK: - Pools (infrastructure, site-style authz)
 
-    /// System admin, or `manage_agents` on the org/OU scope a pool is being
-    /// created under — the same trust level as site management: a pool decides
-    /// which external addresses a site answers for.
+    /// `manage_agents` on the org/OU scope a pool is being created under —
+    /// the same trust level as site management: a pool decides which external
+    /// addresses a site answers for.
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
         let user = try req.auth.require(User.self)
-        if user.isSystemAdmin { return }
         let ref = scope.spiceDBParentRef
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
@@ -48,13 +47,12 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    /// System admin, or `manage` on the site being pinned (resolved through
-    /// `site#parent` in SpiceDB). Pinning a pool occupies the site's
-    /// address-overlap scope, so authorizing only the pool's own org/OU would
-    /// let one tenant's admin claim (and block) another tenant's site.
+    /// `manage` on the site being pinned (resolved through the site's parent
+    /// scope). Pinning a pool occupies the site's address-overlap scope, so
+    /// authorizing only the pool's own org/OU would let one tenant's admin
+    /// claim (and block) another tenant's site.
     private func requireSiteManage(_ req: Request, site: Site) async throws {
         let user = try req.auth.require(User.self)
-        if user.isSystemAdmin { return }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: "manage",
@@ -80,16 +78,16 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    /// System admin, or the scope-level permission a pool operation stands
-    /// for, through the evaluator.
+    /// The scope-level permission a pool operation stands for, through the
+    /// evaluator.
     private func requirePoolPermission(_ req: Request, pool: FloatingIPPool, manage: Bool) async throws {
-        let user = try req.auth.require(User.self)
-        if user.isSystemAdmin { return }
         guard let scope = pool.organizationScope else {
             // Rows predating scoping belong to no organization: nothing to
-            // authorize against, so only system admins may touch them
-            // (defensive deny, mirroring scopeless quotas).
-            throw Abort(.forbidden, reason: "This floating IP pool has no owning organization")
+            // evaluate against, so only system admins may touch them
+            // (defensive deny, mirroring scopeless quotas; the gate marks
+            // the decision for the middleware's handler assertion).
+            _ = try req.requireSystemAdmin("This floating IP pool has no owning organization")
+            return
         }
         let check = Self.poolScopeCheck(scope, manage: manage)
         guard try await req.can(check.action, on: check.node) else {
@@ -296,9 +294,10 @@ struct FloatingIPController: RouteCollection {
             .with(\.$interface) { $0.with(\.$addresses) }
             .sort(\.$createdAt, .descending)
 
-        // System admins bypass the SpiceDB scoping (they may have no
-        // per-project tuples at all), like the pool list and fetch helpers;
-        // an explicit project filter still narrows their view.
+        // Query-level list twin of the tier-1 platform-system-admin policy:
+        // admins see every row without per-row checks (they may hold no
+        // per-project bindings at all); an explicit project filter still
+        // narrows their view.
         if user.isSystemAdmin {
             if let requestedProjectId {
                 query = query.filter(\.$project.$id == requestedProjectId)
@@ -346,19 +345,15 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.badRequest, reason: "No project specified and user has no current organization")
         }
 
-        // System admins bypass, matching the list/fetch paths — they may have
-        // no per-project SpiceDB tuples at all.
-        if !user.isSystemAdmin {
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "create_floating_ip",
-                resource: "project",
-                resourceId: projectId.uuidString
-            )
-            guard hasPermission else {
-                throw Abort(
-                    .forbidden, reason: "You don't have permission to allocate floating IPs in this project")
-            }
+        let hasPermission = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "create_floating_ip",
+            resource: "project",
+            resourceId: projectId.uuidString
+        )
+        guard hasPermission else {
+            throw Abort(
+                .forbidden, reason: "You don't have permission to allocate floating IPs in this project")
         }
 
         guard let pool = try await FloatingIPPool.find(request.poolId, on: req.db) else {
@@ -473,19 +468,16 @@ struct FloatingIPController: RouteCollection {
         }
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
-        // the VM too (the volume-attach rule). System admins bypass, matching
-        // volume attach.
+        // the VM too (the volume-attach rule).
         let user = try req.auth.require(User.self)
-        if !user.isSystemAdmin {
-            let hasVMPermission = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "update",
-                resource: "virtual_machine",
-                resourceId: vm.id!.uuidString
-            )
-            guard hasVMPermission else {
-                throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
-            }
+        let hasVMPermission = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "update",
+            resource: "virtual_machine",
+            resourceId: vm.id!.uuidString
+        )
+        guard hasVMPermission else {
+            throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
@@ -728,9 +720,6 @@ struct FloatingIPController: RouteCollection {
         guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
             throw Abort(.notFound, reason: "Floating IP not found")
         }
-        // System admins bypass, matching the pool helpers and volume/VM
-        // fetch paths — admins may lack per-project SpiceDB tuples entirely.
-        if user.isSystemAdmin { return floatingIP }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: permission,

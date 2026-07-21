@@ -717,7 +717,11 @@ struct NetworkController: RouteCollection {
     }
 
     /// Fetch a network and check permission. Global networks (no project) are
-    /// readable by all authenticated users but only mutable by system admins.
+    /// readable by all authenticated users but mutable only by system admins —
+    /// both rules live in the evaluator now: the tier-1
+    /// `platform-open-network-read` policy grants the read, and with no parent
+    /// scope to hold bindings, nothing short of the tier-1 system-admin policy
+    /// can grant a mutation.
     private func fetchNetworkWithPermission(req: Request, user: User, permission: String) async throws
         -> LogicalNetwork
     {
@@ -729,21 +733,6 @@ struct NetworkController: RouteCollection {
 
         guard let network = try await LogicalNetwork.find(networkId, on: req.db) else {
             throw Abort(.notFound, reason: "Network not found")
-        }
-
-        // System admins bypass permission checks
-        if user.isSystemAdmin {
-            return network
-        }
-
-        // Global networks have no project to derive permissions from: everyone
-        // may read them (they are the VM-create fallback), nobody but system
-        // admins may change them.
-        if network.$project.id == nil {
-            if permission == "read" {
-                return network
-            }
-            throw Abort(.forbidden, reason: "Only system administrators can modify global networks")
         }
 
         let hasPermission = try await req.spicedb.checkPermission(

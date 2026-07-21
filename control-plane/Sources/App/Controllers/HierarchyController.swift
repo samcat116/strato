@@ -317,14 +317,9 @@ struct HierarchyController: RouteCollection {
     // MARK: - Validation and Repair
 
     func validateHierarchy(req: Request) async throws -> HierarchyValidationResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-
-        // Only system admins can validate hierarchy
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
+        // Platform plumbing with no node to attach a policy to: the
+        // decision-marking admin gate, not a bypass.
+        _ = try req.requireSystemAdmin()
 
         let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: req.db)
 
@@ -341,14 +336,9 @@ struct HierarchyController: RouteCollection {
     }
 
     func repairHierarchy(req: Request) async throws -> HierarchyRepairResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-
-        // Only system admins can repair hierarchy
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
+        // Platform plumbing with no node to attach a policy to: the
+        // decision-marking admin gate, not a bypass.
+        _ = try req.requireSystemAdmin()
 
         let repairRequest = try req.content.decode(HierarchyRepairRequest.self)
 

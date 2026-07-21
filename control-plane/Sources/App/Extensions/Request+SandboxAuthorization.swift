@@ -2,9 +2,10 @@ import Fluent
 import Vapor
 
 extension Request {
-    /// Fetch a sandbox and enforce a SpiceDB permission on it in one call.
+    /// Fetch a sandbox and enforce a permission on it in one call, through
+    /// the evaluator.
     ///
-    /// The per-handler defense-in-depth complement to `SpiceDBAuthMiddleware`,
+    /// The per-handler defense-in-depth complement to `AuthorizationMiddleware`,
     /// mirroring `authorizedVM(_:permission:)`: individual sandbox handlers
     /// should not rely solely on the middleware's path-prefix guard for
     /// object-level authorization.
