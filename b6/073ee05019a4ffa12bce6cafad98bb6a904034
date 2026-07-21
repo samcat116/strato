@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_142c71a25effdc::t_64c208be4e4c5c 210,216,218,220-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b6073ee05019a4ffa12bce6cafad98bb6a904034",
+  "prompts": {},
+  "sessions": {
+    "s_142c71a25effdc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90bb8025-bfc8-44c8-8403-a08963648ed9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
