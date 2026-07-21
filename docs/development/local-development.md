@@ -9,6 +9,8 @@ full stack goes through the same Docker Compose deployment operators use.
 - **Swift 6.2 or later** — for `control-plane/`, `agent/`, and `shared/`
 - **Bun** — for the frontend in `control-plane/web/` (not npm)
 - **Docker** — only needed to run the full stack
+- **cvc5** — optional locally, needed to run the IAM symbolic-analysis suites
+  (see below)
 
 Platform notes for running VMs:
 
@@ -63,6 +65,25 @@ Run the full suite before opening a pull request. Tests use
 A fresh checkout starts from an empty `.build` and can take 10+ minutes to
 compile. Give builds a generous timeout rather than assuming they hung.
 :::
+
+### The IAM symbolic-analysis suites
+
+The write-time guardrail check and the role-nesting subsumption proof
+(`docs/architecture/iam.md`) drive an SMT solver, and their suites skip
+themselves when there is none. The rest of the suite is unaffected — the test
+harness installs a permissive analyzer, so writing a binding in an unrelated
+test needs no solver.
+
+```bash
+./scripts/install-cvc5.sh ~/.local/bin
+IAM_SYMCC_SOLVER_PATH=~/.local/bin/cvc5 swift test --package-path control-plane
+```
+
+The script downloads the pinned, checksum-verified cvc5 1.3.1 build for your
+platform; `cvc5` anywhere on `PATH` works too. CI installs it, so these suites
+always run there — if you skip them locally, they still gate the PR. The
+shipped control-plane image carries the solver, because binding writes fail
+closed without one.
 
 CI runs the same control-plane suite against a PostgreSQL service container,
 so local and CI runs exercise identical code paths.

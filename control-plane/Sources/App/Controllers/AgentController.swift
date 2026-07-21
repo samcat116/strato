@@ -6,8 +6,12 @@ struct AgentController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let agents = routes.grouped("api", "agents")
 
-        // Agent enrollment endpoints (SPIRE node provisioning)
-        let enrollmentRoutes = agents.grouped("enrollments")
+        // Agent enrollment endpoints (SPIRE node provisioning). Deliberately a
+        // sibling collection rather than `/api/agents/enrollments`: an
+        // enrollment is its own resource with its own lifecycle, and nesting it
+        // would put the constant `enrollments` in the slot that otherwise holds
+        // an agent id, producing ambiguous path templates (issue #595).
+        let enrollmentRoutes = routes.grouped("api", "agent-enrollments")
         enrollmentRoutes.post(use: createEnrollment)
         enrollmentRoutes.get(use: listEnrollments)
         enrollmentRoutes.delete(":enrollmentId", use: revokeEnrollment)
@@ -372,7 +376,7 @@ struct AgentController: RouteCollection {
         )
     }
 
-    /// GET /api/agents/enrollments
+    /// GET /api/agent-enrollments
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
         let user = try requireUser(req)

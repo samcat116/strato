@@ -164,6 +164,52 @@ struct SCIMProvisioningIntegrationTests {
         }
     }
 
+    /// RFC 7644 §3.12 specifies `status` as the HTTP status code expressed as a
+    /// JSON *string*. The controller's own pre-processor errors used to emit it
+    /// as a JSON number, which a strict client cannot decode — and this is
+    /// invisible to any test that only checks the HTTP status code.
+    @Test("Pre-processor SCIM errors carry `status` as a JSON string")
+    func preProcessorErrorsUseStringStatus() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeSCIMFixture(app)
+            let orgID = fixture.organization.id!.uuidString
+
+            // 401: no bearer token.
+            try await app.test(.GET, "/organizations/\(orgID)/scim/v2/Users") { _ in
+            } afterResponse: { res in
+                #expect(res.status == .unauthorized)
+                let status = try scimErrorStatus(res.body.string)
+                #expect(status as? String == "401")
+            }
+
+            // 400: malformed organization id.
+            try await app.test(.GET, "/organizations/not-a-uuid/scim/v2/Users") { _ in
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                let status = try scimErrorStatus(res.body.string)
+                #expect(status as? String == "400")
+            }
+
+            // 404: well-formed but unknown organization.
+            try await app.test(.GET, "/organizations/\(UUID().uuidString)/scim/v2/Users") { _ in
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+                let status = try scimErrorStatus(res.body.string)
+                #expect(status as? String == "404")
+            }
+        }
+    }
+
+    /// The raw `status` member of a SCIM error document, undecoded, so the test
+    /// can assert its JSON type rather than its rendered value.
+    private func scimErrorStatus(_ body: String) throws -> Any {
+        let data = Data(body.utf8)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let json = try #require(object)
+        #expect(json["schemas"] as? [String] == [self.scimErrorSchema])
+        return try #require(json["status"])
+    }
+
     @Test("SCIM token management API is still session-guarded")
     func tokenManagementStillGuarded() async throws {
         try await withTestApp { app in

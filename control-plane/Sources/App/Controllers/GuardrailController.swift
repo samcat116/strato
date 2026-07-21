@@ -116,6 +116,19 @@ struct GuardrailController: RouteCollection {
         let enabled: Bool?
     }
 
+    /// A guardrail write's response: the row, plus the grants it just
+    /// narrowed.
+    ///
+    /// The write is never refused over these — subtracting from existing
+    /// grants is a ceiling's job, and one that could not be imposed until
+    /// every grant beneath it had been cleaned up first would be useless
+    /// during the incident it was written for. Reporting them is so the author
+    /// finds out now rather than from whoever loses access (#484).
+    struct GuardrailWriteResponse: Content {
+        let guardrail: GuardrailDTO
+        let shadowedBindings: [GuardrailWriteCheck.ShadowedBinding]
+    }
+
     struct GuardrailListResponse: Content {
         let node: IAMNode
         /// When the request asked for the effective set, the chain the answer
@@ -210,12 +223,16 @@ struct GuardrailController: RouteCollection {
         await req.application.announcePolicySetChange()
 
         let response = Response(status: .created)
-        try response.content.encode(try GuardrailDTO(guardrail))
+        try response.content.encode(
+            GuardrailWriteResponse(
+                guardrail: try GuardrailDTO(guardrail),
+                shadowedBindings: try await shadowed(by: guardrail, req: req)
+            ))
         return response
     }
 
     /// PATCH /api/iam/guardrails/:guardrailID
-    func update(req: Request) async throws -> GuardrailDTO {
+    func update(req: Request) async throws -> GuardrailWriteResponse {
         let user = try requireUser(req)
         let existing = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(existing), write: true, req: req)
@@ -250,7 +267,10 @@ struct GuardrailController: RouteCollection {
         }
         await req.application.announcePolicySetChange()
 
-        return try GuardrailDTO(updated)
+        return GuardrailWriteResponse(
+            guardrail: try GuardrailDTO(updated),
+            shadowedBindings: try await shadowed(by: updated, req: req)
+        )
     }
 
     /// DELETE /api/iam/guardrails/:guardrailID
@@ -308,6 +328,45 @@ struct GuardrailController: RouteCollection {
             throw Abort(.notFound, reason: "Guardrail not found")
         }
         return guardrail
+    }
+
+    /// The grants a just-written ceiling narrows.
+    ///
+    /// Runs after the write has committed, so an unavailable solver cannot
+    /// turn a guardrail write into a failure: the ceiling is already in force
+    /// either way, and the report is a courtesy the write does not depend on.
+    /// This is the opposite posture from binding writes, and deliberately so —
+    /// there, the analysis is the thing being decided.
+    private func shadowed(by guardrail: Guardrail, req: Request) async throws
+        -> [GuardrailWriteCheck.ShadowedBinding]
+    {
+        do {
+            let shadowed = try await GuardrailWriteCheck.shadowedBindings(
+                by: guardrail,
+                analyzer: req.application.guardrailAnalyzer,
+                on: req.db,
+                logger: req.logger
+            )
+            for binding in shadowed {
+                req.logger.notice(
+                    "Guardrail write narrowed an existing binding",
+                    metadata: [
+                        "guardrail": .string(guardrail.name),
+                        "principal": .string("\(binding.principalType.rawValue)/\(binding.principalID)"),
+                        "role": .string(binding.role.rawValue),
+                        "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
+                    ])
+            }
+            return shadowed
+        } catch {
+            req.logger.error(
+                "Could not determine which bindings this guardrail narrows",
+                metadata: [
+                    "guardrail": .string(guardrail.name),
+                    "error": .string("\(error)"),
+                ])
+            return []
+        }
     }
 
     private func nodeOf(_ guardrail: Guardrail) throws -> IAMNode {

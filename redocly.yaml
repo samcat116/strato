@@ -15,3 +15,6 @@ rules:
   operation-operationId-unique: error
   path-params-defined: error
   no-identical-paths: error
+  # Constant segments must not share a slot with a path parameter (issue #595):
+  # tooling that resolves templates without regard to HTTP method can mis-route.
+  no-ambiguous-paths: error

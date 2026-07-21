@@ -15,7 +15,7 @@ configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
 Enrollment is one API call — or **Agents → Enroll node** in the web UI:
 
 ```bash
-curl -X POST https://strato.example.com/api/agents/enrollments \
+curl -X POST https://strato.example.com/api/agent-enrollments \
   -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' \
   -d '{"agentName": "hv-01", "organizationId": "<uuid>"}'
 ```
@@ -25,8 +25,8 @@ for `spire-agent` node attestation and a **workload registration entry**
 entitling the node's `strato-agent` to its SPIFFE ID — and returns a
 `bootstrapCommand`: a single copy-paste line to run on the new host.
 
-- `GET /api/agents/enrollments` lists enrollments; `DELETE
-  /api/agents/enrollments/:id` revokes one, removing its SPIRE entries.
+- `GET /api/agent-enrollments` lists enrollments; `DELETE
+  /api/agent-enrollments/:id` revokes one, removing its SPIRE entries.
 - Every enrollment names the organization (or folder) whose
   dedicated capacity the agent becomes, via
   `organizationId`/`organizationalUnitId`; an enrollment with no
@@ -339,7 +339,7 @@ agents**, or the agents will refuse to connect.
 Enrollment requires the control plane to have access to the SPIRE server
 registration API (`SPIRE_ENABLED=true` plus `SPIRE_SERVER_API_ADDRESS`,
 e.g. `unix:///run/spire/server/api.sock` on a shared socket volume);
-without it, `POST /api/agents/enrollments` fails. Creating an enrollment
+without it, `POST /api/agent-enrollments` fails. Creating an enrollment
 provisions the node in SPIRE:
 
 - a one-time **join token** for `spire-agent` node attestation, bound to

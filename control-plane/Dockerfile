@@ -107,11 +107,20 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     tzdata \
     libcurl4 \
     curl \
+    unzip \
     && rm -r /var/lib/apt/lists/*
 # `curl` (the binary — libcurl4 above is the library the Swift runtime links)
 # exists so the container can probe its own /health/ready. Kubernetes probes are
 # run by the kubelet and need nothing in the image, but a Compose `healthcheck`
 # executes inside the container and has no HTTP client otherwise.
+
+# The SMT solver the write-time guardrail check drives (IAM phase 7, #484).
+# Nothing links against it — it is spawned as a subprocess, and never on the
+# request path — but binding writes fail closed without it, so it ships in the
+# image rather than as a sidecar the deployment could forget.
+COPY scripts/install-cvc5.sh /tmp/install-cvc5.sh
+RUN /tmp/install-cvc5.sh /usr/local/bin && rm /tmp/install-cvc5.sh
+ENV IAM_SYMCC_SOLVER_PATH=/usr/local/bin/cvc5
 
 # Copy Swift runtime libraries from build stage
 COPY --from=build /usr/lib/swift/linux/*.so /usr/lib/

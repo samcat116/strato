@@ -54,7 +54,7 @@ final class AgentOrganizationScopeTests {
             logger: app.logger)
     }
 
-    /// An enrollment row as the operator's `POST /api/agents/enrollments` would
+    /// An enrollment row as the operator's `POST /api/agent-enrollments` would
     /// have left it — the sole carrier of a new agent's scope and site.
     private func makeEnrollment(
         agentName: String,
@@ -280,14 +280,14 @@ final class AgentOrganizationScopeTests {
                 var organizationId: UUID? = nil
             }
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-x"))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-x", organizationId: org.id))
             } afterResponse: { res in
@@ -320,7 +320,7 @@ final class AgentOrganizationScopeTests {
 
             // The user holds no binding or membership anywhere, so agent
             // management on the org is denied.
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-y", organizationId: org.id))
             } afterResponse: { res in
@@ -328,7 +328,7 @@ final class AgentOrganizationScopeTests {
             }
 
             // Listing succeeds but shows nothing the user can't manage.
-            try await app.test(.GET, "/api/agents/enrollments") { req in
+            try await app.test(.GET, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -358,7 +358,7 @@ final class AgentOrganizationScopeTests {
                 let siteId: UUID?
             }
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     Body(agentName: "node-z", organizationId: org.id, siteId: foreignSite.id))
@@ -582,7 +582,7 @@ final class AgentOrganizationScopeTests {
                 let agentName: String
                 let organizationId: UUID?
             }
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(Body(agentName: "retiring-agent", organizationId: org.id))
             } afterResponse: { res in
@@ -701,7 +701,7 @@ final class AgentOrganizationScopeTests {
                 let organizationalUnitId: UUID?
                 let siteId: UUID?
             }
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     Body(agentName: "pin-gated-agent", organizationalUnitId: ou.id, siteId: site.id))

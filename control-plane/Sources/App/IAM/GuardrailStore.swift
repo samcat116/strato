@@ -239,6 +239,27 @@ enum GuardrailStore {
         }
     }
 
+    /// Whether a guardrail's principal side covers this principal.
+    ///
+    /// Shared with the write-time ceiling check (#484), which resolves the
+    /// principal side here rather than symbolically: group membership and org
+    /// membership are facts in the database, and a symbolic solver told
+    /// nothing about them would have to assume every principal *might* be in
+    /// every group — reporting a violation for grants no ceiling touches. The
+    /// symbolic part is what is genuinely open: which resource, which action,
+    /// which environment.
+    static func principalMatches(
+        _ match: GuardrailPrincipalMatch,
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        organizationID: UUID?,
+        on db: any Database
+    ) async throws -> Bool {
+        try await matches(
+            match, principalType: principalType, principalID: principalID,
+            organizationID: organizationID, on: db)
+    }
+
     private static func matches(
         _ match: GuardrailPrincipalMatch,
         principalType: IAMPrincipalType,

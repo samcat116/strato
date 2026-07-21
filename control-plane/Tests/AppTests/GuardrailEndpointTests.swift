@@ -24,6 +24,11 @@ final class GuardrailEndpointTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
+            // This suite is about the API, not the symbolic analysis: with the
+            // real analyzer these tests would pass or fail on whether the
+            // machine has an SMT solver. The shadowed-bindings report is
+            // covered against a real solver in GuardrailWriteCheckTests.
+            app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -80,8 +85,12 @@ final class GuardrailEndpointTests {
                 },
                 afterResponse: { res in
                     #expect(res.status == .created)
-                    let decoded = try res.content.decode(GuardrailController.GuardrailDTO.self)
+                    let written = try res.content.decode(GuardrailController.GuardrailWriteResponse.self)
+                    let decoded = written.guardrail
                     #expect(decoded.effect == "forbid")
+                    // The write carries the shadowed-bindings report (#484);
+                    // the injected analyzer finds no overlap, so it is empty.
+                    #expect(written.shadowedBindings.isEmpty)
                     #expect(decoded.actions == ["vm:delete"])
                     #expect(decoded.shape == "unconditional")
                 })
@@ -196,7 +205,7 @@ final class GuardrailEndpointTests {
                     try req.content.encode(self.createBody(name: "temporary", org: fixture.org))
                 },
                 afterResponse: { res in
-                    guardrailID = try res.content.decode(GuardrailController.GuardrailDTO.self).id
+                    guardrailID = try res.content.decode(GuardrailController.GuardrailWriteResponse.self).guardrail.id
                 })
             let id = try #require(guardrailID)
             let afterCreate = try await PolicySetVersionService.current(on: app.db)
