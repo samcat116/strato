@@ -42,16 +42,16 @@ export const agentsApi = {
   // SPIFFE/SPIRE enrollments — the only agent enrollment path.
   listEnrollments(organizationId?: string): Promise<AgentEnrollmentListItem[]> {
     return api.get<AgentEnrollmentListItem[]>(
-      "/api/agents/enrollments",
+      "/api/agent-enrollments",
       organizationId ? { organization_id: organizationId } : undefined
     );
   },
 
   createEnrollment(data: CreateAgentEnrollmentRequest): Promise<AgentEnrollment> {
-    return api.post<AgentEnrollment>("/api/agents/enrollments", data);
+    return api.post<AgentEnrollment>("/api/agent-enrollments", data);
   },
 
   revokeEnrollment(enrollmentId: string): Promise<void> {
-    return api.delete(`/api/agents/enrollments/${enrollmentId}`);
+    return api.delete(`/api/agent-enrollments/${enrollmentId}`);
   },
 };

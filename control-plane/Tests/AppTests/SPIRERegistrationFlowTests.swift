@@ -78,7 +78,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let orgId = try await makeOrg(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(
                     CreateEnrollmentBody(agentName: "node-a", expirationHours: 2, organizationId: orgId))
@@ -147,7 +147,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
             installFakeSPIRE(on: app, fake: fake)
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
@@ -167,7 +167,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setFailJoinToken(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
@@ -186,7 +186,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let orgId = try await makeOrg(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node/../evil", organizationId: orgId))
             } afterResponse: { res in
@@ -206,7 +206,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             // No `spireRegistrationService`: mTLS is the only agent auth path,
             // so without SPIRE there is no way to enroll a node at all.
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
@@ -228,7 +228,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let orgId = try await makeOrg(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
@@ -238,7 +238,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // Re-enrolling means revoking the old enrollment first, so its SPIRE
             // grant is withdrawn rather than orphaned beside a second grant for
             // the same identity.
-            try await app.test(.POST, "/api/agents/enrollments") { req in
+            try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
@@ -261,7 +261,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let enrollment = makeEnrollment()
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -295,7 +295,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -326,7 +326,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let agent = makeAgent(named: "node-a")
             try await agent.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -355,7 +355,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             enrollment.markAsUsed()
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -377,7 +377,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let enrollment = makeEnrollment()
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
@@ -403,7 +403,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let enrollment = makeEnrollment()
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -495,7 +495,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let enrollment = makeEnrollment()
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
@@ -509,14 +509,14 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
             try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
 
             try await app.test(
-                .DELETE, "/api/agents/enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
+                .DELETE, "/api/agent-enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in

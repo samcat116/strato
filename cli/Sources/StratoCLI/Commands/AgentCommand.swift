@@ -101,7 +101,7 @@ struct AgentCommand: AsyncParsableCommand {
                     organizationId: organizationId, organizationalUnitId: folder
                 )
                 let enrollment: AgentEnrollment = try await env.makeClient()
-                    .post("/api/agents/enrollments", body: request)
+                    .post("/api/agent-enrollments", body: request)
 
                 switch global.output {
                 case .table:
