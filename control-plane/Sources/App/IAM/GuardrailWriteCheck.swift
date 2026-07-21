@@ -322,7 +322,12 @@ enum GuardrailWriteCheck {
         }
         guard !representatives.isEmpty else { return nil }
 
-        let schemaText = CedarSchemaBuilder.schemaText()
+        // The seeded descriptors, not the database's rows: the only thing the
+        // roles list contributes to the schema is one `Grants` field pair per
+        // role, and neither policy rendered below reads `context.grants` — the
+        // grant is written as the permit it amounts to. Building from the
+        // registry keeps the check off the database and deterministic.
+        let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
         let grant = grantPolicy(binding)
         let ceiling = ceilingPolicy(guardrail, node: node, resourceMatch: resourceMatch)
 
@@ -362,14 +367,21 @@ enum GuardrailWriteCheck {
     /// covers this principal was already settled against the database, and
     /// restating it symbolically would only let the solver invent memberships
     /// nobody has.
+    ///
+    /// The action side is the role's expanded action list, matching how a role
+    /// row's own permit is written (`RoleDescriptor.canonicalPermitText`):
+    /// roles are flat, so there is no schema action group to name (issue #604).
     private static func grantPolicy(_ binding: ProposedBinding) -> CedarPolicySource {
-        CedarPolicySource(
+        let actionList = IAMRoleRegistry.actions(for: binding.role).sorted()
+            .map { "Action::\(CedarText.stringLiteral($0))" }
+            .joined(separator: ", ")
+        return CedarPolicySource(
             id: "proposed-binding",
             text: """
                 @id("proposed-binding")
                 permit (
                     principal,
-                    action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(binding.role))),
+                    action in [\(actionList)],
                     resource in \(binding.node.cedarUID.cedarLiteral)
                 );
                 """
