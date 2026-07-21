@@ -162,7 +162,7 @@ extension SandboxController {
                 "stop": .stringConvertible(stopAfterSnapshot),
             ])
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `createSnapshot`: the agent RPC and the verdict.
@@ -325,7 +325,7 @@ extension SandboxController {
         }
 
         Self.runSnapshotDeletion(operation, snapshot: snapshot, sandbox: sandbox, app: req.application)
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `deleteSnapshot`. A snapshot whose agent is gone
@@ -499,7 +499,7 @@ extension SandboxController {
                 "sandbox_id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `restoreSnapshot`. `artifacts` is non-nil for a

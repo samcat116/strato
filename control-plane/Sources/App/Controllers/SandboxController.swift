@@ -109,13 +109,6 @@ struct SandboxController: RouteCollection {
         }
     }
 
-    /// `202 Accepted` carrying the operation record for the client to poll.
-    static func accepted(_ operation: ResourceOperation) throws -> Response {
-        let response = Response(status: .accepted)
-        try response.content.encode(OperationResponse(from: operation))
-        return response
-    }
-
     /// Records a verdict on the operation row and resolves the sandbox status
     /// it left in flight. Gated on the operation still being pending, so this
     /// path and the stuck-operation sweep cannot overwrite each other.
@@ -602,7 +595,7 @@ struct SandboxController: RouteCollection {
                 "image": .string(imageRef),
             ])
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Allocates and persists the sandbox's single NIC on the default logical
@@ -739,7 +732,7 @@ struct SandboxController: RouteCollection {
 
         Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func stop(req: Request) async throws -> Response {
@@ -758,7 +751,7 @@ struct SandboxController: RouteCollection {
 
         Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     func restart(req: Request) async throws -> Response {
@@ -784,7 +777,7 @@ struct SandboxController: RouteCollection {
 
         Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
 
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     // MARK: - Exec (issue #423)
@@ -904,7 +897,7 @@ struct SandboxController: RouteCollection {
         } else {
             Self.runDirectSandboxDeletion(operation, sandbox: sandbox, app: req.application)
         }
-        return try Self.accepted(operation)
+        return try operation.acceptedResponse()
     }
 
     /// Background half of `delete` for sandboxes whose agent is gone (never
