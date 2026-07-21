@@ -331,11 +331,38 @@ extension Application {
 
 // Helper function to run tests with proper database lifecycle. configure()
 // runs autoMigrate(), which is a no-op scan against the pre-migrated clone.
+/// A symbolic analyzer that proves nothing and objects to nothing.
+///
+/// Installed by `withTestApp` so the suites that merely *write bindings* do
+/// not each need an SMT solver on the machine. Tests that are about the
+/// write-time ceiling check replace it with the real `SymCCGuardrailAnalyzer`;
+/// production never sees it, since the only construction site is here.
+struct PermissiveGuardrailAnalyzer: GuardrailAnalyzer {
+    func disjoint(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        GuardrailAnalysis(holds: true, counterexample: nil)
+    }
+
+    func implies(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        GuardrailAnalysis(holds: true, counterexample: nil)
+    }
+}
+
 func withTestApp(_ test: (Application) async throws -> Void) async throws {
     let app = try await Application.makeForTesting()
 
     do {
         try await configure(app)
+        app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
         try await test(app)
     } catch {
         try? await app.shutdownForTesting()

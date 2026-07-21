@@ -200,30 +200,9 @@ enum CedarPolicyAssembler {
                 conditions.append("!(principal.memberOfOrgs.contains(\(orgLiteral)))")
             }
 
-            let actionClause: String
-            if guardrail.actions.contains(GuardrailActions.wildcard) {
-                actionClause = "action"
-            } else {
-                let refs = guardrail.actions.map { pattern -> String in
-                    if pattern.hasSuffix(":*") {
-                        let service = String(pattern.dropLast(2))
-                        return "Action::\(CedarText.stringLiteral(CedarSchemaBuilder.serviceGroupName(service)))"
-                    }
-                    return "Action::\(CedarText.stringLiteral(pattern))"
-                }
-                actionClause = "action in [\(refs.joined(separator: ", "))]"
-            }
-
-            switch resourceMatch {
-            case .any:
-                break
-            case .environment(let environment):
-                // Matches the resource being acted on, never its ancestry:
-                // environment is an attribute, not a container. A resource
-                // with no environment is in no environment, so `has` guards
-                // the ceiling off it.
-                conditions.append(
-                    "resource has environment && resource.environment == \(CedarText.stringLiteral(environment))")
+            let actionClause = self.actionClause(for: guardrail.actions)
+            if let environmentCondition = self.environmentCondition(for: resourceMatch) {
+                conditions.append(environmentCondition)
             }
 
             let policyID = "guardrail-\(id.uuidString.lowercased())"
@@ -244,5 +223,45 @@ enum CedarPolicyAssembler {
             compiledGuardrailIDs: compiled,
             skipped: skipped
         )
+    }
+
+    // MARK: - Clause builders
+    //
+    // Shared with the write-time check (#484), which re-expresses a guardrail
+    // as a `permit` to ask whether a proposed grant can reach anything it
+    // forbids. Two renderings of one row is exactly how the write-time answer
+    // and the eval-time answer would come to disagree, so both go through
+    // these.
+
+    /// The `action` scope for a guardrail's patterns.
+    ///
+    /// A `service:*` pattern compiles to the schema's per-service action group
+    /// rather than to today's members, which is what keeps a ceiling covering
+    /// actions shipped after it was written.
+    static func actionClause(for actions: [String]) -> String {
+        if actions.contains(GuardrailActions.wildcard) { return "action" }
+        let refs = actions.map { pattern -> String in
+            if pattern.hasSuffix(":*") {
+                let service = String(pattern.dropLast(2))
+                return "Action::\(CedarText.stringLiteral(CedarSchemaBuilder.serviceGroupName(service)))"
+            }
+            return "Action::\(CedarText.stringLiteral(pattern))"
+        }
+        return "action in [\(refs.joined(separator: ", "))]"
+    }
+
+    /// The `when` condition for a resource-side match, if it constrains
+    /// anything.
+    ///
+    /// Matches the resource being acted on, never its ancestry: environment is
+    /// an attribute, not a container. A resource with no environment is in no
+    /// environment, so `has` guards the ceiling off it.
+    static func environmentCondition(for match: GuardrailResourceMatch) -> String? {
+        switch match {
+        case .any:
+            return nil
+        case .environment(let environment):
+            return "resource has environment && resource.environment == \(CedarText.stringLiteral(environment))"
+        }
     }
 }

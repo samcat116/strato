@@ -61,7 +61,13 @@ let package = Package(
         .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
         // 🌲 Cedar policy engine (IAM phases 3-5): Swift wrapper over the
         // cedar-policy crate, shipping prebuilt binaries for Linux and Apple.
-        .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.1.0"),
+        //
+        // Pinned to a revision, not a version, until swift-cedar cuts the
+        // release carrying `SymbolicCompiler` — the symbolic analysis IAM
+        // phase 7 (#484) runs on policy writes. Move back to `from:` on the
+        // tag; leaving a revision pin here means dependency updates stop
+        // reaching us silently.
+        .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.2.0"),
     ],
     targets: [
         // SPIRE Server registration API client (join tokens + registration

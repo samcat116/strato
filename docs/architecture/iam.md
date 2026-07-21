@@ -169,20 +169,19 @@ Evaluation (`GuardrailStore.forbidding`) returns *every* ceiling in the way,
 not the first: otherwise removing one guardrail looks like it will unblock a
 request the next one still blocks. What shipped in phase 2 was the store and
 these semantics; since cutover, guardrails compile into the evaluator's
-policy set (#480) and sit on the enforcement path of every request. The
-symcc write-time check remains the #484 track.
+policy set (#480) and sit on the enforcement path of every request.
 
-### The write-time ceiling check
+### The write-time ceiling check (shipped, #484)
 
-Before accepting a tier-3 binding, run the symcc analysis: does the resulting
-policy set permit anything the guardrail set forbids? If so, reject the write
-naming the specific guardrail:
+Before accepting a tier-3 binding, run the symcc analysis: does the grant it
+creates reach anything a guardrail forbids? If so, reject the write naming the
+specific guardrail:
 
 ```
 403 GuardrailViolation
-  guardrail: folder/engineering/no-prod-for-contractors
-  set_by:    alice@acme (org admin)
-  reason:    grants editor on resources tagged "prod"
+  guardrail: organization/Acme/no-prod-for-contractors
+  set_by:    alice@acme (organization admin)
+  reason:    grants editor on project resources tagged "prod"
              to principals in group "contractors"
 ```
 
@@ -191,6 +190,57 @@ produces an explanation. This is the reason an analyzable policy language was
 chosen. Eval-time enforcement remains as well (attributes can change after the
 binding exists). The analysis runs only on binding/guardrail writes — rare and
 latency-tolerant — never on the request path.
+
+**What is asked, and of whom.** Bindings are not policies here — they arrive as
+`context.grants` (see the Cedar encoding below) — so `GuardrailWriteCheck`
+first writes the proposed binding as the `permit` it amounts to, then asks
+symcc whether that permit and the guardrail (re-emitted as a `permit` from the
+same clause builders, so the two renderings cannot drift) can both allow one
+request. Non-disjoint means a breach, and the counterexample is a concrete
+request that would be granted and forbidden at once.
+
+The question is split deliberately:
+
+- **The principal side is resolved from the database**, not symbolically.
+  Group and org membership are facts; a solver told nothing about them assumes
+  every principal *might* be in every group and refuses grants no ceiling
+  touches. A group binding is checked against the group *and* its members,
+  because that is how the ceiling reaches them at evaluation time.
+- **The action side is resolved from the registry**, which is finite —
+  paying a solver for an answer already in `IAMRoleRegistry` would be waste.
+- **What is left is genuinely open, and is what symcc decides**: can a resource
+  exist beneath *both* the binding's node and the ceiling's attach node,
+  carrying the attributes the ceiling matches on? That question does not depend
+  on which overlapping action is asked about, only on the resource type, so the
+  enumeration is one query per reachable resource type per candidate guardrail
+  — complete, not sampled.
+
+**Fail closed.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on `PATH`) names the SMT
+solver; the control-plane image ships one. With no solver, gated binding writes
+return `503` rather than being accepted unchecked. Readiness deliberately does
+*not* depend on it: a solver outage should fail the writes it guards, not cycle
+every replica, and eval-time enforcement is untouched throughout.
+
+**Two carve-outs**, both at the call sites:
+
+- **Creator bindings** on resource create are not gated. The create was already
+  authorized through the evaluator, guardrails included, and a solver round
+  trip on every resource create is exactly the request-path cost this design
+  rules out.
+- **Provisioning** (OIDC claim sync, SCIM, invite redemption, bootstrap) is not
+  gated. It runs at sign-in, and failing closed there would make an SMT solver
+  a hard dependency of authentication.
+
+**Guardrail writes are accepted, not refused.** Subtracting from existing
+grants is precisely a ceiling's job, and one that could not be imposed until
+every grant beneath it had been cleaned up first would be useless during the
+incident it was written for. The write returns the bindings it now shadows, and
+logs each one.
+
+The same machinery proves the role-nesting invariant in CI
+(`RoleNestingSubsumptionTests`): `check_implies` over the compiled role
+policies, in both directions, so `viewer ⊂ operator ⊂ editor ⊂ admin` is
+verified rather than assumed.
 
 ## Grants (tier 3)
 
@@ -236,8 +286,9 @@ narrow per-type roles can be added later if needed. This is deliberately not
 GCP's basic-roles mistake: membership is a curated, reviewable schema change —
 new actions join roles by explicit decision, never by default. (Ceilings are
 the opposite: subtractive and automatically covering, per tier 2. The
-asymmetry is intentional.) Verify the implication-nesting direction with symcc
-subsumption checks; it is easy to get backwards.
+asymmetry is intentional.) The implication-nesting direction is verified with
+symcc subsumption checks in CI (`RoleNestingSubsumptionTests`, #484); it is
+easy to get backwards.
 
 Today's environment roles (`environment_manager`, deployer, approver) become
 **conditioned bindings** (e.g. `editor` on a project where
@@ -653,8 +704,9 @@ Phases; each landed independently:
    before upgrading past #483. Releases after #483 no longer carry the
    SpiceDB export, so skipping the cutover release would silently drop
    resource-level grants that existed only in SpiceDB.
-7. **Payoff features.** symcc write-time guardrail check (`403
-   GuardrailViolation` naming the guardrail), policy simulator, workload
+7. **Payoff features.** The symcc write-time guardrail check (`403
+   GuardrailViolation` naming the guardrail) **shipped** — see "The write-time
+   ceiling check" above. Still ahead: policy simulator, workload
    registry/principals, service accounts.
 
 The **folder rename** (OU → folder) happens in two steps: UI/docs copy

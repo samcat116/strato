@@ -1,5 +1,5 @@
 {
-  "originHash" : "ecdda100d0254e6b043ef9b219c7936a0c849fe4e44aedd51b7aae6e4d099942",
+  "originHash" : "75c8640a212a1267eaba1cfd28a992e21b5849485e5badc4a9efdc934cdd9519",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -258,8 +258,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-cedar.git",
       "state" : {
-        "revision" : "3f6e0550c6114d63199246784d31a47aefab9f77",
-        "version" : "0.1.0"
+        "revision" : "4f945a2a33ba8858e89af6874581c8da609663a4",
+        "version" : "0.2.0"
       }
     },
     {
