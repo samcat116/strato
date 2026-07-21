@@ -1,0 +1,22 @@
+control-plane/Sources/App/ReadinessState.swift
+  s_79b58ce4a67d33::t_3222248abb4b81 102-110,113
+  s_79b58ce4a67d33::t_657561836d1912 1
+  s_79b58ce4a67d33::t_d04342af293b1a 129
+  s_79b58ce4a67d33::t_b769edf1ba099a 138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2afec107a23be288d042312b1967dd268ff48dad",
+  "prompts": {},
+  "sessions": {
+    "s_79b58ce4a67d33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eaad77ad-6309-406a-9d7e-31e429c1afe8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
