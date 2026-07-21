@@ -65,6 +65,15 @@ struct AgentController: RouteCollection {
     /// The given permission on the agent itself (resolved through the
     /// agent's parent scope in the IAM tree).
     private func requireAgentPermission(_ req: Request, agent: Agent, permission: String) async throws {
+        // A pre-scoping agent belongs to no org: there is nothing to evaluate
+        // against (the evaluator fails closed on its truncated ancestor
+        // chain), so only system admins may touch it — the decision-marking
+        // gate, mirroring scopeless enrollments. This is what keeps orphaned
+        // agents repairable (deregister, reassign) at all.
+        guard agent.organizationScope != nil else {
+            _ = try req.requireSystemAdmin("This agent has no owning organization")
+            return
+        }
         let user = try requireUser(req)
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
