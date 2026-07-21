@@ -2366,6 +2366,9 @@ paths:
       description: >-
         Organization admins only. The target user is looked up by email and must
         already exist; adding an existing member returns 409.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
       tags: [Organizations]
       requestBody:
         required: true
@@ -2379,6 +2382,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/members/{userID}:
@@ -2399,7 +2403,12 @@ paths:
     patch:
       operationId: updateOrganizationMemberRole
       summary: Change a member's organization role
-      description: Organization admins only. Demoting the last remaining admin is rejected with 400.
+      description: >-
+        Organization admins only. Demoting the last remaining admin is rejected
+        with 400.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
       tags: [Organizations]
       requestBody:
         required: true
@@ -2413,6 +2422,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/organizations/{organizationID}/ous:
     parameters:
@@ -3325,6 +3335,9 @@ paths:
       description: >-
         Requires project admin. Identify the user by `userID` or `userEmail`.
         Returns an empty body.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
       tags: [Projects]
       requestBody:
         required: true
@@ -3338,6 +3351,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/members/{userID}:
@@ -3353,7 +3367,11 @@ paths:
     patch:
       operationId: updateProjectMemberRole
       summary: Change a user's role on a project
-      description: Requires project admin. Returns an empty body.
+      description: >-
+        Requires project admin. Returns an empty body.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
       tags: [Projects]
       requestBody:
         required: true
@@ -3367,6 +3385,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeProjectMember
@@ -3388,6 +3407,9 @@ paths:
       description: >-
         Requires project admin. The group must belong to the project's root
         organization. Returns an empty body.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
       tags: [Projects]
       requestBody:
         required: true
@@ -3401,6 +3423,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/groups/{groupID}:
@@ -4362,11 +4385,11 @@ paths:
               $ref: "#/components/schemas/IAMGuardrailCreateRequest"
       responses:
         "201":
-          description: The created guardrail.
+          description: The created guardrail, and the bindings it now narrows.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IAMGuardrail"
+                $ref: "#/components/schemas/IAMGuardrailWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4405,11 +4428,11 @@ paths:
               $ref: "#/components/schemas/IAMGuardrailUpdateRequest"
       responses:
         "200":
-          description: The updated guardrail.
+          description: The updated guardrail, and the bindings it now narrows.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IAMGuardrail"
+                $ref: "#/components/schemas/IAMGuardrailWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -6454,6 +6477,16 @@ components:
             $ref: "#/components/schemas/Error"
     Forbidden:
       description: The caller is authenticated but not authorized.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    GuardrailCheckUnavailable:
+      description: >-
+        The write-time guardrail check could not run, so the policy write was
+        not accepted. Deliberately fail-closed: a grant is never accepted
+        unchecked because the analyzer was unavailable. Existing access is
+        unaffected and guardrails remain enforced on every request.
       content:
         application/json:
           schema:
@@ -10482,6 +10515,41 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    IAMGuardrailWriteResponse:
+      type: object
+      description: >-
+        A written guardrail, plus the grants it now narrows. The write is never
+        refused over these — subtracting from existing grants is what a ceiling
+        is for — but the author sees what they just took away.
+      required: [guardrail, shadowedBindings]
+      properties:
+        guardrail:
+          $ref: "#/components/schemas/IAMGuardrail"
+        shadowedBindings:
+          type: array
+          description: >-
+            Active role bindings beneath the attach node that this ceiling now
+            constrains. Empty when the symbolic analysis could not run; the
+            ceiling is in force either way.
+          items:
+            $ref: "#/components/schemas/IAMShadowedBinding"
+
+    IAMShadowedBinding:
+      type: object
+      required: [principalType, principalID, role, node]
+      properties:
+        principalType:
+          type: string
+          enum: [user, group]
+        principalID:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [viewer, operator, editor, admin]
+        node:
+          $ref: "#/components/schemas/IAMNode"
 
     IAMGuardrailCreateRequest:
       type: object

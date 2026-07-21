@@ -376,7 +376,18 @@ struct OrganizationController: RouteCollection {
             role: addRequest.role
         )
         // Org admins get an admin binding on the org node; bare membership
-        // maps to no binding.
+        // maps to no binding — and with no binding there is nothing for a
+        // ceiling to be checked against (#484).
+        if let bindingRole = IAMRole.fromOrganizationRole(addRequest.role) {
+            try await GuardrailWriteCheck.requireNoViolation(
+                ProposedBinding(
+                    principalType: .user,
+                    principalID: targetUser.id!,
+                    role: bindingRole,
+                    node: IAMNode(type: .organization, id: organizationID)
+                ), req: req)
+        }
+
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
@@ -489,6 +500,18 @@ struct OrganizationController: RouteCollection {
             if adminCount <= 1 {
                 throw Abort(.badRequest, reason: "Cannot change role of the last admin")
             }
+        }
+
+        // Only the direction that *adds* a binding needs checking; dropping to
+        // bare membership takes access away, which no ceiling objects to.
+        if let bindingRole = IAMRole.fromOrganizationRole(updateRequest.role) {
+            try await GuardrailWriteCheck.requireNoViolation(
+                ProposedBinding(
+                    principalType: .user,
+                    principalID: userID,
+                    role: bindingRole,
+                    node: IAMNode(type: .organization, id: organizationID)
+                ), req: req)
         }
 
         let previousRole = membership.role

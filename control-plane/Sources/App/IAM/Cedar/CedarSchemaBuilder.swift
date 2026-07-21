@@ -202,6 +202,28 @@ enum CedarSchemaBuilder {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Every entity type that can sit at or beneath `entity` in the tree —
+    /// the transitive closure of `parentTypes` read downward.
+    ///
+    /// The write-time ceiling check (#484) uses this to bound its enumeration:
+    /// a binding on a project can only ever reach the types that can live
+    /// under a project, so the other request environments are not worth a
+    /// solver process. Derived from the same declarations the schema emits, so
+    /// a new resource type is covered the moment its parentage is declared.
+    static func descendantTypes(of entity: CedarEntityType) -> [CedarEntityType] {
+        CedarEntityType.nodeTypes.filter { candidate in
+            var frontier: [CedarEntityType] = [candidate]
+            var seen: Set<String> = [candidate.rawValue]
+            while let next = frontier.popLast() {
+                if next == entity { return true }
+                for parent in parentTypes(for: next) where seen.insert(parent.rawValue).inserted {
+                    frontier.append(parent)
+                }
+            }
+            return false
+        }
+    }
+
     /// The legal Cedar parents of an entity type — the same one-parent tree
     /// `IAMResourceTree` walks, as membership declarations.
     private static func parentTypes(for entity: CedarEntityType) -> [CedarEntityType] {

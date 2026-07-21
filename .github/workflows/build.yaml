@@ -304,6 +304,18 @@ jobs:
             fi
           fi
 
+      # The write-time guardrail check and the role-nesting subsumption proof
+      # (#484) skip themselves without a solver, which would leave them
+      # silently covering nothing.
+      # Into the workspace rather than /usr/local/bin: the ARC runner pod's
+      # user has no reliable sudo, and the tests take the path from the
+      # environment anyway.
+      - name: Install cvc5
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ./scripts/install-cvc5.sh "$RUNNER_TEMP/bin"
+          echo "IAM_SYMCC_SOLVER_PATH=$RUNNER_TEMP/bin/cvc5" >> "$GITHUB_ENV"
+
       - name: Build Control Plane
         id: build-cp
         working-directory: control-plane

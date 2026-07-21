@@ -182,6 +182,14 @@ struct OIDCIdentityService {
             // Org admins get an admin binding on the org node, in the same
             // transaction as the mirror row — without it the new user
             // authenticates but fails every permission check.
+            //
+            // Deliberately not gated by the write-time ceiling check (#484),
+            // unlike the administrative grant APIs: this runs during sign-in,
+            // and failing closed here would make an SMT solver a hard
+            // dependency of authentication. Guardrails still apply to every
+            // request this user makes, so a ceiling is enforced either way —
+            // what is given up is only the explanation at write time, for a
+            // grant no human is watching anyway.
             if let bindingRole = IAMRole.fromOrganizationRole(role) {
                 try await RoleBindingService.grant(
                     principalType: .user,

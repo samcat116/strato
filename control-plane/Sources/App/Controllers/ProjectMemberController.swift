@@ -118,6 +118,17 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "User already has a role on this project")
         }
 
+        // A ceiling in force on this project (or above it) may forbid what
+        // this grant would reach — refuse now, with the reason, rather than
+        // leaving it to be discovered as a denial days later (#484).
+        try await GuardrailWriteCheck.requireNoViolation(
+            ProposedBinding(
+                principalType: .user,
+                principalID: userID,
+                role: .fromProjectRole(role),
+                node: IAMNode(type: .project, id: projectID)
+            ), req: req)
+
         // The role binding lands in the same transaction as the mirror row.
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
@@ -155,6 +166,17 @@ struct ProjectMemberController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "User has no role on this project")
         }
+
+        // Checked even though the user already holds a role here: the new role
+        // is a different grant, and widening viewer to editor is exactly the
+        // move a ceiling exists to stop.
+        try await GuardrailWriteCheck.requireNoViolation(
+            ProposedBinding(
+                principalType: .user,
+                principalID: userID,
+                role: .fromProjectRole(role),
+                node: IAMNode(type: .project, id: projectID)
+            ), req: req)
 
         let previousRole = membership.role
         let actorID = req.auth.get(User.self)?.id
@@ -244,6 +266,16 @@ struct ProjectMemberController: RouteCollection {
         if existing != nil {
             throw Abort(.conflict, reason: "Group already has a role on this project")
         }
+
+        // A group grant reaches every member, so the ceiling check asks
+        // whether it covers the group or anyone in it (#484).
+        try await GuardrailWriteCheck.requireNoViolation(
+            ProposedBinding(
+                principalType: .group,
+                principalID: body.groupID,
+                role: .fromProjectRole(role),
+                node: IAMNode(type: .project, id: projectID)
+            ), req: req)
 
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
