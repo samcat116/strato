@@ -32,8 +32,21 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         let isAgentSnapshotArtifact =
             path.hasPrefix("/api/sandboxes/") && path.contains("/snapshots/")
             && path.contains("/artifacts/")
+        // Routes whose path has a dynamic segment before the public part, so a
+        // flat prefix can't express them: exempt when the path starts with
+        // `prefix` AND contains `infix`. The SCIM data plane
+        // (/organizations/:id/scim/v2/**) is like /ssf/events/: IdPs
+        // authenticate with an org-scoped `scim_` bearer token checked
+        // in-handler and never carry a user session. (Token *management* lives
+        // under /organizations/:id/settings/scim-tokens and stays guarded.)
+        let publicPrefixInfixPairs: [(prefix: String, infix: String)] = [
+            ("/organizations/", "/scim/v2")
+        ]
+        let isPublicPrefixInfix = publicPrefixInfixPairs.contains { pair in
+            path.hasPrefix(pair.prefix) && path.contains(pair.infix)
+        }
         if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
-            || isAgentDownload || isAgentSnapshotArtifact
+            || isAgentDownload || isAgentSnapshotArtifact || isPublicPrefixInfix
         {
             return try await next.respond(to: request)
         }
