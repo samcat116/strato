@@ -1,3 +1,4 @@
+import Fluent
 import NIOConcurrencyHelpers
 import Vapor
 
@@ -35,10 +36,18 @@ final class BackgroundTaskRegistry: Sendable {
     /// shutdown). Tasks that outlive the timeout are cancelled and given
     /// `cancellationGrace` to unwind, so a long agent-response wait gets cut
     /// short instead of touching the database after Fluent tears down.
-    /// (Cancellation is cooperative — a task that ignores it can still
-    /// outlive the drain, but every await in the operation paths propagates
-    /// it.) Polls rather than awaiting task handles so a hung task cannot
-    /// pin the drain past its deadline.
+    ///
+    /// Cancellation is cooperative, and plain Fluent awaits (`.find`, `.save`,
+    /// `completeIfPending`) do *not* throw on cancellation — so a task parked
+    /// in a slow query on an overloaded host can survive `cancel` +
+    /// `cancellationGrace` and resume after storage is gone, where the next
+    /// `app.db` read force-unwraps nil (`Fluent/FluentProvider.swift`). The
+    /// completion paths defend against that by reading the database through
+    /// ``Application/liveDB`` and re-checking `Task.isCancelled` before each
+    /// access, so a drained task returns cleanly instead of crashing.
+    ///
+    /// Polls rather than awaiting task handles so a hung task cannot pin the
+    /// drain past its deadline.
     func drain(
         timeout: Duration = .seconds(2),
         cancellationGrace: Duration = .seconds(1)
@@ -79,6 +88,26 @@ extension Application {
         storage[BackgroundTaskRegistryKey.self] = BackgroundTaskRegistry()
         lifecycle.use(BackgroundTaskLifecycle())
     }
+
+    /// Fluent's default database, or `nil` when the current background task has
+    /// been cancelled by shutdown's drain.
+    ///
+    /// After `BackgroundTaskLifecycle` cancels a task that outlived the drain,
+    /// Vapor clears application storage, and any later read of `app.db`
+    /// force-unwraps nil (`Fluent/FluentProvider.swift`), crashing the whole
+    /// process. Post-`202` completion paths capture this once before their
+    /// first database access and reuse the handle: a `nil` here means
+    /// "cancelled — bail", and a task already parked in a
+    /// non-cancellation-throwing Fluent await resolves to a harmless thrown
+    /// error on the captured handle rather than a fatal unwrap.
+    ///
+    /// The check is sound because `Task.isCancelled` can be true here only
+    /// because `drain` issued the cancel, and `drain` issues it *before* it
+    /// returns — so before Vapor clears storage. A non-nil return therefore
+    /// guarantees storage is still live.
+    var liveDB: (any Database)? {
+        Task.isCancelled ? nil : self.db
+    }
 }
 
 /// Drains tracked background work during shutdown. Vapor runs lifecycle
@@ -87,6 +116,16 @@ extension Application {
 /// while the pools are still alive.
 struct BackgroundTaskLifecycle: LifecycleHandler {
     func shutdownAsync(_ application: Application) async {
-        await application.backgroundTasks.drain()
+        // Tests should prefer waiting over racing: a generous budget lets
+        // in-flight completion tasks finish their writes before the pool
+        // closes, so the full-suite run doesn't provoke the teardown race at
+        // all. Production keeps the bounded default so a task stuck on a
+        // multi-minute agent-response wait cannot stall shutdown.
+        if application.environment == .testing {
+            await application.backgroundTasks.drain(
+                timeout: .seconds(10), cancellationGrace: .seconds(2))
+        } else {
+            await application.backgroundTasks.drain()
+        }
     }
 }

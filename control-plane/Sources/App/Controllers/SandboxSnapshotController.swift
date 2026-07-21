@@ -186,7 +186,11 @@ extension SandboxController {
                     sandboxId: sandboxID, snapshotId: snapshotId, mode: mode,
                     agentId: agentId, app: app)
 
-                if let current = try await SandboxSnapshot.find(snapshotId, on: app.db) {
+                // The agent RPC above can span shutdown's drain; bail before the
+                // write-back if it cancelled us (see `Application.liveDB`), and
+                // reuse the captured handle for the rest of the body.
+                guard let db = app.liveDB else { return }
+                if let current = try await SandboxSnapshot.find(snapshotId, on: db) {
                     current.status = .ready
                     current.size = report.sizeBytes
                     current.storagePath = report.storagePath
@@ -201,7 +205,7 @@ extension SandboxController {
                     current.cpuTemplate = report.cpuTemplate
                     current.sourceCPUModel =
                         (await app.agentService.getAgentInfo(agentId))?.hostInfo?.cpuModel
-                    try await current.save(on: app.db)
+                    try await current.save(on: db)
                 }
 
                 // Admission reserved only an estimate (guest memory); the
@@ -210,18 +214,18 @@ extension SandboxController {
                 // enabled storage quota, delete the snapshot rather than keep
                 // over-quota storage.
                 if let violatedQuota = try await QuotaEnforcementService.storageOverCommit(
-                    projectID: projectID, environment: environment, on: app.db)
+                    projectID: projectID, environment: environment, on: db)
                 {
                     try? await SandboxSnapshotService.requestSnapshotDelete(
                         sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
-                    if let current = try? await SandboxSnapshot.find(snapshotId, on: app.db) {
+                    if let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
                         current.status = .error
                         current.errorMessage =
                             "Snapshot exceeded storage quota '\(violatedQuota)' and was deleted"
                         current.size = 0
-                        try? await current.save(on: app.db)
+                        try? await current.save(on: db)
                     }
-                    try? await QuotaEnforcementService.release(for: sandbox, on: app.db)
+                    try? await QuotaEnforcementService.release(for: sandbox, on: db)
                     await completeOperation(
                         operationId, sandboxID: sandboxID, as: .failed,
                         error:
@@ -243,13 +247,17 @@ extension SandboxController {
                 // the sandbox by the authoritative desired-state sync.
                 try? await SandboxSnapshotService.requestSnapshotDelete(
                     sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
-                if let current = try? await SandboxSnapshot.find(snapshotId, on: app.db) {
+                // `try?` does not catch the fatal unwrap a torn-down `app.db`
+                // produces, so short-circuit on cancellation before each access.
+                if let db = app.liveDB, let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
                     current.status = .error
                     current.errorMessage = error.localizedDescription
                     current.size = 0
-                    try? await current.save(on: app.db)
+                    try? await current.save(on: db)
                 }
-                try? await QuotaEnforcementService.release(for: sandbox, on: app.db)
+                if let db = app.liveDB {
+                    try? await QuotaEnforcementService.release(for: sandbox, on: db)
+                }
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .failed,
                     error: error.localizedDescription,
@@ -346,7 +354,10 @@ extension SandboxController {
                 let sandboxRef = snapshot.$sandbox.id
                 let projectRef = snapshot.$project.id
                 let ownerRef = snapshot.$createdBy.id
-                try await app.db.transaction { db in
+                // The agent RPC above can span shutdown's drain; bail before the
+                // row delete if it cancelled us (see `Application.liveDB`).
+                guard let db = app.liveDB else { return }
+                try await db.transaction { db in
                     try await snapshot.delete(on: db)
                     // IAM dual-write: drop the snapshot's bindings with the row.
                     try await RoleBindingService.revokeAll(
@@ -363,16 +374,18 @@ extension SandboxController {
                 try? await app.spicedb.deleteRelationship(
                     entity: "sandbox_snapshot", entityId: snapshotId.uuidString,
                     relation: "project", subject: "project", subjectId: projectRef.uuidString)
-                try? await QuotaEnforcementService.release(for: sandbox, on: app.db)
+                try? await QuotaEnforcementService.release(for: sandbox, on: db)
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
                     settingSandboxStatus: nil, app: app)
             } catch {
-                if let current = try? await SandboxSnapshot.find(snapshotId, on: app.db) {
+                // `try?` does not catch the fatal unwrap a torn-down `app.db`
+                // produces, so short-circuit on cancellation before the access.
+                if let db = app.liveDB, let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
                     // Keep `.deleting` — it is retryable (`canDelete`), and
                     // agent-side deletion is idempotent.
                     current.errorMessage = error.localizedDescription
-                    try? await current.save(on: app.db)
+                    try? await current.save(on: db)
                 }
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .failed,
@@ -548,8 +561,12 @@ extension SandboxController {
     /// sandbox and take the export records with them. Best-effort by the
     /// same rationale as `deleteExportedObjects`.
     static func cleanUpExportedSnapshotObjects(for sandboxID: UUID, app: Application) async {
+        // Best-effort cleanup runs on the delete completion paths, which may
+        // reach here after shutdown's drain cancelled the task; `try?` does not
+        // catch the fatal unwrap a torn-down `app.db` produces, so guard first.
+        guard let db = app.liveDB else { return }
         guard
-            let snapshots = try? await SandboxSnapshot.query(on: app.db)
+            let snapshots = try? await SandboxSnapshot.query(on: db)
                 .filter(\.$sandbox.$id == sandboxID)
                 .all()
         else { return }

@@ -195,7 +195,10 @@ extension Application {
         do {
             try await coordination.subscribe(channel: PolicySetVersionCache.channel) { [self] _ in
                 backgroundTasks.spawn {
-                    await self.policySetVersion.refresh(on: self.db)
+                    // Bail if shutdown's drain cancelled us before Fluent's
+                    // teardown (see `Application.liveDB`).
+                    guard let db = self.liveDB else { return }
+                    await self.policySetVersion.refresh(on: db)
                 }
             }
         } catch {
@@ -211,6 +214,10 @@ extension Application {
                 } catch {
                     return
                 }
+                // The sleep returned without cancelling, but the drain may have
+                // fired since; bail before touching the database (see
+                // `Application.liveDB`).
+                guard let db = liveDB else { return }
                 await policySetVersion.refresh(on: db)
             }
         }
