@@ -199,10 +199,11 @@ same asymmetric hazard as the v3 networks list:
   in #412. Restart is expressed as a fresh desired-`running` generation (there
   is no imperative sandbox reboot message); its agent-side interpretation
   lands with the runtime (#421).
-- `definition sandbox` in SpiceDB: a near-copy of `virtual_machine` minus
-  console/pause/promote, plus `exec` for phase 2. `SpiceDBAuthMiddleware`
-  guards `/api/sandboxes` through the same route-prefix → resource-type
-  mapping as VMs.
+- `sandbox` is an IAM node type of its own: the same action families as
+  `virtual_machine` minus console/pause/promote, plus `exec` for phase 2.
+  `AuthorizationMiddleware` guards `/api/sandboxes` through the same
+  route-prefix → resource-type mapping as VMs, with the sandbox action verbs
+  (`start`, `stop`, `restart`, `exec`).
 - Creation runs the quota admission check in the create transaction and places
   onto an agent that advertised the sandbox runtime (#415, see the versioning
   section above). Placement rides the same `filterEligibleAgents` pipeline and
@@ -351,13 +352,13 @@ endpoint.
 ### Control plane surface
 
 - `POST /api/sandboxes/:id/exec` — guarded by the `exec` permission (an
-  `actionVerbs` entry in `SpiceDBAuthMiddleware`, plus the in-handler check).
+  `actionVerbs` entry in `AuthorizationMiddleware`, plus the in-handler check).
   Requires the sandbox running, placed, its agent socketed to **this replica**,
   and the agent at protocol ≥ 8. Returns `201 {sessionId, websocketPath,
   expiresAt}`; pending sessions expire unattached after 60s.
 - `GET /api/sandboxes/:id/exec/:sessionId/attach` — WebSocket upgrade,
-  modeled on the VM console tunnel (in-handler SpiceDB `exec` re-check,
-  same-user binding to the pending session). Browser→CP: binary frames are
+  modeled on the VM console tunnel (in-handler `exec` re-check through the
+  evaluator, same-user binding to the pending session). Browser→CP: binary frames are
   stdin, text frames carry JSON `resize`. CP→browser: binary frames are
   output; text frames carry JSON `ready`/`exit`/`error` controls.
 

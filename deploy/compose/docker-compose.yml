@@ -14,9 +14,8 @@
 # for the node side.
 #
 # All credentials come from .env (created by setup.sh, mode 0600); nothing is
-# hardcoded here. The one-shot services (spicedb-migrate, spicedb-schema,
-# image-storage-init, spire-bootstrap) exit 0 after doing their job — that is
-# expected in `docker compose ps`.
+# hardcoded here. The one-shot services (image-storage-init, spire-bootstrap)
+# exit 0 after doing their job — that is expected in `docker compose ps`.
 #
 # For local development from source, use the docker-compose.yml at the
 # repository root instead.
@@ -30,69 +29,12 @@ services:
       POSTGRES_DB: vapor_database
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Creates the separate spicedb database on first initialization.
-      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vapor_username -d vapor_database"]
       interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  # One-shot: bring the SpiceDB datastore schema up to date.
-  spicedb-migrate:
-    image: authzed/spicedb:v1.35.3
-    command:
-      - migrate
-      - head
-      - --datastore-engine=postgres
-      - --datastore-conn-uri=postgres://vapor_username:${POSTGRES_PASSWORD}@db:5432/spicedb?sslmode=disable
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: "no"
-
-  spicedb:
-    image: authzed/spicedb:v1.35.3
-    command:
-      - serve
-      - --grpc-preshared-key=${SPICEDB_PRESHARED_KEY}
-      - --http-enabled
-      # Serve the HTTP gateway on 8080 to match the control plane's
-      # SPICEDB_ENDPOINT (and the Helm chart). Without this flag SpiceDB
-      # defaults HTTP to :8443, so the control plane's REST calls hit a dead
-      # port. (Schema loading here still uses gRPC via the spicedb-schema job.)
-      - --http-addr=:8080
-      - --datastore-engine=postgres
-      - --datastore-conn-uri=postgres://vapor_username:${POSTGRES_PASSWORD}@db:5432/spicedb?sslmode=disable
-    depends_on:
-      spicedb-migrate:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # One-shot: load the authorization schema. Safe to re-run on every `up`.
-  spicedb-schema:
-    image: authzed/zed:latest
-    command:
-      - schema
-      - write
-      - /schema/schema.zed
-      - --endpoint
-      - spicedb:50051
-      - --token
-      - ${SPICEDB_PRESHARED_KEY}
-      - --insecure
-    volumes:
-      - ../../spicedb/schema.zed:/schema/schema.zed:ro
-    depends_on:
-      spicedb:
-        condition: service_healthy
-    restart: "no"
 
   valkey:
     image: valkey/valkey:8.0-alpine
@@ -325,8 +267,6 @@ services:
       # plaintext is acceptable. Override with DATABASE_TLS=require (and
       # DATABASE_TLS_CA_CERT_PATH) if you point this at an external database.
       DATABASE_TLS: ${DATABASE_TLS:-disable}
-      SPICEDB_ENDPOINT: http://spicedb:8080
-      SPICEDB_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY}
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
@@ -415,10 +355,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      spicedb:
-        condition: service_healthy
-      spicedb-schema:
-        condition: service_completed_successfully
       valkey:
         condition: service_healthy
       image-storage-init:
@@ -428,7 +364,7 @@ services:
     healthcheck:
       # Readiness, not liveness: this is what `depends_on: service_healthy` and
       # `docker compose ps` report, and a control plane that cannot reach
-      # Postgres or SpiceDB should not read as healthy. `start_period` covers
+      # Postgres should not read as healthy. `start_period` covers
       # migrations and boot-time backfills, during which :8080 is not yet bound.
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
       interval: 10s
@@ -467,10 +403,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      spicedb:
-        condition: service_healthy
-      spicedb-schema:
-        condition: service_completed_successfully
       # The command boots the full Vapor app, whose production startup requires
       # Valkey (sessions + coordination, pinged at didBoot) — without this the
       # standalone `docker compose run --rm bootstrap` on a fresh project would

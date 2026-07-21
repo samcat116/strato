@@ -45,12 +45,7 @@ struct VolumeController: RouteCollection {
             let projectId = UUID(uuidString: projectIdString)
         {
             // Verify user has access to the project
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: projectId.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: projectId.uuidString)
 
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
@@ -113,12 +108,7 @@ struct VolumeController: RouteCollection {
         }
 
         // Check permission to create volumes in this project
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "create_volume",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
+        let hasPermission = try await req.can("create_volume", on: "project", id: projectId.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to create volumes in this project")
@@ -140,12 +130,7 @@ struct VolumeController: RouteCollection {
             // volume source: provisioning hands the agent a signed download URL
             // for it, so accepting an unauthorized image ID would let a user
             // materialize another project's image into their own volume.
-            let hasImagePermission = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "read",
-                resource: "image",
-                resourceId: sourceImageId.uuidString
-            )
+            let hasImagePermission = try await req.can("read", on: "image", id: sourceImageId.uuidString)
 
             guard hasImagePermission else {
                 throw Abort(.forbidden, reason: "Access denied to image")
@@ -178,9 +163,8 @@ struct VolumeController: RouteCollection {
             sourceImageID: request.sourceImageId
         )
 
-        // IAM dual-write (issue #477): the creator's explicit, revocable
-        // binding on the volume, in the same transaction as the row; SpiceDB
-        // stays authoritative.
+        // The creator's explicit, revocable binding on the volume, in the same
+        // transaction as the row (issue #477).
         try await req.db.transaction { db in
             try await volume.save(on: db)
             try await RoleBindingService.grant(
@@ -193,23 +177,6 @@ struct VolumeController: RouteCollection {
                 on: db
             )
         }
-
-        // Create SpiceDB relationship
-        try await req.spicedb.writeRelationship(
-            entity: "volume",
-            entityId: volume.id!.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: user.id!.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "volume",
-            entityId: volume.id!.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: projectId.uuidString
-        )
 
         // Provision the volume on an agent in the background. The volume stays
         // `.creating` until the agent confirms, then becomes `.available` with
@@ -320,52 +287,18 @@ struct VolumeController: RouteCollection {
             .all()
 
         for snapshot in snapshots {
-            // Delete SpiceDB relationships — both tuples, matching
-            // deleteSnapshot: a stale owner tuple would re-create the
-            // snapshot's binding via the SpiceDB export backfill.
-            try await req.spicedb.deleteRelationship(
-                entity: "volume_snapshot",
-                entityId: snapshot.id!.uuidString,
-                relation: "volume",
-                subject: "volume",
-                subjectId: volume.id!.uuidString
-            )
-            try await req.spicedb.deleteRelationship(
-                entity: "volume_snapshot",
-                entityId: snapshot.id!.uuidString,
-                relation: "owner",
-                subject: "user",
-                subjectId: snapshot.$createdBy.id.uuidString
-            )
             try await req.db.transaction { db in
                 try await snapshot.delete(on: db)
-                // IAM dual-write: drop the snapshot's bindings with the row.
+                // Drop the snapshot's bindings with the row.
                 try await RoleBindingService.revokeAll(
                     nodeType: .volumeSnapshot, nodeID: snapshot.id!, on: db)
             }
         }
 
-        // Delete SpiceDB relationships
-        try await req.spicedb.deleteRelationship(
-            entity: "volume",
-            entityId: volume.id!.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: volume.$createdBy.id.uuidString
-        )
-
-        try await req.spicedb.deleteRelationship(
-            entity: "volume",
-            entityId: volume.id!.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: volume.$project.id.uuidString
-        )
-
         try await req.db.transaction { db in
             try await volume.delete(on: db)
-            // IAM dual-write: bindings have no FK to the resources they
-            // protect, so drop them with the node.
+            // Bindings have no FK to the resources they protect, so drop
+            // them with the node.
             try await RoleBindingService.revokeAll(
                 nodeType: .volume, nodeID: volume.id!, on: db)
         }
@@ -403,12 +336,7 @@ struct VolumeController: RouteCollection {
         }
 
         // Attaching changes the VM, so the caller needs update on it too.
-        let hasVMPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "update",
-            resource: "virtual_machine",
-            resourceId: vm.id!.uuidString
-        )
+        let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
 
         guard hasVMPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
@@ -680,8 +608,8 @@ struct VolumeController: RouteCollection {
             createdByID: user.id!
         )
 
-        // IAM dual-write (issue #477): creator binding on the snapshot, in the
-        // same transaction as the row.
+        // Creator binding on the snapshot, in the same transaction as the row
+        // (issue #477).
         try await req.db.transaction { db in
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
@@ -694,23 +622,6 @@ struct VolumeController: RouteCollection {
                 on: db
             )
         }
-
-        // Create SpiceDB relationships
-        try await req.spicedb.writeRelationship(
-            entity: "volume_snapshot",
-            entityId: snapshot.id!.uuidString,
-            relation: "volume",
-            subject: "volume",
-            subjectId: volume.id!.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "volume_snapshot",
-            entityId: snapshot.id!.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: user.id!.uuidString
-        )
 
         // Create the snapshot on the hypervisor; the agent reports the actual
         // snapshot storage path.
@@ -790,8 +701,8 @@ struct VolumeController: RouteCollection {
             sourceVolumeID: sourceVolume.id
         )
 
-        // IAM dual-write (issue #477): creator binding on the cloned volume,
-        // in the same transaction as the row.
+        // Creator binding on the cloned volume, in the same transaction as
+        // the row (issue #477).
         try await req.db.transaction { db in
             try await newVolume.save(on: db)
             try await RoleBindingService.grant(
@@ -804,23 +715,6 @@ struct VolumeController: RouteCollection {
                 on: db
             )
         }
-
-        // Create SpiceDB relationships
-        try await req.spicedb.writeRelationship(
-            entity: "volume",
-            entityId: newVolume.id!.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: user.id!.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "volume",
-            entityId: newVolume.id!.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: sourceVolume.$project.id.uuidString
-        )
 
         // Clone on the agent in the background (copying a disk image can take
         // minutes). The new volume stays `.creating` until the agent confirms,
@@ -892,12 +786,7 @@ struct VolumeController: RouteCollection {
         }
 
         // Check permission to delete snapshot
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "delete",
-            resource: "volume_snapshot",
-            resourceId: snapshotId.uuidString
-        )
+        let hasPermission = try await req.can("delete", on: "volume_snapshot", id: snapshotId.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
@@ -932,26 +821,9 @@ struct VolumeController: RouteCollection {
             throw Abort(.badGateway, reason: "Failed to delete snapshot on hypervisor: \(error.localizedDescription)")
         }
 
-        // Delete SpiceDB relationships
-        try await req.spicedb.deleteRelationship(
-            entity: "volume_snapshot",
-            entityId: snapshotId.uuidString,
-            relation: "volume",
-            subject: "volume",
-            subjectId: volume.id!.uuidString
-        )
-
-        try await req.spicedb.deleteRelationship(
-            entity: "volume_snapshot",
-            entityId: snapshotId.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: snapshot.$createdBy.id.uuidString
-        )
-
         try await req.db.transaction { db in
             try await snapshot.delete(on: db)
-            // IAM dual-write: drop the snapshot's bindings with the row.
+            // Drop the snapshot's bindings with the row.
             try await RoleBindingService.revokeAll(
                 nodeType: .volumeSnapshot, nodeID: snapshotId, on: db)
         }
@@ -980,12 +852,7 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "Volume not found")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "volume",
-            resourceId: volumeId.uuidString
-        )
+        let hasPermission = try await req.can(permission, on: "volume", id: volumeId.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this volume")
@@ -1001,12 +868,7 @@ struct VolumeController: RouteCollection {
         var accessibleProjectIds: [UUID] = []
 
         for project in allProjects {
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: project.id!.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
             if hasAccess {
                 accessibleProjectIds.append(project.id!)
             }

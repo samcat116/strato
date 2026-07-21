@@ -608,7 +608,6 @@ final class SSFStreamAPITests {
             try await builder.addUserToOrganization(user: user, organization: org)
             let token = try await user.generateAPIKey(on: app.db)
 
-            app.spicedbMockAllows = false
             try await app.test(.POST, "/api/organizations/\(org.id!.uuidString)/ssf-streams") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(

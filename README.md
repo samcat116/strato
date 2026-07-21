@@ -11,14 +11,14 @@ Strato is a fast, secure, and easy to deploy private cloud platform based on bat
 - 🚀 **High Performance**: Swift control plane and agent, QEMU with KVM/HVF acceleration
 - 🔒 **WebAuthn/Passkey Authentication**: Modern passwordless authentication
 - 🏗️ **VM Management**: Full lifecycle management via QEMU (and Firecracker on Linux)
-- 🔐 **Fine-grained Authorization**: SpiceDB-backed relationship-based access control
+- 🔐 **Fine-grained Authorization**: built-in Cedar policy engine (IAM roles + resource hierarchy) — no external authz service
 - 🛡️ **Secure by Default**: Deployments generate strong secrets on first run — no baked-in credentials
 - 🌐 **Software-defined Networking**: OVN/OVS integration on Linux hypervisors
 - 📊 **PostgreSQL Backend**: Reliable data persistence with Fluent ORM
 
 ## Quick Start
 
-Secrets (database password, authorization keys) are generated automatically in
+Secrets (database and session-store passwords) are generated automatically in
 both paths — a fresh install is secure by default with zero secret
 configuration.
 
@@ -32,9 +32,9 @@ docker compose up -d
 ```
 
 Open `http://localhost` and register — the first user automatically becomes
-the system administrator. Database migrations and authorization schema loading
-happen automatically. See [deploy/compose/README.md](deploy/compose/README.md)
-for real-hostname/TLS deployments.
+the system administrator. Database migrations run automatically. See
+[deploy/compose/README.md](deploy/compose/README.md) for real-hostname/TLS
+deployments.
 
 ### Kubernetes (Helm)
 
@@ -83,7 +83,7 @@ image. See the [local development guide](docs/development/local-development.md).
 - **[Vapor](https://vapor.codes)** - Server-side Swift web framework
 - **[QEMU](https://www.qemu.org)** - VM execution with KVM (Linux) / HVF (macOS) acceleration
 - **[PostgreSQL](https://www.postgresql.org)** - Advanced open source database
-- **[SpiceDB](https://authzed.com/spicedb)** - Zanzibar-style fine-grained authorization
+- **[Cedar](https://www.cedarpolicy.com)** - Policy language powering the built-in authorization engine
 - **[OVN/OVS](https://www.ovn.org)** - Software-defined networking (Linux)
 - **[Next.js](https://nextjs.org)** - Web frontend
 
@@ -108,7 +108,6 @@ strato/
 ├── shared/              # Common models and WebSocket protocol
 ├── deploy/compose/      # Single-host Docker Compose deployment
 ├── helm/                # Kubernetes Helm chart
-├── spicedb/             # Authorization schema
 └── docs/                # VitePress documentation site
 ```
 

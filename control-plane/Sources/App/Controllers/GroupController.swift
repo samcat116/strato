@@ -115,18 +115,6 @@ struct GroupController: RouteCollection {
 
         try await group.save(on: req.db)
 
-        // Create relationships in SpiceDB
-        let groupId = group.id?.uuidString ?? ""
-
-        // Link group to organization
-        try await req.spicedb.writeRelationship(
-            entity: "group",
-            entityId: groupId,
-            relation: "organization",
-            subject: "organization",
-            subjectId: organizationID.uuidString
-        )
-
         return GroupResponse(from: group, memberCount: 0)
     }
 
@@ -204,32 +192,6 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
         }
 
-        // Delete group relationships from SpiceDB
-        let groupId = group.id?.uuidString ?? ""
-
-        // Delete all group memberships in SpiceDB
-        let members = try await group.getMembersWithJoinDates(on: req.db)
-        for member in members {
-            if let userId = member.id?.uuidString {
-                try await req.spicedb.deleteRelationship(
-                    entity: "group",
-                    entityId: groupId,
-                    relation: "member",
-                    subject: "user",
-                    subjectId: userId
-                )
-            }
-        }
-
-        // Delete organization relationship
-        try await req.spicedb.deleteRelationship(
-            entity: "group",
-            entityId: groupId,
-            relation: "organization",
-            subject: "organization",
-            subjectId: organizationID.uuidString
-        )
-
         // Delete from database (this will cascade delete user_groups)
         try await group.delete(on: req.db)
         return .noContent
@@ -288,8 +250,6 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
         }
 
-        let groupId = group.id?.uuidString ?? ""
-
         // Add each user to the group
         for userID in addRequest.userIds {
             // Verify user exists and belongs to organization
@@ -304,17 +264,7 @@ struct GroupController: RouteCollection {
                 continue  // Skip invalid users instead of failing the entire request
             }
 
-            // Add to database
             try await group.addMember(userID, on: req.db)
-
-            // Add to SpiceDB
-            try await req.spicedb.writeRelationship(
-                entity: "group",
-                entityId: groupId,
-                relation: "member",
-                subject: "user",
-                subjectId: userID.uuidString
-            )
         }
 
         return .ok
@@ -345,21 +295,9 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
         }
 
-        let groupId = group.id?.uuidString ?? ""
-
         // Remove each user from the group
         for userID in removeRequest.userIds {
-            // Remove from database
             try await group.removeMember(userID, on: req.db)
-
-            // Remove from SpiceDB
-            try await req.spicedb.deleteRelationship(
-                entity: "group",
-                entityId: groupId,
-                relation: "member",
-                subject: "user",
-                subjectId: userID.uuidString
-            )
         }
 
         return .ok
@@ -389,19 +327,7 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
         }
 
-        let groupId = group.id?.uuidString ?? ""
-
-        // Remove from database
         try await group.removeMember(userID, on: req.db)
-
-        // Remove from SpiceDB
-        try await req.spicedb.deleteRelationship(
-            entity: "group",
-            entityId: groupId,
-            relation: "member",
-            subject: "user",
-            subjectId: userID.uuidString
-        )
 
         return .ok
     }

@@ -13,24 +13,6 @@ strato:
     relyingPartyName: "Strato Production"
     relyingPartyOrigin: "https://strato-prod.example.com"
 
-spicedb:
-  enabled: true
-  presharedKey: "prod-secure-spicedb-key-change-in-production"
-  replicaCount: 1  # Would be 2+ in real production
-  resources:
-    requests:
-      cpu: 250m
-      memory: 256Mi
-    limits:
-      cpu: 1000m
-      memory: 1Gi
-  persistence:
-    enabled: true
-    size: 20Gi
-  podDisruptionBudget:
-    enabled: true
-    minAvailable: 1
-
 postgresql:
   enabled: true
   auth:
@@ -77,8 +59,6 @@ monitoring:
 # Disable problematic init containers for CI
 initContainers:
   waitForDB:
-    enabled: false
-  waitForSpiceDB:
     enabled: false
 
 # Disable migration job for CI

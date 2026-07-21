@@ -10,7 +10,6 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
 
     let db: Database
     let organizationID: UUID
-    let spicedb: SpiceDBServiceProtocol
 
     // MARK: - Create
 
@@ -152,18 +151,6 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
                 .first()
         else {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
-        }
-
-        // Remove all members from SpiceDB
-        let members = try await App.UserGroup.query(on: db)
-            .filter(\.$group.$id == uuid)
-            .all()
-
-        for member in members {
-            try await spicedb.removeUserFromGroup(
-                userID: member.$user.id.uuidString,
-                groupID: uuid.uuidString
-            )
         }
 
         // Delete the group (cascade will remove UserGroup entries)
@@ -312,21 +299,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         let membership = App.UserGroup(userID: userID, groupID: groupID)
         do {
             try await membership.save(on: db)
-
-            // Add to SpiceDB only if DB save succeeded
-            try await spicedb.addUserToGroup(
-                userID: userID.uuidString,
-                groupID: groupID.uuidString
-            )
         } catch {
             // Check if this was a duplicate key error (membership already exists)
             let errorDescription = String(describing: error).lowercased()
             if errorDescription.contains("unique") || errorDescription.contains("duplicate") {
-                // Membership already exists, which is fine - ensure SpiceDB is in sync
-                try await spicedb.addUserToGroup(
-                    userID: userID.uuidString,
-                    groupID: groupID.uuidString
-                )
+                // Membership already exists, which is fine
             } else {
                 throw error
             }
@@ -334,13 +311,6 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
     }
 
     private func removeMemberFromGroup(userID: UUID, groupID: UUID) async throws {
-        // Remove from SpiceDB first - if this fails, we don't want orphaned DB records
-        try await spicedb.removeUserFromGroup(
-            userID: userID.uuidString,
-            groupID: groupID.uuidString
-        )
-
-        // Then remove from database
         try await App.UserGroup.query(on: db)
             .filter(\.$user.$id == userID)
             .filter(\.$group.$id == groupID)
@@ -348,17 +318,6 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
     }
 
     private func removeAllMembersFromGroup(groupID: UUID) async throws {
-        let members = try await App.UserGroup.query(on: db)
-            .filter(\.$group.$id == groupID)
-            .all()
-
-        for member in members {
-            try await spicedb.removeUserFromGroup(
-                userID: member.$user.id.uuidString,
-                groupID: groupID.uuidString
-            )
-        }
-
         try await App.UserGroup.query(on: db)
             .filter(\.$group.$id == groupID)
             .delete()

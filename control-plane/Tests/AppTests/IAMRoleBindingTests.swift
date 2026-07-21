@@ -6,9 +6,9 @@ import VaporTesting
 @testable import App
 
 /// IAM phase 1 (issue #477): the role/action registry, the role_bindings
-/// store, the dual-writes at controller mutation sites, and the backfills
-/// (relational mirrors + SpiceDB export). SpiceDB remains authoritative; these
-/// tests assert the bindings shadow it correctly.
+/// store, the dual-writes at controller mutation sites, and the
+/// relational-mirror backfill. The bindings are what the Cedar evaluator
+/// authorizes from; these tests assert they are written correctly.
 @Suite("IAM Role Binding Tests", .serialized)
 final class IAMRoleBindingTests {
 
@@ -167,72 +167,6 @@ final class IAMRoleBindingTests {
             let groupBinding = projectBindings.first { $0.principalType == IAMPrincipalType.group.rawValue }
             #expect(groupBinding?.principalID == group.id)
             #expect(groupBinding?.role == IAMRole.viewer.rawValue)
-        }
-    }
-
-    @Test("SpiceDB export backfill converts resource owner/editor/viewer tuples to bindings")
-    func backfillFromSpiceDBExport() async throws {
-        try await withApp { app in
-            let vmID = UUID()
-            let volumeID = UUID()
-            let floatingIPID = UUID()
-            let sandboxSnapshotID = UUID()
-            let owner = UUID()
-            let editor = UUID()
-            let viewer = UUID()
-            app.spicedbMockRelationships = [
-                RelationshipTuple(
-                    entity: "virtual_machine", entityId: vmID.uuidString.uppercased(),
-                    relation: "owner", subject: "user", subjectId: owner.uuidString.uppercased()),
-                RelationshipTuple(
-                    entity: "virtual_machine", entityId: vmID.uuidString,
-                    relation: "editor", subject: "user", subjectId: editor.uuidString),
-                RelationshipTuple(
-                    entity: "virtual_machine", entityId: vmID.uuidString,
-                    relation: "viewer", subject: "user", subjectId: viewer.uuidString),
-                RelationshipTuple(
-                    entity: "volume", entityId: volumeID.uuidString,
-                    relation: "owner", subject: "user", subjectId: owner.uuidString),
-                // Structural tuple: subject isn't a user, must be skipped.
-                RelationshipTuple(
-                    entity: "volume", entityId: volumeID.uuidString,
-                    relation: "owner", subject: "project", subjectId: UUID().uuidString),
-                // Owner-only types whose omission from the export would lose
-                // pre-dual-write grants at cutover (issue #482 audit).
-                RelationshipTuple(
-                    entity: "floating_ip", entityId: floatingIPID.uuidString,
-                    relation: "owner", subject: "user", subjectId: owner.uuidString),
-                RelationshipTuple(
-                    entity: "sandbox_snapshot", entityId: sandboxSnapshotID.uuidString,
-                    relation: "owner", subject: "user", subjectId: owner.uuidString),
-            ]
-
-            try await RoleBindingBackfill.backfillFromSpiceDB(app)
-            try await RoleBindingBackfill.backfillFromSpiceDB(app)
-
-            let vmBindings = try await bindings(on: app.db, nodeType: .virtualMachine, nodeID: vmID)
-            #expect(vmBindings.count == 3)
-            let ownerBinding = vmBindings.first { $0.principalID == owner }
-            #expect(ownerBinding?.role == IAMRole.admin.rawValue)
-            let editorBinding = vmBindings.first { $0.principalID == editor }
-            #expect(editorBinding?.role == IAMRole.editor.rawValue)
-            let viewerBinding = vmBindings.first { $0.principalID == viewer }
-            #expect(viewerBinding?.role == IAMRole.viewer.rawValue)
-
-            let volumeBindings = try await bindings(on: app.db, nodeType: .volume, nodeID: volumeID)
-            #expect(volumeBindings.count == 1)
-            #expect(volumeBindings.first?.principalID == owner)
-
-            let floatingIPBindings = try await bindings(on: app.db, nodeType: .floatingIP, nodeID: floatingIPID)
-            #expect(floatingIPBindings.count == 1)
-            #expect(floatingIPBindings.first?.principalID == owner)
-            #expect(floatingIPBindings.first?.role == IAMRole.admin.rawValue)
-
-            let snapshotBindings = try await bindings(
-                on: app.db, nodeType: .sandboxSnapshot, nodeID: sandboxSnapshotID)
-            #expect(snapshotBindings.count == 1)
-            #expect(snapshotBindings.first?.principalID == owner)
-            #expect(snapshotBindings.first?.role == IAMRole.admin.rawValue)
         }
     }
 

@@ -1,6 +1,6 @@
 # Strato Control Plane Helm Chart
 
-This Helm chart deploys the Strato control plane application with all its dependencies including PostgreSQL database and SpiceDB authorization service.
+This Helm chart deploys the Strato control plane application with all its dependencies including a PostgreSQL database. Authorization is handled by the control plane's built-in Cedar policy engine — no external authorization service is deployed.
 
 ## Prerequisites
 
@@ -16,7 +16,6 @@ First, add the required Helm repositories:
 
 ```bash
 helm repo add bitnami https://charts.bitnami.com/bitnami
-helm repo add spicedb-operator-chart https://bushelpowered.github.io/spicedb-operator-chart/
 helm repo update
 ```
 
@@ -46,7 +45,7 @@ helm install strato-control-plane ./helm/strato-control-plane -f my-values.yaml
 ### Required Configuration
 
 Secrets are generated automatically: on first install the chart creates strong
-random credentials (PostgreSQL passwords and the SpiceDB preshared key) in the
+random credentials (PostgreSQL passwords) in the
 `<release>-strato-credentials` secret and reuses them on every upgrade. The
 secret is kept on uninstall so a reinstall keeps matching a retained database
 volume. A bare `helm install` is secure by default — you only need to set the
@@ -67,9 +66,9 @@ strato:
 ```
 
 To supply your own secrets instead of the generated ones, set
-`postgresql.auth.password`, `postgresql.auth.postgresPassword`, and/or
-`spicedb.presharedKey`; explicit values always win and are stored in the same
-credentials secret so every consumer stays in sync.
+`postgresql.auth.password` and/or `postgresql.auth.postgresPassword`; explicit
+values always win and are stored in the same credentials secret so every
+consumer stays in sync.
 
 ### Common Configuration Options
 
@@ -84,15 +83,6 @@ resources:
   requests:
     cpu: 500m
     memory: 512Mi
-
-spicedb:
-  resources:
-    limits:
-      cpu: 1000m
-      memory: 1Gi
-    requests:
-      cpu: 250m
-      memory: 256Mi
 
 # High availability
 replicaCount: 2
@@ -128,23 +118,6 @@ externalDatabase:
   password: external-db-password
 ```
 
-SpiceDB's Postgres connection pools default to small, shared-database-friendly
-sizes (read 8 max / 2 min, write 2 max / 1 min per replica) so that a managed
-database with a low connection cap (e.g. DigitalOcean's 1GB tier allows ~22
-non-superuser connections) isn't exhausted before the control plane can
-connect. On a dedicated or larger database, raise
-`spicedb.datastore.connPool.*` toward SpiceDB's upstream defaults (read 20,
-write 10) for more throughput.
-
-#### Disable SpiceDB
-
-If you don't need authorization features:
-
-```yaml
-spicedb:
-  enabled: false
-```
-
 ## Values Reference
 
 | Key | Type | Default | Description |
@@ -169,15 +142,6 @@ spicedb:
 | `postgresql.auth.database` | string | `"vapor_database"` | PostgreSQL database name |
 | `postgresql.auth.username` | string | `"vapor_username"` | PostgreSQL username |
 | `postgresql.auth.password` | string | `""` | PostgreSQL password (auto-generated when empty) |
-| `spicedb.enabled` | bool | `true` | Enable SpiceDB authorization |
-| `spicedb.operator.enabled` | bool | `true` | Install the SpiceDB Operator dependency |
-| `spicedb.presharedKey` | string | `""` | SpiceDB preshared key (auto-generated when empty) |
-| `spicedb.datastore.connPool.read.maxOpen` | int | `8` | Max open Postgres connections in SpiceDB's read pool |
-| `spicedb.datastore.connPool.read.minOpen` | int | `2` | Min (idle) Postgres connections in SpiceDB's read pool |
-| `spicedb.datastore.connPool.write.maxOpen` | int | `2` | Max open Postgres connections in SpiceDB's write pool |
-| `spicedb.datastore.connPool.write.minOpen` | int | `1` | Min (idle) Postgres connections in SpiceDB's write pool |
-| `spicedb.resources.limits.cpu` | string | `"500m"` | SpiceDB CPU limit |
-| `spicedb.resources.limits.memory` | string | `"512Mi"` | SpiceDB memory limit |
 | `ingress.enabled` | bool | `false` | Enable the legacy ingress-nginx path (superseded by `gateway`) |
 | `gateway.enabled` | bool | `false` | Route external traffic via Gateway API (Envoy Gateway): HTTPRoute for UI/API + frontend, TLS-passthrough TLSRoutes for `agents.<host>` (Envoy sidecar mTLS) and `spire.<host>` (SPIRE node API), all sharing :443 by SNI |
 | `gateway.create` | bool | `false` | Render the Gateway (and optional GatewayClass) instead of only attaching routes to an operator-provided one |
@@ -238,7 +202,6 @@ If pods are stuck in `Init:0/1` or `Init:0/2` state, check the init container lo
 
 ```bash
 kubectl logs <pod-name> -c wait-for-db
-kubectl logs <pod-name> -c wait-for-spicedb
 ```
 
 This usually indicates connectivity issues between services.
@@ -256,22 +219,6 @@ kubectl run postgresql-client --rm --tty -i --restart='Never' \
   --image docker.io/bitnami/postgresql:16 \
   --env="PGPASSWORD=$POSTGRES_PASSWORD" \
   --command -- psql --host <release-name>-postgresql -U vapor_username -d vapor_database -c 'SELECT version();'
-```
-
-#### SpiceDB Authorization Issues
-
-Check SpiceDB logs and schema:
-
-```bash
-# Check SpiceDB logs
-kubectl logs -l app.kubernetes.io/component=spicedb
-
-# Get the SpiceDB preshared key (auto-generated on first install)
-kubectl get secret <release-name>-strato-credentials -o jsonpath="{.data.spicedb-preshared-key}" | base64 -d
-
-# Verify schema is loaded
-kubectl port-forward svc/<release-name>-spicedb 8080:8080 &
-curl -H "Authorization: Bearer <preshared-key>" http://localhost:8080/v1/schema/read
 ```
 
 ### Debug Commands
@@ -312,7 +259,7 @@ kubectl logs <pod-name> --all-containers=true
 
 When `networkPolicy.enabled=true`, the chart creates policies that:
 - Allow ingress traffic only on application ports
-- Allow egress to database and SpiceDB services
+- Allow egress to the database and other release services
 - Allow DNS resolution
 - Deny all other traffic by default
 

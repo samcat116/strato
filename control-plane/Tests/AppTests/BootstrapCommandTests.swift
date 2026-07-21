@@ -91,35 +91,6 @@ struct BootstrapCommandTests {
         }
     }
 
-    @Test("Rolls back all rows when a SpiceDB write fails, so a retry works")
-    func rollsBackOnSpiceDBFailure() async throws {
-        try await withTestApp { app in
-            app.spicedbMockWritesFail = true
-            await #expect(throws: (any Error).self) {
-                try await runBootstrap(app, arguments: ["--quiet"])
-            }
-
-            // Nothing may survive the failed run — most importantly no user row,
-            // which would otherwise trip the isFirstUser guard forever.
-            let userCount = try await User.query(on: app.db).count()
-            #expect(userCount == 0)
-            let orgCount = try await Organization.query(on: app.db).count()
-            #expect(orgCount == 0)
-            let projectCount = try await Project.query(on: app.db).count()
-            #expect(projectCount == 0)
-            let bindingCount = try await RoleBinding.query(on: app.db).count()
-            #expect(bindingCount == 0)
-            let keyCount = try await APIKey.query(on: app.db).count()
-            #expect(keyCount == 0)
-
-            // With SpiceDB healthy again, the retry succeeds.
-            app.spicedbMockWritesFail = false
-            try await runBootstrap(app, arguments: ["--quiet"])
-            let usersAfterRetry = try await User.query(on: app.db).count()
-            #expect(usersAfterRetry == 1)
-        }
-    }
-
     @Test("A second run refuses instead of duplicating seed data")
     func secondRunRefuses() async throws {
         try await withTestApp { app in

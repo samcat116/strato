@@ -28,7 +28,7 @@ final class OrganizationAccessServiceTests {
     }
 
     /// Builds an authenticated `Request` so the static service methods can resolve the
-    /// current user and the (mock) SpiceDB service.
+    /// current user.
     private func authedRequest(_ app: Application, user: User) -> Request {
         let req = Request(
             application: app,

@@ -13,11 +13,6 @@ strato:
     relyingPartyName: "Strato"
     relyingPartyOrigin: "http://monitoring.local:8080"
 
-spicedb:
-  presharedKey: "monitoring-test-key"
-  persistence:
-    enabled: false
-
 postgresql:
   auth:
     database: vapor_database

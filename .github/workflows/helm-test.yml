@@ -8,15 +8,11 @@ on:
     branches: [main, develop]
     paths:
       - "helm/**"
-      # The chart embeds a copy of the SpiceDB schema; run on canonical-schema
-      # changes too so the drift check can catch a missed sync.
-      - "spicedb/schema.zed"
       - ".github/workflows/helm-test.yml"
   pull_request:
     branches: [main, develop]
     paths:
       - "helm/**"
-      - "spicedb/schema.zed"
       - ".github/workflows/helm-test.yml"
   workflow_dispatch:
 
@@ -51,15 +47,6 @@ jobs:
       - name: Lint Helm chart
         run: |
           helm lint helm/strato-control-plane/
-
-      - name: Check SpiceDB schema copies are in sync
-        run: |
-          # The chart ships a verbatim copy of the authorization schema because
-          # Helm cannot read files outside the chart root. Fail on any drift so
-          # a schema change can never silently miss Kubernetes installs again.
-          diff -u spicedb/schema.zed helm/strato-control-plane/files/spicedb-schema.zed \
-            || { echo "❌ helm/strato-control-plane/files/spicedb-schema.zed is out of sync with spicedb/schema.zed — copy the canonical file into the chart"; exit 1; }
-          echo "✅ Chart schema matches spicedb/schema.zed"
 
       - name: Validate chart dependencies
         run: |
@@ -116,12 +103,7 @@ jobs:
           import base64, re, sys
           r = open('/tmp/default-template.yaml').read()
           pw = base64.b64decode(re.search(r'db-password: "([^"]+)"', r).group(1)).decode()
-          uri = base64.b64decode(re.search(r'datastore-conn-uri: "([^"]+)"', r).group(1)).decode()
-          psk = base64.b64decode(re.search(r'spicedb-preshared-key: "([^"]+)"', r).group(1)).decode()
-          cfg = base64.b64decode(re.search(r'\n  preshared-key: "([^"]+)"', r).group(1)).decode()
-          assert pw in uri, "SpiceDB datastore-conn-uri does not use the generated db password"
-          assert psk == cfg, "credentials secret and spicedb config secret disagree on preshared key"
-          assert len(pw) >= 32 and len(psk) >= 32, "generated credentials too short"
+          assert len(pw) >= 32, "generated credentials too short"
           print("✅ Generated credentials are internally consistent")
           EOF
 
@@ -132,11 +114,8 @@ jobs:
             --set image.tag=latest \
             --set strato.logLevel=info \
             --set postgresql.auth.password=secure-password \
-            --set spicedb.presharedKey=secure-spicedb-key \
             --set resources.limits.cpu=2000m \
             --set resources.limits.memory=2Gi \
-            --set spicedb.resources.limits.cpu=1000m \
-            --set spicedb.resources.limits.memory=1Gi \
             --set networkPolicy.enabled=true \
             --set podDisruptionBudget.enabled=true > /tmp/production-template.yaml
           echo "Production template generated successfully"
@@ -316,10 +295,6 @@ jobs:
           strato:
             logLevel: debug
 
-          # Disable SpiceDB for faster CI
-          spicedb:
-            enabled: false
-
           # Use external database configuration (no actual DB deployment)
           postgresql:
             enabled: false
@@ -344,8 +319,6 @@ jobs:
 
           initContainers:
             waitForDB:
-              enabled: false
-            waitForSpiceDB:
               enabled: false
 
           # Disable migration job
@@ -532,9 +505,6 @@ jobs:
             logLevel: info
 
           # Disable heavy components for faster testing
-          spicedb:
-            enabled: false
-
           postgresql:
             enabled: false
 
@@ -558,8 +528,6 @@ jobs:
           initContainers:
             waitForDB:
               enabled: false
-            waitForSpiceDB:
-              enabled: false
 
           migration:
             enabled: false
@@ -581,9 +549,6 @@ jobs:
             logLevel: debug
 
           # Disable heavy components for faster testing
-          spicedb:
-            enabled: false
-
           postgresql:
             enabled: false
 
@@ -606,8 +571,6 @@ jobs:
 
           initContainers:
             waitForDB:
-              enabled: false
-            waitForSpiceDB:
               enabled: false
 
           migration:

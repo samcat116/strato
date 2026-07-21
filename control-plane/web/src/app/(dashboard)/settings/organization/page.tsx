@@ -51,7 +51,7 @@ export default function OrganizationSettingsPage() {
   const { data: members = [], isLoading: isMembersLoading } =
     useOrganizationMembers(id);
 
-  // Permission-driven gating (SpiceDB) rather than a hardcoded role string.
+  // Permission-driven gating (IAM can-i checks) rather than a hardcoded role string.
   const { permissions } = usePermissions(
     id
       ? [

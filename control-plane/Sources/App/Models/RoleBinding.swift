@@ -5,10 +5,9 @@ import Vapor
 /// A role grant: `principal` holds `role` on `node` (an org-tree node or an
 /// individual resource), optionally conditioned and optionally expiring.
 ///
-/// This table is the future policy store for the Cedar-based evaluator (see
-/// docs/architecture/iam.md). During the migration it is dual-written alongside
-/// the SpiceDB tuples, which remain authoritative; nothing enforces from this
-/// table yet. Rows are written in the same database transaction as the
+/// This table is the policy store for the Cedar-based evaluator (see
+/// docs/architecture/iam.md) — what grants evaluate from since the cutover
+/// (issue #482). Rows are written in the same database transaction as the
 /// mutation they accompany wherever one exists.
 ///
 /// There is deliberately no foreign key on `node_id`: the column points at

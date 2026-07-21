@@ -38,7 +38,7 @@ final class SCIMFilterTests: BaseTestCase {
         op: SCIMFilterOperator,
         value: String
     ) async throws -> [String] {
-        let handler = UserSCIMHandler(db: app.db, organizationID: org.id!, spicedb: try app.spicedb)
+        let handler = UserSCIMHandler(db: app.db, organizationID: org.id!)
         let query = userQuery(.attribute(path, op, value))
         let response = try await handler.search(query: query, context: makeContext())
         return response.Resources.map(\.userName).sorted()
@@ -52,7 +52,7 @@ final class SCIMFilterTests: BaseTestCase {
         op: SCIMFilterOperator,
         value: String
     ) async throws -> [String] {
-        let handler = GroupSCIMHandler(db: app.db, organizationID: org.id!, spicedb: try app.spicedb)
+        let handler = GroupSCIMHandler(db: app.db, organizationID: org.id!)
         let query = SCIMServerQuery(filter: .attribute(path, op, value))
         let response = try await handler.search(query: query, context: makeContext())
         return response.Resources.map(\.displayName).sorted()

@@ -30,12 +30,7 @@ struct NetworkController: RouteCollection {
         if let projectIdString = req.query[String.self, at: "project_id"],
             let projectId = UUID(uuidString: projectIdString)
         {
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: projectId.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: projectId.uuidString)
 
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
@@ -106,12 +101,7 @@ struct NetworkController: RouteCollection {
             throw Abort(.badRequest, reason: "No project specified and user has no current organization")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "create_network",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
+        let hasPermission = try await req.can("create_network", on: "project", id: projectId.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to create networks in this project")
@@ -171,9 +161,8 @@ struct NetworkController: RouteCollection {
         )
 
         do {
-            // IAM dual-write (issue #477): the creator's explicit, revocable
-            // binding on the network, in the same transaction as the row;
-            // SpiceDB stays authoritative.
+            // The creator's explicit, revocable binding on the network, in the
+            // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
                 try await network.save(on: db)
@@ -190,23 +179,6 @@ struct NetworkController: RouteCollection {
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(name)' already exists")
         }
-
-        // Create SpiceDB relationships
-        try await req.spicedb.writeRelationship(
-            entity: "network",
-            entityId: network.id!.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: user.id!.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "network",
-            entityId: network.id!.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: projectId.uuidString
-        )
 
         req.logger.info(
             "Network created",
@@ -468,31 +440,10 @@ struct NetworkController: RouteCollection {
             )
         }
 
-        // Delete SpiceDB relationships
-        if let createdById = network.$createdBy.id {
-            try await req.spicedb.deleteRelationship(
-                entity: "network",
-                entityId: network.id!.uuidString,
-                relation: "owner",
-                subject: "user",
-                subjectId: createdById.uuidString
-            )
-        }
-
-        if let projectId = network.$project.id {
-            try await req.spicedb.deleteRelationship(
-                entity: "network",
-                entityId: network.id!.uuidString,
-                relation: "project",
-                subject: "project",
-                subjectId: projectId.uuidString
-            )
-        }
-
         try await req.db.transaction { db in
             try await network.delete(on: db)
-            // IAM dual-write: bindings have no FK to the resources they
-            // protect, so drop them with the node.
+            // Bindings have no FK to the resources they protect, so drop
+            // them with the node.
             try await RoleBindingService.revokeAll(
                 nodeType: .network, nodeID: network.id!, on: db)
         }
@@ -735,12 +686,7 @@ struct NetworkController: RouteCollection {
             throw Abort(.notFound, reason: "Network not found")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "network",
-            resourceId: networkId.uuidString
-        )
+        let hasPermission = try await req.can(permission, on: "network", id: networkId.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this network")
@@ -755,12 +701,7 @@ struct NetworkController: RouteCollection {
         var accessibleProjectIds: [UUID] = []
 
         for project in allProjects {
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: project.id!.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
             if hasAccess {
                 accessibleProjectIds.append(project.id!)
             }

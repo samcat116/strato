@@ -5,12 +5,11 @@ import VaporTesting
 
 @testable import App
 
-/// Pins the issue #482 pre-cutover audit decision for org member management:
+/// Pins the issue #482 audit decision for org member management:
 /// `addMember` / `removeMember` / `updateMemberRole` / `getMembers` authorize
-/// through SpiceDB (`OrganizationAccessService`), not through inline
-/// `UserOrganization.role` reads — so the decisions are shadow-evaluated and
-/// map to `org:update` / `org:read` at the Cedar cutover, and system admins
-/// bypass like everywhere else in the API.
+/// through the Cedar evaluator (`org:update` / `org:read`), not through inline
+/// `UserOrganization.role` reads, and system admins bypass like everywhere
+/// else in the API.
 @Suite("Organization Member Authorization Tests", .serialized)
 final class OrganizationMemberAuthzTests {
 
@@ -51,13 +50,11 @@ final class OrganizationMemberAuthzTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("Member management 403s when SpiceDB withholds org admin")
-    func memberManagementRequiresSpiceDBAdmin() async throws {
+    @Test("Member management 403s for a caller without org admin")
+    func memberManagementRequiresOrgAdmin() async throws {
         try await withMemberAuthzApp { app, org, _, callerToken, target in
-            // The mock default-allows; withholding `manage_members` models a
-            // caller without org admin, regardless of the relational role row.
-            app.spicedbMockDeniedPermissions = ["manage_members"]
-
+            // The caller is a bare "member" with no admin binding, so the
+            // evaluator denies member management.
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: callerToken)
                 try req.content.encode(["userEmail": target.email, "role": "member"])
@@ -81,7 +78,7 @@ final class OrganizationMemberAuthzTests {
     }
 
     @Test("Member list 403s for a caller outside the organization")
-    func memberListRequiresSpiceDBMembership() async throws {
+    func memberListRequiresMembership() async throws {
         try await withMemberAuthzApp { app, org, _, _, _ in
             // Not a member of the org: no membership-derived org:read, no
             // binding — the evaluator denies the member list.
@@ -97,11 +94,10 @@ final class OrganizationMemberAuthzTests {
         }
     }
 
-    @Test("System admins manage members even when SpiceDB denies everything")
+    @Test("System admins manage members without any org membership or binding")
     func systemAdminBypassesMemberManagement() async throws {
-        // Pins the platform-bypass semantics these routes gain by going
-        // through `req.can` — the tier-1 `platform-system-admin` policy at
-        // cutover.
+        // Pins the platform-bypass semantics these routes get from `req.can` —
+        // the tier-1 `platform-system-admin` policy.
         try await withMemberAuthzApp { app, org, _, _, target in
             let builder = TestDataBuilder(db: app.db)
             let sysAdmin = try await builder.createUser(
@@ -111,8 +107,6 @@ final class OrganizationMemberAuthzTests {
                 isSystemAdmin: true
             )
             let sysAdminToken = try await sysAdmin.generateAPIKey(on: app.db)
-
-            app.spicedbMockAllows = false
 
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: sysAdminToken)

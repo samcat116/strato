@@ -11,7 +11,7 @@ import Darwin
 
 /// Process-local gates on `/health/ready` that no dependency probe can observe.
 ///
-/// Dependency reachability (Postgres, SpiceDB, Valkey) is probed per request;
+/// Dependency reachability (Postgres, Valkey) is probed per request;
 /// these two facts are about *this* process's lifecycle and have to be recorded
 /// as they happen:
 ///

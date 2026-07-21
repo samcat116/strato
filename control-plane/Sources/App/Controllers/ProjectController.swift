@@ -653,10 +653,6 @@ struct ProjectController: RouteCollection {
         // Verify user has admin access to current location
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
-        // Capture the current immediate parent so we can migrate the SpiceDB
-        // project#parent tuple if the destination is a different parent.
-        let oldParentRef = project.spiceDBParentRef
-
         // Resolve and validate the destination, deriving its root organization.
         let destinationOrganizationID: UUID?
         if let destOuID = transferRequest.organizationalUnitId {
@@ -699,35 +695,6 @@ struct ProjectController: RouteCollection {
 
         try project.validate()
         try await project.save(on: req.db)
-
-        // Migrate the project#parent SpiceDB tuple when the *immediate* parent
-        // changes — including org→OU moves within the same root org, which a
-        // root-org comparison would miss. Project-scoped permissions resolve through
-        // this parent, so a stale tuple leaves destination admins with 403s and the
-        // source retaining access (issue #267).
-        let newParentRef = project.spiceDBParentRef
-        if oldParentRef?.subjectType != newParentRef?.subjectType
-            || oldParentRef?.subjectId != newParentRef?.subjectId
-        {
-            if let oldParentRef {
-                try await req.spicedb.deleteRelationship(
-                    entity: "project",
-                    entityId: projectID.uuidString,
-                    relation: "parent",
-                    subject: oldParentRef.subjectType,
-                    subjectId: oldParentRef.subjectId.uuidString
-                )
-            }
-            if let newParentRef {
-                try await req.spicedb.writeRelationship(
-                    entity: "project",
-                    entityId: projectID.uuidString,
-                    relation: "parent",
-                    subject: newParentRef.subjectType,
-                    subjectId: newParentRef.subjectId.uuidString
-                )
-            }
-        }
 
         let vmCount = try await VM.query(on: req.db)
             .filter(\.$project.$id == projectID)
@@ -792,10 +759,9 @@ struct ProjectController: RouteCollection {
         try project.validate()
 
         // Persist the project (two saves: the path embeds the generated id)
-        // and the creator's explicit admin binding in one transaction (IAM
-        // dual-write, issue #477). Deliberately new behavior — today a
-        // member-created project has no administrator besides org admins; the
-        // binding fixes that (it grants nothing until the Cedar cutover).
+        // and the creator's explicit admin binding in one transaction, so a
+        // member-created project always has an administrator besides org
+        // admins.
         let creatorID = req.auth.get(User.self)?.id
         try await db.transaction { transaction in
             try await project.save(on: transaction)
@@ -813,26 +779,6 @@ struct ProjectController: RouteCollection {
                 )
             }
         }
-
-        // Write the SpiceDB project#parent tuple against the *immediate* parent (the
-        // OU when OU-scoped, else the organization) using the persisted project id.
-        // Without it, project-scoped permissions can't resolve and even the creating
-        // admin gets 403s; pointing at the immediate parent is what lets OU-scoped
-        // projects inherit from the OU chain (see issue #267).
-        guard let projectId = project.id else {
-            throw Abort(.internalServerError, reason: "Project was not assigned an ID after save")
-        }
-
-        guard let parent = project.spiceDBParentRef else {
-            throw Abort(.internalServerError, reason: "Project has no parent")
-        }
-        try await req.spicedb.writeRelationship(
-            entity: "project",
-            entityId: projectId.uuidString,
-            relation: "parent",
-            subject: parent.subjectType,
-            subjectId: parent.subjectId.uuidString
-        )
 
         return project
     }

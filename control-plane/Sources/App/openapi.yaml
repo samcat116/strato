@@ -22,8 +22,8 @@ info:
     - `cookieAuth` — the `vapor-session` cookie set after a WebAuthn/passkey
       login.
 
-    Per-object access is additionally enforced by relationship-based
-    authorization (SpiceDB); a caller who is authenticated but not authorized
+    Per-object access is additionally enforced by the control plane's Cedar
+    policy evaluator; a caller who is authenticated but not authorized
     receives `403`.
 
     ## Asynchronous mutations
@@ -128,8 +128,9 @@ tags:
     description: SPIFFE/SPIRE registration entries, trust bundles, and federation.
   - name: IAM
     description: >-
-      Permission checks, guardrails, and decision logs. Some operations are
-      transitional tooling for the SpiceDB-to-Cedar migration.
+      Permission checks, guardrails, and decision logs. Some field names
+      (`spicedbPermission`, `spicedbDecision`) are historical, kept from the
+      pre-Cedar migration for API compatibility.
   - name: Audit
     description: Audit event history.
   - name: OIDC
@@ -3939,8 +3940,8 @@ paths:
       description: >-
         Retires the node: deprovisions its SPIRE entries (fail-closed — this is
         the operator's revocation lever), drops it from the in-memory registry,
-        deletes the row, removes its SpiceDB ownership tuple, and deletes its
-        enrollment so the name can be enrolled again. Refused with `409` while
+        deletes the row, and deletes its enrollment so the name can be
+        enrolled again. Refused with `409` while
         the agent is a site's network controller, and restricted to system
         admins while it hosts another organization's VMs, sandboxes, or
         volumes. Requires `manage` on the agent.
@@ -4261,13 +4262,12 @@ paths:
       description: >-
         Answers up to 50 permission questions in one call, keyed by an opaque
         client-chosen `key` so the caller can correlate each answer with the UI
-        element it gates. Two forms, answered from different stores while the
-        SpiceDB→Cedar migration is in flight: without `principal` the caller
-        asks about themselves and SpiceDB answers (`permission` is a SpiceDB
-        permission name such as `manage_project`); with `principal` the answer
-        comes from the IAM role-bindings table plus the resource tree, so it
-        agrees with `who-can` (`permission` is an IAM action name such as
-        `vm:start`). System administrators always receive `true` for the
+        element it gates. Two forms: without `principal` the caller asks about
+        themselves and the answer comes from the same Cedar evaluation that
+        gates requests (`permission` is a legacy permission name such as
+        `manage_project`); with `principal` the answer comes from the IAM
+        role-bindings table plus the resource tree, so it agrees with
+        `who-can` (`permission` is an IAM action name such as `vm:start`). System administrators always receive `true` for the
         self-check form. The `principal` form additionally requires admin on
         each named resource or a container above it.
       tags: [IAM]
@@ -4452,11 +4452,9 @@ paths:
       operationId: listIAMDecisionLogs
       summary: List authorization decision-log entries
       description: >-
-        Transitional, shadow-mode surface. During the SpiceDB→Cedar migration
-        every authorization check records both engines' verdicts; this endpoint
-        reads those rows, newest first, and is what the mismatch burn-down
-        works from. Cursor-paginated: pass the `createdAt` of the oldest row of
-        the previous page back as `before`, verbatim. System administrators
+        Every authorization check records a decision row; this endpoint reads
+        those rows, newest first. Cursor-paginated: pass the `createdAt` of the
+        oldest row of the previous page back as `before`, verbatim. System administrators
         only — rows span organizations and this is an operator tool, not a
         customer surface.
       tags: [IAM]
@@ -4481,12 +4479,11 @@ paths:
       operationId: getIAMDecisionLogSummary
       summary: Summarize decision-log entries into burn-down buckets
       description: >-
-        Transitional, shadow-mode surface. Groups decision rows by SpiceDB
-        permission, IAM action, both verdicts, and tier, largest buckets first,
-        so one glance says which mismatch classes remain and how big each is.
-        Time-bounded on purpose (`sinceHours`): the log takes a row per
-        authorization check, so an unbounded aggregate would scan the whole
-        retention window. System administrators only.
+        Groups decision rows by permission, IAM action, verdict, and tier,
+        largest buckets first, so one glance says how each check class is
+        deciding. Time-bounded on purpose (`sinceHours`): the log takes a row
+        per authorization check, so an unbounded aggregate would scan the
+        whole retention window. System administrators only.
       tags: [IAM]
       parameters:
         - $ref: "#/components/parameters/DecisionLogSinceHoursQuery"
@@ -10297,7 +10294,7 @@ components:
         permission:
           type: string
           description: >-
-            A SpiceDB permission name (`manage_project`) for a self-check, or
+            A legacy permission name (`manage_project`) for a self-check, or
             an IAM action name (`vm:start`) when `principal` is set.
 
     IAMPermissionCheckRequest:
@@ -10597,10 +10594,10 @@ components:
     IAMDecisionLogEntry:
       type: object
       description: >-
-        One shadow-evaluation record: the verdict SpiceDB returned (which is
-        what actually gated the request) alongside the verdict Cedar would
-        have returned. Transitional — this table exists for the migration
-        burn-down.
+        One authorization decision record. The `spicedb*` field names are
+        historical (kept for API compatibility): `spicedbPermission` carries
+        the permission as asked at the check site, and `spicedbDecision` is
+        always `none` on rows written after the SpiceDB removal (#483).
       required:
         - id
         - subject
@@ -10631,7 +10628,7 @@ components:
           type: string
         iamAction:
           type: string
-          description: The IAM action the SpiceDB permission was mapped to, when one exists.
+          description: The IAM action the legacy permission was mapped to, when one exists.
         nodeType:
           type: string
         nodeID:

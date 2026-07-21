@@ -52,15 +52,6 @@ spec:
             - |
               until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
         {{- end }}
-        {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
-        - name: wait-for-spicedb
-          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForSpiceDB.image | quote }}
-          command:
-            - sh
-            - -c
-            - |
-              until nc -w 1 -z {{ include "strato-control-plane.spicedb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spicedb.service.grpcPort }}; do echo waiting for SpiceDB; sleep 2; done
-        {{- end }}
         {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
         - name: wait-for-valkey
           image: {{ default "busybox:1.36.1" .Values.initContainers.waitForDB.image | quote }}
@@ -196,15 +187,6 @@ spec:
             {{- if .Values.strato.database.tlsCACert }}
             - name: DATABASE_TLS_CA_CERT_PATH
               value: "/etc/strato/db-tls/ca.crt"
-            {{- end }}
-            {{- if .Values.spicedb.enabled }}
-            - name: SPICEDB_ENDPOINT
-              value: "http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}"
-            - name: SPICEDB_PRESHARED_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: "{{ include "strato-control-plane.spicedb.fullname" . }}-config"
-                  key: "preshared-key"
             {{- end }}
             {{- if .Values.strato.secretEncryption.existingSecret }}
             # At-rest encryption key for stored secrets (OIDC client secrets).

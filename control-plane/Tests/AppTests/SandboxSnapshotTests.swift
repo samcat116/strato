@@ -153,8 +153,6 @@ final class SandboxSnapshotTests {
     @Test("POST snapshots returns 202, inserts the estimated row, and fails cleanly without a live socket")
     func createAcceptsAndResolvesFailure() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
             var operation: OperationResponse?
@@ -182,10 +180,16 @@ final class SandboxSnapshotTests {
             #expect(snapshot.name == "before-upgrade")
             #expect(snapshot.agentId == sandbox.hypervisorId)
 
-            // Ownership tuples: owner, sandbox, project.
-            let writes = await recorder.writes.filter { $0.entity == "sandbox_snapshot" }
-            #expect(writes.contains { $0.relation == "owner" && $0.subjectId == user.id!.uuidString })
-            #expect(writes.contains { $0.relation == "sandbox" && $0.subjectId == sandbox.id!.uuidString })
+            // Ownership: the creator gets an admin binding on the snapshot
+            // node in the create transaction.
+            let ownerBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == user.id!)
+                .filter(\.$role == IAMRole.admin.rawValue)
+                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
+                .filter(\.$nodeID == snapshot.id!)
+                .count()
+            #expect(ownerBindings == 1)
 
             // No live agent socket: the background RPC fails fast, the
             // operation records the failure, and the row goes error with its

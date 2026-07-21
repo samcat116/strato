@@ -8,7 +8,7 @@ struct RateLimitTests {
 
     /// Build a minimal app wired with only the rate-limit middleware and a couple
     /// of test routes, so these tests exercise the limiter in isolation without a
-    /// database, SpiceDB, or the full middleware stack.
+    /// database or the full middleware stack.
     private func withRateLimitedApp(
         config: RateLimitConfig,
         _ test: (Application) async throws -> Void

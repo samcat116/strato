@@ -27,7 +27,7 @@ Three independent Swift packages: `control-plane/`, `agent/`, `shared/` (plus ve
 
 Build & test notes:
 - Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
-- Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs the suite against Postgres, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
+- Control-plane tests run against in-memory SQLite locally — no Postgres service needed. CI additionally runs the suite against Postgres, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
 - Known CI flake: the "Test Control Plane (Postgres)" step of the Test Control Plane job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
 - Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
@@ -46,7 +46,7 @@ running services), and full-stack runs go through `deploy/compose`. See
 
 ### Running services directly
 
-- `cd control-plane && swift run` — control plane. Needs Postgres/SpiceDB/Valkey env vars pointed at reachable services; `deploy/compose` does **not** publish those ports, so this requires a `docker-compose.override.yml` that does.
+- `cd control-plane && swift run` — control plane. Needs Postgres/Valkey env vars pointed at reachable services; `deploy/compose` does **not** publish those ports, so this requires a `docker-compose.override.yml` that does.
 - `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). Copy `config.toml.example` to start.
 - Agents authenticate only by SPIFFE/SPIRE X.509 SVID over mTLS. Enroll a node with `POST /api/agents/enrollments` (or **Agents → Enroll node** in the UI), which provisions it in SPIRE and returns a one-liner `bootstrapCommand`; the agent then dials its configured `control_plane_url` with `?name=<agent-name>` and no bearer credential.
 - Authentication is always on: there is no development bypass. Local development registers a real WebAuthn passkey user (see `docs/development/local-development.md`).
@@ -123,9 +123,9 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 
 ### AuthZ, authN, and the org hierarchy
 
-- **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
+- **Authorization** is a built-in Cedar policy engine — no external authz service. The in-process evaluator (`IAMAuthorizer`) evaluates compiled Cedar policy sets against `role_bindings` rows and the relational org hierarchy in Postgres; the default-deny `AuthorizationMiddleware` gates every API route, and admin access flows through the evaluator too (no controller-local fast paths).
 - **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
-- Hierarchy: Organization → optional nested **Folders** (materialized `path`/`depth`) → Projects (with environments). Folders are still named `OrganizationalUnit` on the wire and in the database (models, routes, SpiceDB types); the user-facing term is "folder" and the wire rename lands with the Cedar cutover. **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, folder, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
+- Hierarchy: Organization → optional nested **Folders** (materialized `path`/`depth`) → Projects (with environments). Folders are still named `OrganizationalUnit` on the wire and in the database (models, routes); the user-facing term is "folder" and the wire rename is still pending. **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, folder, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 - Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane — the only agent authentication path. Config lives in `deploy/compose/spiffe/` (SPIRE server, Envoy, bootstrap) and is wired into the compose stack by default.
 
 ### Observability
@@ -147,7 +147,6 @@ strato/
 │   └── Sources/StratoAgent/       # executable (drivers, WebSocket client)
 ├── shared/               # Wire protocol, DTOs (StratoShared)
 ├── SwiftFirecracker/     # Vendored Swift wrapper for the Firecracker API
-├── spicedb/schema.zed    # Authorization schema
 ├── deploy/compose/       # Supported single-host deployment (incl. spiffe/ mTLS config)
 ├── helm/                 # Kubernetes Helm chart
 └── docs/                 # VitePress site incl. docs/architecture/*.md

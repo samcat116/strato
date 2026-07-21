@@ -469,37 +469,6 @@ actor AgentService {
             throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
         }
 
-        // Mirror the agent's owner into SpiceDB so org admins can see and
-        // manage it (`agent#parent`). Failure is logged, not fatal: scheduling
-        // works from the database row alone, system admins retain access, and
-        // the startup backfill (`backfillInfraParentRelationships`) heals the
-        // tuple on the next boot.
-        if let scope = agent.organizationScope, scope != previousScope {
-            do {
-                if let old = previousScope, old != scope {
-                    let oldRef = old.spiceDBParentRef
-                    try await app.spicedb.deleteRelationship(
-                        entity: "agent", entityId: agentUUID.uuidString,
-                        relation: "parent",
-                        subject: oldRef.subjectType, subjectId: oldRef.subjectId.uuidString)
-                }
-                let ref = scope.spiceDBParentRef
-                try await app.spicedb.touchRelationships([
-                    RelationshipTuple(
-                        entity: "agent",
-                        entityId: agentUUID.uuidString,
-                        relation: "parent",
-                        subject: ref.subjectType,
-                        subjectId: ref.subjectId.uuidString
-                    )
-                ])
-            } catch {
-                app.logger.error(
-                    "Failed to write agent#parent SpiceDB tuple; org visibility degraded until next boot backfill",
-                    metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
-            }
-        }
-
         // Attach the UUID to the live socket so local routing (sync pushes,
         // RPC forwarding, the periodic sync's work list) can resolve it
         // without a database read. No-op when no socket exists (tests).

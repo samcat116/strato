@@ -40,7 +40,7 @@ data:
                 Follow the chart-wide TLS mode instead of hardcoding disable.
                 SPIRE's sql plugin uses lib/pq semantics where plain `require`
                 encrypts but skips server-cert verification, so map require to
-                verify-full — same reasoning as the SpiceDB datastore URI.
+                verify-full to match the control plane's verified connection.
                 Under the verify modes lib/pq needs a root CA it trusts: when
                 the chart carries one (strato.database.tlsCACert) point
                 sslrootcert at its mount. Modes below require (prefer/allow)

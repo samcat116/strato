@@ -123,11 +123,8 @@ final class OIDCControllerTests: BaseTestCase {
             try await memberOrg.save(on: app.db)
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
 
-            // Provider management authorizes through SpiceDB (issue #482
-            // pre-cutover audit); the mock default-allows, so withhold the
-            // org-admin permission to model a plain member.
-            app.spicedbMockDeniedPermissions = ["manage_members"]
-
+            // Provider management requires org admin: the member holds no
+            // admin binding on the org, so the Cedar evaluator denies.
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(
@@ -177,9 +174,8 @@ final class OIDCControllerTests: BaseTestCase {
 
             // A plain member can list providers but must not see which IdP
             // claims map groups or grant admin. The admin/member distinction
-            // now comes from SpiceDB (issue #482 pre-cutover audit), so
-            // withhold the org-admin permission for the member's call.
-            app.spicedbMockDeniedPermissions = ["manage_members"]
+            // comes from the Cedar evaluator: the member holds no admin
+            // binding on the org.
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
             } afterResponse: { res in
@@ -192,7 +188,6 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             // Admins see the full configuration.
-            app.spicedbMockDeniedPermissions = []
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -726,17 +721,14 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
-    @Test("First SSO login provisions current org and SpiceDB membership")
+    @Test("First SSO login provisions current org and membership")
     func testFirstLoginSeedsAuthorization() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
             let provider = try await makeProvider(
                 on: app.db, organizationID: testOrganization.id!, name: "Okta")
 
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
-            let identity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            let identity = OIDCIdentityService(db: app.db, logger: app.logger)
             let user = try await identity.resolveUser(
                 userInfo: OIDCUserInfo(
                     subject: "subject-new",
@@ -760,12 +752,16 @@ final class OIDCControllerTests: BaseTestCase {
                 .first()
             #expect(membership?.role == "member")
 
-            let writes = await recorder.writes
-            let memberTuple = writes.first {
-                $0.entity == "organization" && $0.entityId == testOrganization.id!.uuidString
-                    && $0.relation == "member" && $0.subjectId == user.id!.uuidString
-            }
-            #expect(memberTuple != nil)
+            // A bare "member" membership carries its own access (org:read +
+            // project:create); only org admins get a role binding, so none may
+            // be written here.
+            let orgBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == user.id!)
+                .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+                .filter(\.$nodeID == testOrganization.id!)
+                .count()
+            #expect(orgBindings == 0)
 
             // Second login with the same subject reuses the user, no new rows
             let again = try await identity.resolveUser(
@@ -776,54 +772,6 @@ final class OIDCControllerTests: BaseTestCase {
                 groupValues: []
             )
             #expect(again.id == user.id)
-        }
-    }
-
-    @Test("Failed SpiceDB write rolls back first-login provisioning")
-    func testFirstLoginRollsBackOnSpiceDBFailure() async throws {
-        try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
-
-            app.spicedbMockWritesFail = true
-
-            let identity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            let userInfo = OIDCUserInfo(
-                subject: "subject-rollback",
-                email: "rollback@example.com",
-                emailVerified: true,
-                name: "Roll Back",
-                preferredUsername: "rollback"
-            )
-
-            await #expect(throws: Error.self) {
-                _ = try await identity.resolveUser(
-                    userInfo: userInfo,
-                    provider: provider,
-                    organization: self.testOrganization,
-                    groupValues: []
-                )
-            }
-
-            // No half-provisioned user may survive: with the rows committed, a
-            // retry would take the findOIDCUser early return and never write
-            // the missing SpiceDB tuple.
-            let orphan = try await User.query(on: app.db)
-                .filter(\.$email == "rollback@example.com")
-                .first()
-            #expect(orphan == nil)
-
-            // With SpiceDB healthy again the same subject provisions cleanly.
-            app.spicedbMockWritesFail = false
-            let healthyIdentity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            let user = try await healthyIdentity.resolveUser(
-                userInfo: userInfo,
-                provider: provider,
-                organization: testOrganization,
-                groupValues: []
-            )
-            #expect(user.currentOrganizationId == testOrganization.id)
         }
     }
 

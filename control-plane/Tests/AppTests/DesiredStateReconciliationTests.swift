@@ -14,8 +14,8 @@ import StratoShared
 @Suite("Desired State Reconciliation Tests", .serialized)
 final class DesiredStateReconciliationTests {
 
-    /// Same harness as `VMOperationTests`: full middleware stack, mock SpiceDB,
-    /// API-key auth, one VM.
+    /// Same harness as `VMOperationTests`: full middleware stack, API-key
+    /// auth, one VM.
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {

@@ -33,7 +33,7 @@ struct SandboxController: RouteCollection {
                 // Snapshot mobility (issue #428); handlers live in
                 // SandboxSnapshotTransferController.swift. The artifact
                 // routes are signed agent routes (streamed bodies, no
-                // session — see the SpiceDBAuthMiddleware carve-out).
+                // session — see the AuthorizationMiddleware carve-out).
                 snapshot.post("export", use: exportSnapshot)
                 snapshot.on(.PUT, "artifacts", ":artifactKind", body: .stream, use: uploadSnapshotArtifact)
                 snapshot.get("artifacts", ":artifactKind", use: downloadSnapshotArtifact)
@@ -171,7 +171,7 @@ struct SandboxController: RouteCollection {
     /// GET /api/sandboxes
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func index(req: Request) async throws -> [SandboxDetailResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -187,12 +187,7 @@ struct SandboxController: RouteCollection {
         var authorized: [SandboxDetailResponse] = []
 
         for sandbox in allSandboxes {
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: user.id?.uuidString ?? "",
-                permission: "read",
-                resource: "sandbox",
-                resourceId: sandbox.id?.uuidString ?? ""
-            )
+            let hasPermission = try await req.can("read", on: "sandbox", id: sandbox.id?.uuidString ?? "")
             if hasPermission {
                 authorized.append(SandboxDetailResponse(from: sandbox))
             }
@@ -201,7 +196,7 @@ struct SandboxController: RouteCollection {
         return authorized
     }
 
-    /// Fetch a sandbox by its :sandboxID route parameter and enforce a SpiceDB
+    /// Fetch a sandbox by its :sandboxID route parameter and enforce a
     /// permission on it (per-handler defense in depth over the middleware).
     func fetchSandboxWithPermission(req: Request, permission: String) async throws -> Sandbox {
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self) else {
@@ -296,11 +291,7 @@ struct SandboxController: RouteCollection {
                         "'restoreFrom' cannot be combined with image, CPU, memory, or process overrides; a fork preserves the checkpointed machine shape"
                 )
             }
-            let canReadSnapshot = try await req.spicedb.checkPermission(
-                subject: try user.requireID().uuidString,
-                permission: "read",
-                resource: "sandbox_snapshot",
-                resourceId: snapshotID.uuidString)
+            let canReadSnapshot = try await req.can("read", on: "sandbox_snapshot", id: snapshotID.uuidString)
             guard canReadSnapshot else {
                 throw Abort(.forbidden, reason: "You don't have permission to read this snapshot")
             }
@@ -406,12 +397,7 @@ struct SandboxController: RouteCollection {
         // Require create permission on the target project. Org membership
         // alone is not enough: `sandbox.create` resolves to
         // `project->create_resources`, same as VMs.
-        let canCreate = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "create_resources",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
+        let canCreate = try await req.can("create_resources", on: "project", id: projectId.uuidString)
         guard canCreate else {
             throw Abort(.forbidden, reason: "You don't have permission to create sandboxes in this project")
         }
@@ -562,24 +548,6 @@ struct SandboxController: RouteCollection {
         }
 
         let sandboxID = try sandbox.requireID()
-
-        // Ownership relationships in SpiceDB, mirroring VMs: owner (creator)
-        // and project (org/OU admins reach the sandbox transitively via
-        // sandbox#project → project#parent).
-        try await req.spicedb.writeRelationship(
-            entity: "sandbox",
-            entityId: sandboxID.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: userID.uuidString
-        )
-        try await req.spicedb.writeRelationship(
-            entity: "sandbox",
-            entityId: sandboxID.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: projectId.uuidString
-        )
 
         // Place the sandbox in the background: the scheduler selects a
         // Firecracker-capable agent and persists hypervisorId, and the

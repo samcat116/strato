@@ -538,7 +538,7 @@ struct OIDCController: RouteCollection {
 
             // Resolve the user and converge identity/authz state with the
             // token's claims (issue #363).
-            let identity = OIDCIdentityService(db: req.db, spicedb: try req.spicedb, logger: req.logger)
+            let identity = OIDCIdentityService(db: req.db, logger: req.logger)
 
             let user = try await identity.resolveUser(
                 userInfo: userInfo,
@@ -612,13 +612,12 @@ struct OIDCController: RouteCollection {
 
     // MARK: - Helper Methods
 
-    // Provider management goes through SpiceDB like every other org-scoped
-    // surface (issue #482 pre-cutover audit: the inline relational reads here
-    // were allow decisions invisible to shadow evaluation). Only the error
-    // messages remain OIDC-specific; `req.can` applies the system-admin
-    // bypass. Managing a provider is org administration — it maps to
-    // `org:update` at the Cedar cutover rather than growing an `oidc:*`
-    // action family.
+    // Provider management goes through the Cedar evaluator like every other
+    // org-scoped surface (issue #482 pre-cutover audit: the inline relational
+    // reads here were allow decisions invisible to the decision log). Only the
+    // error messages remain OIDC-specific. Managing a provider is org
+    // administration — it maps to `org:update` rather than growing an
+    // `oidc:*` action family.
 
     private func verifyOrganizationAccess(req: Request, organizationID: UUID) async throws {
         guard req.auth.get(User.self) != nil else {

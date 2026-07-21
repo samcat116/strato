@@ -2,29 +2,18 @@ import Fluent
 import Vapor
 import Foundation
 
-/// The roles a user or group can hold on a project. Values match the SpiceDB
-/// `project` relations for user grants (`admin`/`member`/`viewer`); group grants map
-/// these to the `group_admin`/`group_member`/`group_viewer` relations.
+/// The roles a user or group can hold on a project (`admin`/`member`/`viewer`).
 enum ProjectRole: String, Content, CaseIterable {
     case admin
     case member
     case viewer
-
-    /// The corresponding SpiceDB group-relation for group grants.
-    var groupRelation: GroupProjectRole {
-        switch self {
-        case .admin: return .admin
-        case .member: return .member
-        case .viewer: return .viewer
-        }
-    }
 }
 
 /// A user's direct role on a specific project.
 ///
-/// SpiceDB is the authorization source of truth; this table is a relational mirror
-/// (written alongside the SpiceDB tuple) so the members list can be rendered with a
-/// fast, joinable query instead of paginating SpiceDB LookupSubjects. Same pattern as
+/// The Cedar evaluator's `role_bindings` are the authorization source of truth;
+/// this table is a relational mirror (written alongside the binding) so the
+/// members list can be rendered with a fast, joinable query. Same pattern as
 /// `UserOrganization`.
 final class ProjectMember: Model, @unchecked Sendable {
     static let schema = "project_members"
@@ -59,8 +48,8 @@ final class ProjectMember: Model, @unchecked Sendable {
 
 extension ProjectMember: Content {}
 
-/// A group's role grant on a specific project (relational mirror of the SpiceDB
-/// `project#group_<role>@group` tuple).
+/// A group's role grant on a specific project (mirrored by a group-principal
+/// role binding on the project node).
 final class ProjectGroupGrant: Model, @unchecked Sendable {
     static let schema = "project_group_grants"
 

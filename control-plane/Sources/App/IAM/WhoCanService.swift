@@ -102,8 +102,8 @@ struct WhoCanResult: Content, Sendable {
 /// resource's organization — doing so would silently hide exactly the external
 /// access that most needs to be visible.
 ///
-/// SpiceDB remains authoritative for enforcement during phase 1, so these
-/// answers describe the bindings model, which is being dual-written to match.
+/// Since the cutover (#482) the bindings model these answers describe is also
+/// what enforces, so who-can answers and request verdicts share one source.
 enum WhoCanService {
 
     // MARK: - Reverse lookup
@@ -298,11 +298,9 @@ enum WhoCanService {
     /// Whether one principal can perform `action` on `node`, answered from the
     /// same bindings + tree the reverse lookup uses.
     ///
-    /// This is the arbitrary-principal form of `can-i`. It deliberately does
-    /// *not* consult SpiceDB: it reports what the bindings model says, which is
-    /// what will enforce after cutover (#482). Until then the caller-scoped
-    /// path in `AuthorizationController.check` stays on SpiceDB, because that
-    /// is what actually gates requests today.
+    /// This is the arbitrary-principal form of `can-i`: it reports what the
+    /// bindings model says, the same model the evaluator enforces from since
+    /// cutover (#482).
     static func can(
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {

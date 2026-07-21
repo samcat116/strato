@@ -132,7 +132,7 @@ struct UserController: RouteCollection {
 
         // Optional org assignment: provisioning the invitee into an org up front
         // keeps them admin-managed (they don't land on self-onboarding with no
-        // memberships). Only "admin"/"member" match the SpiceDB org relations.
+        // memberships). Only "admin"/"member" are valid org roles.
         let assignedOrgID = body.organizationId
         let requestedRole = body.role?.trimmingCharacters(in: .whitespacesAndNewlines)
         let assignedRole = (requestedRole?.isEmpty == false ? requestedRole! : "member")
@@ -141,10 +141,6 @@ struct UserController: RouteCollection {
                 throw Abort(.badRequest, reason: "role must be 'admin' or 'member'")
             }
         }
-
-        // Fetched here (throwing getter) so the org-membership tuple can be
-        // written inside the transaction below; only needed when assigning.
-        let spicedb: SpiceDBServiceProtocol? = assignedOrgID != nil ? try req.spicedb : nil
 
         // Create the user, its claim token, and any org membership in one
         // transaction so the token row is visible the instant the user row is.
@@ -197,8 +193,8 @@ struct UserController: RouteCollection {
                 )
                 try await membership.save(on: db)
 
-                // IAM dual-write (issue #477): org admins get an admin binding
-                // on the org node, in the same transaction as the mirror row.
+                // Org admins get an admin binding on the org node, in the same
+                // transaction as the mirror row.
                 if let bindingRole = IAMRole.fromOrganizationRole(assignedRole) {
                     try await RoleBindingService.grant(
                         principalType: .user,
@@ -208,21 +204,6 @@ struct UserController: RouteCollection {
                         nodeID: orgID,
                         createdBy: createdByID,
                         on: db
-                    )
-                }
-
-                // Authorization reads org access from SpiceDB (e.g. VM
-                // collection checks need view_organization), and missing tuples
-                // are only reconciled by a boot-time backfill. Write the tuple
-                // inside the transaction so a failure rolls the whole create
-                // back — better to fail and let the admin retry than to hand
-                // out a claim link for a member who can't use the org.
-                if let spicedb {
-                    try await spicedb.setOrganizationRole(
-                        userID: try user.requireID().uuidString,
-                        organizationID: orgID.uuidString,
-                        oldRole: nil,
-                        newRole: assignedRole
                     )
                 }
             }
@@ -457,12 +438,7 @@ struct UserController: RouteCollection {
         // They'll create their organization through the onboarding flow
         if !user.isSystemAdmin {
             // Ensure user belongs to default organization
-            do {
-                try await ensureUserInDefaultOrganization(user: user, req: req)
-            } catch {
-                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-                // Don't fail the registration if SpiceDB relationship creation fails
-            }
+            try await ensureUserInDefaultOrganization(user: user, req: req)
         }
 
         return RegistrationFinishResponse(
@@ -704,15 +680,9 @@ struct UserController: RouteCollection {
         req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.login, user: user)
 
-        // Store in SpiceDB relationships if needed
         // Ensure user belongs to default organization (skip for system admins)
         if !user.isSystemAdmin {
-            do {
-                try await ensureUserInDefaultOrganization(user: user, req: req)
-            } catch {
-                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-                // Don't fail the login if SpiceDB relationship creation fails
-            }
+            try await ensureUserInDefaultOrganization(user: user, req: req)
         }
 
         return AuthenticationFinishResponse(
@@ -1058,15 +1028,6 @@ extension UserController {
                 role: "member"
             )
             try await membership.save(on: req.db)
-
-            // Create SpiceDB relationship
-            try await req.spicedb.writeRelationship(
-                entity: "organization",
-                entityId: defaultOrg.id?.uuidString ?? "",
-                relation: "member",
-                subject: "user",
-                subjectId: user.id?.uuidString ?? ""
-            )
         }
 
         // Set as current organization if user doesn't have one

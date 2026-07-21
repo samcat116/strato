@@ -14,7 +14,7 @@ final class VMOperationTests {
 
     /// Boots a configured test app with a non-admin user, org, project and one VM.
     /// Mirrors the harness in `VMAuthorizationTests` so requests traverse the full
-    /// middleware stack (mock SpiceDB, API-key auth).
+    /// middleware stack (role-binding-backed authorization, API-key auth).
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {

@@ -29,17 +29,14 @@ struct SiteController: RouteCollection {
         return user
     }
 
+    /// The (resourceType, id) pair naming the scope's owning node for
+    /// permission checks against the IAM hierarchy.
+
     /// `manage_agents` on the org/OU scope a new site is being created under
     /// (system admins pass through the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let user = try requireUser(req)
-        let ref = scope.spiceDBParentRef
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "manage_agents",
-            resource: ref.subjectType,
-            resourceId: ref.subjectId.uuidString
-        )
+        let resource = scope.checkResource
+        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to manage sites for this organization")
         }
@@ -48,31 +45,19 @@ struct SiteController: RouteCollection {
     /// The given permission on the site itself (resolved through the site's
     /// parent scope in the IAM tree).
     private func requireSitePermission(_ req: Request, site: Site, permission: String) async throws {
-        let user = try requireUser(req)
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "site",
-            resourceId: try site.requireID().uuidString
-        )
+        let allowed = try await req.can(permission, on: "site", id: try site.requireID().uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this site")
         }
     }
 
-    /// `manage` on the agent (via `agent#parent`). Site
+    /// `manage` on the agent (resolved through the agent's parent scope). Site
     /// membership changes need this ON TOP of site#manage: with agents and
     /// sites delegated to different OUs of one org, a sibling-OU site admin
-    /// shares the root org but must not move an agent SpiceDB wouldn't let
-    /// them manage.
+    /// shares the root org but must not move an agent the evaluator wouldn't
+    /// let them manage.
     private func requireAgentManage(_ req: Request, agent: Agent) async throws {
-        let user = try requireUser(req)
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "manage",
-            resource: "agent",
-            resourceId: try agent.requireID().uuidString
-        )
+        let allowed = try await req.can("manage", on: "agent", id: try agent.requireID().uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this agent")
         }
@@ -140,12 +125,7 @@ struct SiteController: RouteCollection {
             var allowed: [Site] = []
             for site in sites {
                 guard let siteId = site.id else { continue }
-                let ok = try await req.spicedb.checkPermission(
-                    subject: user.id!.uuidString,
-                    permission: "view",
-                    resource: "site",
-                    resourceId: siteId.uuidString
-                )
+                let ok = try await req.can("view", on: "site", id: siteId.uuidString)
                 if ok { allowed.append(site) }
             }
             visible = allowed
@@ -184,13 +164,6 @@ struct SiteController: RouteCollection {
             // the registration-token conflict behavior.
             throw Abort(.conflict, reason: "A site named '\(name)' already exists")
         }
-
-        // Mirror ownership into SpiceDB so org admins can manage the site.
-        let ref = scope.spiceDBParentRef
-        try await req.spicedb.writeRelationship(
-            entity: "site", entityId: try site.requireID().uuidString,
-            relation: "parent",
-            subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
 
         return try SiteResponse(from: site)
     }
@@ -287,15 +260,6 @@ struct SiteController: RouteCollection {
         }
 
         try await site.delete(on: req.db)
-
-        // Drop the ownership tuple; best-effort — a leftover grants nothing
-        // once the row is gone.
-        if let ref = site.organizationScope?.spiceDBParentRef {
-            try? await req.spicedb.deleteRelationship(
-                entity: "site", entityId: siteId.uuidString,
-                relation: "parent",
-                subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
-        }
         return .noContent
     }
 

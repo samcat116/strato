@@ -25,8 +25,3 @@ dependencies:
     repository: https://charts.bitnami.com/bitnami
     alias: valkey
     condition: valkey.enabled
-  - name: spicedb-operator
-    version: "2.2.0"
-    repository: https://bushelpowered.github.io/spicedb-operator-chart/
-    alias: spicedb-operator
-    condition: spicedb.operator.enabled

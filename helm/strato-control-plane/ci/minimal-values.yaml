@@ -13,20 +13,6 @@ strato:
     relyingPartyName: "Minimal Strato"
     relyingPartyOrigin: "http://minimal.local:8080"
 
-spicedb:
-  enabled: true
-  presharedKey: "minimal-test-key"
-  replicaCount: 1
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-  persistence:
-    enabled: false  # Use emptyDir for testing
-
 postgresql:
   enabled: true
   auth:
@@ -77,8 +63,6 @@ monitoring:
 # Disable init containers for CI
 initContainers:
   waitForDB:
-    enabled: false
-  waitForSpiceDB:
     enabled: false
 
 # Disable migration job for CI

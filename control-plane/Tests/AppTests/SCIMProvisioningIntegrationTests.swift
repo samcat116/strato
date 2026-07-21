@@ -40,7 +40,7 @@ private func makeSCIMFixture(
 // MARK: - Middleware-stack integration tests
 
 /// End-to-end requests against the SCIM data plane through the full middleware
-/// stack (session authenticator, SpiceDBAuthMiddleware, …). IdP provisioning
+/// stack (session authenticator, AuthorizationMiddleware, …). IdP provisioning
 /// requests carry only an org-scoped `scim_` bearer token — no user session —
 /// so these tests pin the middleware exemption that lets them reach the
 /// controller, where the token is actually verified.
@@ -48,7 +48,7 @@ private func makeSCIMFixture(
 struct SCIMProvisioningIntegrationTests {
 
     /// Distinguishes a handler-level rejection (SCIM error document) from a
-    /// SpiceDBAuthMiddleware rejection (Vapor's generic `{"error":true,…}`
+    /// AuthorizationMiddleware rejection (Vapor's generic `{"error":true,…}`
     /// body synthesized from the thrown Abort).
     private let scimErrorSchema = "urn:ietf:params:scim:api:messages:2.0:Error"
 

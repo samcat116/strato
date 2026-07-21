@@ -27,12 +27,14 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     @OptionalField(key: "method")
     var method: String?
 
-    /// The SpiceDB subject as passed to the check — a user UUID everywhere
-    /// today, kept as a string so an unexpected subject shape is still logged.
+    /// The subject as passed to the check — a user UUID everywhere today,
+    /// kept as a string so an unexpected subject shape is still logged.
     @Field(key: "subject")
     var subject: String
 
-    /// What SpiceDB was asked, verbatim.
+    /// The legacy-vocabulary permission as asked at the check site (the IAM
+    /// action for native-vocabulary checks). The column keeps its historical
+    /// name from the SpiceDB era.
     @Field(key: "spicedb_permission")
     var spicedbPermission: String
 
@@ -58,18 +60,19 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     @OptionalField(key: "organization_id")
     var organizationID: UUID?
 
-    /// `allow` or `deny` — what actually gated the request.
+    /// Always `none` since the shadow-comparison verdict retired with SpiceDB
+    /// (issue #483); historical rows carry `allow`/`deny`/`error`.
     @Field(key: "spicedb_decision")
     var spicedbDecision: String
 
-    /// `allow` / `deny`, or why there is no verdict: `untranslated` (no IAM
-    /// mapping), `skipped` (no compiled policy set yet), `error` (evaluation
-    /// failed).
+    /// `allow` / `deny` — what actually gated the request — or why there is no
+    /// verdict: `untranslated` (no IAM mapping), `skipped` (no compiled policy
+    /// set yet), `error` (evaluation failed).
     @Field(key: "cedar_decision")
     var cedarDecision: String
 
-    /// Whether the two verdicts agree; nil when Cedar produced no verdict.
-    /// The mismatch burn-down (docs/architecture/iam.md phase 4) queries this.
+    /// Whether the shadow-era verdicts agreed; nil on every row since the
+    /// comparison retired (issue #483).
     @OptionalField(key: "decisions_match")
     var decisionsMatch: Bool?
 

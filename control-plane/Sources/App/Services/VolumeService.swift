@@ -4,7 +4,7 @@ import Fluent
 import StratoShared
 
 /// Service for managing volume operations across agents
-/// Coordinates between the database, SpiceDB, and AgentService
+/// Coordinates between the database and AgentService
 actor VolumeService {
     private let app: Application
     private let logger: Logger

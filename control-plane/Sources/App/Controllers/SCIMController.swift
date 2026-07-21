@@ -229,18 +229,10 @@ struct SCIMController: RouteCollection {
         let processor = SCIMRequestProcessor(configuration: config, authenticator: authenticator)
 
         // Register handlers
-        let userHandler = UserSCIMHandler(
-            db: req.db,
-            organizationID: organizationID,
-            spicedb: try req.spicedb
-        )
+        let userHandler = UserSCIMHandler(db: req.db, organizationID: organizationID)
         await processor.register(userHandler)
 
-        let groupHandler = GroupSCIMHandler(
-            db: req.db,
-            organizationID: organizationID,
-            spicedb: try req.spicedb
-        )
+        let groupHandler = GroupSCIMHandler(db: req.db, organizationID: organizationID)
         await processor.register(groupHandler)
 
         return processor

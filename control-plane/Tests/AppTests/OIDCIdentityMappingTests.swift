@@ -10,8 +10,8 @@ import VaporTesting
 /// claim extraction, JIT provisioning with a configurable default role, IdP
 /// group membership sync, org role reconciliation, and SCIM ↔ OIDC
 /// convergence. Drives `OIDCIdentityService` directly (no fake IdP needed —
-/// the service starts after ID-token validation) and asserts on both the DB
-/// state and the SpiceDB writes/deletes captured by `SpiceDBMockRecorder`.
+/// the service starts after ID-token validation) and asserts on the DB state:
+/// membership mirror rows, group pivot rows, and `role_bindings`.
 @Suite("OIDC Identity Mapping Tests", .serialized)
 final class OIDCIdentityMappingTests {
 
@@ -62,16 +62,14 @@ final class OIDCIdentityMappingTests {
 
     // MARK: - Harness
 
-    /// Boots a test app with an org, a provider configured for claim mapping,
-    /// and a recorder installed after fixture setup so only the service under
-    /// test contributes SpiceDB records.
+    /// Boots a test app with an org and a provider configured for claim
+    /// mapping.
     private func withIdentityTestApp(
         groupsClaim: String? = "groups",
         groupMappings: (TestDataBuilder, Organization) async throws -> [OIDCGroupMapping] = { _, _ in [] },
         adminClaimValues: [String] = [],
         defaultRole: String = "member",
-        _ test: (Application, Organization, OIDCProvider, OIDCIdentityService, SpiceDBMockRecorder) async throws ->
-            Void
+        _ test: (Application, Organization, OIDCProvider, OIDCIdentityService) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -94,11 +92,8 @@ final class OIDCIdentityMappingTests {
             )
             try await provider.save(on: app.db)
 
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
-            let service = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            try await test(app, org, provider, service, recorder)
+            let service = OIDCIdentityService(db: app.db, logger: app.logger)
+            try await test(app, org, provider, service)
 
         } catch {
             try await app.shutdownForTesting()
@@ -118,9 +113,9 @@ final class OIDCIdentityMappingTests {
 
     // MARK: - JIT provisioning
 
-    @Test("JIT user gets the provider's default role and a SpiceDB org tuple")
+    @Test("JIT user gets the provider's default role and an org role binding")
     func jitUsesDefaultRole() async throws {
-        try await withIdentityTestApp(defaultRole: "admin") { app, org, provider, service, recorder in
+        try await withIdentityTestApp(defaultRole: "admin") { app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
@@ -130,19 +125,22 @@ final class OIDCIdentityMappingTests {
                 .first()
             #expect(membership?.role == "admin")
 
-            // The org tuple was previously never written for JIT users.
-            let writes = await recorder.writes
-            let expected = SpiceDBMockRecorder.RelationshipWrite(
-                entity: "organization", entityId: org.id!.uuidString,
-                relation: "admin", subject: "user", subjectId: user.id!.uuidString)
-            #expect(writes.contains(expected))
+            // The admin role binding is written alongside the membership row —
+            // without it the new user authenticates but every check denies.
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == user.id!)
+                .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+                .filter(\.$nodeID == org.id!)
+                .all()
+            #expect(bindings.map(\.role) == [IAMRole.admin.rawValue])
         }
     }
 
     @Test("JIT user with a matching admin claim value is provisioned as admin")
     func jitAdminClaimValue() async throws {
         try await withIdentityTestApp(adminClaimValues: ["strato-admins"], defaultRole: "member") {
-            app, org, provider, service, _ in
+            app, org, provider, service in
             let admin = try await service.resolveUser(
                 userInfo: userInfo(subject: "sub-a", email: "a@example.com"),
                 provider: provider, organization: org, groupValues: ["strato-admins", "other"])
@@ -165,7 +163,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("OIDC subject matching a SCIM externalId resolves to the SCIM user and links the provider")
     func scimExternalIDLinksUser() async throws {
-        try await withIdentityTestApp { app, org, provider, service, _ in
+        try await withIdentityTestApp { app, org, provider, service in
             let scimUser = User(
                 username: "scimuser", email: "scim@example.com", displayName: "SCIM User",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: true)
@@ -197,7 +195,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("SCIM externalId matching is skipped when the org has multiple providers")
     func scimExternalIDRequiresSoleProvider() async throws {
-        try await withIdentityTestApp { app, org, provider, service, _ in
+        try await withIdentityTestApp { app, org, provider, service in
             // Second provider: subjects are no longer attributable to one
             // IdP, so a sub match must not log the caller into the SCIM
             // user's account.
@@ -233,7 +231,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("An unverified email does not link to or take over an existing account")
     func unverifiedEmailDoesNotLink() async throws {
-        try await withIdentityTestApp { app, org, provider, service, _ in
+        try await withIdentityTestApp { app, org, provider, service in
             let existing = User(
                 username: "victim", email: "victim@example.com", displayName: "Victim",
                 isSystemAdmin: false)
@@ -257,7 +255,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("SCIM-deactivated users are denied login")
     func scimDeactivatedDenied() async throws {
-        try await withIdentityTestApp { app, org, provider, service, _ in
+        try await withIdentityTestApp { app, org, provider, service in
             let deactivated = User(
                 username: "gone", email: "gone@example.com", displayName: "Gone",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: false)
@@ -282,7 +280,7 @@ final class OIDCIdentityMappingTests {
 
     // MARK: - Group membership sync
 
-    @Test("Mapped claim value adds the user to the group in DB and SpiceDB")
+    @Test("Mapped claim value adds the user to the group")
     func groupSyncAdds() async throws {
         var engineeringID: UUID!
         try await withIdentityTestApp(groupMappings: { builder, org in
@@ -290,7 +288,7 @@ final class OIDCIdentityMappingTests {
                 name: "Engineering", description: "eng", organization: org)
             engineeringID = engineering.id!
             return [OIDCGroupMapping(claimValue: "idp-engineering", groupID: engineering.id!)]
-        }) { app, org, provider, service, recorder in
+        }) { app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
@@ -298,15 +296,11 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!,
                 groupValues: ["idp-engineering", "unrelated"])
 
+            // The pivot row is what the Cedar evaluator reads for
+            // group-derived access.
             let group = try await Group.find(engineeringID, on: app.db)
             let isMember = try await group!.hasMember(user.id!, on: app.db)
             #expect(isMember)
-
-            let writes = await recorder.writes
-            let expected = SpiceDBMockRecorder.RelationshipWrite(
-                entity: "group", entityId: engineeringID.uuidString,
-                relation: "member", subject: "user", subjectId: user.id!.uuidString)
-            #expect(writes.contains(expected))
         }
     }
 
@@ -318,7 +312,7 @@ final class OIDCIdentityMappingTests {
                 name: "Mapped", description: "idp-managed", organization: org)
             mappedID = mapped.id!
             return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
-        }) { app, org, provider, service, recorder in
+        }) { app, org, provider, service in
             let builder = TestDataBuilder(db: app.db)
             let manual = try await builder.createGroup(
                 name: "Manual", description: "manually managed", organization: org)
@@ -338,12 +332,6 @@ final class OIDCIdentityMappingTests {
             #expect(!stillMapped)
             let stillManual = try await manual.hasMember(user.id!, on: app.db)
             #expect(stillManual)
-
-            let deletes = await recorder.deletes
-            let expected = SpiceDBMockRecorder.RelationshipWrite(
-                entity: "group", entityId: mappedID.uuidString,
-                relation: "member", subject: "user", subjectId: user.id!.uuidString)
-            #expect(deletes.contains(expected))
         }
     }
 
@@ -362,7 +350,7 @@ final class OIDCIdentityMappingTests {
                 return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
             },
             adminClaimValues: ["strato-admins"]
-        ) { app, org, provider, service, _ in
+        ) { app, org, provider, service in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "keeper", email: "keeper@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -392,14 +380,14 @@ final class OIDCIdentityMappingTests {
         // Removal from the org deletes the UserOrganization row but keeps the
         // OIDC link, so the user still resolves on a later login. Their
         // claims must not re-grant org group memberships (which carry
-        // project permissions through SpiceDB).
+        // project permissions through group role bindings).
         var mappedID: UUID!
         try await withIdentityTestApp(groupMappings: { builder, org in
             let mapped = try await builder.createGroup(
                 name: "Mapped", description: "idp-managed", organization: org)
             mappedID = mapped.id!
             return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
-        }) { app, org, provider, service, recorder in
+        }) { app, org, provider, service in
             // OIDC-linked user with no UserOrganization row for this org.
             let removed = User(
                 username: "removed", email: "removed@example.com", displayName: "Removed",
@@ -412,8 +400,6 @@ final class OIDCIdentityMappingTests {
             let mapped = try await Group.find(mappedID, on: app.db)
             let isMember = try await mapped!.hasMember(removed.id!, on: app.db)
             #expect(!isMember)
-            let writes = await recorder.writes
-            #expect(writes.isEmpty)
         }
     }
 
@@ -421,7 +407,7 @@ final class OIDCIdentityMappingTests {
     func groupSyncSkipsMissingGroup() async throws {
         try await withIdentityTestApp(groupMappings: { _, _ in
             [OIDCGroupMapping(claimValue: "ghost", groupID: UUID())]
-        }) { app, org, provider, service, _ in
+        }) { app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
             try await service.syncGroupMemberships(
@@ -429,46 +415,11 @@ final class OIDCIdentityMappingTests {
         }
     }
 
-    @Test("Failed SpiceDB write rolls back the group row so the next login retries")
-    func groupSyncRollsBackOnSpiceDBFailure() async throws {
-        var mappedID: UUID!
-        try await withIdentityTestApp(groupMappings: { builder, org in
-            let mapped = try await builder.createGroup(
-                name: "Mapped", description: "idp-managed", organization: org)
-            mappedID = mapped.id!
-            return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
-        }) { app, org, provider, service, recorder in
-            let user = try await service.resolveUser(
-                userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
-
-            app.spicedbMockWritesFail = true
-            let failing = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            await #expect(throws: Error.self) {
-                try await failing.syncGroupMemberships(
-                    user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
-            }
-
-            // The row must not survive the failed tuple write — a committed
-            // row would make the next login skip the SpiceDB retry.
-            let mapped = try await Group.find(mappedID, on: app.db)
-            let memberAfterFailure = try await mapped!.hasMember(user.id!, on: app.db)
-            #expect(!memberAfterFailure)
-
-            // With SpiceDB healthy again, the next login converges.
-            app.spicedbMockWritesFail = false
-            let healthy = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            try await healthy.syncGroupMemberships(
-                user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
-            let memberAfterRetry = try await mapped!.hasMember(user.id!, on: app.db)
-            #expect(memberAfterRetry)
-        }
-    }
-
     // MARK: - Org role reconciliation
 
     @Test("Admin claim value promotes an existing member; losing it demotes back")
     func roleReconcilePromoteAndDemote() async throws {
-        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service, recorder in
+        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service in
             let builder = TestDataBuilder(db: app.db)
             // A standing admin so the last-admin guard never trips here.
             let standing = try await builder.createUser(username: "standing", email: "standing@example.com")
@@ -477,60 +428,41 @@ final class OIDCIdentityMappingTests {
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
+            func adminBindingCount() async throws -> Int {
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                    .filter(\.$principalID == user.id!)
+                    .filter(\.$role == IAMRole.admin.rawValue)
+                    .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+                    .filter(\.$nodeID == org.id!)
+                    .count()
+            }
+
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
             let promoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
             #expect(promoted?.role == "admin")
 
-            // The stale member tuple is deleted alongside the admin write.
-            let deletes = await recorder.deletes
-            let staleMember = SpiceDBMockRecorder.RelationshipWrite(
-                entity: "organization", entityId: org.id!.uuidString,
-                relation: "member", subject: "user", subjectId: user.id!.uuidString)
-            #expect(deletes.contains(staleMember))
+            // The admin binding is written alongside the mirror-row update.
+            let bindingsAfterPromotion = try await adminBindingCount()
+            #expect(bindingsAfterPromotion == 1)
 
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             let demoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
             #expect(demoted?.role == "member")
-        }
-    }
 
-    @Test("Failed SpiceDB write rolls back a role change so the next login retries")
-    func roleReconcileRollsBackOnSpiceDBFailure() async throws {
-        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service, _ in
-            let builder = TestDataBuilder(db: app.db)
-            let user = try await builder.createUser(username: "promotee", email: "promotee@example.com")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-
-            app.spicedbMockWritesFail = true
-            let failing = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            await #expect(throws: Error.self) {
-                try await failing.reconcileOrganizationRole(
-                    user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
-            }
-
-            // Role must stay unchanged in the DB, otherwise the next login
-            // sees it converged and never retries the tuple update.
-            let afterFailure = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == user.id!).first()
-            #expect(afterFailure?.role == "member")
-
-            app.spicedbMockWritesFail = false
-            let healthy = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
-            try await healthy.reconcileOrganizationRole(
-                user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
-            let afterRetry = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == user.id!).first()
-            #expect(afterRetry?.role == "admin")
+            // Demotion revokes the binding again (bare membership has none).
+            let bindingsAfterDemotion = try await adminBindingCount()
+            #expect(bindingsAfterDemotion == 0)
         }
     }
 
     @Test("Role reconciliation is a no-op when no admin claim values are configured")
     func roleReconcileOptIn() async throws {
-        try await withIdentityTestApp(adminClaimValues: []) { app, org, provider, service, _ in
+        try await withIdentityTestApp(adminClaimValues: []) { app, org, provider, service in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "manual", email: "manual@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -546,7 +478,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("The organization's last usable admin is never demoted by claim mapping")
     func roleReconcileLastAdminGuard() async throws {
-        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service, _ in
+        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "lastadmin", email: "last@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")

@@ -18,7 +18,7 @@ extension Request {
 /// - reads too, when `AUDIT_INCLUDE_READS` is set.
 ///
 /// Registered after the authenticators (so events carry the resolved user and
-/// API key) and before `SpiceDBAuthMiddleware` (so denied requests are audited
+/// API key) and before `AuthorizationMiddleware` (so denied requests are audited
 /// with their 401/403 status). Like `RequestLoggingMiddleware`, the error path
 /// derives the status the client will see from the thrown error, then
 /// rethrows.

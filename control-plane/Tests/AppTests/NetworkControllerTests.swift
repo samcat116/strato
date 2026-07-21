@@ -54,8 +54,6 @@ final class NetworkControllerTests {
     @Test("GET /api/networks always includes the global default network")
     func listIncludesGlobalDefault() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.GET, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -74,8 +72,6 @@ final class NetworkControllerTests {
     @Test("GET /api/networks?project_id excludes other projects but keeps globals")
     func listScopesToProjectPlusGlobals() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             // A network in a different project that must not appear.
             let builder = TestDataBuilder(db: app.db)
             let otherProject = try await builder.createProject(
@@ -122,8 +118,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks persists a valid network (200)")
     func createValidNetwork() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -149,8 +143,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks defaults new networks to dual-stack with a generated ULA /64")
     func createDefaultsToGeneratedULA() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -172,8 +164,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks accepts an explicit IPv6 /64 and defaults its gateway")
     func createWithExplicitSubnet6() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -193,8 +183,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks with ipv6Enabled=false creates a v4-only network")
     func createV4Only() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -224,8 +212,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects non-/64 and non-routable IPv6 subnets (400)")
     func createRejectsInvalidSubnet6() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             for subnet6 in ["fd00:1::/48", "fd00:1::/80", "ff02::/64", "fe80::/64", "::/64", "junk"] {
                 try await app.test(.POST, "/api/networks") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -243,8 +229,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects an IPv6 subnet overlapping a project sibling (409)")
     func createRejectsOverlappingSubnet6() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let existing = LogicalNetwork(
                 name: "sibling6-net", subnet: "10.26.0.0/24", gateway: "10.26.0.1",
                 subnet6: "fd00:aa:bb:cc::/64", gateway6: "fd00:aa:bb:cc::1",
@@ -266,8 +250,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks adds IPv6 to an in-use v4-only network, bumping the generation")
     func updateAddsIPv6ToInUseNetwork() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "grow6-net", subnet: "10.28.0.0/24", gateway: "10.28.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -296,8 +278,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks rejects removing IPv6 while v6 addresses are allocated (409)")
     func updateRejectsRemovingIPv6InUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "shrink6-net", subnet: "10.29.0.0/24", gateway: "10.29.0.1",
                 subnet6: "fd00:29::/64", gateway6: "fd00:29::1",
@@ -332,8 +312,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects an invalid subnet (400)")
     func createRejectsInvalidSubnet() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -348,8 +326,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects a gateway outside the subnet (400)")
     func createRejectsGatewayOutsideSubnet() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -364,8 +340,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects a duplicate name (409)")
     func createRejectsDuplicateName() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            app.spicedbMockAllows = true
-
             // "default" already exists as a global network.
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -407,8 +381,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks allows a gateway change on an unused network (200)")
     func updateGatewayOnUnusedNetwork() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "editable-net", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -428,8 +400,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks toggling external access bumps the realization generation")
     func updateExternalAccessBumpsGeneration() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "l3-net", subnet: "10.61.0.0/24", gateway: "10.61.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -472,7 +442,6 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects a subnet overlapping a sibling in the same project (409)")
     func createRejectsOverlappingSubnet() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
             let existing = LogicalNetwork(
                 name: "net-a", subnet: "10.50.0.0/16", gateway: "10.50.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -491,8 +460,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks rejects a gateway change while the network is in use (409)")
     func updateRejectsGatewayChangeWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "gw-net", subnet: "10.71.0.0/24", gateway: "10.71.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -515,8 +482,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks rejects a name change while the network is in use (409)")
     func updateRejectsRenameWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "used-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -540,8 +505,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks rejects a non-admin mutating the global default (403)")
     func updateDefaultDeniedForNonAdmin() async throws {
         try await withNetworkTestApp { app, _, _, token in
-            app.spicedbMockAllows = true
-
             let defaultNet = try await LogicalNetwork.query(on: app.db)
                 .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
 
@@ -558,8 +521,6 @@ final class NetworkControllerTests {
     @Test("PUT /api/networks rejects a system admin renaming the default network (409)")
     func updateRejectsAdminRenamingDefault() async throws {
         try await withNetworkTestApp { app, _, _, _ in
-            app.spicedbMockAllows = true
-
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "netadmin", email: "netadmin@example.com",
                 displayName: "Net Admin", isSystemAdmin: true)
@@ -582,8 +543,6 @@ final class NetworkControllerTests {
     @Test("DELETE /api/networks removes an unused project network (204)")
     func deleteUnusedNetwork() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "throwaway-net", subnet: "10.80.0.0/24", gateway: "10.80.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -603,8 +562,6 @@ final class NetworkControllerTests {
     @Test("DELETE /api/networks rejects a network in use (409)")
     func deleteRejectsNetworkInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            app.spicedbMockAllows = true
-
             let network = LogicalNetwork(
                 name: "busy-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1",
                 projectID: project.id!, createdByID: user.id!)
@@ -626,8 +583,6 @@ final class NetworkControllerTests {
     @Test("DELETE /api/networks rejects a non-admin deleting the global default (403)")
     func deleteDefaultDeniedForNonAdmin() async throws {
         try await withNetworkTestApp { app, _, _, token in
-            app.spicedbMockAllows = true
-
             let defaultNet = try await LogicalNetwork.query(on: app.db)
                 .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
 
@@ -642,8 +597,6 @@ final class NetworkControllerTests {
     @Test("DELETE /api/networks rejects a system admin deleting the default network (409)")
     func deleteRejectsAdminDeletingDefault() async throws {
         try await withNetworkTestApp { app, _, _, _ in
-            app.spicedbMockAllows = true
-
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "deladmin", email: "deladmin@example.com",
                 displayName: "Delete Admin", isSystemAdmin: true)

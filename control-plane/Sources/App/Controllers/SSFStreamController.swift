@@ -15,7 +15,7 @@ import Vapor
 /// - `POST .../:streamID/poll` — drain a poll stream immediately.
 ///
 /// Plus the public RFC 8935 push delivery endpoint (exempt from session auth
-/// in `SpiceDBAuthMiddleware`; authenticated in-handler with the per-stream
+/// in `AuthorizationMiddleware`; authenticated in-handler with the per-stream
 /// bearer token):
 /// - `POST /ssf/events/:streamID`
 struct SSFStreamController: RouteCollection {
