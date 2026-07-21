@@ -1,0 +1,74 @@
+control-plane/web/src/app/(dashboard)/settings/profile/page.tsx
+  s_7f0eb3edc56d24::t_57111cdb87a9a5 1-19
+control-plane/web/src/components/layout/sidebar.tsx
+  s_7f0eb3edc56d24::t_2636183011a9c7 155-161
+  s_7f0eb3edc56d24::t_454e901f800625 6
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7f0eb3edc56d24::t_dbc7587d355133 260-292,298-314
+  s_7f0eb3edc56d24::t_023dc6476b8e17 315,985-1032
+  s_7f0eb3edc56d24::t_89491c0045547f 793,796-801
+  s_35ce2ad6c6864b::t_0c78521c423dd6 259,316
+control-plane/web/src/lib/webauthn/client.ts
+  s_7f0eb3edc56d24::t_8d95fc1d555f54 10,12
+  s_7f0eb3edc56d24::t_1f5ae79de1579c 188-211
+  s_7f0eb3edc56d24::t_be01ffbd1eb153 187
+control-plane/Sources/App/Services/AuditService.swift
+  s_7f0eb3edc56d24::t_1ab742c9170ff3 22-27
+control-plane/web/src/components/profile/index.ts
+  s_7f0eb3edc56d24::t_421247c540e60d 1-2
+control-plane/web/src/lib/api/passkeys.ts
+  s_7f0eb3edc56d24::t_27941beb007699 1-37
+control-plane/Tests/AppTests/PasskeyManagementTests.swift
+  s_7f0eb3edc56d24::t_776a07651f43cf 21
+  s_7f0eb3edc56d24::t_897575f97a4149 191,193-195
+  s_7f0eb3edc56d24::t_0eab206f30fe8c 1-20,22,26-190,192,196-369
+  s_7f0eb3edc56d24::t_5410394e7e7cec 23-25
+control-plane/web/src/components/profile/passkeys-section.tsx
+  s_7f0eb3edc56d24::t_6616ab3e4795bc 1-265
+control-plane/Sources/App/Controllers/PasskeyController.swift
+  s_7f0eb3edc56d24::t_8449599c2f5fc8 1-281
+control-plane/web/src/lib/api/index.ts
+  s_7f0eb3edc56d24::t_9b7861d8dcbec9 6
+control-plane/Sources/App/routes.swift
+  s_7f0eb3edc56d24::t_311c2c290c5bb0 8-9
+control-plane/web/src/components/layout/nav.ts
+  s_7f0eb3edc56d24::t_a7d997823355e0 96
+  s_7f0eb3edc56d24::t_8de6c855c7860a 6
+control-plane/web/src/lib/hooks/use-passkeys.ts
+  s_7f0eb3edc56d24::t_db8d082ca7c49d 1-69
+control-plane/web/src/lib/hooks/index.ts
+  s_7f0eb3edc56d24::t_9fbd04b2c60e46 64-69
+  s_7f0eb3edc56d24::t_263c1294f5eac7 63
+control-plane/web/src/types/api.ts
+  s_7f0eb3edc56d24::t_93e92d0ac51547 53,58-68
+  s_7f0eb3edc56d24::t_1b9819a515ad96 69-70
+control-plane/web/src/components/profile/profile-form.tsx
+  s_7f0eb3edc56d24::t_8e1b84a5e60da1 13-21
+  s_7f0eb3edc56d24::t_e193c8938edae3 1-2,4-12,22-31,41-160
+  s_7f0eb3edc56d24::t_4ebb04f08954c8 32-40
+  s_7f0eb3edc56d24::t_018f477d80ff64 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f439c4ae00789be9f79e78b390aa2fc29dad3dde",
+  "prompts": {},
+  "sessions": {
+    "s_35ce2ad6c6864b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ae0671-17de-483b-bc40-cd9bc3f807d3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7f0eb3edc56d24": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "42700e9d-391c-4ff9-91dc-16256e103727",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
