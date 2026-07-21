@@ -80,13 +80,17 @@ final class OrganizationMemberAuthzTests {
         }
     }
 
-    @Test("Member list 403s when SpiceDB withholds org view")
+    @Test("Member list 403s for a caller outside the organization")
     func memberListRequiresSpiceDBMembership() async throws {
-        try await withMemberAuthzApp { app, org, _, callerToken, _ in
-            app.spicedbMockDeniedResources = ["organization"]
+        try await withMemberAuthzApp { app, org, _, _, _ in
+            // Not a member of the org: no membership-derived org:read, no
+            // binding — the evaluator denies the member list.
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "authz-outsider", email: "authz-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
             try await app.test(.GET, "/api/organizations/\(org.id!)/members") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: callerToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

@@ -4,11 +4,11 @@ import Fluent
 import VaporTesting
 @testable import App
 
-/// `OrganizationAccessService` now delegates to SpiceDB (via `Request.can`) instead of
-/// reading the relational `UserOrganization.role`. These tests drive the verdict
-/// through the mock SpiceDB (`spicedbMockAllows` / `spicedbMockDeniedResources`) and
-/// assert the wrapper's behavior: the right resource is checked, the documented
-/// `.forbidden` reason is thrown on denial, and system admins bypass.
+/// `OrganizationAccessService` delegates to `Request.can`, which since cutover
+/// (#482) is the Cedar evaluator answering from memberships and
+/// `role_bindings`. These tests assert the wrapper's behavior: the right check
+/// is made, the documented `.forbidden` reason is thrown on denial, and
+/// system admins are allowed through the platform policy.
 @Suite("OrganizationAccessService Tests", .serialized)
 final class OrganizationAccessServiceTests {
 
@@ -60,44 +60,45 @@ final class OrganizationAccessServiceTests {
 
     // MARK: - Organization scope
 
-    @Test("requireMember passes when SpiceDB grants and 403s when it withholds")
+    @Test("requireMember passes for a member and 403s for an outsider")
     func testRequireMember() async throws {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
-            let user = try await builder.createUser(username: "m", email: "m@example.com")
-            let req = self.authedRequest(app, user: user)
+            let member = try await builder.createUser(username: "m", email: "m@example.com")
+            try await builder.addUserToOrganization(user: member, organization: org, role: "member")
+            try await OrganizationAccessService.requireMember(
+                organizationID: org.id!, on: self.authedRequest(app, user: member))
 
-            app.spicedbMockAllows = true
-            try await OrganizationAccessService.requireMember(organizationID: org.id!, on: req)
-
-            app.spicedbMockDeniedResources = ["organization"]
+            let outsider = try await builder.createUser(username: "m2", email: "m2@example.com")
             await self.expectAbort(.forbidden, reason: "Not a member of this organization") {
-                try await OrganizationAccessService.requireMember(organizationID: org.id!, on: req)
+                try await OrganizationAccessService.requireMember(
+                    organizationID: org.id!, on: self.authedRequest(app, user: outsider))
             }
         }
     }
 
-    @Test("requireAdmin passes when SpiceDB grants and 403s when it withholds")
+    @Test("requireAdmin passes for an org admin and 403s for a bare member")
     func testRequireAdmin() async throws {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
-            let user = try await builder.createUser(username: "a", email: "a@example.com")
-            let req = self.authedRequest(app, user: user)
+            let admin = try await builder.createUser(username: "a", email: "a@example.com")
+            try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
+            try await OrganizationAccessService.requireAdmin(
+                organizationID: org.id!, on: self.authedRequest(app, user: admin))
 
-            app.spicedbMockAllows = true
-            try await OrganizationAccessService.requireAdmin(organizationID: org.id!, on: req)
-
-            app.spicedbMockAllows = false
+            let member = try await builder.createUser(username: "a2", email: "a2@example.com")
+            try await builder.addUserToOrganization(user: member, organization: org, role: "member")
             await self.expectAbort(.forbidden, reason: "Admin access required") {
-                try await OrganizationAccessService.requireAdmin(organizationID: org.id!, on: req)
+                try await OrganizationAccessService.requireAdmin(
+                    organizationID: org.id!, on: self.authedRequest(app, user: member))
             }
         }
     }
 
-    @Test("system admins bypass the SpiceDB check")
+    @Test("system admins are allowed through the platform-system-admin policy")
     func testSystemAdminBypasses() async throws {
-        // System admins bypass everywhere (Request.can returns true for them), so these
-        // checks pass even when the mock denies all permissions.
+        // No membership, no bindings — the evaluator's tier-1 policy is what
+        // permits these.
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
             let sysAdmin = try await builder.createUser(
@@ -105,7 +106,6 @@ final class OrganizationAccessServiceTests {
             )
             let req = self.authedRequest(app, user: sysAdmin)
 
-            app.spicedbMockAllows = false
             try await OrganizationAccessService.requireMember(organizationID: org.id!, on: req)
             try await OrganizationAccessService.requireAdmin(organizationID: org.id!, on: req)
         }
@@ -121,13 +121,16 @@ final class OrganizationAccessServiceTests {
             let user = try await builder.createUser(username: "m", email: "m@example.com")
             let req = self.authedRequest(app, user: user)
 
-            app.spicedbMockAllows = true
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
             try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
-            // Deny only the project resource — the check must fail.
-            app.spicedbMockDeniedResources = ["project"]
+            // A user with no binding anywhere — the check must fail.
+            let outsider = try await builder.createUser(username: "m3", email: "m3@example.com")
             await self.expectAbort(.forbidden, reason: "Not a member of this organization") {
-                try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+                try await OrganizationAccessService.requireProjectMember(
+                    project: project, on: self.authedRequest(app, user: outsider))
             }
         }
     }
@@ -140,12 +143,19 @@ final class OrganizationAccessServiceTests {
             let user = try await builder.createUser(username: "a", email: "a@example.com")
             let req = self.authedRequest(app, user: user)
 
-            app.spicedbMockAllows = true
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
             try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
-            app.spicedbMockAllows = false
+            // A viewer can see the project but not manage it.
+            let viewer = try await builder.createUser(username: "a3", email: "a3@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: viewer.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
             await self.expectAbort(.forbidden, reason: "Admin access required") {
-                try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+                try await OrganizationAccessService.requireProjectAdmin(
+                    project: project, on: self.authedRequest(app, user: viewer))
             }
         }
     }

@@ -32,7 +32,7 @@ final class VolumeAuthorizationTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Volume Auth Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -73,16 +73,22 @@ final class VolumeAuthorizationTests {
 
     @Test("POST /api/volumes with a sourceImageId the user cannot read is denied (403)")
     func createFromImageDeniedWithoutImagePermission() async throws {
-        try await withVolumeTestApp { app, project, image, token in
-            // Grant everything except image reads: the project-level
-            // `create_volume` check passes, so a 403 can only come from the
-            // image permission check.
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = ["image"]
+        try await withVolumeTestApp { app, project, _, token in
+            // The caller may create volumes in their own project, but the
+            // source image lives in a foreign organization no binding
+            // reaches — the exact cross-project leak this test pins.
+            let builder = TestDataBuilder(db: app.db)
+            let foreignOrg = try await builder.createOrganization(name: "Foreign Image Org")
+            let foreignProject = try await builder.createProject(
+                name: "Foreign Image Project", description: "elsewhere", organization: foreignOrg)
+            let foreignUploader = try await builder.createUser(
+                username: "foreign-uploader", email: "foreign-uploader@example.com")
+            let foreignImage = try await builder.createImage(
+                name: "Foreign Image", project: foreignProject, uploadedBy: foreignUploader)
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(self.createVolumeBody(project: project, image: image))
+                try req.content.encode(self.createVolumeBody(project: project, image: foreignImage))
             } afterResponse: { res in
                 // Before the fix this returned 200 and kicked off provisioning,
                 // which signs a download URL for an image the caller can't read.
@@ -99,9 +105,6 @@ final class VolumeAuthorizationTests {
     @Test("POST /api/volumes with a readable sourceImageId succeeds (200)")
     func createFromImageAllowedWithPermission() async throws {
         try await withVolumeTestApp { app, project, image, token in
-            app.spicedbMockAllows = true
-            app.spicedbMockDeniedResources = []
-
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(self.createVolumeBody(project: project, image: image))

@@ -50,6 +50,16 @@ final class ImageControllerTests {
         return buffer
     }
 
+    /// A user with no memberships or bindings — the post-cutover (#482) way to
+    /// exercise denial paths (the mock SpiceDB verdict no longer decides).
+    static func makeOutsiderToken(on app: Application) async throws -> String {
+        let suffix = UUID().uuidString.prefix(8)
+        let outsider = try await TestDataBuilder(db: app.db).createUser(
+            username: "img-outsider-\(suffix)",
+            email: "img-outsider-\(suffix)@example.com")
+        return try await outsider.generateAPIKey(on: app.db)
+    }
+
     /// Creates a temporary storage directory
     static func createTempStorageDirectory() throws -> String {
         let tempDir = FileManager.default.temporaryDirectory
@@ -232,6 +242,13 @@ final class ImageControllerTests {
                 role: "admin"
             )
             try await userOrg.save(on: app.db)
+
+            // The admin role binding the API/backfill would have written
+            // alongside the membership row — the Cedar evaluator (#482)
+            // answers from `role_bindings`.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: testUser.id!, role: .admin,
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
 
             // Create test project
             let testProject = Project(
@@ -1322,12 +1339,12 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let imageID = try await Self.createEmptyImage(
                 app: app, project: project, authToken: authToken)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(
                 .POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/fetch"
             ) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
                 req.headers.contentType = .json
                 try req.content.encode(
                     ArtifactFetchRequest(kind: "kernel", sourceURL: "https://example.com/vmlinux"))
@@ -1378,13 +1395,13 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let imageID = try await Self.createEmptyImage(
                 app: app, project: project, authToken: authToken)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             let (body, boundary) = Self.createArtifactMultipartFormData(
                 kind: "kernel", filename: "vmlinux", fileContent: Self.createRawBuffer())
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
                 req.headers.contentType = HTTPMediaType(
                     type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
                 req.body = ByteBuffer(data: body)
@@ -1406,10 +1423,10 @@ final class ImageControllerTests {
     @Test("List images is denied (403) when SpiceDB withholds view_project")
     func testListImagesForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -1421,10 +1438,10 @@ final class ImageControllerTests {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -1434,10 +1451,10 @@ final class ImageControllerTests {
     @Test("Create image is denied (403) when SpiceDB withholds update_project")
     func testCreateImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
                 req.headers.contentType = .json
                 try req.content.encode(
                     CreateImageRequest(
@@ -1460,10 +1477,10 @@ final class ImageControllerTests {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
                 req.headers.contentType = .json
                 try req.content.encode(
                     UpdateImageRequest(
@@ -1485,10 +1502,10 @@ final class ImageControllerTests {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -1500,10 +1517,10 @@ final class ImageControllerTests {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            app.spicedbMockAllows = false
+            let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/status") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

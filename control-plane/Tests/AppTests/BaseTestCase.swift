@@ -45,6 +45,20 @@ class BaseTestCase {
         )
         try await userOrg.save(on: db)
 
+        // The admin role binding the API/backfill would have written alongside
+        // the membership row. Since cutover (#482) the Cedar evaluator answers
+        // from `role_bindings`, so a membership written straight to the
+        // database grants nothing without it.
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: testUser.id!,
+            role: .admin,
+            nodeType: .organization,
+            nodeID: testOrganization.id!,
+            createdBy: nil,
+            on: db
+        )
+
         // Set current organization
         testUser.currentOrganizationId = testOrganization.id
         try await testUser.save(on: db)

@@ -1,24 +1,24 @@
+import Fluent
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
+
 @testable import App
 
-/// Regression tests for issue #163: `SpiceDBAuthMiddleware` guarded `/vms` while VM
-/// routes live under `/api/vms`, so per-object authorization was dead code. These tests
-/// exercise the full middleware + handler stack against the in-memory mock SpiceDB and
-/// assert that a denied permission actually yields 403 on the `/api/vms` routes.
+/// Regression tests for issue #163 (the middleware guarded `/vms` while VM
+/// routes live under `/api/vms`, so per-object authorization was dead code),
+/// updated for the #482 cutover: authorization is now the Cedar evaluator
+/// answering from `role_bindings`, so denial is the *absence of a binding*
+/// rather than a mock verdict, and an unclassified path is denied outright by
+/// the default-deny middleware.
 @Suite("VM Authorization Tests", .serialized)
 final class VMAuthorizationTests {
 
-    /// Boots a configured test app with a non-admin user, org, project and one VM.
-    ///
-    /// `configure(app)` installs `SpiceDBAuthMiddleware` in every environment,
-    /// including `.testing` (issue #196), so these requests traverse the same
-    /// middleware whose `/api/vms` prefix regression this suite covers rather than
-    /// only exercising the per-handler `authorizedVM` checks.
+    /// Boots a configured test app with a non-admin org *member* (bare
+    /// membership carries no role binding, so they can list but not read any
+    /// VM), plus an org, a project, and one VM.
     private func withVMTestApp(
-        _ test: (Application, User, VM, String) async throws -> Void
+        _ test: (Application, User, VM, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -46,7 +46,7 @@ final class VMAuthorizationTests {
             let vm = try await builder.createVM(name: "auth-vm", project: project)
             let token = try await user.generateAPIKey(on: app.db)
 
-            try await test(app, user, vm, token)
+            try await test(app, user, vm, project, token)
 
         } catch {
             try await app.shutdownForTesting()
@@ -56,11 +56,30 @@ final class VMAuthorizationTests {
         try await app.shutdownForTesting()
     }
 
+    /// Grant `role` to `user` on `project` — the binding the evaluator answers
+    /// from.
+    private func grant(_ role: IAMRole, to user: User, onProject project: Project, app: Application)
+        async throws
+    {
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: user.id!,
+            role: role,
+            nodeType: .project,
+            nodeID: project.id!,
+            createdBy: nil,
+            on: app.db
+        )
+    }
+
     @Test("GET /api/vms?organization_id= narrows the list to that org's projects")
     func indexFilteredByOrganization() async throws {
-        try await withVMTestApp { app, user, vm, token in
-            // A VM in another organization's project. A VM has no org scope of its
-            // own, so the filter has to reach it through the project.
+        try await withVMTestApp { app, user, vm, project, token in
+            // Visibility comes from a viewer binding on the project; the VM in
+            // another organization's project stays invisible because no
+            // binding reaches it.
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
+
             let builder = TestDataBuilder(db: app.db)
             let otherOrg = try await builder.createOrganization(name: "Other VM Org")
             let otherProject = try await builder.createProject(
@@ -78,25 +97,23 @@ final class VMAuthorizationTests {
         }
     }
 
-    @Test("GET /api/vms/:id is denied (403) when SpiceDB withholds read")
+    @Test("GET /api/vms/:id is denied (403) without a binding granting read")
     func showDeniedWhenNoPermission() async throws {
-        try await withVMTestApp { app, _, vm, token in
-            app.spicedbMockAllows = false
-
+        try await withVMTestApp { app, _, vm, _, token in
             try await app.test(.GET, "/api/vms/\(vm.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                // Before the fix the middleware guarded `/vms`, so this route slipped
-                // through with only authentication and returned 200 (VM leaked).
+                // Bare org membership grants org:read + project:create only —
+                // no vm:read anywhere, so the middleware's object check denies.
                 #expect(res.status == .forbidden)
             }
         }
     }
 
-    @Test("GET /api/vms/:id succeeds (200) when SpiceDB grants read")
+    @Test("GET /api/vms/:id succeeds (200) with a viewer binding on the project")
     func showAllowedWhenPermitted() async throws {
-        try await withVMTestApp { app, _, vm, token in
-            app.spicedbMockAllows = true
+        try await withVMTestApp { app, user, vm, project, token in
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -106,10 +123,12 @@ final class VMAuthorizationTests {
         }
     }
 
-    @Test("POST /api/vms/:id/start is denied (403) when SpiceDB withholds start")
+    @Test("POST /api/vms/:id/start is denied (403) for a viewer (vm:start is operator+)")
     func startActionDeniedWhenNoPermission() async throws {
-        try await withVMTestApp { app, _, vm, token in
-            app.spicedbMockAllows = false
+        try await withVMTestApp { app, user, vm, project, token in
+            // A viewer can read the VM but vm:start belongs to operator and
+            // above — the role nesting, not the mock, is what denies here.
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -119,11 +138,9 @@ final class VMAuthorizationTests {
         }
     }
 
-    @Test("GET /api/vms/:id/logs is denied (403) when SpiceDB withholds read")
+    @Test("GET /api/vms/:id/logs is denied (403) without a binding granting read")
     func logsDeniedWhenNoPermission() async throws {
-        try await withVMTestApp { app, _, vm, token in
-            app.spicedbMockAllows = false
-
+        try await withVMTestApp { app, _, vm, _, token in
             try await app.test(.GET, "/api/vms/\(vm.id!)/logs") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -134,11 +151,10 @@ final class VMAuthorizationTests {
 
     // MARK: - Direct middleware tests
     //
-    // These isolate `SpiceDBAuthMiddleware` from the route handlers so the `/api/vms`
-    // prefix regression is pinned independently of the per-handler `authorizedVM`
-    // checks: reverting the guard to `/vms` makes `middlewareGuardsApiVmsPrefix` fail
-    // (the request falls through to `next` → 200 instead of throwing 403), and
-    // `middlewareIgnoresBareVmsPrefix` fails the other way.
+    // These isolate `AuthorizationMiddleware` from the route handlers so the
+    // `/api/vms` prefix guard is pinned independently of the per-handler
+    // `authorizedVM` checks, and the default-deny behavior for unclassified
+    // paths is pinned at all.
 
     /// A `next` responder that unconditionally succeeds, standing in for the route
     /// handler so any 403 must originate from the middleware itself.
@@ -161,33 +177,37 @@ final class VMAuthorizationTests {
             on: app.eventLoopGroup.next()
         )
         req.auth.login(user)
-        return try await SpiceDBAuthMiddleware().respond(to: req, chainingTo: OKResponder())
+        return try await AuthorizationMiddleware().respond(to: req, chainingTo: OKResponder())
     }
 
     @Test("Middleware runs its per-object check for the /api/vms prefix")
     func middlewareGuardsApiVmsPrefix() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // Denied: the middleware must reject before reaching the handler.
-            app.spicedbMockAllows = false
+        try await withVMTestApp { app, user, vm, project, _ in
+            // Denied: no binding grants vm:read, so the middleware rejects
+            // before reaching the handler.
             await #expect(throws: Abort.self) {
                 _ = try await self.runMiddleware(app, user: user, path: "/api/vms/\(vm.id!)")
             }
 
-            // Granted: the middleware lets the request through to `next` (200).
-            app.spicedbMockAllows = true
+            // Granted: with a viewer binding the middleware lets the request
+            // through to `next` (200).
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
             let res = try await runMiddleware(app, user: user, path: "/api/vms/\(vm.id!)")
             #expect(res.status == .ok)
         }
     }
 
-    @Test("Middleware does not guard the stale bare /vms prefix")
-    func middlewareIgnoresBareVmsPrefix() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // The old (buggy) prefix must NOT be what's guarded: even with permission
-            // withheld, a bare `/vms/...` path is not a real route and falls through.
-            app.spicedbMockAllows = false
-            let res = try await runMiddleware(app, user: user, path: "/vms/\(vm.id!)")
-            #expect(res.status == .ok)
+    @Test("Middleware denies the unclassified bare /vms prefix outright")
+    func middlewareDeniesBareVmsPrefix() async throws {
+        try await withVMTestApp { app, user, vm, project, _ in
+            // Issue #163's bug was `/vms` slipping through unguarded. Under
+            // default-deny (#482) the failure mode is gone structurally: a
+            // path outside every route class is denied even for a user who
+            // could read the VM through the real route.
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
+            await #expect(throws: Abort.self) {
+                _ = try await self.runMiddleware(app, user: user, path: "/vms/\(vm.id!)")
+            }
         }
     }
 }

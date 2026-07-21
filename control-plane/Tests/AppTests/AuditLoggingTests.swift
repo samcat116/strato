@@ -89,10 +89,14 @@ final class AuditLoggingTests {
         }
     }
 
-    @Test("System-admin bypassed requests are audited, including reads")
+    @Test("Requests allowed by the platform-system-admin policy are audited, including reads")
     func adminBypassIsAudited() async throws {
         try await withApp(systemAdmin: true) { app, user, _, token in
-            try await app.test(.GET, "/api/api-keys") { req in
+            // A route that flows through the evaluator: the admin's allow is
+            // determined by platform-system-admin, which is what marks the
+            // audit event. (Identity-plane reads like /api/api-keys are
+            // self-scoped and involve no evaluator decision anymore.)
+            try await app.test(.GET, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -110,11 +114,18 @@ final class AuditLoggingTests {
 
     @Test("Denied requests are audited with their status")
     func deniedRequestIsAudited() async throws {
-        try await withApp { app, user, _, token in
-            app.spicedbMockAllows = false
+        try await withApp { app, _, org, _ in
+            // Someone whose current org they are not a member of: the
+            // middleware's collection gate denies before the handler runs.
+            let builder = TestDataBuilder(db: app.db)
+            let outsider = try await builder.createUser(
+                username: "audit-outsider", email: "audit-outsider@example.com")
+            outsider.currentOrganizationId = org.id
+            try await outsider.save(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -123,7 +134,7 @@ final class AuditLoggingTests {
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.status == 403)
-            #expect(event.userID == user.id)
+            #expect(event.userID == outsider.id)
             #expect(event.resourceType == "vms")
             #expect(event.action == "create")
         }
@@ -256,9 +267,14 @@ final class AuditLoggingTests {
                 #expect(orgIDs == [org.id])
             }
 
-            app.spicedbMockAllows = false
+            // A bare member is not an org admin, so the same query is denied.
+            let member = try await TestDataBuilder(db: app.db).createUser(
+                username: "audit-member", email: "audit-member@example.com")
+            try await TestDataBuilder(db: app.db).addUserToOrganization(
+                user: member, organization: org, role: "member")
+            let memberToken = try await member.generateAPIKey(on: app.db)
             try await app.test(.GET, "/api/organizations/\(org.id!)/audit-events") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

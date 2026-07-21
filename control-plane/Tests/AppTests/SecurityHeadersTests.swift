@@ -29,11 +29,11 @@ struct SecurityHeadersTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        // An unmatched route becomes a 404 synthesized by Vapor's ErrorMiddleware.
-        // The security middleware must sit outside ErrorMiddleware so these still
-        // carry the headers. Authenticate the request so `SpiceDBAuthMiddleware`
-        // (now active under .testing, issue #196) lets it fall through to the
-        // router and produce the 404 we're asserting on — rather than a 401.
+        // An unmatched route is denied (403) by the default-deny
+        // `AuthorizationMiddleware` (#482) before it can reach the router's
+        // 404. The point here is unchanged: the security middleware sits
+        // outside ErrorMiddleware, so even this synthesized error response
+        // must carry the headers.
         let builder = TestDataBuilder(db: app.db)
         let user = try await builder.createUser()
         let token = try await user.generateAPIKey(on: app.db)
@@ -41,7 +41,7 @@ struct SecurityHeadersTests {
         try await app.test(.GET, "/this-route-does-not-exist") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
         } afterResponse: { res async throws in
-            #expect(res.status == .notFound)
+            #expect(res.status == .forbidden)
             #expect(res.headers.first(name: "X-Content-Type-Options") == "nosniff")
             #expect(res.headers.first(name: "X-Frame-Options") == "DENY")
         }

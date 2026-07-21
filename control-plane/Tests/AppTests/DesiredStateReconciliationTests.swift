@@ -33,7 +33,7 @@ final class DesiredStateReconciliationTests {
                 isSystemAdmin: false
             )
             let org = try await builder.createOrganization(name: "Recon Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 

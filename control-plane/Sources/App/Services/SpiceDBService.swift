@@ -964,21 +964,24 @@ extension Application {
 }
 
 extension Request {
-    /// The SpiceDB service, wrapped so every permission check is also
-    /// shadow-evaluated through Cedar (IAM phase 4, issue #481). Request-level
-    /// on purpose: every middleware and handler check site reaches SpiceDB
-    /// through this accessor, so shadow coverage is total by construction —
-    /// including check sites added after this shipped.
+    /// The SpiceDB service, wrapped so every permission check is answered by
+    /// the authoritative Cedar evaluator (IAM phase 5, issue #482) while
+    /// relationship writes still reach SpiceDB (dual-write until #483).
+    /// Request-level on purpose: every middleware and handler check site
+    /// reaches SpiceDB through this accessor, so the cutover is total by
+    /// construction — including check sites added after this shipped.
     var spicedb: SpiceDBServiceProtocol {
         get throws {
-            let inner = try self.application.spicedb
-            guard self.application.iamShadowConfig.enabled else { return inner }
-            return ShadowingSpiceDBService(
-                inner: inner,
-                shadow: self.application.iamShadow,
-                path: self.url.path,
-                method: self.method.rawValue,
-                requestID: self.id
+            CedarAuthoritativeSpiceDBService(
+                inner: try self.application.spicedb,
+                app: self.application,
+                db: self.db,
+                state: self.iamAuthState,
+                context: IAMCheckContext(
+                    path: self.url.path,
+                    method: self.method.rawValue,
+                    requestID: self.id
+                )
             )
         }
     }

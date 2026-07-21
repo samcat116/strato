@@ -20,11 +20,11 @@ struct SCIMTokenController: RouteCollection {
 
     @Sendable
     func listTokens(req: Request) async throws -> [SCIMTokenResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let organizationID = try getOrganizationID(from: req)
 
         // Verify user is admin of this organization
-        try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
         let tokens = try await SCIMToken.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
@@ -42,7 +42,7 @@ struct SCIMTokenController: RouteCollection {
         let organizationID = try getOrganizationID(from: req)
 
         // Verify user is admin of this organization
-        try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
         let request = try req.content.decode(CreateSCIMTokenRequest.self)
 
@@ -80,11 +80,11 @@ struct SCIMTokenController: RouteCollection {
 
     @Sendable
     func getToken(req: Request) async throws -> SCIMTokenResponse {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let organizationID = try getOrganizationID(from: req)
 
         // Verify user is admin of this organization
-        try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
             let tokenID = UUID(uuidString: tokenIDString)
@@ -108,11 +108,11 @@ struct SCIMTokenController: RouteCollection {
 
     @Sendable
     func updateToken(req: Request) async throws -> SCIMTokenResponse {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let organizationID = try getOrganizationID(from: req)
 
         // Verify user is admin of this organization
-        try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
             let tokenID = UUID(uuidString: tokenIDString)
@@ -148,11 +148,11 @@ struct SCIMTokenController: RouteCollection {
 
     @Sendable
     func deleteToken(req: Request) async throws -> HTTPStatus {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let organizationID = try getOrganizationID(from: req)
 
         // Verify user is admin of this organization
-        try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
             let tokenID = UUID(uuidString: tokenIDString)
@@ -185,27 +185,12 @@ struct SCIMTokenController: RouteCollection {
         return organizationID
     }
 
-    private func requireOrganizationAdmin(user: User, organizationID: UUID, on db: Database) async throws {
-        // System admins can manage any organization
-        if user.isSystemAdmin {
-            return
-        }
-
-        guard let userID = user.id else {
-            throw Abort(.unauthorized, reason: "User not authenticated")
-        }
-
-        // Check if user is admin of this organization
-        guard
-            let membership = try await UserOrganization.query(on: db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
-            throw Abort(.forbidden, reason: "You are not a member of this organization")
-        }
-
-        guard membership.role == "admin" else {
+    /// Managing SCIM tokens is org administration, gated through the
+    /// evaluator like the rest of the org-admin surface (the issue #482
+    /// pre-cutover audit's conversion pattern — previously an inline
+    /// `UserOrganization.role` read invisible to the decision log).
+    private func requireOrganizationAdmin(organizationID: UUID, on req: Request) async throws {
+        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Only organization admins can manage SCIM tokens")
         }
     }

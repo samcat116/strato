@@ -485,6 +485,9 @@ struct OAuthDeviceFlowTests {
             let issued = try #require(issuedToken)
 
             app.routes.all.removeAll()
+            // Ad-hoc route outside the production classification; declare it
+            // so the default-deny middleware treats it as login-gated (#482).
+            app.testOnlyLoginRoutePrefixes = ["/resource"]
             let protected = app.grouped(
                 BearerAuthorizationHeaderAuthenticator(),
                 APIKeyScopeMiddleware()

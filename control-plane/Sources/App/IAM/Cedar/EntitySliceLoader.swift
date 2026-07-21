@@ -69,6 +69,14 @@ struct CedarEntitySlice: Equatable, Sendable {
     /// a restricted grant into an open one — so they are skipped, which can
     /// only under-grant, and counted so the caller can log them.
     let skippedConditionedBindings: Int
+    /// Whether the ancestor chain reached its root. A truncated chain (an
+    /// orphaned intermediate node, a scopeless legacy site) under-grants
+    /// harmlessly for tier 3 — but it is fail-*open* for tier-2 guardrails: a
+    /// `forbid (… resource in Organization::"X")` silently stops matching the
+    /// moment the parent edges no longer reach X, while an in-chain binding
+    /// still fires its permit. The authorizer denies outright when this is
+    /// false; a ceiling that "usually" applies is not a ceiling.
+    let chainComplete: Bool
 
     /// The entity store in Cedar's entities JSON format.
     func entitiesJSON() throws -> String {
@@ -159,6 +167,18 @@ enum EntitySliceLoader {
             }
         }
 
+        // The chain is complete when it terminates at an organization — the
+        // root every guardrail attach node resolves through. Two shapes are
+        // rootless *by design* and stay complete: the organization itself, and
+        // a global network (no project, no site), which is deliberately
+        // project-less as the VM-create fallback (`platform-open-network-read`).
+        var chainComplete = chain.last?.type == .organization
+        if !chainComplete, node.type == .network, chain.count == 1 {
+            if let network = try await LogicalNetwork.find(node.id, on: db) {
+                chainComplete = network.$project.id == nil && network.$site.id == nil
+            }
+        }
+
         var entities: [CedarEntity] = []
 
         let principalUID = CedarEntityUID(type: .user, id: userID)
@@ -206,7 +226,8 @@ enum EntitySliceLoader {
             chain: chain,
             entities: entities,
             grants: grants,
-            skippedConditionedBindings: skippedConditionedBindings
+            skippedConditionedBindings: skippedConditionedBindings,
+            chainComplete: chainComplete
         )
     }
 }

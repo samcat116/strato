@@ -66,19 +66,36 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    /// System admin, or the given permission on the pool itself (resolved
-    /// through `floating_ip_pool#parent` in SpiceDB).
-    private func requirePoolPermission(_ req: Request, pool: FloatingIPPool, permission: String) async throws {
+    /// The IAM action standing for pool `view`/`manage`: a pool's access *is*
+    /// its owning scope's access (exactly how the SpiceDB schema resolved
+    /// `floating_ip_pool` permissions — `view = parent->view_*`,
+    /// `manage = parent->manage_*`), so the check evaluates on the owning
+    /// org/folder node. The pool itself has no node in the IAM tree.
+    private static func poolScopeCheck(_ scope: OrganizationScope, manage: Bool) -> (action: String, node: IAMNode) {
+        switch scope {
+        case .organization(let id):
+            return (manage ? "org:update" : "org:read", IAMNode(type: .organization, id: id))
+        case .organizationalUnit(let id):
+            return (manage ? "folder:update" : "folder:read", IAMNode(type: .organizationalUnit, id: id))
+        }
+    }
+
+    /// System admin, or the scope-level permission a pool operation stands
+    /// for, through the evaluator.
+    private func requirePoolPermission(_ req: Request, pool: FloatingIPPool, manage: Bool) async throws {
         let user = try req.auth.require(User.self)
         if user.isSystemAdmin { return }
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "floating_ip_pool",
-            resourceId: try pool.requireID().uuidString
-        )
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this floating IP pool")
+        guard let scope = pool.organizationScope else {
+            // Rows predating scoping belong to no organization: nothing to
+            // authorize against, so only system admins may touch them
+            // (defensive deny, mirroring scopeless quotas).
+            throw Abort(.forbidden, reason: "This floating IP pool has no owning organization")
+        }
+        let check = Self.poolScopeCheck(scope, manage: manage)
+        guard try await req.can(check.action, on: check.node) else {
+            throw Abort(
+                .forbidden,
+                reason: "You don't have '\(manage ? "manage" : "view")' permission on this floating IP pool")
         }
     }
 
@@ -103,14 +120,9 @@ struct FloatingIPController: RouteCollection {
             visible = pools
         } else {
             for pool in pools {
-                guard let poolId = pool.id else { continue }
-                let ok = try await req.spicedb.checkPermission(
-                    subject: user.id!.uuidString,
-                    permission: "view",
-                    resource: "floating_ip_pool",
-                    resourceId: poolId.uuidString
-                )
-                if ok { visible.append(pool) }
+                guard let scope = pool.organizationScope else { continue }
+                let check = Self.poolScopeCheck(scope, manage: false)
+                if try await req.can(check.action, on: check.node) { visible.append(pool) }
             }
         }
 
@@ -174,7 +186,7 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func getPool(req: Request) async throws -> FloatingIPPoolResponse {
         let pool = try await findPool(req)
-        try await requirePoolPermission(req, pool: pool, permission: "view")
+        try await requirePoolPermission(req, pool: pool, manage: false)
         let count = try await FloatingIP.query(on: req.db)
             .filter(\.$pool.$id == pool.requireID())
             .count()
@@ -187,7 +199,7 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func updatePool(req: Request) async throws -> FloatingIPPoolResponse {
         let pool = try await findPool(req)
-        try await requirePoolPermission(req, pool: pool, permission: "manage")
+        try await requirePoolPermission(req, pool: pool, manage: true)
         let update = try req.content.decode(UpdateFloatingIPPoolRequest.self)
 
         var canonicalGateway: String?
@@ -248,7 +260,7 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func deletePool(req: Request) async throws -> HTTPStatus {
         let pool = try await findPool(req)
-        try await requirePoolPermission(req, pool: pool, permission: "manage")
+        try await requirePoolPermission(req, pool: pool, manage: true)
         let poolId = try pool.requireID()
 
         let allocated = try await FloatingIP.query(on: req.db)

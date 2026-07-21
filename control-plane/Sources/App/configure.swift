@@ -213,10 +213,11 @@ public func configure(_ app: Application) async throws {
     // Register the authorization middleware in every environment — including
     // .testing. It used to be skipped under .testing, which meant every controller
     // test ran with authorization off and no test could catch an authz regression
-    // (issue #196). In testing, `app.spicedb` resolves to a mock whose verdict is
-    // controlled by `app.spicedbMockAllows`, so tests can exercise both the
-    // allow and deny paths through the real middleware + handler stack.
-    app.middleware.use(SpiceDBAuthMiddleware())
+    // (issue #196). Since cutover (#482) authorization is evaluated by the
+    // in-process Cedar policy set against real `role_bindings` rows, so tests
+    // exercise the exact production decision path — there is no permissive mock
+    // in front of it.
+    app.middleware.use(AuthorizationMiddleware())
 
     // Configure database based on environment
     if app.environment == .testing {
@@ -542,9 +543,18 @@ public func configure(_ app: Application) async throws {
     // watch, level-triggered so a failed rebuild retries on the periodic
     // re-read. The listener registers first so the watch's initial refresh
     // performs the boot-time build.
+    //
+    // Since cutover (#482) the compiled set is the authoritative decision
+    // path, so `.testing` needs it too — but built once at boot rather than
+    // via the watch, whose periodic re-read would outlive the test's
+    // application. Tests that change policy (guardrail writes) drive
+    // `cedarPolicySet.reconcile` directly.
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()
+    } else {
+        let version = try await PolicySetVersionService.current(on: app.db)
+        await app.cedarPolicySet.rebuild(version: version, on: app.db)
     }
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
@@ -690,4 +700,10 @@ public func configure(_ app: Application) async throws {
     app.readiness.markMigrationsComplete()
 
     try routes(app)
+
+    // The structural half of default-deny (#482): every registered route must
+    // carry an authorization classification, or the process refuses to start.
+    // Runs in every environment, so the whole test suite fails the moment an
+    // unclassified endpoint is added.
+    try app.assertAllRoutesClassified()
 }

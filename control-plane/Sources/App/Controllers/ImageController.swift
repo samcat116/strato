@@ -981,7 +981,14 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        // Check permission via SpiceDB
+        // Existence before permission: the evaluator resolves grants through
+        // the image's ancestor chain, so a nonexistent image can only ever
+        // deny — a plain 404 is the accurate answer (and the pre-cutover
+        // behavior).
+        guard try await Image.find(imageID, on: req.db) != nil else {
+            throw Abort(.notFound, reason: "Image not found")
+        }
+
         let hasPermission = try await req.spicedb.checkPermission(
             subject: user.id?.uuidString ?? "",
             permission: "download",

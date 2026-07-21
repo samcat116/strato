@@ -144,14 +144,14 @@ struct GuardrailController: RouteCollection {
     /// inherited from above. They intersect; the effective set is the whole
     /// list, not the nearest entry.
     func list(req: Request) async throws -> GuardrailListResponse {
-        let user = try requireUser(req)
+        _ = try requireUser(req)
         guard let nodeType = req.query[String.self, at: "nodeType"],
             let nodeId = req.query[String.self, at: "nodeId"]
         else {
             throw Abort(.badRequest, reason: "nodeType and nodeId query parameters are required")
         }
         let node = try IAMPolicyGate.node(resourceType: nodeType, resourceId: nodeId)
-        try await requirePolicyAdmin(on: node, caller: user, req: req)
+        try await requirePolicyAdmin(on: node, write: false, req: req)
 
         let effective = req.query[Bool.self, at: "effective"] ?? false
         if effective {
@@ -171,9 +171,9 @@ struct GuardrailController: RouteCollection {
 
     /// GET /api/iam/guardrails/:guardrailID
     func get(req: Request) async throws -> GuardrailDTO {
-        let user = try requireUser(req)
+        _ = try requireUser(req)
         let guardrail = try await find(req)
-        try await requirePolicyAdmin(on: try nodeOf(guardrail), caller: user, req: req)
+        try await requirePolicyAdmin(on: try nodeOf(guardrail), write: false, req: req)
         return try GuardrailDTO(guardrail)
     }
 
@@ -182,7 +182,7 @@ struct GuardrailController: RouteCollection {
         let user = try requireUser(req)
         let payload = try req.content.decode(CreateGuardrailRequest.self)
         let node = try IAMPolicyGate.node(resourceType: payload.nodeType, resourceId: payload.nodeId)
-        try await requirePolicyAdmin(on: node, caller: user, req: req)
+        try await requirePolicyAdmin(on: node, write: true, req: req)
 
         let principalMatch = try payload.principalMatch?.toMatch() ?? .any
         let resourceMatch = try payload.resourceMatch?.toMatch() ?? .any
@@ -218,7 +218,7 @@ struct GuardrailController: RouteCollection {
     func update(req: Request) async throws -> GuardrailDTO {
         let user = try requireUser(req)
         let existing = try await find(req)
-        try await requirePolicyAdmin(on: try nodeOf(existing), caller: user, req: req)
+        try await requirePolicyAdmin(on: try nodeOf(existing), write: true, req: req)
 
         let payload = try req.content.decode(UpdateGuardrailRequest.self)
         let principalMatch = try payload.principalMatch?.toMatch()
@@ -257,7 +257,7 @@ struct GuardrailController: RouteCollection {
     func delete(req: Request) async throws -> HTTPStatus {
         let user = try requireUser(req)
         let guardrail = try await find(req)
-        try await requirePolicyAdmin(on: try nodeOf(guardrail), caller: user, req: req)
+        try await requirePolicyAdmin(on: try nodeOf(guardrail), write: true, req: req)
 
         let name = guardrail.name
         guard let id = guardrail.id else {
@@ -317,12 +317,16 @@ struct GuardrailController: RouteCollection {
         return node
     }
 
-    private func requirePolicyAdmin(on node: IAMNode, caller: User, req: Request) async throws {
-        try await IAMPolicyGate.requireAdmin(
-            on: node,
-            caller: caller,
-            deniedReason: "Managing guardrails requires admin on the node or a container above it",
-            req: req
-        )
+    /// Reading a node's guardrails is `iam:readPolicy`; changing them is
+    /// `iam:setPolicy`. Both are admin-role actions, evaluated through the
+    /// policy set (so system admins flow through `platform-system-admin` and
+    /// appear in decision logs).
+    private func requirePolicyAdmin(on node: IAMNode, write: Bool, req: Request) async throws {
+        let reason = "Managing guardrails requires admin on the node or a container above it"
+        if write {
+            try await IAMPolicyGate.requirePolicyWrite(on: node, deniedReason: reason, req: req)
+        } else {
+            try await IAMPolicyGate.requirePolicyRead(on: node, deniedReason: reason, req: req)
+        }
     }
 }

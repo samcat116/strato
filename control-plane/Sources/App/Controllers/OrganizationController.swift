@@ -99,6 +99,10 @@ struct OrganizationController: RouteCollection {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
+        // Open by design: any authenticated user may start an organization
+        // (they become its admin below). Declared so the default-deny
+        // middleware's handler assertion knows this is deliberate.
+        req.markRowScopedAuthorization()
 
         let createRequest = try req.content.decode(CreateOrganizationRequest.self)
 
