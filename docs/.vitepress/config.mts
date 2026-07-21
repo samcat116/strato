@@ -66,6 +66,7 @@ export default defineConfig({
           { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
           { text: 'Agents', link: '/deployment/agents' },
           { text: 'IAM & Permissions', link: '/deployment/iam' },
+          { text: 'Health Checks & Zero-Downtime Deploys', link: '/deployment/health-checks' },
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },
           { text: 'Logging', link: '/deployment/logging' },
           { text: 'Audit Logging', link: '/deployment/audit-logging' },

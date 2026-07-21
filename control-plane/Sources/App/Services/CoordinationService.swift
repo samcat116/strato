@@ -520,6 +520,16 @@ actor CoordinationService {
         }
     }
 
+    /// Round-trip the store so `/health/ready` can report coordination
+    /// reachability. Deliberately the one method here that **rethrows**: every
+    /// other caller wants the fail-open degradation described above, but the
+    /// health endpoint's whole job is to surface the failure rather than paper
+    /// over it. Readiness grades the result as degraded, not fatal, so the
+    /// fail-open policy still holds where it matters.
+    func probe() async throws {
+        _ = try await store.keyExists("health:probe")
+    }
+
     // MARK: Singleton sweeps
 
     /// Acquire the expiring lock for one pass of a background sweep. Returns
