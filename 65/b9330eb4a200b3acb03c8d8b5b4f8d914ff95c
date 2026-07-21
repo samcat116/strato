@@ -1,0 +1,36 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_867bf73d1b9606::t_85369fb0bb3ae5 219-226
+  s_867bf73d1b9606::t_86689908e75c5a 833-836
+control-plane/Sources/App/IAM/PolicySetVersionService.swift
+  s_867bf73d1b9606::t_5c6eb114d0b4e2 198-201,217-220
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_867bf73d1b9606::t_f87f01bf338c5a 130-133,135-136,150-153,166,682-684,686,931-933,937,945-946
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_867bf73d1b9606::t_21747bcffc6a47 189-193,208,217,221,226,228,250-252,256-259,357-360,377,382-384,388,564-567,569
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_867bf73d1b9606::t_eec4cf27ec7c62 149-152,165
+control-plane/Sources/App/Controllers/VMController.swift
+  s_867bf73d1b9606::t_1cd622052013fd 188-191,193-194,208-212,229,834-836,840,919-921,926,934
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_867bf73d1b9606::t_60d453099f28e1 1,39-50,91-110,119-129
+control-plane/Sources/App/Services/VolumeService.swift
+  s_867bf73d1b9606::t_4717fe1ba5176b 34-39,41,50,57-59,66,85-89,102-104,113,126,129,147-149,151,154,172-173,187-188,195,203,231-233
+control-plane/Tests/AppTests/BackgroundTaskRegistryTests.swift
+  s_867bf73d1b9606::t_cfb9c16197d78f 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "65b9330eb4a200b3acb03c8d8b5b4f8d914ff95c",
+  "prompts": {},
+  "sessions": {
+    "s_867bf73d1b9606": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "34c5594c-82d1-4c12-9f45-b28b82d41f05",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
