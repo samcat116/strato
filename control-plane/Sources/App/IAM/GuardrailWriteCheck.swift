@@ -156,7 +156,13 @@ enum GuardrailWriteCheck {
         // not covered.
         var shadowed: [ShadowedBinding] = []
         for candidate in try await RoleBinding.query(on: db).active().all() {
-            guard let role = IAMRole(rawValue: candidate.role),
+            // `role_bindings.role` holds the `iam_roles` row id since issue
+            // #604, not the role name. A row naming a custom role maps to no
+            // `IAMRole` and is skipped, the same as any unparseable row —
+            // shadow reporting over custom roles needs this whole check to
+            // stop being enum-shaped, which is its own piece of work.
+            guard let roleID = UUID(uuidString: candidate.role),
+                let role = IAMRole(seededID: roleID),
                 let nodeType = IAMNodeType(rawValue: candidate.nodeType),
                 let principalType = IAMPrincipalType(rawValue: candidate.principalType)
             else { continue }
@@ -328,12 +334,12 @@ enum GuardrailWriteCheck {
         // grant is written as the permit it amounts to. Building from the
         // registry keeps the check off the database and deterministic.
         let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
-        let grant = grantPolicy(binding)
         let ceiling = ceilingPolicy(guardrail, node: node, resourceMatch: resourceMatch)
 
         for (resourceType, action) in representatives.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             let environment = CedarRequestEnvironment(
                 principalType: .user, action: action, resourceType: resourceType)
+            let grant = grantPolicy(binding, action: action)
             let analysis: GuardrailAnalysis
             do {
                 analysis = try await analyzer.disjoint(
@@ -368,20 +374,21 @@ enum GuardrailWriteCheck {
     /// restating it symbolically would only let the solver invent memberships
     /// nobody has.
     ///
-    /// The action side is the role's expanded action list, matching how a role
-    /// row's own permit is written (`RoleDescriptor.canonicalPermitText`):
-    /// roles are flat, so there is no schema action group to name (issue #604).
-    private static func grantPolicy(_ binding: ProposedBinding) -> CedarPolicySource {
-        let actionList = IAMRoleRegistry.actions(for: binding.role).sorted()
-            .map { "Action::\(CedarText.stringLiteral($0))" }
-            .joined(separator: ", ")
-        return CedarPolicySource(
+    /// The action side names the one action the environment fixes, rather than
+    /// the role's whole expanded list. Roles are flat since issue #604, so
+    /// there is no schema action group to stand in for the list — and a
+    /// literal list would carry actions that do not apply to the environment's
+    /// resource type, which strict validation rejects. Restricting to the
+    /// asked-about action loses nothing: the environment already pins it, and
+    /// the caller enumerates one environment per overlapping action.
+    private static func grantPolicy(_ binding: ProposedBinding, action: String) -> CedarPolicySource {
+        CedarPolicySource(
             id: "proposed-binding",
             text: """
                 @id("proposed-binding")
                 permit (
                     principal,
-                    action in [\(actionList)],
+                    action == Action::\(CedarText.stringLiteral(action)),
                     resource in \(binding.node.cedarUID.cedarLiteral)
                 );
                 """
