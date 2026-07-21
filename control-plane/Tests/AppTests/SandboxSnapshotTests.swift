@@ -207,16 +207,35 @@ final class SandboxSnapshotTests {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
+            var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["stop": true])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
             }
+            let accepted = try #require(operation)
 
-            let updated = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            #expect(updated.desiredStatus == .stopped)
-            #expect(updated.generation == 2)
+            // The accept transaction flipped desired state to stopped
+            // (generation 1 → 2), but with no live agent socket the
+            // background RPC fails fast and `completeOperation` reverts
+            // desired state to observed (.running, generation 3) — reading
+            // right after the 202 races that revert. Wait out the operation
+            // and assert the settled state instead: generation 3 is only
+            // reachable through flip-then-revert, so it pins the accept
+            // -transaction flip without the race (no flip would leave the
+            // revert a no-op and the generation at 1).
+            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
+            #expect(completed?.status == .failed)
+            var settled: Sandbox?
+            for _ in 0..<100 {
+                settled = try await Sandbox.find(sandbox.id, on: app.db)
+                if settled?.generation == 3 { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(settled?.generation == 3)
+            #expect(settled?.desiredStatus == .running)
         }
     }
 
