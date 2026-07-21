@@ -53,14 +53,30 @@ human-readable `reason`.
 
 ## Scope
 
-The document is filled in incrementally (see
-[issue #557](https://github.com/samcat116/strato/issues/557)). It currently
-covers the core compute and infrastructure surfaces — virtual machines,
-operations, sandboxes and snapshots, images and artifacts, volumes, networks,
-and floating IPs — with the remaining IAM/organization, agent, user, and
-identity-provider surfaces to follow. A CI route-drift test keeps the documented
-controllers from silently diverging from the spec.
+The document describes the **whole** JSON API: virtual machines, operations,
+sandboxes and snapshots, images and artifacts, volumes, networks and floating
+IPs, log queries, users and authentication, API keys, organizations, folders and
+groups, projects and members, quotas, agents, sites, workload identity, IAM and
+audit, and the identity-provider surfaces (OIDC, SCIM, and Shared Signals).
 
-WebSocket and streaming endpoints (the agent channel, VM consoles, sandbox
-exec, and Loki-backed log queries) are intentionally **not** modeled as OpenAPI
-operations; they are documented as prose in the specification's description.
+A CI route-drift test (`AppTests/OpenAPISpecDriftTests`) boots the app and
+enforces both directions: no registered route may go undocumented, and no
+operation may describe a route that does not exist. There is no quarantine list
+— adding a route without documenting it fails the build.
+
+WebSocket endpoints (the agent channel, VM consoles, and sandbox exec) are
+intentionally **not** modeled as OpenAPI operations, since OpenAPI 3.0 cannot
+express a protocol upgrade; they are documented as prose in the specification's
+description.
+
+### SCIM
+
+The SCIM 2.0 data plane is registered in Vapor as a catch-all and dispatched
+internally by SwiftSCIM's request processor. The spec describes the concrete
+resource endpoints that processor serves — `/Users`, `/Groups`,
+`/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas` — so that generated
+clients can call them, and the drift test matches those operations against the
+catch-all registration.
+
+SCIM requests authenticate with an org-scoped `scim_` bearer token rather than a
+user session, and return RFC 7644 errors rather than the envelope above.
