@@ -121,12 +121,9 @@ final class ProjectTests {
         }
     }
 
-    @Test("Create project in organization writes SpiceDB project→organization tuple with persisted id")
-    func testCreateProjectWritesOrganizationTuple() async throws {
-        try await withProjectTestApp { app, _, testOrganization, _, authToken in
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
+    @Test("Create project in organization persists org parentage and grants the creator admin")
+    func testCreateProjectPersistsOrganizationParentage() async throws {
+        try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
             var createdProjectId: UUID?
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -143,27 +140,30 @@ final class ProjectTests {
                 createdProjectId = try res.content.decode(ProjectResponse.self).id
             }
 
-            // The tuple must reference the *persisted* project id (issue #267): a
-            // mismatch here means project-scoped permissions can't resolve via
-            // organization->admin and the creating admin gets 403s.
+            // Parentage must reference the *persisted* project id (issue #267):
+            // a mismatch here means project-scoped permissions can't resolve
+            // via the org hierarchy and the creating admin gets 403s.
             let projectId = try #require(createdProjectId)
-            let writes = await recorder.writes
-            let orgTuple = writes.first {
-                $0.entity == "project" && $0.relation == "parent"
-            }
-            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
-            #expect(tuple.entityId == projectId.uuidString)
-            #expect(tuple.subject == "organization")
-            #expect(tuple.subjectId == testOrganization.id!.uuidString)
+            let savedProject = try await Project.find(projectId, on: app.db)
+            let saved = try #require(savedProject)
+            #expect(saved.$organization.id == testOrganization.id)
+            #expect(saved.path == "/\(testOrganization.id!.uuidString)/\(projectId.uuidString)")
+
+            // The creator gets an explicit admin binding on the new project.
+            let bindingCount = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == testUser.id!)
+                .filter(\.$role == IAMRole.admin.rawValue)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == projectId)
+                .count()
+            #expect(bindingCount == 1)
         }
     }
 
-    @Test("Create project in OU writes a project#parent tuple against the OU")
-    func testCreateProjectInOUWritesOUParentTuple() async throws {
+    @Test("Create project in OU persists the OU as the immediate parent")
+    func testCreateProjectInOUPersistsOUParentage() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
             var createdProjectId: UUID?
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -181,17 +181,15 @@ final class ProjectTests {
             }
 
             let projectId = try #require(createdProjectId)
-            let writes = await recorder.writes
-            let parentTuple = writes.first {
-                $0.entity == "project" && $0.relation == "parent"
-            }
-            let tuple = try #require(parentTuple, "expected a project#parent relationship write")
-            #expect(tuple.entityId == projectId.uuidString)
-            // The tuple must point at the *immediate* parent — the OU, not the root
-            // organization — so OU-scoped projects inherit up the OU chain (and OU
-            // admins, not just org admins, can manage them).
-            #expect(tuple.subject == "organizational_unit")
-            #expect(tuple.subjectId == testOU.id!.uuidString)
+            let savedProject = try await Project.find(projectId, on: app.db)
+            let saved = try #require(savedProject)
+            // The parent must be the *immediate* parent — the OU, not the root
+            // organization — so OU-scoped projects inherit up the OU chain (and
+            // OU admins, not just org admins, can manage them). The Cedar
+            // hierarchy is built from these columns and the materialized path.
+            #expect(saved.$organizationalUnit.id == testOU.id)
+            #expect(saved.$organization.id == nil)
+            #expect(saved.path == "\(testOU.path)/\(projectId.uuidString)")
         }
     }
 
@@ -403,8 +401,8 @@ final class ProjectTests {
         }
     }
 
-    @Test("Transfer to another organization migrates the SpiceDB org tuple")
-    func testTransferAcrossOrganizationsRewritesTuple() async throws {
+    @Test("Transfer to another organization reparents the project")
+    func testTransferAcrossOrganizationsReparents() async throws {
         try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
             // A second organization the user also administers.
             let destinationOrg = Organization(name: "Destination Org", description: "Transfer target")
@@ -426,9 +424,6 @@ final class ProjectTests {
             )
             try await project.save(on: app.db)
 
-            let recorder = SpiceDBMockRecorder()
-            app.spicedbMockRecorder = recorder
-
             try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -442,15 +437,13 @@ final class ProjectTests {
                 #expect(response.organizationId == destinationOrg.id)
             }
 
-            // The project→organization tuple must now point at the destination org,
-            // otherwise destination admins can't resolve project-scoped permissions.
-            let writes = await recorder.writes
-            let orgTuple = writes.first {
-                $0.entity == "project" && $0.relation == "parent"
-            }
-            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
-            #expect(tuple.entityId == project.id!.uuidString)
-            #expect(tuple.subjectId == destinationOrg.id!.uuidString)
+            // The persisted parentage must now point at the destination org,
+            // otherwise destination admins can't resolve project-scoped
+            // permissions through the hierarchy the Cedar evaluator builds.
+            let movedProject = try await Project.find(project.id!, on: app.db)
+            let moved = try #require(movedProject)
+            #expect(moved.$organization.id == destinationOrg.id)
+            #expect(moved.path == "/\(destinationOrg.id!.uuidString)/\(project.id!.uuidString)")
         }
     }
 
@@ -465,11 +458,9 @@ final class ProjectTests {
                 role: "member"
             ).save(on: app.db)
 
-            // Authorization is SpiceDB-driven now: withhold the organization
-            // permission so the destination-org admin check fails (the project-scoped
-            // check on the source still passes, since it targets the "project"
-            // resource). Previously the "member" role drove this 403.
-            app.spicedbMockDeniedResources = ["organization"]
+            // The user holds no admin binding on the destination org (only a
+            // "member" mirror row), so the destination-org admin check fails;
+            // the project-scoped check on the source still passes.
 
             let project = Project(
                 name: "Guarded Project",

@@ -5,8 +5,8 @@ import Vapor
 
 /// `/api/projects/:projectID/registry-credentials`: per-project pull secrets
 /// for private OCI registries (issue #414). Project-scoped like project
-/// members: reads require `view_project`, mutations `manage_project` (SpiceDB,
-/// via `OrganizationAccessService`). The secret value is write-only — it is
+/// members: reads require `view_project`, mutations `manage_project` (via
+/// `OrganizationAccessService`). The secret value is write-only — it is
 /// encrypted at rest and never appears in any response.
 struct RegistryPullSecretController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {

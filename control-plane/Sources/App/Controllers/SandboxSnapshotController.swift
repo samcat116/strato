@@ -97,8 +97,8 @@ extension SandboxController {
             try await QuotaEnforcementService.reserveSandboxSnapshot(
                 for: project, environment: environment, size: memory, on: db)
             try await snapshot.save(on: db)
-            // IAM dual-write (issue #477): the creator's binding on the
-            // snapshot, in the create transaction (the volume-snapshot path).
+            // The creator's binding on the snapshot, in the create
+            // transaction (the volume-snapshot path, issue #477).
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: userID,
@@ -118,36 +118,6 @@ extension SandboxController {
         }
 
         let snapshotID = try snapshot.requireID()
-
-        // Ownership relationships, mirroring volume snapshots: the creator,
-        // the source sandbox (read/delete/restore resolve through it), and
-        // the project. The operation and snapshot rows are already committed,
-        // so a failed write must compensate — without tuples the `.creating`
-        // row would be an unmanageable orphan holding quota until nothing.
-        do {
-            try await req.spicedb.writeRelationship(
-                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-                relation: "owner", subject: "user", subjectId: userID.uuidString)
-            try await req.spicedb.writeRelationship(
-                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-                relation: "sandbox", subject: "sandbox", subjectId: sandboxID.uuidString)
-            try await req.spicedb.writeRelationship(
-                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-                relation: "project", subject: "project", subjectId: sandbox.$project.id.uuidString)
-        } catch {
-            snapshot.status = .error
-            snapshot.errorMessage = "authorization setup failed: \(error.localizedDescription)"
-            snapshot.size = 0
-            try? await snapshot.save(on: req.db)
-            _ = try? await operation.completeIfPending(
-                as: .failed,
-                error: "Failed to record snapshot ownership relationships",
-                on: req.db)
-            try? await QuotaEnforcementService.release(for: sandbox, on: req.db)
-            throw Abort(
-                .internalServerError,
-                reason: "Failed to record snapshot ownership relationships; the operation was cancelled")
-        }
 
         Self.runSnapshotCreation(
             operation, snapshot: snapshot, sandbox: sandbox,
@@ -290,11 +260,7 @@ extension SandboxController {
         let snapshot = try await fetchSnapshot(req: req, sandbox: sandbox)
         let snapshotID = try snapshot.requireID()
 
-        let canDelete = try await req.spicedb.checkPermission(
-            subject: try user.requireID().uuidString,
-            permission: "delete",
-            resource: "sandbox_snapshot",
-            resourceId: snapshotID.uuidString)
+        let canDelete = try await req.can("delete", on: "sandbox_snapshot", id: snapshotID.uuidString)
         guard canDelete else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
@@ -349,31 +315,17 @@ extension SandboxController {
                         agentId: agentId, app: app)
                 }
                 // The exported copy goes with the snapshot (issue #428);
-                // best-effort, like the SpiceDB tuples below.
+                // best-effort.
                 await snapshot.deleteExportedObjects(app: app)
-                let sandboxRef = snapshot.$sandbox.id
-                let projectRef = snapshot.$project.id
-                let ownerRef = snapshot.$createdBy.id
                 // The agent RPC above can span shutdown's drain; bail before the
                 // row delete if it cancelled us (see `Application.liveDB`).
                 guard let db = app.liveDB else { return }
                 try await db.transaction { db in
                     try await snapshot.delete(on: db)
-                    // IAM dual-write: drop the snapshot's bindings with the row.
+                    // Drop the snapshot's bindings with the row.
                     try await RoleBindingService.revokeAll(
                         nodeType: .sandboxSnapshot, nodeID: snapshotId, on: db)
                 }
-                // Relationship cleanup mirrors what create wrote; best-effort
-                // (a leaked tuple on a deleted row grants nothing reachable).
-                try? await app.spicedb.deleteRelationship(
-                    entity: "sandbox_snapshot", entityId: snapshotId.uuidString,
-                    relation: "owner", subject: "user", subjectId: ownerRef.uuidString)
-                try? await app.spicedb.deleteRelationship(
-                    entity: "sandbox_snapshot", entityId: snapshotId.uuidString,
-                    relation: "sandbox", subject: "sandbox", subjectId: sandboxRef.uuidString)
-                try? await app.spicedb.deleteRelationship(
-                    entity: "sandbox_snapshot", entityId: snapshotId.uuidString,
-                    relation: "project", subject: "project", subjectId: projectRef.uuidString)
                 try? await QuotaEnforcementService.release(for: sandbox, on: db)
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
@@ -410,11 +362,7 @@ extension SandboxController {
         let snapshotID = try snapshot.requireID()
         let sandboxID = try sandbox.requireID()
 
-        let canRestore = try await req.spicedb.checkPermission(
-            subject: try user.requireID().uuidString,
-            permission: "restore",
-            resource: "sandbox_snapshot",
-            resourceId: snapshotID.uuidString)
+        let canRestore = try await req.can("restore", on: "sandbox_snapshot", id: snapshotID.uuidString)
         guard canRestore else {
             throw Abort(.forbidden, reason: "You don't have permission to restore this snapshot")
         }

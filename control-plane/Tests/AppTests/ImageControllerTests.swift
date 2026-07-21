@@ -51,7 +51,7 @@ final class ImageControllerTests {
     }
 
     /// A user with no memberships or bindings — the post-cutover (#482) way to
-    /// exercise denial paths (the mock SpiceDB verdict no longer decides).
+    /// exercise denial paths (the Cedar evaluator denies without a grant).
     static func makeOutsiderToken(on app: Application) async throws -> String {
         let suffix = UUID().uuidString.prefix(8)
         let outsider = try await TestDataBuilder(db: app.db).createUser(
@@ -1334,7 +1334,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Fetch artifact is denied (403) when SpiceDB withholds update")
+    @Test("Fetch artifact is denied (403) when the caller lacks update")
     func testFetchArtifactForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let imageID = try await Self.createEmptyImage(
@@ -1390,7 +1390,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Upload artifact is denied (403) when SpiceDB withholds update")
+    @Test("Upload artifact is denied (403) when the caller lacks update")
     func testUploadArtifactForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let imageID = try await Self.createEmptyImage(
@@ -1413,14 +1413,14 @@ final class ImageControllerTests {
 
     // MARK: - Authorization Tests
     //
-    // Every ImageController handler gates on `req.spicedb.checkPermission` after
+    // Every ImageController handler gates on a permission check after
     // authenticating the caller. These pin the deny path: an authenticated user
-    // whom SpiceDB refuses must get 403, not a leaked image or a mutation. They
-    // regress the whole class of authz bugs that went uncaught while the auth
-    // middleware was disabled under `.testing` (issue #196). `spicedbMockAllows`
-    // drives the mock's verdict for the whole request.
+    // whom the Cedar evaluator refuses (no binding anywhere) must get 403, not
+    // a leaked image or a mutation. They regress the whole class of authz bugs
+    // that went uncaught while the auth middleware was disabled under
+    // `.testing` (issue #196).
 
-    @Test("List images is denied (403) when SpiceDB withholds view_project")
+    @Test("List images is denied (403) when the caller lacks view_project")
     func testListImagesForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
@@ -1433,7 +1433,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Get image is denied (403) when SpiceDB withholds read")
+    @Test("Get image is denied (403) when the caller lacks read")
     func testGetImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -1448,7 +1448,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Create image is denied (403) when SpiceDB withholds update_project")
+    @Test("Create image is denied (403) when the caller lacks update_project")
     func testCreateImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
@@ -1472,7 +1472,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Update image is denied (403) when SpiceDB withholds update")
+    @Test("Update image is denied (403) when the caller lacks update")
     func testUpdateImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -1497,7 +1497,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Delete image is denied (403) when SpiceDB withholds delete")
+    @Test("Delete image is denied (403) when the caller lacks delete")
     func testDeleteImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -1512,7 +1512,7 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Get image status is denied (403) when SpiceDB withholds read")
+    @Test("Get image status is denied (403) when the caller lacks read")
     func testGetImageStatusForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             let builder = TestDataBuilder(db: app.db)

@@ -2,10 +2,10 @@ import Fluent
 import Foundation
 import Vapor
 
-/// Writes and reads `role_bindings` rows. During the migration these rows are
-/// dual-written next to the authoritative SpiceDB tuples; call sites pass the
-/// transaction `Database` of the mutation they accompany so binding rows never
-/// diverge from the relational rows they mirror.
+/// Writes and reads `role_bindings` rows — the grants the Cedar evaluator
+/// answers from. Call sites pass the transaction `Database` of the mutation
+/// they accompany so binding rows never diverge from the relational rows they
+/// mirror.
 enum RoleBindingService {
     /// Idempotently grant `role` to a principal on a node. An existing row for
     /// the same (principal, role, node) is refreshed (its `expires_at` takes

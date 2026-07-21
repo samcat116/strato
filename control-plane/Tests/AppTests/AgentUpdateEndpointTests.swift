@@ -227,8 +227,8 @@ final class AgentUpdateEndpointTests {
     @Test("explicit artifact overrides are system-admin only")
     func explicitArtifactRequiresSystemAdmin() async throws {
         try await withUpdateTestApp { app, builder, org, _ in
-            // A delegated org admin: SpiceDB grants agent#manage (mocked
-            // all-allow), but explicit artifacts are arbitrary host code and
+            // A delegated org admin: their org-admin binding grants
+            // agent manage, but explicit artifacts are arbitrary host code and
             // must stay system-admin only. The same request without the
             // override (exercised elsewhere) is allowed for this user.
             let delegated = try await builder.createUser(
@@ -239,7 +239,6 @@ final class AgentUpdateEndpointTests {
             )
             try await builder.addUserToOrganization(user: delegated, organization: org, role: "admin")
             let delegatedToken = try await delegated.generateAPIKey(on: app.db)
-            app.spicedbMockAllows = true
 
             let agent = try await self.makeAgent(app: app, org: org)
 

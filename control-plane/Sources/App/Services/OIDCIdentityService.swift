@@ -12,7 +12,6 @@ import Vapor
 /// a fake IdP.
 struct OIDCIdentityService {
     let db: Database
-    let spicedb: SpiceDBServiceProtocol
     let logger: Logger
 
     // MARK: - Claim extraction
@@ -52,8 +51,7 @@ struct OIDCIdentityService {
     /// sole provider — subjects aren't unique across issuers), (3) org member
     /// with the same email; both (2) and (3) link the user to the provider. Otherwise a new
     /// user is created and added to the org with the role derived from the
-    /// provider's admin claim values and configured default role, mirrored to
-    /// SpiceDB (previously the tuple was never written for JIT users).
+    /// provider's admin claim values and configured default role.
     func resolveUser(
         userInfo: OIDCUserInfo,
         provider: OIDCProvider,
@@ -123,16 +121,14 @@ struct OIDCIdentityService {
             }
         }
 
-        // JIT-provision a new user. The SQL rows and the SpiceDB tuple must
-        // land together: doing the SpiceDB write inside the transaction means
-        // a failed write rolls the rows back, so the next login for this
-        // subject re-runs provisioning cleanly instead of early-returning a
-        // user that authenticates but fails every permission check.
+        // JIT-provision a new user. The user, membership, and role-binding
+        // rows land in one transaction, so a failure re-runs provisioning
+        // cleanly on the next login instead of early-returning a user that
+        // authenticates but fails every permission check.
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
         let role = desiredOrganizationRole(provider: provider, groupValues: groupValues)
-        let spicedb = self.spicedb
 
         // Reaching here with an email that already belongs to a user means we were
         // not allowed to link to that account — either the IdP didn't verify the
@@ -183,8 +179,9 @@ struct OIDCIdentityService {
             )
             try await membership.save(on: transaction)
 
-            // IAM dual-write (issue #477): org admins get an admin binding on
-            // the org node, in the same transaction as the mirror row.
+            // Org admins get an admin binding on the org node, in the same
+            // transaction as the mirror row — without it the new user
+            // authenticates but fails every permission check.
             if let bindingRole = IAMRole.fromOrganizationRole(role) {
                 try await RoleBindingService.grant(
                     principalType: .user,
@@ -196,16 +193,6 @@ struct OIDCIdentityService {
                     on: transaction
                 )
             }
-
-            // Mirror the membership into SpiceDB, like OrganizationController's
-            // addMember does — without this tuple the new user authenticates
-            // but fails every permission check.
-            try await spicedb.setOrganizationRole(
-                userID: userID.uuidString,
-                organizationID: organizationID.uuidString,
-                oldRole: nil,
-                newRole: role
-            )
 
             return user
         }
@@ -244,8 +231,9 @@ struct OIDCIdentityService {
 
         // A user removed from the org keeps their OIDC link, so resolveUser
         // still returns them. Granting org group memberships (which carry
-        // project permissions through SpiceDB) to a non-member would undo
-        // the removal — claims only ever map onto current org members.
+        // project permissions through group role bindings) to a non-member
+        // would undo the removal — claims only ever map onto current org
+        // members.
         let membership = try await UserOrganization.query(on: db)
             .filter(\.$user.$id == userID)
             .filter(\.$organization.$id == organizationID)
@@ -280,22 +268,11 @@ struct OIDCIdentityService {
                 continue
             }
 
-            // The SpiceDB call runs inside the transaction so a failed call
-            // rolls the row back: with the row committed, the next login
-            // would see the DB already converged and never retry the tuple,
-            // leaving permissions permanently out of sync.
             let isMember = try await group.hasMember(userID, on: db)
-            let spicedb = self.spicedb
             if desired && !isMember {
-                try await db.transaction { transaction in
-                    try await group.addMember(userID, on: transaction)
-                    try await spicedb.addUserToGroup(userID: userID.uuidString, groupID: groupID.uuidString)
-                }
+                try await group.addMember(userID, on: db)
             } else if !desired && isMember {
-                try await db.transaction { transaction in
-                    try await group.removeMember(userID, on: transaction)
-                    try await spicedb.removeUserFromGroup(userID: userID.uuidString, groupID: groupID.uuidString)
-                }
+                try await group.removeMember(userID, on: db)
             }
         }
     }
@@ -360,14 +337,10 @@ struct OIDCIdentityService {
 
         let oldRole = membership.role
         membership.role = desired
-        // As in group sync, the SpiceDB update runs inside the transaction:
-        // committing the row first would make the next login see
-        // membership.role == desired and never retry the tuple change.
-        let spicedb = self.spicedb
         try await db.transaction { transaction in
             try await membership.save(on: transaction)
-            // IAM dual-write (issue #477): swap the role binding with the
-            // mirror-row update (admin↔member; bare membership has none).
+            // Swap the role binding with the mirror-row update (admin↔member;
+            // bare membership has none).
             if let oldBinding = IAMRole.fromOrganizationRole(oldRole) {
                 try await RoleBindingService.revoke(
                     principalType: .user,
@@ -389,12 +362,6 @@ struct OIDCIdentityService {
                     on: transaction
                 )
             }
-            try await spicedb.setOrganizationRole(
-                userID: userID.uuidString,
-                organizationID: organizationID.uuidString,
-                oldRole: oldRole,
-                newRole: desired
-            )
         }
     }
 

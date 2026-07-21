@@ -65,12 +65,8 @@ final class GroupTests: BaseTestCase {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
 
-            // Authorization is now SpiceDB-driven: withhold the organization
-            // permission so the non-admin member is denied (previously this was
-            // inferred from the relational "member" role).
-            app.spicedbMockDeniedResources = ["organization"]
-
-            // Create member user
+            // Create member user: a bare "member" with no admin binding, so
+            // the Cedar evaluator denies group creation.
             let memberUser = User(
                 username: "memberuser",
                 email: "member@example.com",

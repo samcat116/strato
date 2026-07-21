@@ -107,7 +107,6 @@ cat > .env <<EOF
 # --- Secrets (generated; do not change after first start: the database was
 # --- initialized with this password) ---
 POSTGRES_PASSWORD=$(openssl rand -hex 32)
-SPICEDB_PRESHARED_KEY=$(openssl rand -hex 32)
 VALKEY_PASSWORD=$(openssl rand -hex 32)
 # Encrypts OIDC client secrets at rest in the database. If this key is lost,
 # stored client secrets become unreadable (re-enter them in the UI to recover).

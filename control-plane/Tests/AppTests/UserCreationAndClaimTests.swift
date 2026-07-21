@@ -170,32 +170,6 @@ final class UserCreationAndClaimTests: BaseTestCase {
         }
     }
 
-    @Test("assigned-org create rolls back when the SpiceDB tuple write fails")
-    func testCreateOrgAssignmentRollsBackOnSpiceDBFailure() async throws {
-        try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
-            let orgID = try testOrganization.requireID()
-
-            // Force the mirrored org-role write to fail.
-            app.spicedbMockWritesFail = true
-
-            try await app.test(.POST, "/api/users") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(
-                    AdminCreateUserRequest(
-                        username: "neo", email: "neo@example.com", displayName: "Neo",
-                        isSystemAdmin: false, organizationId: orgID, role: "member"))
-            } afterResponse: { res in
-                #expect(res.status != .ok)
-            }
-
-            // The whole create is rolled back — no orphaned user or claim token.
-            let user = try await User.query(on: app.db).filter(\.$username == "neo").first()
-            #expect(user == nil)
-        }
-    }
-
     @Test("org list-all is system-admin only and includes non-member orgs")
     func testListAllOrganizations() async throws {
         try await withApp { app in

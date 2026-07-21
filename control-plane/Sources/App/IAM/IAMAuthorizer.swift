@@ -2,23 +2,23 @@ import Fluent
 import NIOConcurrencyHelpers
 import Vapor
 
-// IAM phase 5 (issue #482): the authoritative evaluator.
+// IAM phase 5 (issue #482): the authoritative evaluator. SpiceDB itself is
+// gone (issue #483); the legacy permission vocabulary survives only as the
+// `req.can(_:on:id:)` spelling that `IAMActionTranslator` maps into IAM
+// actions.
 //
-// Cedar now gates requests. Every check — middleware, `req.can`, and the ~55
-// handler sites still speaking SpiceDB vocabulary through `req.spicedb` —
-// funnels into `IAMAuthorizer.authorize`: load the entity slice, evaluate the
-// compiled policy set inline, record the decision, and (while SpiceDB is still
-// deployed, until #483) compare SpiceDB's verdict in the background as the
-// reverse of the phase-4 shadow. The system-admin bypass is gone from code:
-// admins are allowed by the `platform-system-admin` tier-1 policy, which means
-// their decisions appear in the decision log and tier-2 guardrail forbids
-// bind them like everyone else.
+// Cedar gates requests. Every check — middleware, `req.can` in either
+// vocabulary — funnels into `IAMAuthorizer.authorize`: load the entity slice,
+// evaluate the compiled policy set inline, record the decision. The
+// system-admin bypass is gone from code: admins are allowed by the
+// `platform-system-admin` tier-1 policy, which means their decisions appear in
+// the decision log and tier-2 guardrail forbids bind them like everyone else.
 
-/// The SpiceDB question a check corresponds to, when it has one — carried so
-/// the background comparison asks SpiceDB the *original* question rather than
-/// a back-translation. Checks born in Cedar vocabulary (the middleware's, or
-/// `iam:readPolicy`) may have no equivalent; they skip the comparison.
-struct SpiceDBCheckEquivalent: Sendable {
+/// The legacy-vocabulary question a check was phrased in, when it has one —
+/// carried into the decision log so rows record what was literally asked at
+/// the check site, not a back-translation. Checks born in the IAM action
+/// vocabulary (the middleware's, or `iam:readPolicy`) have none.
+struct LegacyCheckEquivalent: Sendable {
     let permission: String
     let resourceType: String
     let resourceID: String
@@ -33,8 +33,7 @@ struct IAMCheckContext: Sendable {
 
 /// Per-request authorization state shared between the evaluator entry points
 /// and the middleware/audit layers. A class with locked fields (not plain
-/// request storage) so the Sendable `req.spicedb` decorator can carry it into
-/// its check calls.
+/// request storage) so Sendable helpers can carry it into their check calls.
 final class IAMRequestAuthState: Sendable {
     /// Whether any decision this request was allowed by the
     /// `platform-system-admin` policy — the audit trail's admin-bypass marker,
@@ -75,7 +74,7 @@ enum IAMAuthorizer {
         userID: UUID,
         action: String,
         node: IAMNode,
-        spicedbEquivalent: SpiceDBCheckEquivalent?,
+        legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
         app: Application,
@@ -125,7 +124,7 @@ enum IAMAuthorizer {
                     skippedConditionedBindings: slice.skippedConditionedBindings,
                     decision: denial,
                     policyVersion: built.version,
-                    spicedbEquivalent: spicedbEquivalent,
+                    legacyEquivalent: legacyEquivalent,
                     context: context
                 ))
             return denial
@@ -164,18 +163,18 @@ enum IAMAuthorizer {
                 skippedConditionedBindings: slice.skippedConditionedBindings,
                 decision: decision,
                 policyVersion: built.version,
-                spicedbEquivalent: spicedbEquivalent,
+                legacyEquivalent: legacyEquivalent,
                 context: context
             ))
 
         return decision
     }
 
-    /// Evaluate a check still phrased in the legacy SpiceDB vocabulary: the
-    /// per-handler `req.can`/`req.authorize` form and every
-    /// `req.spicedb.checkPermission` site. Translation failures fail closed —
-    /// denied, logged, recorded — because an unmapped pair is a check site
-    /// nobody mapped, not an allowance.
+    /// Evaluate a check still phrased in the legacy (pre-Cedar) permission
+    /// vocabulary: the per-handler `req.can`/`req.authorize` form and the
+    /// middleware's method/path-derived checks. Translation failures fail
+    /// closed — denied, logged, recorded — because an unmapped pair is a check
+    /// site nobody mapped, not an allowance.
     static func checkLegacyVocabulary(
         userID: UUID,
         permission: String,
@@ -186,7 +185,7 @@ enum IAMAuthorizer {
         app: Application,
         db: any Database
     ) async throws -> Bool {
-        let equivalent = SpiceDBCheckEquivalent(
+        let equivalent = LegacyCheckEquivalent(
             permission: permission, resourceType: resourceType, resourceID: resourceID)
         guard
             let translation = IAMActionTranslator.translate(
@@ -211,122 +210,13 @@ enum IAMAuthorizer {
             userID: userID,
             action: translation.action,
             node: translation.node,
-            spicedbEquivalent: equivalent,
+            legacyEquivalent: equivalent,
             context: context,
             state: state,
             app: app,
             db: db
         )
         return decision.allowed
-    }
-}
-
-// MARK: - The authoritative `req.spicedb` decorator
-
-/// Wraps the SpiceDB service so every *permission check* is answered by the
-/// Cedar evaluator while every *write* still reaches SpiceDB (the dual-write
-/// continues until #483 deletes it, keeping rollback open). Returned by
-/// `Request.spicedb`, which is what makes the cutover total: all handler and
-/// middleware check sites go through that accessor, so none of them needed to
-/// change and new ones are covered by construction.
-struct CedarAuthoritativeSpiceDBService: SpiceDBServiceProtocol {
-    let inner: any SpiceDBServiceProtocol
-    let app: Application
-    let db: any Database
-    let state: IAMRequestAuthState
-    let context: IAMCheckContext
-
-    func checkPermission(
-        subject: String, permission: String, resource: String, resourceId: String
-    ) async throws -> Bool {
-        guard let userID = UUID(uuidString: subject) else {
-            // Every check site passes a user id; anything else is a caller
-            // bug, and the safe answer to a question about nobody is no.
-            app.logger.error(
-                "Authorization check with non-UUID subject denied",
-                metadata: ["subject": .string(subject), "path": .string(context.path)])
-            return false
-        }
-        return try await IAMAuthorizer.checkLegacyVocabulary(
-            userID: userID,
-            permission: permission,
-            resourceType: resource,
-            resourceID: resourceId,
-            context: context,
-            state: state,
-            app: app,
-            db: db
-        )
-    }
-
-    /// Group-based checks collapse into the same evaluator: Cedar resolves
-    /// group grants natively through the principal's group parent edges, so
-    /// the direct/group distinction SpiceDB needed no longer exists.
-    func checkGroupBasedPermission(
-        userID: String, permission: String, resource: String, resourceId: String
-    ) async throws -> Bool {
-        try await checkPermission(
-            subject: userID, permission: permission, resource: resource, resourceId: resourceId)
-    }
-
-    // Everything below forwards untouched: reads and relationship writes keep
-    // SpiceDB's data fresh for the reverse shadow and the rollback window.
-
-    func readSchema() async throws -> String? {
-        try await inner.readSchema()
-    }
-
-    func writeSchema(_ schema: String) async throws {
-        try await inner.writeSchema(schema)
-    }
-
-    func writeRelationship(
-        entity: String, entityId: String, relation: String, subject: String, subjectId: String
-    ) async throws {
-        try await inner.writeRelationship(
-            entity: entity, entityId: entityId, relation: relation, subject: subject, subjectId: subjectId)
-    }
-
-    func deleteRelationship(
-        entity: String, entityId: String, relation: String, subject: String, subjectId: String
-    ) async throws {
-        try await inner.deleteRelationship(
-            entity: entity, entityId: entityId, relation: relation, subject: subject, subjectId: subjectId)
-    }
-
-    func touchRelationships(_ tuples: [RelationshipTuple]) async throws {
-        try await inner.touchRelationships(tuples)
-    }
-
-    func readRelationships(resourceType: String, relation: String?) async throws -> [RelationshipTuple] {
-        try await inner.readRelationships(resourceType: resourceType, relation: relation)
-    }
-
-    func setOrganizationRole(
-        userID: String, organizationID: String, oldRole: String?, newRole: String
-    ) async throws {
-        try await inner.setOrganizationRole(
-            userID: userID, organizationID: organizationID, oldRole: oldRole, newRole: newRole)
-    }
-
-    func removeOrganizationMember(userID: String, organizationID: String, role: String) async throws {
-        try await inner.removeOrganizationMember(userID: userID, organizationID: organizationID, role: role)
-    }
-
-    func addUserToGroup(userID: String, groupID: String) async throws {
-        try await inner.addUserToGroup(userID: userID, groupID: groupID)
-    }
-
-    func removeUserFromGroup(userID: String, groupID: String) async throws {
-        try await inner.removeUserFromGroup(userID: userID, groupID: groupID)
-    }
-
-    func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
-        try await inner.addGroupToProject(groupID: groupID, projectID: projectID, role: role)
-    }
-
-    func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
-        try await inner.removeGroupFromProject(groupID: groupID, projectID: projectID, role: role)
     }
 }
 
@@ -341,7 +231,7 @@ extension Request {
     func can(
         _ action: String,
         on node: IAMNode,
-        spicedbEquivalent: SpiceDBCheckEquivalent? = nil
+        legacyEquivalent: LegacyCheckEquivalent? = nil
     ) async throws -> Bool {
         guard let user = auth.get(User.self), let userID = user.id else {
             throw Abort(.unauthorized)
@@ -350,7 +240,7 @@ extension Request {
             userID: userID,
             action: action,
             node: node,
-            spicedbEquivalent: spicedbEquivalent,
+            legacyEquivalent: legacyEquivalent,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id),
             state: iamAuthState,
             app: application,
@@ -363,9 +253,9 @@ extension Request {
     func authorize(
         _ action: String,
         on node: IAMNode,
-        spicedbEquivalent: SpiceDBCheckEquivalent? = nil
+        legacyEquivalent: LegacyCheckEquivalent? = nil
     ) async throws {
-        guard try await can(action, on: node, spicedbEquivalent: spicedbEquivalent) else {
+        guard try await can(action, on: node, legacyEquivalent: legacyEquivalent) else {
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }

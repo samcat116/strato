@@ -21,7 +21,6 @@ All three return the same JSON shape:
   "checks": [
     { "name": "database",   "status": "up" },
     { "name": "migrations", "status": "up" },
-    { "name": "spicedb",    "status": "up" },
     { "name": "valkey",     "status": "up" }
   ],
   "identity": {
@@ -55,9 +54,9 @@ Checks are graded, because the dependencies are not equally fatal:
   not a row count, so a fleet-sized table does not turn every probe interval into
   a sequential scan.
 - **migrations** — fatal. A reachable database says nothing about whether this
-  process finished applying schema to it.
-- **spicedb** — fatal. Every authorized request goes through SpiceDB, so a
-  replica that cannot reach it would 500 on effectively all traffic.
+  process finished applying schema to it. (Authorization needs no check of its
+  own: the Cedar evaluator is in-process and reads its data from the same
+  Postgres the **database** check covers.)
 - **valkey** — **degraded only**. Coordination is deliberately fail-open (see
   [multi-replica](../architecture/multi-replica.md)); agents still converge via
   the periodic sync. Pulling every replica out of rotation because Valkey blipped

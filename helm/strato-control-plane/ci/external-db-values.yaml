@@ -13,17 +13,6 @@ strato:
     relyingPartyName: "Strato External DB Test"
     relyingPartyOrigin: "http://strato-external-db.local:8080"
 
-spicedb:
-  enabled: true
-  presharedKey: "external-db-test-spicedb-key"
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-
 # Use external database instead of embedded PostgreSQL
 postgresql:
   enabled: false
@@ -46,8 +35,6 @@ resources:
 # Disable init containers for CI
 initContainers:
   waitForDB:
-    enabled: false
-  waitForSpiceDB:
     enabled: false
 
 # Disable migration job for CI

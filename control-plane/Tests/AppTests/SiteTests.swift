@@ -386,10 +386,9 @@ final class SiteTests {
                 displayName: "Plain", isSystemAdmin: false)
             let token = try await user.generateAPIKey(on: app.db)
 
-            // The mock SpiceDB denies site view for this user, so the list is
-            // empty rather than forbidden — sites are org-delegated now.
-            app.spicedbMockAllows = false
-            defer { app.spicedbMockAllows = true }
+            // The user holds no binding anywhere, so site view resolves to
+            // nothing — the list is empty rather than forbidden, since sites
+            // are org-delegated now.
             try await app.test(.GET, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -486,8 +485,8 @@ final class SiteTests {
                 displayName: "Outsider", isSystemAdmin: false)
             let outsiderToken = try await outsider.generateAPIKey(on: app.db)
 
-            app.spicedbMockAllows = false
-            defer { app.spicedbMockAllows = true }
+            // The outsider holds no binding on the organization, so the
+            // org-scoped filter is refused.
             try await app.test(.GET, "/api/sites?organization_id=\(orgID.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in

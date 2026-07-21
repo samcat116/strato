@@ -7,11 +7,11 @@ import VaporTesting
 
 @testable import App
 
-/// IAM phase 5 (issue #482): the authoritative Cedar evaluator, the decision
-/// log it writes, and the reverse SpiceDB shadow. These drive
-/// `IAMAuthorizer.checkLegacyVocabulary` (the boundary every legacy-vocabulary
-/// check site funnels through) against real trees, bindings, and the real
-/// engine, then assert on both the enforced verdict and the recorded row.
+/// IAM phase 5 (issue #482): the authoritative Cedar evaluator and the
+/// decision log it writes. These drive `IAMAuthorizer.checkLegacyVocabulary`
+/// (the boundary every legacy-vocabulary check site funnels through) against
+/// real trees, bindings, and the real engine, then assert on both the
+/// enforced verdict and the recorded row.
 @Suite("IAM Authorizer Tests", .serialized)
 final class IAMAuthorizerTests {
 
@@ -20,13 +20,10 @@ final class IAMAuthorizerTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            // Enable decision-row recording and the reverse SpiceDB
-            // comparison (against the testing mock, whose verdict
-            // `spicedbMockAllows` controls). After configure — which resets
-            // the config from the environment — and before the recorder is
-            // lazily built with it at boot.
-            app.iamShadowConfig.recordDecisions = true
-            app.iamShadowConfig.enabled = true
+            // Enable decision-row recording (off by default under .testing).
+            // After configure — which resets the config from the environment —
+            // and before the recorder is lazily built with it at boot.
+            app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -54,8 +51,7 @@ final class IAMAuthorizerTests {
         return Tree(org: org, project: project, vm: vm, user: user)
     }
 
-    /// Run one legacy-vocabulary check exactly as `req.can` / the
-    /// `req.spicedb` decorator would.
+    /// Run one legacy-vocabulary check exactly as `req.can` would.
     private func check(
         _ app: Application,
         user: User,
@@ -89,7 +85,7 @@ final class IAMAuthorizerTests {
         return try #require(entries.first)
     }
 
-    @Test("An allowed check records the decision with policy, tier, version, and a matching reverse shadow")
+    @Test("An allowed check records the decision with policy, tier, and version")
     func allowRecorded() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "agree")
@@ -106,8 +102,8 @@ final class IAMAuthorizerTests {
 
             let entry = try await onlyEntry(app)
             #expect(entry.cedarDecision == "allow")
-            #expect(entry.spicedbDecision == "allow")  // the mock allows by default
-            #expect(entry.decisionsMatch == true)
+            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
+            #expect(entry.decisionsMatch == nil)
             #expect(entry.iamAction == "vm:read")
             #expect(entry.tier == "grant")
             #expect(entry.determiningPolicies == ["role-viewer"])
@@ -117,13 +113,12 @@ final class IAMAuthorizerTests {
         }
     }
 
-    @Test("A deny is enforced and the disagreeing SpiceDB verdict is recorded as a mismatch")
-    func denyEnforcedAndMismatchRecorded() async throws {
+    @Test("A deny is enforced and recorded")
+    func denyEnforcedAndRecorded() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "mismatch")
             // No binding: Cedar denies (org members no longer see every
-            // project). The mock SpiceDB still says allow — the reverse
-            // shadow's regression signal.
+            // project).
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
@@ -134,8 +129,8 @@ final class IAMAuthorizerTests {
 
             let entry = try await onlyEntry(app)
             #expect(entry.cedarDecision == "deny")
-            #expect(entry.spicedbDecision == "allow")
-            #expect(entry.decisionsMatch == false)
+            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
+            #expect(entry.decisionsMatch == nil)
             #expect(entry.iamAction == "project:read")
             #expect(entry.tier == "default-deny")
             #expect(entry.determiningPolicies.isEmpty)
@@ -207,7 +202,7 @@ final class IAMAuthorizerTests {
                 userID: UUID(),
                 action: "vm:read",
                 node: IAMNode(type: .virtualMachine, id: UUID()),
-                spicedbEquivalent: nil,
+                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: nil,
                 app: app,
@@ -234,7 +229,6 @@ final class IAMAuthorizerTests {
 
             let entry = try await onlyEntry(app)
             #expect(entry.cedarDecision == "allow")
-            #expect(entry.decisionsMatch == true)
             #expect(entry.tier == "platform")
             #expect(entry.determiningPolicies == ["org-membership"])
         }
@@ -264,66 +258,35 @@ final class IAMAuthorizerTests {
         }
     }
 
-    @Test("Request.spicedb returns the Cedar-authoritative decorator, and its verdict is Cedar's")
-    func decoratorIsAuthoritative() async throws {
+    @Test("Request.can in the legacy vocabulary evaluates through Cedar and records the row")
+    func legacyRequestCanIsCedar() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "e2e")
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let request = Request(application: app, method: .GET, url: "/api/vms", on: app.eventLoopGroup.next())
-            #expect(try request.spicedb is CedarAuthoritativeSpiceDBService)
+            request.auth.login(tree.user)
 
-            // The mock SpiceDB would allow; Cedar (no binding) denies — and
-            // Cedar is what's enforced now.
-            let allowed = try await request.spicedb.checkPermission(
-                subject: tree.user.id!.uuidString,
-                permission: "read",
-                resource: "virtual_machine",
-                resourceId: tree.vm.id!.uuidString)
+            // No binding on the VM's project: Cedar denies.
+            let allowed = try await request.can(
+                "read", on: "virtual_machine", id: tree.vm.id!.uuidString)
             #expect(!allowed)
 
             let entry = try await onlyEntry(app)
             #expect(entry.cedarDecision == "deny")
-            #expect(entry.spicedbDecision == "allow")
-            #expect(entry.decisionsMatch == false)
+            #expect(entry.spicedbPermission == "read")
+            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
             #expect(entry.path == "/api/vms")
         }
     }
 
-    @Test("With the reverse shadow disabled, rows are still written without a comparison")
-    func rowsWithoutReverseShadow() async throws {
-        let app = try await Application.makeForTesting()
-        do {
-            try await configure(app)
-            try await app.autoMigrate()
-            // Rows on, reverse shadow left at its .testing default (off).
-            app.iamShadowConfig.recordDecisions = true
-            let tree = try await buildTree(app, prefix: "norev")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
-
-            _ = try await check(
-                app, user: tree.user, permission: "view_organization", resourceType: "organization",
-                resourceID: tree.org.id!.uuidString)
-
-            let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "allow")
-            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
-            #expect(entry.decisionsMatch == nil)
-        } catch {
-            try await app.shutdownForTesting()
-            throw error
-        }
-        try await app.shutdownForTesting()
-    }
-
     /// The gate is what keeps decision recording off the connection pool: each
-    /// record is an insert (plus the reverse-shadow round trip), against a
-    /// Fluent pool that defaults to one connection per event loop.
+    /// record holds a connection for its insert, against a Fluent pool that
+    /// defaults to one connection per event loop.
     @Test("The gate admits up to its ceiling, queues to its depth, then sheds")
     func gateBoundsConcurrency() async throws {
-        let gate = IAMShadowGate(maxConcurrent: 2, maxQueueDepth: 1)
+        let gate = IAMRecordingGate(maxConcurrent: 2, maxQueueDepth: 1)
 
         #expect(await gate.acquire() == .admitted)
         #expect(await gate.acquire() == .admitted)
@@ -362,7 +325,7 @@ final class IAMAuthorizerTests {
             let entry = try await onlyEntry(app)
 
             // Age the row past the window, then sweep.
-            let old = Date().addingTimeInterval(-Double(app.iamShadowConfig.retentionDays + 1) * 86_400)
+            let old = Date().addingTimeInterval(-Double(app.iamDecisionLogConfig.retentionDays + 1) * 86_400)
             entry.createdAt = old
             try await entry.save(on: app.db)
 
@@ -386,7 +349,7 @@ final class IAMAuthorizerBackstopTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            app.iamShadowConfig.recordDecisions = true
+            app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -426,7 +389,7 @@ final class IAMAuthorizerBackstopTests {
                 userID: user.id!,
                 action: "network:read",
                 node: IAMNode(type: .network, id: network.id!),
-                spicedbEquivalent: nil,
+                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
                 state: state,
                 app: app,
@@ -455,7 +418,7 @@ final class IAMAuthorizerBackstopTests {
                 userID: user.id!,
                 action: "network:read",
                 node: IAMNode(type: .network, id: network.id!),
-                spicedbEquivalent: nil,
+                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
                 state: nil,
                 app: app,
@@ -464,21 +427,6 @@ final class IAMAuthorizerBackstopTests {
             // platform-open-network-read, not the truncation denial.
             #expect(decision.allowed)
             #expect(decision.determiningPolicyIDs == ["platform-open-network-read"])
-        }
-    }
-
-    @Test("A non-UUID subject through the decorator is denied, not evaluated")
-    func nonUUIDSubjectDenied() async throws {
-        try await withApp { app in
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
-            let request = Request(application: app, method: .GET, url: "/api/vms", on: app.eventLoopGroup.next())
-            let allowed = try await request.spicedb.checkPermission(
-                subject: "not-a-user-id",
-                permission: "read",
-                resource: "virtual_machine",
-                resourceId: UUID().uuidString)
-            #expect(!allowed)
         }
     }
 

@@ -3,10 +3,10 @@ import Testing
 
 @testable import App
 
-/// IAM phase 4 (issue #481): the SpiceDB-permission → IAM-action translator.
+/// IAM phase 4 (issue #481): the legacy-permission → IAM-action translator.
 /// The table below is the inventory of (permission, resource type) pairs the
 /// middleware and handlers actually check — each must translate to a registry
-/// action that is schema-applicable on the node, or shadow evaluation records
+/// action that is schema-applicable on the node, or decision recording logs
 /// it as a coverage gap.
 @Suite("IAM Shadow Translation Tests")
 struct IAMShadowTranslationTests {
@@ -26,7 +26,7 @@ struct IAMShadowTranslationTests {
         // (permission, resourceType, expected action) — assembled from every
         // `checkPermission` call site plus the middleware's method mapping.
         let inventory: [(String, String, String)] = [
-            // SpiceDBAuthMiddleware method-derived verbs
+            // AuthorizationMiddleware method-derived verbs
             ("read", "virtual_machine", "vm:read"),
             ("create", "virtual_machine", "vm:create"),
             ("update", "virtual_machine", "vm:update"),

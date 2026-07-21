@@ -30,8 +30,9 @@ schemes are accepted interchangeably:
   `POST /api/api-keys`. Keys carry scopes (`read`, `write`).
 - **Session cookie** (`vapor-session`) — set after a WebAuthn/passkey login.
 
-Per-object access is additionally enforced by relationship-based authorization
-(SpiceDB); an authenticated-but-unauthorized caller receives `403`.
+Per-object access is additionally enforced by the built-in IAM system (an
+in-process Cedar policy evaluator); an authenticated-but-unauthorized caller
+receives `403`.
 
 ### Asynchronous mutations
 

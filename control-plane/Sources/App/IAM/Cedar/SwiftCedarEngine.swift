@@ -53,8 +53,8 @@ struct SwiftCedarEngine: CedarEngine {
                 context: contextFields.mapValues { Self.engineValue($0) }
             )
             // Schema-validated: a request whose action does not apply to the
-            // resource type is an error, not a silent deny — the shadow
-            // evaluator records it as such rather than as a verdict.
+            // resource type is an error, not a silent deny — the decision
+            // log records it as such rather than as a verdict.
             let response = try authorizer.isAuthorized(
                 request, policies: policies, entities: entities, schema: schema)
             return CedarCheckDecision(

@@ -47,10 +47,9 @@ struct HealthController: RouteCollection {
     ///
     /// Checks are graded, because not every dependency is equally fatal:
     ///
-    /// - **database** (fatal) — nothing works without Postgres.
+    /// - **database** (fatal) — nothing works without Postgres; authorization
+    ///   itself evaluates in-process against it, so no separate authz probe.
     /// - **migrations** (fatal) — schema application must have finished.
-    /// - **spicedb** (fatal) — every authorized request goes through it, so a
-    ///   replica that cannot reach it would 500 on effectively all traffic.
     /// - **valkey** (degraded) — coordination is documented as fail-open
     ///   (`docs/architecture/multi-replica.md`); agents still converge via the
     ///   periodic sync. Reported, but never a reason to pull a replica out of
@@ -93,16 +92,6 @@ struct HealthController: RouteCollection {
             checks.append(HealthCheck(name: "migrations", status: "up"))
         } else {
             checks.append(HealthCheck(name: "migrations", status: "down", error: "migrations have not completed"))
-            failed = true
-        }
-
-        // SpiceDB. `readSchema` is the cheapest read on the API and exercises
-        // the same client, endpoint, and preshared key that authorization uses.
-        do {
-            _ = try await req.spicedb.readSchema()
-            checks.append(HealthCheck(name: "spicedb", status: "up"))
-        } catch {
-            checks.append(HealthCheck(name: "spicedb", status: "down", error: String(reflecting: error)))
             failed = true
         }
 

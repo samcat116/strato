@@ -15,8 +15,9 @@ import VaporTesting
 @Suite("Sandbox Exec Tests", .serialized)
 final class SandboxExecTests {
 
-    /// Same harness shape as `SandboxTests`: full middleware stack, mock
-    /// SpiceDB, API-key auth, one org/project and one pre-created sandbox.
+    /// Same harness shape as `SandboxTests`: full middleware stack,
+    /// role-binding-backed authorization, API-key auth, one org/project and
+    /// one pre-created sandbox.
     private func withSandboxTestApp(
         _ test: (Application, User, Project, Sandbox, String) async throws -> Void
     ) async throws {

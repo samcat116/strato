@@ -13,17 +13,6 @@ strato:
     relyingPartyName: "Strato CI Test"
     relyingPartyOrigin: "http://ci-test.local:8080"
 
-spicedb:
-  enabled: true
-  presharedKey: "ci-test-spicedb-key"
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-
 postgresql:
   enabled: true
   auth:
@@ -53,8 +42,6 @@ resources:
 # Disable problematic init containers for CI
 initContainers:
   waitForDB:
-    enabled: false
-  waitForSpiceDB:
     enabled: false
 
 # Disable migration job for CI

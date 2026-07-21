@@ -38,7 +38,7 @@ struct ImageController: RouteCollection {
     // MARK: - List Images
 
     func index(req: Request) async throws -> [ImageResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -52,12 +52,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check user permission on project (view_project permission allows listing images)
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "view_project",
-            resource: "project",
-            resourceId: projectID.uuidString
-        )
+        let hasPermission = try await req.can("view_project", on: "project", id: projectID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to project")
@@ -76,7 +71,7 @@ struct ImageController: RouteCollection {
     // MARK: - Get Image Details
 
     func show(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -98,12 +93,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "read",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("read", on: "image", id: imageID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to image")
@@ -132,12 +122,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Project not found")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "update_project",
-            resource: "project",
-            resourceId: projectID.uuidString
-        )
+        let hasPermission = try await req.can("update_project", on: "project", id: projectID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to create images in project")
@@ -218,10 +203,9 @@ struct ImageController: RouteCollection {
 
         try await image.save(on: req.db)
 
-        // Create SpiceDB relationships and the creator's IAM binding.
+        // Grant the creator's IAM binding.
         let imageId = try image.requireID().uuidString
-        try await writeImageRelationships(
-            req: req, imageID: try image.requireID(), projectID: projectID, userID: userID)
+        try await grantImageCreatorBinding(req: req, imageID: try image.requireID(), userID: userID)
 
         // Start background fetch
         req.logger.info(
@@ -287,8 +271,7 @@ struct ImageController: RouteCollection {
         )
         try await image.save(on: req.db)
 
-        try await writeImageRelationships(
-            req: req, imageID: image.id!, projectID: projectID, userID: userID)
+        try await grantImageCreatorBinding(req: req, imageID: image.id!, userID: userID)
 
         req.logger.info(
             "Empty image shell created",
@@ -299,11 +282,10 @@ struct ImageController: RouteCollection {
         return ImageResponse(from: image)
     }
 
-    /// Writes the standard SpiceDB ownership relationships for a new image,
-    /// plus the creator's role binding (IAM dual-write, issue #477 — SpiceDB
-    /// stays authoritative).
-    private func writeImageRelationships(
-        req: Request, imageID: UUID, projectID: UUID, userID: UUID
+    /// Grants the creator's admin role binding on a new image (issue #477) —
+    /// the authoritative grant Cedar evaluates.
+    private func grantImageCreatorBinding(
+        req: Request, imageID: UUID, userID: UUID
     ) async throws {
         try await RoleBindingService.grant(
             principalType: .user,
@@ -313,20 +295,6 @@ struct ImageController: RouteCollection {
             nodeID: imageID,
             createdBy: userID,
             on: req.db
-        )
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageID.uuidString,
-            relation: "project",
-            subject: "project",
-            subjectId: projectID.uuidString
-        )
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageID.uuidString,
-            relation: "owner",
-            subject: "user",
-            subjectId: userID.uuidString
         )
     }
 
@@ -470,9 +438,8 @@ struct ImageController: RouteCollection {
         // Reflect the new artifact in the response (relation isn't auto-loaded).
         tempImage.$artifacts.value = [diskArtifact]
 
-        // Create SpiceDB relationships and the creator's IAM binding.
-        try await writeImageRelationships(
-            req: req, imageID: imageID, projectID: projectID, userID: userID)
+        // Grant the creator's IAM binding.
+        try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
 
         req.logger.info(
             "Image uploaded successfully",
@@ -496,7 +463,7 @@ struct ImageController: RouteCollection {
     /// QEMU boot disk. The image transitions to `.ready` once its artifact set
     /// satisfies at least one hypervisor.
     func uploadArtifact(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
@@ -512,12 +479,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "update",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -635,7 +597,7 @@ struct ImageController: RouteCollection {
     /// the artifact becomes `ready` (and the image bootable) once the download
     /// completes. Replaces any existing artifact of the same kind.
     func fetchArtifact(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
@@ -651,12 +613,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "update",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -737,7 +694,7 @@ struct ImageController: RouteCollection {
     /// Removes a single typed artifact from an image, deleting its stored file
     /// and recomputing whether the image is still bootable.
     func deleteArtifact(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
@@ -757,12 +714,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "update",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -804,7 +756,7 @@ struct ImageController: RouteCollection {
     // MARK: - Update Image
 
     func update(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -824,12 +776,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "update",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
@@ -869,7 +816,7 @@ struct ImageController: RouteCollection {
     // MARK: - Delete Image
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -889,12 +836,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "delete",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("delete", on: "image", id: imageID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to delete image")
@@ -977,7 +919,7 @@ struct ImageController: RouteCollection {
         }
 
         // Fall back to user session authentication
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -989,12 +931,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "download",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("download", on: "image", id: imageID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to download image")
@@ -1048,7 +985,7 @@ struct ImageController: RouteCollection {
     // MARK: - Get Image Status
 
     func status(req: Request) async throws -> ImageStatusResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -1068,12 +1005,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "read",
-            resource: "image",
-            resourceId: imageID.uuidString
-        )
+        let hasPermission = try await req.can("read", on: "image", id: imageID.uuidString)
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to image")

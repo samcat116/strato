@@ -35,7 +35,6 @@ final class VMNetworkSelectionTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            app.spicedbMockAllows = true
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "netseluser", email: "netsel@example.com")
@@ -199,7 +198,7 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms is denied (403) when SpiceDB withholds project create")
+    @Test("POST /api/vms is denied (403) when the caller lacks vm:create on the project")
     func createDeniedWithoutProjectCreatePermission() async throws {
         try await withApp { app, _, org, project, image, _ in
             // A project *viewer* can read the image but does not hold

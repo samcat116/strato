@@ -67,10 +67,8 @@ are invisible to unit tests and direct-to-container curl.
 
 ## What's included
 
-- **PostgreSQL** — control-plane database plus a separate `spicedb` database.
-- **SpiceDB** — authorization, persisted to PostgreSQL. Datastore migration
-  and schema loading run automatically as one-shot services on every `up`
-  (they show as `Exited (0)` in `docker compose ps`, which is expected).
+- **PostgreSQL** — control-plane database (authorization is evaluated
+  in-process by the control plane's Cedar engine; no separate authz service).
 - **Valkey** — control-plane coordination (agent presence, singleton sweeps,
   scheduler reservations) and session storage; required, password-protected.
 - **Control plane + frontend** — published images

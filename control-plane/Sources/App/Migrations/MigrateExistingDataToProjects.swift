@@ -24,12 +24,10 @@ struct MigrateExistingDataToProjects: AsyncMigration {
             }
             try await defaultProject.save(on: database)
 
-            // Get all VMs that belong to this organization (via SpiceDB)
-            // Since we can't query SpiceDB directly in a migration, we'll need to
-            // use a different approach. For now, we'll update all VMs that don't
-            // have a project_id to use the default project of the first organization.
-            // A separate script will need to be run to properly associate VMs with
-            // their correct organizations based on SpiceDB data.
+            // VM→organization ownership lived in the then-authorization engine
+            // rather than a relational column, so this migration could not
+            // resolve it. VMs without a project_id fall back to the first
+            // organization's default project below.
         }
 
         // If there are any VMs without a project_id after this migration,

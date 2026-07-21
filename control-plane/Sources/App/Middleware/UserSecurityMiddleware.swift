@@ -13,7 +13,7 @@ import Vapor
 ///   epoch existed carry no stamp and count as epoch 0.
 ///
 /// Must be registered after both authenticators (session + bearer) so it sees
-/// the resolved user, and before `SpiceDBAuthMiddleware` so revoked sessions
+/// the resolved user, and before `AuthorizationMiddleware` so revoked sessions
 /// never reach authorization. Denials return a `Response` rather than throwing
 /// so the sessions middleware still runs its response path and actually
 /// deletes the destroyed session record and cookie.

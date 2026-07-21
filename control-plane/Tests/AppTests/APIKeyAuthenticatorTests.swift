@@ -380,7 +380,7 @@ struct APIKeyAuthenticatorTests {
 
         // This is a route-level unit test of the `isAPIKeyAuthenticated` request
         // property, including the *unauthenticated* branch. `configure` now installs
-        // the global `SpiceDBAuthMiddleware` in every environment (issue #196), which
+        // the global `AuthorizationMiddleware` in every environment (issue #196), which
         // would 401 the no-key request below before it ever reaches the handler. Reset
         // the middleware stack to just error handling so the request-scoped
         // authenticator on the route group is the only auth in play.

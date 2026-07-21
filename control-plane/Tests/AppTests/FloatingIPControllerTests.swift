@@ -40,7 +40,6 @@ final class FloatingIPControllerTests {
                 organization: org
             )
             let token = try await user.generateAPIKey(on: app.db)
-            app.spicedbMockAllows = true
 
             try await test(app, user, org, project, token)
 
@@ -445,7 +444,7 @@ final class FloatingIPControllerTests {
         }
     }
 
-    @Test("System admins list floating IPs without per-project SpiceDB tuples")
+    @Test("System admins list floating IPs without per-project role bindings")
     func adminListBypass() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in
             let pool = try await self.createPool(app: app, org: org, token: token)
@@ -456,31 +455,34 @@ final class FloatingIPControllerTests {
                 #expect(res.status == .ok)
             }
 
-            // Deny every project permission: the admin flag alone must be
-            // enough to allocate and to list, with and without an explicit
-            // project filter.
-            app.spicedbMockDeniedResources = ["project"]
+            // A system admin with no membership or binding anywhere: the admin
+            // flag alone (the evaluator's tier-1 policy) must be enough to
+            // allocate and to list, with and without an explicit project
+            // filter.
+            let bareAdmin = try await TestDataBuilder(db: app.db).createUser(
+                username: "fip-bare-admin", email: "fip-bare-admin@example.com",
+                displayName: "Bare Admin", isSystemAdmin: true)
+            let bareAdminToken = try await bareAdmin.generateAPIKey(on: app.db)
             try await app.test(.POST, "/api/floating-ips") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
                 try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
             try await app.test(.GET, "/api/floating-ips") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
                 #expect(addresses.contains("203.0.113.2"))
             }
             try await app.test(.GET, "/api/floating-ips?project_id=\(project.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
                 #expect(addresses.contains("203.0.113.2"))
             }
-            app.spicedbMockDeniedResources = []
         }
     }
 

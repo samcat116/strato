@@ -66,10 +66,7 @@ directly and `docker compose up -d` again.
 
 | Service | Purpose | Notes |
 |---|---|---|
-| `db` | PostgreSQL 16 | Control-plane DB plus a separate `spicedb` database |
-| `spicedb-migrate` | one-shot | Migrates the SpiceDB datastore, exits 0 |
-| `spicedb` | Authorization | Persisted to PostgreSQL |
-| `spicedb-schema` | one-shot | Loads the authorization schema on every `up`, exits 0 |
+| `db` | PostgreSQL 16 | Control-plane DB (durable truth, including authorization data) |
 | `valkey` | Coordination + sessions | Required by the control plane (agent presence, sweep locks, scheduler reservations); password-protected |
 | `control-plane` | API + core | Runs DB migrations automatically at startup |
 | `frontend` | Web UI | Next.js |
@@ -84,7 +81,6 @@ expected.
 
 - `POSTGRES_PASSWORD` — do not change after the database volume is
   initialized
-- `SPICEDB_PRESHARED_KEY`
 - `VALKEY_PASSWORD`
 - `STRATO_SECRET_ENCRYPTION_KEY` — encrypts stored secrets (OIDC client
   secrets, SSF stream auth tokens) at rest in the database. Do not lose or
@@ -125,7 +121,7 @@ docker compose down -v             # stop and WIPE all data
 ```
 
 `docker compose ps` reports the control plane healthy only once
-`/health/ready` passes — that is, once Postgres, SpiceDB, and migrations are all
+`/health/ready` passes — that is, once Postgres and migrations are both
 good, not merely once the process started. On `down` and on `up -d` upgrades the
 control plane drains in-flight requests and agent WebSockets within
 `stop_grace_period` (60s). See

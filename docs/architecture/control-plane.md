@@ -20,8 +20,8 @@ Two targets under `control-plane/Sources/`:
   | `Models/` | ~39 Fluent models plus `…DTOs.swift` bundles |
   | `Migrations/` | ~87 `AsyncMigration`s, verb-named (`Create…`, `Add…To…`, `Backfill…`, `Drop…`) |
   | `Services/` | ~50 service types (actors/structs), plus `SCIM/` and `SPIFFE/` subdirectories |
-  | `IAM/` | The engine-independent role model for the Cedar migration (issue #477): `RoleRegistry`, `RoleBinding` dual-writes alongside SpiceDB tuples — see [iam](./iam.md) |
-  | `Middleware/` | The request pipeline: auth, rate limiting, audit, SpiceDB |
+  | `IAM/` | The authorization engine: `IAMAuthorizer`, the Cedar encoding (`Cedar/`), `RoleRegistry`/`RoleBindingService`, the guardrail store, `WhoCanService`, decision recording — see [iam](./iam.md) |
+  | `Middleware/` | The request pipeline: auth, rate limiting, audit, authorization |
   | `Extensions/` | `Request+…` per-object authz helpers, `Application+LazyService.swift` |
   | `Telemetry/` | Static metrics facade (`Telemetry.…`) |
 
@@ -45,24 +45,26 @@ Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
 2. **Middleware chain** (outermost→innermost): request logging, security
    headers, sessions (+ `User.sessionAuthenticator()`), bearer API-key
    authenticator, rate limiting, audit, API-key scoping, user-security
-   (SSF revocation enforcement), and `SpiceDBAuthMiddleware` — which runs in
-   every environment including tests.
+   (SSF revocation enforcement), and `AuthorizationMiddleware` — the
+   structurally default-deny authorization gate, which runs in every
+   environment including tests.
 3. **Coordination**: Valkey (`ValkeyCoordinationStore` + Valkey-backed
    sessions) in real deployments — startup fails hard if it's missing;
    `InMemoryCoordinationStore` + Fluent sessions under `.testing`.
-4. Secrets encryption, registry client, WebAuthn, SpiceDB validation,
-   Postgres (with TLS), then ~87 ordered migrations and `autoMigrate()`.
-   Migrations run at startup; there is no separate migrate step.
-5. Post-migration convergence: secret re-encryption and the SpiceDB
-   relationship backfills (project/org-member/infra parents), each of which
-   runs every boot and no-ops when converged.
+4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
+   ~87 ordered migrations and `autoMigrate()`. Migrations run at startup;
+   there is no separate migrate step.
+5. Post-migration convergence: the Cedar policy set is compiled at its
+   current version, stored secrets are re-encrypted, and `role_bindings` are
+   backfilled from the relational mirrors (org members, project
+   members/grants) — each runs every boot and no-ops when converged.
 6. Scheduler registration (`app.useScheduler`), SPIRE configuration, OTel
    bootstrap, and lifecycle handlers (agent heartbeat monitor, hourly audit
    retention, SSF polling).
 
 Services are exposed via lazy accessors
 (`Extensions/Application+LazyService.swift`): `app.scheduler`,
-`app.coordination`, `app.spicedb`, `app.agentService`, etc.
+`app.coordination`, `app.agentService`, etc.
 
 ## Key services
 
@@ -80,8 +82,6 @@ The important ones to know when navigating `Services/`:
 - **`IPAMService`** — control-plane IP allocation (IPv4/IPv6) from a
   `LogicalNetwork`'s subnets, plus floating (external) IPv4 addresses from
   `FloatingIPPool` ranges (issue #344).
-- **`SpiceDBService`** — authorization checks and relationship writes;
-  mock-backed under `.testing`.
 - **`QuotaEnforcementService`** — reserve/release quota against project,
   folder, and org at VM/sandbox create/delete.
 - **`VMSpecBuilder` / `SandboxSpecBuilder`** — assemble the
@@ -104,22 +104,28 @@ The important ones to know when navigating `Services/`:
 The canonical mutation path (`Controllers/VMController.swift`):
 
 1. **Middleware** authenticates (session or API key) and
-   `SpiceDBAuthMiddleware` does route-level authz via its route-prefix →
-   resource-type map (public paths like `/health`, `/auth/*`, `/agent/ws`,
-   and image download URLs — authenticated in-handler by agent SVID or user
-   session — are allowlisted; system admins bypass checks).
+   `AuthorizationMiddleware` — structurally default-deny; every route is
+   classified public / login-only / resource-mapped / handler-checked, and
+   an unclassified route fails boot — evaluates the method/path-derived
+   check for `/api/vms` through the Cedar evaluator (public paths like
+   `/health`, `/auth/*`, `/agent/ws`, and image download URLs —
+   authenticated in-handler by agent SVID or user session — are
+   allowlisted; system admins are allowed by a tier-1 policy inside the
+   evaluator, not a bypass).
 2. The handler validates the request: image must be `.ready` and readable,
-   the user needs `project:create_resources` in SpiceDB (org membership
-   alone is not enough), environment and network selections are checked.
+   the user needs create rights on the project (checked via `req.can` /
+   `req.authorize` against the evaluator; org membership alone is not
+   enough), environment and network selections are checked.
 3. **One transaction** (with constraint-failure retry for IPAM races):
    quota reservation → VM row → `setDesiredStatus(.shutdown)` (bumps
    `generation`) → NIC rows with IPAM-allocated addresses → a
-   **`ResourceOperation`** row (`pending`). The desired-state change and the
-   operation commit atomically.
-4. SpiceDB `owner` and `project` tuples are written for the new VM.
-5. The handler returns **202 Accepted** with the operation; the client polls
+   **`ResourceOperation`** row (`pending`) → the creator's role binding on
+   the new VM (`RoleBindingService.grant` — an explicit, revocable grant,
+   transactional with the resource it protects). The desired-state change,
+   the operation, and the grant commit atomically.
+4. The handler returns **202 Accepted** with the operation; the client polls
    `/api/operations/:id`.
-6. The rest happens off-request on `app.backgroundTasks`: scheduling,
+5. The rest happens off-request on `app.backgroundTasks`: scheduling,
    placement, and a desired-state sync to the chosen agent.
 
 Lifecycle verbs (start/stop/pause/resume/delete) follow the same shape via
@@ -212,9 +218,10 @@ uses `CREATE DATABASE ... TEMPLATE ...`. `withApp { app in ... }` (from
 `BaseTestCase`) boots via `configure()` against the pre-migrated clone and
 tears down with `shutdownForTesting()`, which drops the clone.
 
-Authorization tests run through the **real** `SpiceDBAuthMiddleware` with
-`app.spicedb` resolving to a mock whose verdicts are test-controlled, so both
-allow and deny paths are exercised. Sweeps are `internal` rather than
+Authorization tests run through the **real** `AuthorizationMiddleware` and
+the real Cedar evaluator against `role_bindings` rows the tests create —
+there is no permissive mock in front of the decision path, so both allow and
+deny paths are exercised exactly as in production. Sweeps are `internal` rather than
 `private` specifically so tests can drive a pass directly, and the heartbeat
 interval is injectable. `TestDataBuilder` creates users/orgs/projects/VMs/
 sandboxes; migration up/down coverage lives in `MigrationRoundTripTests`.

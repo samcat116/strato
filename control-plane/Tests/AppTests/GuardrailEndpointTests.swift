@@ -5,9 +5,7 @@ import VaporTesting
 
 @testable import App
 
-/// The guardrail API (`/api/iam/guardrails`, issue #479). Admin gating runs
-/// through the mock SpiceDB (`spicedbMockAllows`), as it does everywhere else
-/// until cutover.
+/// The guardrail API (`/api/iam/guardrails`, issue #479).
 @Suite("Guardrail Endpoint Tests", .serialized)
 final class GuardrailEndpointTests {
 
@@ -26,7 +24,6 @@ final class GuardrailEndpointTests {
         do {
             try await configure(app)
             try await app.autoMigrate()
-            app.spicedbMockAllows = true
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(

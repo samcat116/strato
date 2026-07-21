@@ -8,7 +8,7 @@ import Vapor
 /// (docs/architecture/iam.md); the policy simulator and decision logs land with
 /// later phases.
 struct AuthorizationController: RouteCollection {
-    /// Cap on checks per request — keeps a single call bounded (see `checkBulk`).
+    /// Cap on checks per request — keeps a single call bounded.
     private static let maxChecks = 50
 
     func boot(routes: RoutesBuilder) throws {
@@ -61,7 +61,7 @@ struct AuthorizationController: RouteCollection {
     ///   the authoritative Cedar policy set — exactly what gates requests, so
     ///   the answer here is the answer enforcement would give, guardrails
     ///   included. `permission` accepts an IAM action name (`vm:start`) or,
-    ///   for callers not yet migrated, a legacy SpiceDB permission name
+    ///   for callers not yet migrated, a legacy permission name
     ///   (`manage_project`), translated the same way `req.can` translates.
     /// - **With `principal`**: answered from the `role_bindings` table + the
     ///   resource tree, so it agrees with `who-can`. `permission` is an IAM
@@ -90,7 +90,7 @@ struct AuthorizationController: RouteCollection {
 
         var results: [String: Bool] = [:]
         for item in payload.checks {
-            // Action names carry a `:`; anything else is the legacy SpiceDB
+            // Action names carry a `:`; anything else is the legacy
             // vocabulary and goes through the same translation as `req.can`.
             if item.permission.contains(":") {
                 let node = try Self.node(resourceType: item.resourceType, resourceId: item.resourceId)
@@ -117,7 +117,7 @@ struct AuthorizationController: RouteCollection {
         _ principal: PrincipalRequest, _ checks: [PermissionCheckItem], caller: User, req: Request
     ) async throws -> CheckResponse {
         // Gate each distinct resource once: a batch may ask fifty questions
-        // about the same VM, and the gate is a tree walk plus SpiceDB calls.
+        // about the same VM, and the gate is a tree walk plus evaluator calls.
         var gated: Set<IAMNode> = []
         var results: [String: Bool] = [:]
         for item in checks {

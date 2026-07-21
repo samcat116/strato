@@ -201,15 +201,6 @@ public func configure(_ app: Application) async throws {
         relyingPartyOrigin: relyingPartyOrigin
     )
 
-    if app.environment != .testing {
-        // Fail fast: the SpiceDB service is constructed lazily on every authorized
-        // request, so validate its required configuration at boot rather than
-        // letting the first request that touches it error out. Skipped under
-        // .testing, which resolves `app.spicedb` to an in-memory mock and needs no
-        // real endpoint or preshared key.
-        try app.validateSpiceDBConfiguration()
-    }
-
     // Register the authorization middleware in every environment — including
     // .testing. It used to be skipped under .testing, which meant every controller
     // test ran with authorization off and no test could catch an authz regression
@@ -455,7 +446,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddHostInfoToAgent())
 
     // IAM phase 1 (issue #477): the role_bindings policy store and the
-    // role/action registry, dual-written alongside SpiceDB tuples.
+    // role/action registry — the durable state Cedar evaluates.
     app.migrations.add(CreateRoleBinding())
     app.migrations.add(CreateIAMRoleRegistry())
 
@@ -464,8 +455,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGuardrail())
     app.migrations.add(CreatePolicySetVersion())
 
-    // IAM phase 4 (issue #481): the authorization decision log written by
-    // shadow evaluation.
+    // IAM phase 4 (issue #481): the authorization decision log.
     app.migrations.add(CreateIAMDecisionLog())
 
     // Sandbox snapshots / checkpoint-resume (issue #426).
@@ -563,32 +553,12 @@ public func configure(_ app: Application) async throws {
     // existed. No-op without a key.
     try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
 
-    // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
-    // before anything writes relationships — the backfills below are the first
-    // writers on a fresh stack and crash with a 400 without a schema.
+    // IAM phase 1: populate role_bindings from the relational mirrors
+    // (user_organizations, project_members, project_group_grants). Idempotent,
+    // so re-running every boot also repairs any grant a crashed request
+    // missed.
     if app.environment != .testing {
-        try await ensureSpiceDBSchema(app)
-        // Backfill SpiceDB tuples so existing data authorizes correctly after the
-        // schema/tuple reset and now that SpiceDB is the sole authorization source.
-        // Each is a single chunked idempotent (TOUCH) batch. OU parents first so the
-        // project#parent → organizational_unit → organization chain resolves.
-        //  - organizational_unit#parent tuples (parent OU or organization).
-        //  - project#parent tuples against each project's immediate parent.
-        //  - organization#<role>→user tuples for every relational membership, so
-        //    existing members don't 403 once relational role checks are retired.
-        try await backfillOrganizationalUnitParentRelationships(app)
-        try await backfillProjectOrganizationRelationships(app)
-        try await backfillOrganizationMemberRelationships(app)
-        //  - agent#parent / site#parent tuples for org-scoped infrastructure.
-        try await backfillInfraParentRelationships(app)
-
-        // IAM phase 1: populate role_bindings from the relational mirrors and
-        // from a SpiceDB export of resource-level owner/viewer/editor tuples
-        // (those exist only in SpiceDB and would be lost at cutover). Both are
-        // idempotent, so re-running every boot also repairs any dual-write a
-        // crashed request missed.
         try await RoleBindingBackfill.backfillFromMirrors(app)
-        try await RoleBindingBackfill.backfillFromSpiceDB(app)
     }
 
     // Initialize the WebAuthn decoy credential key (generates if not exists),
@@ -670,13 +640,12 @@ public func configure(_ app: Application) async throws {
     // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
     app.lifecycle.use(AuditRetentionLifecycleHandler())
 
-    // IAM phase 4 (issue #481): decision-log retention. The shadow evaluation
-    // itself needs no boot step — it hangs off `Request.spicedb`. Resolve the
-    // config once here rather than letting the accessor re-read the
-    // environment on every `Request.spicedb` access. Tests override the stored
-    // value after `configure` to opt into shadowing.
-    app.iamShadowConfig = .fromEnvironment(app.environment)
-    app.lifecycle.use(IAMShadowLifecycleHandler())
+    // IAM phase 4 (issue #481): decision-log recording and retention. Resolve
+    // the config once here rather than re-reading the environment on every
+    // access. Tests override the stored value after `configure` to opt into
+    // recording.
+    app.iamDecisionLogConfig = .fromEnvironment(app.environment)
+    app.lifecycle.use(IAMDecisionLogLifecycleHandler())
 
     // SSF poll delivery (issue #38): periodically drain poll-delivery streams
     // from their transmitters. The handler arms the sweep at boot and cancels

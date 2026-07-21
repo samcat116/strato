@@ -193,7 +193,7 @@ final class HierarchyIntegrationTests {
             // Add developer to group
             try await developerGroup.addMember(developer.id!, on: app.db)
 
-            // In a real test with SpiceDB integration:
+            // In a full authorization test against the Cedar evaluator:
             // - Add group to project with member role
             // - Verify developer has access through group membership
             // - Verify non-member doesn't have access
@@ -300,7 +300,7 @@ final class HierarchyIntegrationTests {
                 ou: childOU
             )
 
-            // In a real system with SpiceDB:
+            // Under the Cedar evaluator's hierarchy semantics:
             // - User with admin on parentOU should have admin on childOU and project
             // - User with member on organization should have view on all
 

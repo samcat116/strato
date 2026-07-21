@@ -29,18 +29,15 @@ struct FloatingIPController: RouteCollection {
 
     // MARK: - Pools (infrastructure, site-style authz)
 
+    /// The (resourceType, id) pair naming the scope's owning node for
+    /// permission checks against the IAM hierarchy.
+
     /// `manage_agents` on the org/OU scope a pool is being created under —
     /// the same trust level as site management: a pool decides which external
     /// addresses a site answers for.
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let user = try req.auth.require(User.self)
-        let ref = scope.spiceDBParentRef
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "manage_agents",
-            resource: ref.subjectType,
-            resourceId: ref.subjectId.uuidString
-        )
+        let resource = scope.checkResource
+        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
         guard allowed else {
             throw Abort(
                 .forbidden, reason: "You don't have permission to manage floating IP pools for this organization")
@@ -52,21 +49,14 @@ struct FloatingIPController: RouteCollection {
     /// authorizing only the pool's own org/OU would let one tenant's admin
     /// claim (and block) another tenant's site.
     private func requireSiteManage(_ req: Request, site: Site) async throws {
-        let user = try req.auth.require(User.self)
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "manage",
-            resource: "site",
-            resourceId: try site.requireID().uuidString
-        )
+        let allowed = try await req.can("manage", on: "site", id: try site.requireID().uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this site")
         }
     }
 
     /// The IAM action standing for pool `view`/`manage`: a pool's access *is*
-    /// its owning scope's access (exactly how the SpiceDB schema resolved
-    /// `floating_ip_pool` permissions — `view = parent->view_*`,
+    /// its owning scope's access (`view = parent->view_*`,
     /// `manage = parent->manage_*`), so the check evaluates on the owning
     /// org/folder node. The pool itself has no node in the IAM tree.
     private static func poolScopeCheck(_ scope: OrganizationScope, manage: Bool) -> (action: String, node: IAMNode) {
@@ -170,13 +160,6 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.conflict, reason: "A floating IP pool named '\(name)' already exists")
         }
 
-        // Mirror ownership into SpiceDB so org admins can manage the pool.
-        let ref = scope.spiceDBParentRef
-        try await req.spicedb.writeRelationship(
-            entity: "floating_ip_pool", entityId: try pool.requireID().uuidString,
-            relation: "parent",
-            subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
-
         return try FloatingIPPoolResponse(from: pool, allocatedCount: 0)
     }
 
@@ -270,14 +253,6 @@ struct FloatingIPController: RouteCollection {
 
         try await pool.delete(on: req.db)
 
-        // Drop the ownership tuple; best-effort — a leftover grants nothing
-        // once the row is gone.
-        if let ref = pool.organizationScope?.spiceDBParentRef {
-            try? await req.spicedb.deleteRelationship(
-                entity: "floating_ip_pool", entityId: poolId.uuidString,
-                relation: "parent",
-                subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
-        }
         return .noContent
     }
 
@@ -303,12 +278,7 @@ struct FloatingIPController: RouteCollection {
                 query = query.filter(\.$project.$id == requestedProjectId)
             }
         } else if let requestedProjectId {
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: requestedProjectId.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
@@ -345,12 +315,7 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.badRequest, reason: "No project specified and user has no current organization")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "create_floating_ip",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
+        let hasPermission = try await req.can("create_floating_ip", on: "project", id: projectId.uuidString)
         guard hasPermission else {
             throw Abort(
                 .forbidden, reason: "You don't have permission to allocate floating IPs in this project")
@@ -382,7 +347,7 @@ struct FloatingIPController: RouteCollection {
                     projectID: projectId,
                     createdByID: creatorID)
                 try await row.save(on: db)
-                // IAM dual-write (issue #477), mirroring network create.
+                // Creator binding (issue #477), mirroring network create.
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: creatorID,
@@ -397,15 +362,6 @@ struct FloatingIPController: RouteCollection {
         } catch let error as IPAMService.IPAMError {
             throw Abort(.conflict, reason: error.localizedDescription)
         }
-
-        try await req.spicedb.writeRelationship(
-            entity: "floating_ip", entityId: floatingIP.id!.uuidString,
-            relation: "owner",
-            subject: "user", subjectId: creatorID.uuidString)
-        try await req.spicedb.writeRelationship(
-            entity: "floating_ip", entityId: floatingIP.id!.uuidString,
-            relation: "project",
-            subject: "project", subjectId: projectId.uuidString)
 
         req.logger.info(
             "Floating IP allocated",
@@ -436,17 +392,6 @@ struct FloatingIPController: RouteCollection {
         }
         let floatingIpId = try floatingIP.requireID()
 
-        if let createdById = floatingIP.$createdBy.id {
-            try await req.spicedb.deleteRelationship(
-                entity: "floating_ip", entityId: floatingIpId.uuidString,
-                relation: "owner",
-                subject: "user", subjectId: createdById.uuidString)
-        }
-        try await req.spicedb.deleteRelationship(
-            entity: "floating_ip", entityId: floatingIpId.uuidString,
-            relation: "project",
-            subject: "project", subjectId: floatingIP.$project.id.uuidString)
-
         try await req.db.transaction { db in
             try await floatingIP.delete(on: db)
             try await RoleBindingService.revokeAll(nodeType: .floatingIP, nodeID: floatingIpId, on: db)
@@ -469,13 +414,7 @@ struct FloatingIPController: RouteCollection {
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
         // the VM too (the volume-attach rule).
-        let user = try req.auth.require(User.self)
-        let hasVMPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "update",
-            resource: "virtual_machine",
-            resourceId: vm.id!.uuidString
-        )
+        let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
         guard hasVMPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
@@ -713,19 +652,13 @@ struct FloatingIPController: RouteCollection {
     }
 
     private func fetchFloatingIPWithPermission(req: Request, permission: String) async throws -> FloatingIP {
-        let user = try req.auth.require(User.self)
         guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid floating IP ID")
         }
         guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
             throw Abort(.notFound, reason: "Floating IP not found")
         }
-        let allowed = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "floating_ip",
-            resourceId: floatingIpId.uuidString
-        )
+        let allowed = try await req.can(permission, on: "floating_ip", id: floatingIpId.uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this floating IP")
         }
@@ -747,12 +680,7 @@ struct FloatingIPController: RouteCollection {
         let allProjects = try await Project.query(on: req.db).all()
         var accessibleProjectIds: [UUID] = []
         for project in allProjects {
-            let hasAccess = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "view_project",
-                resource: "project",
-                resourceId: project.id!.uuidString
-            )
+            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
             if hasAccess {
                 accessibleProjectIds.append(project.id!)
             }

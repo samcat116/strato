@@ -10,10 +10,11 @@ enum OrganizationScope: Equatable, Sendable {
     case organization(UUID)
     case organizationalUnit(UUID)
 
-    /// The SpiceDB subject for a `#parent` relation, written against the
-    /// *immediate* parent so OU-scoped resources inherit access up the OU
-    /// chain (same rationale as `Project.spiceDBParentRef`).
-    var spiceDBParentRef: (subjectType: String, subjectId: UUID) {
+    /// The (resourceType, id) pair naming this scope's node in an
+    /// authorization check — checks on scoped infrastructure evaluate against
+    /// the *immediate* owner so OU-scoped resources inherit access up the OU
+    /// chain.
+    var checkResource: (type: String, id: UUID) {
         switch self {
         case .organization(let id):
             return ("organization", id)

@@ -1,15 +1,15 @@
 import Foundation
 
-// The SpiceDB-permission → IAM-action translator. Born with shadow evaluation
+// The legacy-permission → IAM-action translator. Born with shadow evaluation
 // (issue #481) to bridge the two vocabularies for comparison; since cutover
 // (issue #482) it is the load-bearing boundary: handler sites still speaking
-// SpiceDB vocabulary (`req.can("read", on: "virtual_machine", ...)`,
-// `req.spicedb.checkPermission`) are translated here to the IAM action naming
-// the *act being gated*, then evaluated through the authoritative Cedar
-// policy set. Untranslatable checks fail closed and are recorded as
-// `untranslated` in the decision log — an unmapped pair is a check site
-// nobody mapped, not an allowance. The vocabulary (and this translator) goes
-// away when #483 converts the call sites and deletes SpiceDB.
+// the legacy vocabulary (`req.can("read", on: "virtual_machine", ...)`) are
+// translated here to the IAM action naming the *act being gated*, then
+// evaluated through the authoritative Cedar policy set. Untranslatable checks
+// fail closed and are recorded as `untranslated` in the decision log — an
+// unmapped pair is a check site nobody mapped, not an allowance. The
+// vocabulary (and this translator) goes away when the call sites move to
+// native IAM actions.
 
 /// One translated check: the IAM action and the tree node to evaluate it on.
 struct IAMShadowTranslation: Equatable, Sendable {
@@ -19,9 +19,9 @@ struct IAMShadowTranslation: Equatable, Sendable {
 
 enum IAMActionTranslator {
 
-    /// Translate a SpiceDB check into the Cedar vocabulary, or nil when the
-    /// pair has no faithful IAM-action equivalent (unknown resource type,
-    /// non-UUID resource id, or a permission nobody mapped).
+    /// Translate a legacy-vocabulary check into the Cedar vocabulary, or nil
+    /// when the pair has no faithful IAM-action equivalent (unknown resource
+    /// type, non-UUID resource id, or a permission nobody mapped).
     ///
     /// `path` disambiguates the one genuinely ambiguous permission:
     /// `create_resources` on a project gates whichever resource kind the
@@ -66,7 +66,7 @@ enum IAMActionTranslator {
     private static func action(permission: String, nodeType: IAMNodeType, path: String) -> String? {
         let service = service(for: nodeType)
         switch permission {
-        // The generic method-derived verbs (SpiceDBAuthMiddleware) and the
+        // The generic method-derived verbs (AuthorizationMiddleware) and the
         // view/manage pairs the containers use.
         case "read", "view", "view_project", "view_organization":
             return "\(service):read"

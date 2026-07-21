@@ -206,7 +206,7 @@ struct SandboxExecWebSocketController: RouteCollection {
         return frame
     }
 
-    /// Authenticates the request and re-checks the SpiceDB `exec` permission
+    /// Authenticates the request and re-checks the `exec` permission
     /// on the sandbox. Returns the user ID on success; on any failure it
     /// reports the error over the socket, closes it, and returns nil.
     /// Mirrors `ConsoleWebSocketController.validateConsoleAccess`: authorize
@@ -232,12 +232,7 @@ struct SandboxExecWebSocketController: RouteCollection {
 
             // Authorize before loading the sandbox, so unauthorized users
             // cannot probe arbitrary sandbox UUIDs via distinct errors.
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: userId,
-                permission: "exec",
-                resource: "sandbox",
-                resourceId: sandboxId.uuidString
-            )
+            let hasPermission = try await req.can("exec", on: "sandbox", id: sandboxId.uuidString)
 
             guard hasPermission else {
                 req.logger.warning(

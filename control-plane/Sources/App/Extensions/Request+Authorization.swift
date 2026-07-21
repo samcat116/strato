@@ -1,16 +1,16 @@
 import Fluent
 import Vapor
 
-// IAM phase 5 (issue #482): `req.can` is Cedar. The legacy SpiceDB-vocabulary
-// form survives so the ~55 handler sites need not churn before #483 deletes
-// SpiceDB outright: it translates the (permission, resourceType) pair to the
-// IAM action naming the act being gated — the same mapping shadow evaluation
-// validated — and evaluates it through `IAMAuthorizer`. The Cedar-native form
-// lives in IAMAuthorizer.swift; new code should prefer it.
+// IAM phase 5 (issue #482): `req.can` is Cedar. This legacy-vocabulary form
+// (the permission names the pre-Cedar authorizer used) survives so the ~55
+// handler sites need not churn: it translates the (permission, resourceType)
+// pair to the IAM action naming the act being gated — the same mapping shadow
+// evaluation validated — and evaluates it through `IAMAuthorizer`. The
+// Cedar-native form lives in IAMAuthorizer.swift; new code should prefer it.
 
 extension Request {
     /// Whether the current user holds `permission` on the given resource, in
-    /// the legacy SpiceDB vocabulary.
+    /// the legacy permission vocabulary.
     ///
     /// There is no system-admin short-circuit anymore: admins are allowed by
     /// the `platform-system-admin` tier-1 policy, which lands their decisions
