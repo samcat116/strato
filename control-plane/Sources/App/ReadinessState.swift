@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 import NIOConcurrencyHelpers
 import Vapor
@@ -98,9 +99,18 @@ extension Request {
 /// Kubernetes (see the Helm chart's `terminationDrain`), or a stop timeout under
 /// Compose — because the process cannot delay a shutdown Vapor has already begun.
 struct DrainSignalLifecycleHandler: LifecycleHandler {
+    /// `DispatchSourceSignal` is an existential with no `Sendable` conformance
+    /// on Linux (Darwin's overlay is more permissive, so this compiles there
+    /// without the wrapper), and a `static let` must be `Sendable`. Dispatch
+    /// sources are documented as safe to use from any thread, and every access
+    /// below happens under the enclosing lock.
+    private struct SignalSourceBox: @unchecked Sendable {
+        let source: any DispatchSourceSignal
+    }
+
     /// Kept alive for the process lifetime; a `DispatchSourceSignal` stops
     /// delivering once it is deallocated.
-    private static let source = NIOLockedValueBox<DispatchSourceSignal?>(nil)
+    private static let source = NIOLockedValueBox<SignalSourceBox?>(nil)
 
     func didBootAsync(_ application: Application) async throws {
         // Tests boot and tear down many applications in one process; installing
@@ -116,7 +126,7 @@ struct DrainSignalLifecycleHandler: LifecycleHandler {
             logger.notice("SIGTERM received: reporting unready, draining in-flight work")
         }
         signalSource.resume()
-        Self.source.withLockedValue { $0 = signalSource }
+        Self.source.withLockedValue { $0 = SignalSourceBox(source: signalSource) }
     }
 
     func shutdownAsync(_ application: Application) async {
@@ -125,7 +135,7 @@ struct DrainSignalLifecycleHandler: LifecycleHandler {
         // during teardown.
         application.readiness.beginDraining()
         Self.source.withLockedValue { existing in
-            existing?.cancel()
+            existing?.source.cancel()
             existing = nil
         }
     }
