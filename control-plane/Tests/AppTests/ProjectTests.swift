@@ -571,4 +571,62 @@ final class ProjectTests {
             }
         }
     }
+
+    // MARK: - Generated-handler wire compatibility (#583)
+
+    /// The projects surface is served by handlers generated from `openapi.yaml`
+    /// rather than a hand-written controller. These two tests pin the parts of
+    /// the wire format that the migration could plausibly have changed:
+    /// serialization of dates, and the error envelope.
+
+    @Test("Generated handlers encode timestamps as ISO-8601, like the rest of the API")
+    func testProjectTimestampEncoding() async throws {
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
+            let project = Project(
+                name: "Timestamp Project",
+                description: "Checks date encoding",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await project.save(on: app.db)
+
+            try await app.test(.GET, "/api/projects/\(project.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = res.body.string
+                let json = try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
+                let createdAt = json?["createdAt"] as? String
+                #expect(createdAt != nil, "createdAt should serialize as an ISO-8601 string, got: \(body)")
+                if let createdAt {
+                    #expect(ISO8601DateFormatter().date(from: createdAt) != nil)
+                }
+            }
+        }
+    }
+
+    @Test("Generated handlers return the standard error envelope")
+    func testProjectErrorEnvelope() async throws {
+        try await withProjectTestApp { app, _, _, _, authToken in
+            try await app.test(.GET, "/api/projects/\(UUID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+                let json = try JSONSerialization.jsonObject(with: Data(res.body.string.utf8)) as? [String: Any]
+                #expect(json?["error"] as? Bool == true)
+                #expect(json?["reason"] as? String == "Project not found")
+            }
+        }
+    }
+
+    @Test("A malformed project id is rejected with 400, not 500")
+    func testProjectMalformedID() async throws {
+        try await withProjectTestApp { app, _, _, _, authToken in
+            try await app.test(.GET, "/api/projects/not-a-uuid") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
 }

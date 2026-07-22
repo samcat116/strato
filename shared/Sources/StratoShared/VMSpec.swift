@@ -17,6 +17,13 @@ public struct VMSpec: Codable, Sendable {
     public let maxCpus: Int
     /// Guest memory size in bytes.
     public let memoryBytes: Int64
+    /// Maximum guest memory in bytes (for hot-add on backends that support
+    /// it), mirroring how `maxCpus` bounds vCPU hot-add. Equal to
+    /// `memoryBytes` when the VM was created without headroom, in which case
+    /// no hot-pluggable memory device is realized at all. Nil from control
+    /// planes that predate the field (issue #568); consumers treat nil as
+    /// `memoryBytes`.
+    public let maxMemoryBytes: Int64
     /// Disk requirement in bytes — the figure the scheduler gated placement on
     /// (`vm.disk`), carried so agents can account committed disk without
     /// deriving it from volumes (which don't carry sizes). Nil from control
@@ -55,6 +62,7 @@ public struct VMSpec: Codable, Sendable {
         cpus: Int,
         maxCpus: Int? = nil,
         memoryBytes: Int64,
+        maxMemoryBytes: Int64? = nil,
         diskBytes: Int64? = nil,
         sharedMemory: Bool = false,
         hugepages: Bool = false,
@@ -69,6 +77,7 @@ public struct VMSpec: Codable, Sendable {
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
         self.memoryBytes = memoryBytes
+        self.maxMemoryBytes = max(maxMemoryBytes ?? memoryBytes, memoryBytes)
         self.diskBytes = diskBytes
         self.sharedMemory = sharedMemory
         self.hugepages = hugepages
@@ -85,9 +94,10 @@ public struct VMSpec: Codable, Sendable {
     /// sending control plane predates the field.
     public var effectiveMachine: MachineProfile { machine ?? .default }
 
-    // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `machine`, and
-    // `userData` tolerate absence: a spec produced by an older control plane
-    // (before these fields existed) decodes to []/nil rather than throwing, keeping
+    // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `maxMemoryBytes`,
+    // `machine`, and `userData` tolerate absence: a spec produced by an older
+    // control plane (before these fields existed) decodes to []/nil rather
+    // than throwing, keeping
     // agent↔control-plane compatible across version skew. `encode(to:)` stays
     // synthesized. All other keys remain required, matching the existing wire
     // contract.
@@ -96,6 +106,8 @@ public struct VMSpec: Codable, Sendable {
         cpus = try c.decode(Int.self, forKey: .cpus)
         maxCpus = try c.decode(Int.self, forKey: .maxCpus)
         memoryBytes = try c.decode(Int64.self, forKey: .memoryBytes)
+        maxMemoryBytes = max(
+            try c.decodeIfPresent(Int64.self, forKey: .maxMemoryBytes) ?? memoryBytes, memoryBytes)
         diskBytes = try c.decodeIfPresent(Int64.self, forKey: .diskBytes)
         sharedMemory = try c.decode(Bool.self, forKey: .sharedMemory)
         hugepages = try c.decode(Bool.self, forKey: .hugepages)

@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Building and testing (Swift)
 
-Three independent Swift packages: `control-plane/`, `agent/`, `shared/` (plus vendored `SwiftFirecracker/`). Each builds and tests separately:
+Independent Swift packages: `control-plane/`, `agent/`, `shared/`, `cli/`, `clients/swift/` (plus vendored `SwiftFirecracker/`). Each builds and tests separately:
 
 - `swift build --package-path <pkg>` / `swift test --package-path <pkg>`
 - `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating; run the full suite once before creating or updating a PR
@@ -146,6 +146,7 @@ strato/
 │   ├── Sources/StratoAgentCore/   # testable core (reconciler, storage, manifest)
 │   └── Sources/StratoAgent/       # executable (drivers, WebSocket client)
 ├── shared/               # Wire protocol, DTOs (StratoShared)
+├── clients/swift/        # Generated Swift API client (spec symlinked from control-plane)
 ├── SwiftFirecracker/     # Vendored Swift wrapper for the Firecracker API
 ├── deploy/compose/       # Supported single-host deployment (incl. spiffe/ mTLS config)
 ├── helm/                 # Kubernetes Helm chart

@@ -3522,6 +3522,15 @@ extension Agent: ReconcileActuator {
         return presence
     }
 
+    /// The sizing each managed VM is running with, from the manifest entry —
+    /// which is written from the spec the VM was created (or last resized)
+    /// with, so it is exactly the figure a new spec must be diffed against.
+    /// Orphans are omitted: an unadopted VM has no control session to resize
+    /// over, and adoption is planned for it first anyway.
+    func observedSizing() async -> [String: VMSizing] {
+        managedVMs.mapValues { VMSizing(cpus: $0.spec.cpus, memoryBytes: $0.spec.memoryBytes) }
+    }
+
     func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus {
         guard let entry = orphanedVMs[item.vmId] else {
             // A replayed sync may race re-adoption; if the VM is already
@@ -3653,6 +3662,8 @@ extension Agent: ReconcileActuator {
             try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
         case .resume:
             try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
+        case .resize:
+            try await reconcileResize(item)
         case .shutdown:
             try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
         case .delete:
@@ -3699,6 +3710,31 @@ extension Agent: ReconcileActuator {
         await sendVMLog(
             vmId: item.vmId, level: .info, eventType: .statusChange,
             message: "VM created by reconciliation", operation: "create", newStatus: .created)
+    }
+
+    /// Applies a running VM's new vCPU/memory sizing (issue #568) and records
+    /// it in the manifest, so the next sync diffs against what the VM is now
+    /// actually running with instead of re-planning the same resize forever.
+    ///
+    /// The manifest write happens only after the driver reports success:
+    /// recording the new sizing first would make a failed resize look applied
+    /// and silently strand the VM at its old size.
+    private func reconcileResize(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desired else {
+            throw HypervisorServiceError.invalidConfiguration("resize work item without a desired entry")
+        }
+        guard let entry = managedVMs[item.vmId] else {
+            throw HypervisorServiceError.vmNotFound(item.vmId)
+        }
+        let service = try reconcileService(for: item.vmId)
+        try await service.resizeVM(vmId: item.vmId, spec: desired.spec)
+
+        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: entry.hypervisorType, spec: desired.spec)
+        persistManifest()
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .operation,
+            message: "VM resized to \(desired.spec.cpus) vCPUs and \(desired.spec.memoryBytes) bytes of memory",
+            operation: "resize")
     }
 
     private func reconcileDelete(_ item: ReconcileWorkItem) async throws {
@@ -3776,7 +3812,7 @@ extension Agent: ReconcileActuator {
             try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
         case .delete:
             try await sandboxReconcileDelete(item)
-        case .pause, .resume:
+        case .pause, .resume, .resize:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items.
             throw SandboxRuntimeError.unsupportedStep(String(describing: step))

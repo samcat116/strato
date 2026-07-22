@@ -64,7 +64,8 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
-| `supportsMachineProfile` | 17 | `VMSpec.machine` — Secure Boot and vTPM |
+| `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
+| `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -83,15 +84,24 @@ Version 16 follows the same pattern: `ObservedVMState.memoryStats` (issue
 observed-state report — optional, nil-tolerant both ways, informational only,
 so no gate.
 
-Version 17 adds `VMSpec.machine` (a `MachineProfile` of `secureBoot` and
+Version 17 adds CPU/memory hot-add (issue #568). The new spec field —
+`VMSpec.maxMemoryBytes`, defaulting to `memoryBytes` — is additive and
+nil-tolerant, but the *behavior* is not: a pre-v17 agent plans no work for a
+generation that changed only sizing and reports it converged, so the resize
+would silently succeed having changed nothing. Hence `supportsVMResize`: the
+control plane refuses an online resize below it and tells the caller to
+restart the VM. Resizing a stopped VM needs no gate, since the next boot
+uses the whole spec.
+
+Version 18 adds `VMSpec.machine` (a `MachineProfile` of `secureBoot` and
 `tpm`, issue #565) plus `AgentRegisterMessage.tpmCapable`. The field itself is
-additive and tolerant — a pre-v17 agent decodes the sync fine — but that is
+additive and tolerant — a pre-v18 agent decodes the sync fine — but that is
 precisely the problem: it would then boot the guest *without* Secure Boot or a
 TPM and report success, and Windows setup would refuse to install with nothing
 in the API explaining why. So this feature is gated on two signals rather than
 one, exactly as `sandboxCapable` is at v5: `supportsMachineProfile` proves the
 agent understands the field, and `tpmCapable` proves the host can actually
-realize a TPM (swtpm installed). A v17 build on a host without swtpm answers
+realize a TPM (swtpm installed). A v18 build on a host without swtpm answers
 yes to the first and no to the second, which is why the version number alone
 cannot stand in for the capability flag. The scheduler treats both as hard
 constraints.

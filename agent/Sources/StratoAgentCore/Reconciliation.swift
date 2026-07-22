@@ -32,6 +32,24 @@ public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable 
 public typealias VMPresence = WorkloadPresence<VMStatus>
 public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
 
+/// The sizing a VM on this host is actually running with, as opposed to the
+/// sizing its desired spec asks for. Only the two hot-addable dimensions
+/// (issue #568) — everything else in a spec still needs a recreate.
+public struct VMSizing: Equatable, Sendable {
+    public let cpus: Int
+    public let memoryBytes: Int64
+
+    public init(cpus: Int, memoryBytes: Int64) {
+        self.cpus = cpus
+        self.memoryBytes = memoryBytes
+    }
+
+    /// Whether `spec` asks for a different size than this.
+    public func differs(from spec: VMSpec) -> Bool {
+        cpus != spec.cpus || memoryBytes != spec.memoryBytes
+    }
+}
+
 // MARK: - Work items
 
 /// A single convergence action. Items are executed in order within one
@@ -51,6 +69,9 @@ public enum ReconcileStep: Equatable, Sendable {
     case boot
     case pause
     case resume
+    /// Converge a *running* VM's vCPU/memory sizing on the desired spec
+    /// (issue #568). VM-only: sandboxes are not resizable in place.
+    case resize
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
@@ -125,6 +146,10 @@ public struct ReconcileWorkItem: Sendable {
 public protocol ReconcileActuator: Sendable {
     /// Snapshot of every VM present on this host (managed + orphaned).
     func observedPresence() async -> [String: VMPresence]
+    /// The sizing each managed VM is actually running with, so the planner
+    /// can spot a spec whose vCPU/memory changed under a running VM
+    /// (issue #568).
+    func observedSizing() async -> [String: VMSizing]
     /// Re-adopt an orphaned VM and return its observed status, so the
     /// reconciler can plan the remaining convergence steps toward the desired
     /// status.
@@ -156,6 +181,10 @@ public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedErro
 /// a sync plans sandbox work.
 extension ReconcileActuator {
     public func observedSandboxPresence() async -> [String: SandboxPresence] { [:] }
+
+    /// Actuators that cannot report per-VM sizing simply never have a resize
+    /// planned for them; the change still lands at the VM's next boot.
+    public func observedSizing() async -> [String: VMSizing] { [:] }
 
     public func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus {
         throw SandboxActuationUnsupportedError()
@@ -320,7 +349,8 @@ public actor Reconciler {
     public func apply(_ message: DesiredStateMessage, includeSandboxes: Bool = false) async {
         let presentVMs = await actuator.observedPresence()
         var items = Self.plan(
-            desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm))
+            desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
+            presentSizing: await actuator.observedSizing())
 
         var presentSandboxCount = 0
         if includeSandboxes {
@@ -578,6 +608,7 @@ public actor Reconciler {
         case .boot: return "booting"
         case .pause: return "pausing"
         case .resume: return "resuming"
+        case .resize: return "resizing"
         case .shutdown: return "shutting down"
         case .delete: return "deleting"
         }
@@ -590,9 +621,53 @@ public actor Reconciler {
     public static func plan(
         desired: [DesiredVMState],
         present: [String: VMPresence],
-        lastApplied: [String: Int64]
+        lastApplied: [String: Int64],
+        presentSizing: [String: VMSizing] = [:]
     ) -> [ReconcileWorkItem] {
-        planCore(desired: desired, present: present, lastApplied: lastApplied)
+        var items = planCore(desired: desired, present: present, lastApplied: lastApplied)
+        addResizes(to: &items, desired: desired, present: present, lastApplied: lastApplied, sizing: presentSizing)
+        return items
+    }
+
+    /// Plans `.resize` for VMs that are already running the status the
+    /// control plane wants but at a different size than its spec asks for
+    /// (issue #568) — the declarative alternative to an imperative resize
+    /// RPC: it survives dropped syncs by construction, since the next
+    /// level-triggered sync re-derives the same diff.
+    ///
+    /// A VM with other steps planned is left alone: `.create`/`.boot` build
+    /// the process from the new spec wholesale, so resizing on top would be
+    /// redundant at best. Likewise for a VM that isn't running — a stopped
+    /// VM picks the new size up at its next boot.
+    private static func addResizes(
+        to items: inout [ReconcileWorkItem],
+        desired: [DesiredVMState],
+        present: [String: VMPresence],
+        lastApplied: [String: Int64],
+        sizing: [String: VMSizing]
+    ) {
+        guard !sizing.isEmpty else { return }
+        for entry in desired where !entry.wantsAbsent {
+            let id = entry.vmId.uuidString
+            guard case .managed(.running)? = present[id],
+                entry.desiredStatus == .running,
+                let observed = sizing[id],
+                observed.differs(from: entry.spec)
+            else { continue }
+            // Same staleness rule as the core diff: an older sync must never
+            // undo a newer one, and an equal generation is drift correction.
+            if let applied = lastApplied[id], entry.generation < applied { continue }
+
+            if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
+                guard items[index].steps.isEmpty else { continue }
+                items[index] = ReconcileWorkItem(
+                    kind: .vm, id: id, generation: entry.generation, steps: [.resize], target: entry.asTarget)
+            } else {
+                items.append(
+                    ReconcileWorkItem(
+                        kind: .vm, id: id, generation: entry.generation, steps: [.resize], target: entry.asTarget))
+            }
+        }
     }
 
     /// Compute the sandbox convergence plan for one sync. Same engine, same

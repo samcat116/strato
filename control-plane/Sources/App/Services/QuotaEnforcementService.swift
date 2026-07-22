@@ -83,6 +83,29 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Admission for resizing an existing VM (issue #568): only the *delta*
+    /// is checked and reserved, since the VM's current sizing is already
+    /// counted. Call inside the same transaction as the VM's sizing write and
+    /// *before* it, so the resync baseline still reflects the old size.
+    ///
+    /// A pure shrink never fails admission, but still runs through here so
+    /// the freed capacity is credited back immediately rather than at the
+    /// next resync.
+    static func reserveVMResize(
+        for project: Project,
+        environment: String,
+        vcpuDelta: Int,
+        memoryDelta: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateVMResize(vcpuDelta: vcpuDelta, memoryDelta: memoryDelta)
+            guard check.allowed else { return check }
+            try quota.applyVMResize(vcpuDelta: vcpuDelta, memoryDelta: memoryDelta)
+            return check
+        }
+    }
+
     /// Sandbox counterpart of `reserve`: same shared vCPU/memory pools, the
     /// sandbox count limit instead of the VM one, no storage (issue #415).
     static func reserveSandbox(

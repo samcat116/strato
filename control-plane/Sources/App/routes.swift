@@ -24,8 +24,9 @@ func routes(_ app: Application) throws {
     try app.register(collection: AgentWebSocketController())
 
     // Hierarchical IAM controllers
+    // Projects themselves are served by generated handlers — see
+    // `registerGeneratedAPIHandlers` below.
     try app.register(collection: OrganizationalUnitController())
-    try app.register(collection: ProjectController())
     try app.register(collection: ProjectMemberController())
     // Registry pull secrets for private sandbox images (issue #414)
     try app.register(collection: RegistryPullSecretController())
@@ -76,11 +77,11 @@ func routes(_ app: Application) throws {
     // Workload Identity (SPIFFE / SPIRE) read API
     try app.register(collection: WorkloadIdentityController())
 
-    // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
-    // from Sources/App/openapi.yaml, register handlers here.
-    // let transport = VaporTransport(routesBuilder: app)
-    // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
-    // try apiImpl.registerHandlers(on: transport)
+    // OpenAPI Vapor transport (spec-first, issue #583): surfaces whose handlers
+    // are generated from Sources/App/openapi.yaml. Registered last so a
+    // hand-written controller can never shadow a generated route unnoticed —
+    // the drift suite asserts each generated route is registered exactly once.
+    try registerGeneratedAPIHandlers(on: app)
 
     // The frontend is served by the separate Next.js container; ingress owns
     // user-facing page routing.

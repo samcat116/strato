@@ -308,6 +308,52 @@ extension ResourceQuota {
         return (true, nil)
     }
 
+    /// Check whether growing an existing VM would exceed quota limits
+    /// (issue #568). The deltas draw from the same vCPU/memory pools as a
+    /// create, but the VM count is unchanged — a resize adds no VM — so the
+    /// count limit is deliberately not consulted, and a shrink (negative
+    /// delta) always fits.
+    func canAccommodateVMResize(vcpuDelta: Int, memoryDelta: Int64) -> (allowed: Bool, reason: String?) {
+        if !isEnabled {
+            return (true, nil)
+        }
+
+        if vcpuDelta > 0 {
+            let (newVCPUs, overflowed) = reservedVCPUs.addingReportingOverflow(vcpuDelta)
+            if overflowed || newVCPUs > maxVCPUs {
+                return (false, "Insufficient vCPU quota: \(availableVCPUs) available, \(vcpuDelta) requested")
+            }
+        }
+
+        if memoryDelta > 0 {
+            let (newMemory, overflowed) = reservedMemory.addingReportingOverflow(memoryDelta)
+            if overflowed || newMemory > maxMemory {
+                let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
+                let requestedGB = Double(memoryDelta) / 1024 / 1024 / 1024
+                return (
+                    false,
+                    "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, "
+                        + "\(String(format: "%.2f", requestedGB))GB requested"
+                )
+            }
+        }
+
+        return (true, nil)
+    }
+
+    /// Applies a resize's deltas to this quota's reservations. Shrinks floor
+    /// at zero: the counters are resynced to real usage before any admission
+    /// check, so a transiently negative figure would be meaningless anyway.
+    func applyVMResize(vcpuDelta: Int, memoryDelta: Int64) throws {
+        let check = canAccommodateVMResize(vcpuDelta: vcpuDelta, memoryDelta: memoryDelta)
+        if !check.allowed {
+            throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
+        }
+
+        reservedVCPUs = max(reservedVCPUs + vcpuDelta, 0)
+        reservedMemory = max(reservedMemory + memoryDelta, 0)
+    }
+
     /// Check if a sandbox creation would exceed quota limits. Sandboxes draw
     /// vCPUs and memory from the same pools as VMs but have their own count
     /// limit and reserve no storage (issue #415).

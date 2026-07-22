@@ -44,6 +44,12 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 return 300
             case .shutdown, .reboot, .pause, .resume:
                 return 120
+            case .resize:
+                // Hot-add is a couple of QMP commands; the budget covers a
+                // sync round trip and the agent's next observed report, not
+                // the guest's own onlining (which the operation doesn't wait
+                // for).
+                return 120
             case .snapshot, .snapshotDelete, .restore, .snapshotExport:
                 // Unreachable for VMs (no endpoint issues them — snapshots
                 // are a sandbox operation, issue #426) but the budget
@@ -58,9 +64,9 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 return 600
             case .delete:
                 return 300
-            case .shutdown, .reboot, .pause, .resume:
-                // Pause/resume are unreachable for sandboxes (no endpoint
-                // issues them) but the budget total function stays total.
+            case .shutdown, .reboot, .pause, .resume, .resize:
+                // Pause/resume/resize are unreachable for sandboxes (no
+                // endpoint issues them) but the budget function stays total.
                 return 120
             case .snapshot:
                 // Checkpoint copies the guest memory file plus a full rootfs

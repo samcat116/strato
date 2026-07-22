@@ -30,6 +30,7 @@ Package.resolved
 !/control-plane/Package.resolved
 !/SwiftFirecracker/Package.resolved
 !/cli/Package.resolved
+!/clients/swift/Package.resolved
 
 
 # VitePress
