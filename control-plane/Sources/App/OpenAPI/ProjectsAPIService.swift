@@ -177,10 +177,22 @@ struct ProjectsAPIService: APIProtocol {
         }
 
         // IAM dual-write (issue #477): bindings have no FK to the nodes they
-        // protect, so drop the project node's bindings with the row.
-        try await req.db.transaction { db in
+        // protect, so drop the project node's bindings with the row — and the
+        // roles it owns (issue #605), which would otherwise be bindable
+        // nowhere while still shaping the Cedar schema. Removing roles is a
+        // policy-set change and bumps the version.
+        let removedRoles = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             try await project.delete(on: db)
             try await RoleBindingService.revokeAll(nodeType: .project, nodeID: projectID, on: db)
+            let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
+            if removedRoles > 0 {
+                try await PolicySetVersionService.bump(
+                    reason: "project deleted: \(removedRoles) owned role(s) removed", on: db)
+            }
+            return removedRoles
+        }
+        if removedRoles > 0 {
+            await req.application.announcePolicySetChange()
         }
         return .noContent(.init())
     }

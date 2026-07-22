@@ -272,7 +272,12 @@ struct OrganizationController: RouteCollection {
                 .compactMap { $0.id }
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
-        try await req.db.transaction { db in
+        // Roles owned by the org (or by a project cascading away with it) go
+        // too — a role outliving its owner is bindable nowhere and listed
+        // nowhere, while still contributing a grants-field pair to the Cedar
+        // schema. That makes this a policy-set change, so it runs inside
+        // `withPolicySetChange` and bumps the version when roles actually went.
+        let removedRoles = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             try await organization.delete(on: db)
             // The trust domain row deliberately outlives the organization: it
             // is the instruction to destroy the org's CA, and the reconciler
@@ -281,10 +286,21 @@ struct OrganizationController: RouteCollection {
             try await OrgTrustDomainProvisioning.markForTeardown(organizationID: organizationID, on: db)
             try await RoleBindingService.revokeAll(
                 nodeType: .organization, nodeID: organizationID, on: db)
+            var removedRoles = try await RoleStore.deleteOwned(
+                by: .organization, ownerID: organizationID, on: db)
             for projectID in cascadedProjectIDs {
                 try await RoleBindingService.revokeAll(
                     nodeType: .project, nodeID: projectID, on: db)
+                removedRoles += try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             }
+            if removedRoles > 0 {
+                try await PolicySetVersionService.bump(
+                    reason: "organization deleted: \(removedRoles) owned role(s) removed", on: db)
+            }
+            return removedRoles
+        }
+        if removedRoles > 0 {
+            await req.application.announcePolicySetChange()
         }
 
         return .noContent

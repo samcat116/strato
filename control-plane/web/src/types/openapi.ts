@@ -3198,6 +3198,121 @@ export interface paths {
         patch: operations["updateGuardrail"];
         trace?: never;
     };
+    "/api/iam/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the roles an owner defines
+         * @description The roles owned by one organization or project. This is not the set bindable at a node — that includes the platform defaults and everything inherited from above, and is served by `/api/iam/roles/bindable`. Admin-gated on the owner.
+         */
+        get: operations["listRoles"];
+        put?: never;
+        /**
+         * Create a role
+         * @description Defines a role owned by an organization or project. Send **either** `actions` — the server generates the canonical Cedar permit — **or** `cedarText` for the conditions an action list cannot express. Advanced text must keep the role shape: a permit, an unconstrained principal scope, an enumerable action scope drawn from the action catalog, and a condition on this role's own grants fields. The row and the policy-set version bump commit in one transaction. Platform-owned (seeded) roles cannot be created here.
+         */
+        post: operations["createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/iam/roles/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compile a role without saving it
+         * @description Runs the same preparation a write does — generate or accept the Cedar text, enforce the role shape, compile against the schema the store would have — and returns the result instead of storing it. Authenticated rather than admin-gated: it touches no stored policy, and it validates against the vocabulary `/api/iam/actions` already publishes.
+         */
+        post: operations["validateRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/iam/roles/bindable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the roles bindable on a node
+         * @description The platform-owned defaults plus every role owned by an organization or project on the node's ancestor chain — ownership is what scopes a role, so a project's role is bindable on that project and below it and nowhere else. The ancestor chain the answer was assembled from is returned with it. Gated on read access to the node, not on admin: choosing a role to grant is part of the grant flow. Because that gate is weaker than the rest of the role API's, entries carry names and action sets but not `cedarText` — reading a role's policy text stays an `iam:readPolicy` act.
+         */
+        get: operations["listBindableRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/iam/roles/{roleID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role definition's id. */
+                roleID: components["parameters"]["RoleID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a role
+         * @description Admin-gated on the role's owner. Platform-owned (seeded) roles are readable by any authenticated user — they are the same defaults the bindable listing and the action catalog already publish.
+         */
+        get: operations["getRole"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a role
+         * @description Refused with `409` while active bindings still name the role: dropping it out from under them would silently revoke whatever they grant, with nothing in the bindings list to show it happened. Seeded roles are immutable (`403`). The delete and the policy-set version bump commit together.
+         */
+        delete: operations["deleteRole"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a role
+         * @description Partial update; omitted fields are left unchanged. Sending `actions` or `cedarText` rewrites the permit under the same shape rules a create applies. The role's owner is immutable — moving a role changes where it is bindable, which is a different role. Seeded roles are immutable (`403`).
+         */
+        patch: operations["updateRole"];
+        trace?: never;
+    };
+    "/api/iam/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The action catalog
+         * @description The action vocabulary a role can be built from, grouped by service, with each action's applicable resource types and the seeded roles that carry it. Generated from the same registry the Cedar schema is, so the catalog can never offer an action a role write would reject. Describes the software, not any deployment's policy — authenticated only.
+         */
+        get: operations["listIAMActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/iam/policy-set/version": {
         parameters: {
             query?: never;
@@ -6083,6 +6198,116 @@ export interface components {
             /** @description The environment name; required for `environment`, absent otherwise. */
             value?: string;
         };
+        /**
+         * @description Who owns a role definition. `platform` rows are the seeded defaults, reconciled from the code registry and immutable through the API; organization- and project-owned rows are user-created and bindable at or below their owner.
+         * @enum {string}
+         */
+        IAMRoleOwnerType: "platform" | "organization" | "project";
+        /** @description A role definition: a named Cedar permit whose action scope is an explicit, enumerable action list. The four defaults are seeded rows, not a separate kind of thing. */
+        IAMRole: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /**
+             * Format: uuid
+             * @description The owning organization or project. Platform rows carry the all-zero sentinel.
+             */
+            ownerId: string;
+            /** @description The role's permit, in Cedar policy language, compiled into the policy set verbatim. Round-trips: this value is accepted as `cedarText` on a later write. */
+            cedarText: string;
+            /** @description Derived from `cedarText`'s action scope on every write, never sent by the client. */
+            actions: string[];
+            /** @description A seeded default, reconciled from the code registry at boot and immutable through this API. */
+            managed: boolean;
+            /** Format: uuid */
+            createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        IAMRoleListResponse: {
+            roles: components["schemas"]["IAMRole"][];
+        };
+        IAMBindableRolesResponse: {
+            node: components["schemas"]["IAMNode"];
+            /** @description The chain the answer was assembled from, resource first, so an inherited role is explicable without a second round trip. */
+            ancestors: components["schemas"]["IAMNode"][];
+            roles: components["schemas"]["IAMBindableRole"][];
+        };
+        /** @description A role as the grant flow needs it: enough to choose one and know what it confers, without the policy text. This listing is gated on read of the node rather than on `iam:readPolicy`, and a role's `cedarText` can describe the organization's security posture — which environments are fenced off, where MFA is demanded — so reading it stays an `iam:readPolicy` act. */
+        IAMBindableRole: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /** Format: uuid */
+            ownerId: string;
+            actions: string[];
+            managed: boolean;
+        };
+        IAMRoleCreateRequest: {
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /** Format: uuid */
+            ownerId: string;
+            /** @description Pick actions and the server writes the canonical permit. Mutually exclusive with `cedarText`; exactly one is required. */
+            actions?: string[];
+            /** @description Write the permit yourself. Mutually exclusive with `actions`. Because the permit is conditioned on grants fields whose names embed the role id, a client supplying its own text supplies `id` too — `/api/iam/roles/validate` hands out one to build against. */
+            cedarText?: string;
+            /**
+             * Format: uuid
+             * @description The id to create the role under. Optional; the server allocates one when it is omitted, in which case only the `actions` mode can be used.
+             */
+            id?: string;
+        };
+        /** @description Partial update. Sending `actions` or `cedarText` rewrites the permit; sending neither leaves it as it is. The two remain mutually exclusive. */
+        IAMRoleUpdateRequest: {
+            name?: string;
+            description?: string;
+            actions?: string[];
+            cedarText?: string;
+        };
+        /** @description Exactly one of `actions` or `cedarText`, as on a write. */
+        IAMRoleValidateRequest: {
+            actions?: string[];
+            cedarText?: string;
+            /**
+             * Format: uuid
+             * @description The role being edited, so its own grants fields are the accepted ones. Omit for a role that does not exist yet and the response carries a freshly allocated id to build against.
+             */
+            id?: string;
+        };
+        IAMRoleValidateResponse: {
+            /**
+             * Format: uuid
+             * @description The id the text was checked against — the one being edited, or a freshly allocated one to write `cedarText` against and then send back as the create request's `id`.
+             */
+            id: string;
+            cedarText: string;
+            actions: string[];
+        };
+        IAMActionCatalogEntry: {
+            action: string;
+            service: string;
+            /** @description The tree-node types this action can be requested against. Container types appear because `create`/`list` checks target the container. */
+            resourceTypes: components["schemas"]["IAMNodeType"][];
+            /** @description The seeded roles carrying this action. Empty for an action no default role grants — which is a fine thing for a custom role to grant. */
+            roles: string[];
+            /** @description Granted by bare organization membership, with no binding behind it. Including such an action in a custom role is legal but buys nothing inside the org. */
+            membershipDerived: boolean;
+        };
+        IAMActionCatalogService: {
+            service: string;
+            actions: components["schemas"]["IAMActionCatalogEntry"][];
+        };
+        IAMActionCatalogResponse: {
+            services: components["schemas"]["IAMActionCatalogService"][];
+        };
         /** @description A tier-2 ceiling on what grants beneath a node can reach. Guardrails only ever forbid; they intersect rather than override one another. */
         IAMGuardrail: {
             /** Format: uuid */
@@ -6848,6 +7073,16 @@ export interface components {
         GuardrailNodeIdQuery: string;
         /** @description When true, return every enabled guardrail in force at the node — its own plus everything inherited from ancestors — with the ancestor chain. When false or absent, only the guardrails attached directly. */
         GuardrailEffectiveQuery: boolean;
+        /** @description The role definition's id. */
+        RoleID: string;
+        /** @description Which kind of owner defines the roles being listed. */
+        RoleOwnerTypeQuery: components["schemas"]["IAMRoleOwnerType"];
+        /** @description The id of the organization or project defining the roles. */
+        RoleOwnerIdQuery: string;
+        /** @description The type of the tree node a role would be bound on. */
+        RoleBindableNodeTypeQuery: components["schemas"]["IAMNodeType"];
+        /** @description The id of the tree node a role would be bound on. */
+        RoleBindableNodeIdQuery: string;
         /** @description Return only entries where the two engines disagreed. */
         DecisionLogMismatchesOnlyQuery: boolean;
         /** @description Maximum number of decision-log entries to return (1–500). */
@@ -12436,6 +12671,217 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listRoles: {
+        parameters: {
+            query: {
+                /** @description Which kind of owner defines the roles being listed. */
+                ownerType: components["parameters"]["RoleOwnerTypeQuery"];
+                /** @description The id of the organization or project defining the roles. */
+                ownerId: components["parameters"]["RoleOwnerIdQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The roles the owner defines. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMRoleListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMRoleCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The created role. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    validateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMRoleValidateRequest"];
+            };
+        };
+        responses: {
+            /** @description The accepted Cedar text and the actions derived from it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMRoleValidateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listBindableRoles: {
+        parameters: {
+            query: {
+                /** @description The type of the tree node a role would be bound on. */
+                nodeType: components["parameters"]["RoleBindableNodeTypeQuery"];
+                /** @description The id of the tree node a role would be bound on. */
+                nodeId: components["parameters"]["RoleBindableNodeIdQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bindable roles and the chain they were gathered from. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMBindableRolesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role definition's id. */
+                roleID: components["parameters"]["RoleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The role. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role definition's id. */
+                roleID: components["parameters"]["RoleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role definition's id. */
+                roleID: components["parameters"]["RoleID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMRoleUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated role. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listIAMActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The action catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMActionCatalogResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     getPolicySetVersion: {
