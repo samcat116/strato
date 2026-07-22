@@ -53,28 +53,46 @@ final class IAMRoleBindingTests {
         #expect(admin.contains("iam:setPolicy") && !editor.contains("iam:setPolicy"))
     }
 
-    @Test("Registry sync seeds the tables and is idempotent")
+    @Test("Registry sync seeds the managed rows and is idempotent")
     func registrySyncIdempotent() async throws {
         try await withApp { app in
             // configure() already ran the sync once; run it again.
             try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
 
-            // Every persisted (role → implies) mapping matches the registry.
-            let roles = try await IAMRoleRecord.query(on: app.db).all()
-            let persistedImplies = Dictionary(uniqueKeysWithValues: roles.map { ($0.name, $0.implies) })
-            let expectedImplies = Dictionary(
-                uniqueKeysWithValues: IAMRole.allCases.map { ($0.rawValue, $0.implies?.rawValue) })
-            #expect(persistedImplies == expectedImplies)
+            // Every managed row matches its seeded descriptor exactly:
+            // fixed id, name, expanded action set, canonical Cedar text.
+            let managed = try await IAMRoleDefinition.query(on: app.db)
+                .filter(\.$managed == true)
+                .all()
+            #expect(managed.count == IAMRole.allCases.count)
+            for desired in RoleDescriptor.seededDefaults() {
+                let row = managed.first { $0.id == desired.id }
+                #expect(row?.name == desired.name)
+                #expect(row?.actions == desired.actions)
+                #expect(row?.cedarText == desired.cedarText)
+                #expect(row?.ownerType == IAMRoleOwnerType.platform.rawValue)
+                #expect(row?.ownerID == IAMRoleDefinition.platformOwnerID)
+            }
+        }
+    }
 
-            // Every persisted (role, action) pair matches the expanded registry
-            // exactly — not just in aggregate count.
-            let actions = try await IAMRoleAction.query(on: app.db).all()
-            let persistedPairs = Set(actions.map { "\($0.role)|\($0.action)" })
-            let expectedPairs = Set(
-                IAMRole.allCases.flatMap { role in
-                    IAMRoleRegistry.actions(for: role).map { "\(role.rawValue)|\($0)" }
-                })
-            #expect(persistedPairs == expectedPairs)
+    @Test("Registry sync never touches user-created rows")
+    func registrySyncLeavesUserRolesAlone() async throws {
+        try await withApp { app in
+            let userRole = IAMRoleDefinition(
+                name: "auditor",
+                ownerType: .organization,
+                ownerID: UUID(),
+                cedarText: "// user-authored",
+                actions: ["vm:read"]
+            )
+            try await userRole.create(on: app.db)
+
+            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+
+            let survived = try await IAMRoleDefinition.find(userRole.id, on: app.db)
+            #expect(survived?.cedarText == "// user-authored")
+            #expect(survived?.actions == ["vm:read"])
         }
     }
 
@@ -118,14 +136,14 @@ final class IAMRoleBindingTests {
             let activeNow = try await RoleBindingService.activeBindings(
                 principalType: .user, principalID: principal, on: app.db)
             #expect(activeNow.count == 1)
-            #expect(activeNow.first?.role == IAMRole.viewer.rawValue)
+            #expect(activeNow.first?.role == IAMRole.viewer.seededID.uuidString)
 
             // Role-scoped revoke removes only that role; revokeAll clears the node.
             try await RoleBindingService.revoke(
                 principalType: .user, principalID: principal, role: .viewer,
                 nodeType: .project, nodeID: node, on: app.db)
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
-            #expect(rows.map(\.role) == [IAMRole.editor.rawValue])
+            #expect(rows.map(\.role) == [IAMRole.editor.seededID.uuidString])
 
             try await RoleBindingService.revokeAll(nodeType: .project, nodeID: node, on: app.db)
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
@@ -157,16 +175,16 @@ final class IAMRoleBindingTests {
             let orgBindings = try await bindings(on: app.db, nodeType: .organization, nodeID: org.id!)
             #expect(orgBindings.count == 1)
             #expect(orgBindings.first?.principalID == admin.id)
-            #expect(orgBindings.first?.role == IAMRole.admin.rawValue)
+            #expect(orgBindings.first?.role == IAMRole.admin.seededID.uuidString)
 
             let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(projectBindings.count == 2)
             let userBinding = projectBindings.first { $0.principalType == IAMPrincipalType.user.rawValue }
             #expect(userBinding?.principalID == member.id)
-            #expect(userBinding?.role == IAMRole.editor.rawValue)
+            #expect(userBinding?.role == IAMRole.editor.seededID.uuidString)
             let groupBinding = projectBindings.first { $0.principalType == IAMPrincipalType.group.rawValue }
             #expect(groupBinding?.principalID == group.id)
-            #expect(groupBinding?.role == IAMRole.viewer.rawValue)
+            #expect(groupBinding?.role == IAMRole.viewer.seededID.uuidString)
         }
     }
 
@@ -193,7 +211,7 @@ final class IAMRoleBindingTests {
             let orgBindings = try await bindings(on: app.db, nodeType: .organization, nodeID: createdOrgID)
             #expect(orgBindings.count == 1)
             #expect(orgBindings.first?.principalID == creator.id)
-            #expect(orgBindings.first?.role == IAMRole.admin.rawValue)
+            #expect(orgBindings.first?.role == IAMRole.admin.seededID.uuidString)
             #expect(orgBindings.first?.createdBy == creator.id)
 
             // The auto-created default project carries a creator binding.
@@ -204,7 +222,7 @@ final class IAMRoleBindingTests {
             let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: projectID)
             #expect(projectBindings.count == 1)
             #expect(projectBindings.first?.principalID == creator.id)
-            #expect(projectBindings.first?.role == IAMRole.admin.rawValue)
+            #expect(projectBindings.first?.role == IAMRole.admin.seededID.uuidString)
         }
     }
 
@@ -232,7 +250,7 @@ final class IAMRoleBindingTests {
             }
             var rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
-            #expect(rows.first?.role == IAMRole.editor.rawValue)
+            #expect(rows.first?.role == IAMRole.editor.seededID.uuidString)
             #expect(rows.first?.principalID == target.id)
             #expect(rows.first?.createdBy == actor.id)
 
@@ -245,7 +263,7 @@ final class IAMRoleBindingTests {
             }
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
-            #expect(rows.first?.role == IAMRole.admin.rawValue)
+            #expect(rows.first?.role == IAMRole.admin.seededID.uuidString)
 
             // Revoke → no bindings left on the node.
             try await app.test(.DELETE, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
@@ -283,7 +301,7 @@ final class IAMRoleBindingTests {
             #expect(rows.count == 1)
             #expect(rows.first?.principalType == IAMPrincipalType.group.rawValue)
             #expect(rows.first?.principalID == group.id)
-            #expect(rows.first?.role == IAMRole.viewer.rawValue)
+            #expect(rows.first?.role == IAMRole.viewer.seededID.uuidString)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -325,7 +343,7 @@ final class IAMRoleBindingTests {
             let rows = try await bindings(on: app.db, nodeType: .project, nodeID: createdID)
             #expect(rows.count == 1)
             #expect(rows.first?.principalID == creator.id)
-            #expect(rows.first?.role == IAMRole.admin.rawValue)
+            #expect(rows.first?.role == IAMRole.admin.seededID.uuidString)
         }
     }
 }

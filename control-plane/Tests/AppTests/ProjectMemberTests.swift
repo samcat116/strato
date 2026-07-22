@@ -72,7 +72,7 @@ final class ProjectMemberTests {
                 .filter(\.$nodeType == IAMNodeType.project.rawValue)
                 .filter(\.$nodeID == project.id!)
                 .all()
-            #expect(bindings.map(\.role) == [IAMRole.editor.rawValue])
+            #expect(bindings.map(\.role) == [IAMRole.editor.seededID.uuidString])
         }
     }
 
@@ -101,8 +101,8 @@ final class ProjectMemberTests {
                 .filter(\.$nodeID == project.id!)
                 .all()
                 .map(\.role)
-            #expect(!roles.contains(IAMRole.editor.rawValue))
-            #expect(roles == [IAMRole.admin.rawValue])
+            #expect(!roles.contains(IAMRole.editor.seededID.uuidString))
+            #expect(roles == [IAMRole.admin.seededID.uuidString])
         }
     }
 
@@ -154,7 +154,7 @@ final class ProjectMemberTests {
                 .filter(\.$nodeType == IAMNodeType.project.rawValue)
                 .filter(\.$nodeID == project.id!)
                 .all()
-            #expect(bindings.map(\.role) == [IAMRole.editor.rawValue])
+            #expect(bindings.map(\.role) == [IAMRole.editor.seededID.uuidString])
         }
     }
 

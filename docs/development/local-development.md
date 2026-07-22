@@ -23,8 +23,23 @@ Platform notes for running VMs:
 
 ## Build and test
 
-The three Swift packages build and test separately. **Tests need no running
-services** — the control-plane suite runs against in-memory SQLite:
+The three Swift packages build and test separately. The agent and shared
+suites need no running services. The control-plane suite runs against
+PostgreSQL — the engine production uses — and expects one reachable via the
+standard `DATABASE_*` env vars (defaults: `localhost:5432`, user `strato`,
+password `strato_password`, database `strato_test`). A disposable container
+matching the defaults:
+
+```bash
+docker run -d --name strato-test-postgres \
+  -e POSTGRES_DB=strato_test -e POSTGRES_USER=strato \
+  -e POSTGRES_PASSWORD=strato_password \
+  --tmpfs /var/lib/postgresql/data -p 5432:5432 postgres:15
+```
+
+The harness migrates a template database once per run and hands each test a
+server-side clone, so the suite is safe to run in parallel worktrees against
+the same server.
 
 ```bash
 swift build --package-path control-plane
@@ -70,10 +85,8 @@ always run there — if you skip them locally, they still gate the PR. The
 shipped control-plane image carries the solver, because binding writes fail
 closed without one.
 
-CI additionally runs the control-plane suite against PostgreSQL, so
-migrations must work on **both** SQLite and Postgres. In particular, SQLite
-cannot combine multiple actions in one `ALTER TABLE` step — use separate
-`.update()` calls.
+CI runs the same control-plane suite against a PostgreSQL service container,
+so local and CI runs exercise identical code paths.
 
 ## Frontend
 

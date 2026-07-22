@@ -1,7 +1,6 @@
 import Testing
 import Vapor
 import Fluent
-import FluentSQLiteDriver
 import VaporTesting
 import WebAuthn
 @testable import App

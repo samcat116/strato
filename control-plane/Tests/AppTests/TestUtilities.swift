@@ -1,6 +1,5 @@
 import Fluent
 import FluentPostgresDriver
-import FluentSQLiteDriver
 import NIOCore
 import NIOPosix
 import PostgresNIO
@@ -10,40 +9,23 @@ import VaporTesting
 
 @testable import App
 
-// MARK: - Test Database Backend
-
-/// Which database engine the test suite runs against.
-///
-/// Defaults to SQLite for a fast, zero-dependency local inner loop. Set
-/// `STRATO_TEST_DATABASE=postgres` (as CI does) to run the exact same tests
-/// against a real Postgres, so migrations and Postgres-specific SQL are
-/// validated against the engine production actually uses (see issue #195).
-enum TestDatabaseBackend {
-    case sqlite
-    case postgres
-
-    static var current: TestDatabaseBackend {
-        switch Environment.get("STRATO_TEST_DATABASE")?.lowercased() {
-        case "postgres", "postgresql", "psql":
-            return .postgres
-        default:
-            return .sqlite
-        }
-    }
-}
-
 // MARK: - Test Database Templates
+//
+// The suite runs against Postgres — the engine production uses — so migrations
+// and Postgres-specific SQL are validated everywhere, not just in CI (issue
+// #195; the former SQLite backend was removed because nothing used it and its
+// CI leg doubled suite runtime). Connection parameters come from the standard
+// `DATABASE_*` env vars, defaulting to localhost:5432, strato/strato_password,
+// anchor database strato_test — matching `docker run -e POSTGRES_DB=strato_test
+// -e POSTGRES_USER=strato -e POSTGRES_PASSWORD=strato_password ...`.
 //
 // Booting a test app used to replay every migration up (via `configure()`'s
 // trailing `autoMigrate()`) against an empty database, and most teardowns
 // replayed them all back down with `autoRevert()` — two full migration passes
-// per test, which dominated suite runtime on both engines. Instead, migrations
-// run ONCE per test process into a template, and every test gets a cheap clone
-// of the migrated result:
-//
-//  - SQLite: the template is a database file; each test copies it.
-//  - Postgres: the template is a database; each test clones it server-side
-//    with `CREATE DATABASE ... TEMPLATE ...`.
+// per test, which dominated suite runtime. Instead, migrations run ONCE per
+// test process into a template database, and every test gets a cheap
+// server-side clone of the migrated result via
+// `CREATE DATABASE ... TEMPLATE ...`.
 //
 // `configure(app)` still calls `autoMigrate()` in every test, but against a
 // pre-migrated clone that is a no-op scan of the migration log. Full up/down
@@ -51,43 +33,11 @@ enum TestDatabaseBackend {
 
 private let testProcessID = ProcessInfo.processInfo.processIdentifier
 
-/// Whether the test process that embedded `pid` in a leftover template's name
+/// Whether the test process that embedded `pid` in a leftover database's name
 /// is still alive on this machine (a parallel run in another worktree we must
 /// not disturb). Anything else is debris from a finished or crashed run.
 private func isTestProcessAlive(_ pid: Int32) -> Bool {
     kill(pid, 0) == 0 || errno == EPERM
-}
-
-/// Migrated SQLite template, built once per process. Value is the file path.
-private let sqliteTemplate = Task { () -> String in
-    // Sweep templates left by dead runs — there is no reliable async hook at
-    // process exit to self-delete, so each run cleans up after previous ones.
-    let fileManager = FileManager.default
-    for entry in (try? fileManager.contentsOfDirectory(atPath: "/tmp")) ?? []
-    where entry.hasPrefix("strato-test-template-") && entry.hasSuffix(".db") {
-        let pidText = entry.dropFirst("strato-test-template-".count).dropLast(".db".count)
-        if let pid = Int32(pidText), pid != testProcessID, !isTestProcessAlive(pid) {
-            try? fileManager.removeItem(atPath: "/tmp/\(entry)")
-        }
-    }
-
-    let path = "/tmp/strato-test-template-\(testProcessID).db"
-    try? fileManager.removeItem(atPath: path)
-
-    var env = Environment.testing
-    env.arguments = ["vapor"]
-    let app = try await Application.make(env)
-    app.logger.logLevel = .error
-    app.databases.use(.sqlite(.file(path)), as: .sqlite)
-    do {
-        // configure() registers every migration and runs autoMigrate().
-        try await configure(app)
-        try await app.asyncShutdown()
-    } catch {
-        try? await app.asyncShutdown()
-        throw error
-    }
-    return path
 }
 
 /// Builds the per-process Postgres template database and hands out per-test
@@ -97,11 +47,11 @@ private let sqliteTemplate = Task { () -> String in
 actor PostgresTestDatabases {
     static let shared = PostgresTestDatabases()
 
-    /// Small event-loop group shared by every test app on the Postgres leg.
+    /// Small event-loop group shared by every test app in the suite.
     /// Fluent's pool opens at most one connection per event loop, so this caps
     /// each app at two connections and keeps the fully parallel suite well
     /// under the server's default max_connections=100 — the constraint that
-    /// used to force CI's Postgres leg to run --no-parallel.
+    /// used to force CI's Postgres run to be --no-parallel.
     static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
     /// Connection parameters from the environment. `DATABASE_NAME` is only the
@@ -145,6 +95,28 @@ actor PostgresTestDatabases {
         return name
     }
 
+    /// Mint an EMPTY database (no migrations applied) for tests that need to
+    /// build legacy schemas by hand before running a single migration — the
+    /// migrated template has every migration pre-applied, which makes
+    /// before/after tests impossible. Shares the clone namespace so teardown
+    /// (`dropDatabase`) and the dead-run sweep cover these too.
+    func createBareDatabaseForTest() async throws -> String {
+        // Await the template build even though its result is unused: every
+        // other admin statement is serialized behind it, and buildTemplate()'s
+        // internal queries (`allDatabaseNames`) run outside the FIFO chain.
+        // Racing it here would mint a second admin connection and drop the
+        // first unclosed — PostgresNIO asserts on that.
+        if template == nil {
+            template = Task { try await self.buildTemplate() }
+        }
+        try await template!.value
+
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let name = "strato_test_db_\(testProcessID)_\(suffix)"
+        try await run(#"CREATE DATABASE "\#(name)""#)
+        return name
+    }
+
     /// Destroy one test's clone. Best effort — leftovers are swept by the
     /// next run's buildTemplate().
     func dropDatabase(_ name: String) async {
@@ -159,8 +131,8 @@ actor PostgresTestDatabases {
         //
         // ALTER SYSTEM is cluster-wide and persists in postgresql.auto.conf, so it is
         // gated behind an explicit opt-in that only the ephemeral CI service sets — a
-        // developer pointing STRATO_TEST_DATABASE=postgres at a local/shared cluster
-        // must never silently disable durability for unrelated databases.
+        // developer pointing DATABASE_* at a local/shared cluster must never silently
+        // disable durability for unrelated databases.
         if Environment.get("STRATO_TEST_DISPOSABLE_POSTGRES") == "1" {
             try await run("ALTER SYSTEM SET fsync = off")
             try await run("ALTER SYSTEM SET synchronous_commit = off")
@@ -269,39 +241,37 @@ extension Application {
         var env = environment
         env.arguments = ["vapor"]
 
-        switch TestDatabaseBackend.current {
-        case .sqlite:
-            // Each test gets its own copy of the migrated template file.
-            let templatePath = try await sqliteTemplate.value
-            let testDBPath = "/tmp/strato-test-\(UUID().uuidString).db"
-            try FileManager.default.copyItem(atPath: templatePath, toPath: testDBPath)
-
-            let app = try await Application.make(env)
-            app.logger.logLevel = .debug
-            app.databases.use(.sqlite(.file(testDBPath)), as: .sqlite)
-            app.storage[TestDatabasePathKey.self] = testDBPath
-            return app
-
-        case .postgres:
-            // Each test gets its own server-side clone of the migrated
-            // template database.
-            let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
-
-            let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
-            app.logger.logLevel = .debug
-            app.databases.use(
-                .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
-                as: .psql
-            )
-            app.storage[TestDatabaseNameKey.self] = databaseName
-            return app
-        }
+        // Each test gets its own server-side clone of the migrated template
+        // database.
+        let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
+        return try await make(env, database: databaseName)
     }
-}
 
-// Storage key for test database path (SQLite)
-struct TestDatabasePathKey: StorageKey {
-    typealias Value = String
+    /// Like `makeForTesting`, but on an EMPTY database with no migrations
+    /// applied — for migration before/after tests that hand-build legacy
+    /// schemas. Tear down with `shutdownForTesting()` as usual.
+    static func makeForBareDatabaseTesting(_ environment: Environment = .testing) async throws
+        -> Application
+    {
+        var env = environment
+        env.arguments = ["vapor"]
+
+        let databaseName = try await PostgresTestDatabases.shared.createBareDatabaseForTest()
+        return try await make(env, database: databaseName)
+    }
+
+    private static func make(_ env: Environment, database databaseName: String) async throws
+        -> Application
+    {
+        let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
+        app.logger.logLevel = .debug
+        app.databases.use(
+            .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
+            as: .psql
+        )
+        app.storage[TestDatabaseNameKey.self] = databaseName
+        return app
+    }
 }
 
 // Storage key for the per-test Postgres database clone's name
@@ -314,17 +284,11 @@ extension Application {
     /// database pool), then destroy the test's database clone.
     func shutdownForTesting() async throws {
         let databaseName = storage[TestDatabaseNameKey.self]
-        let sqlitePath = storage[TestDatabasePathKey.self]
 
         try await asyncShutdown()
 
         if let databaseName {
             await PostgresTestDatabases.shared.dropDatabase(databaseName)
-        }
-        if let sqlitePath {
-            try? FileManager.default.removeItem(atPath: sqlitePath)
-            try? FileManager.default.removeItem(atPath: sqlitePath + "-shm")
-            try? FileManager.default.removeItem(atPath: sqlitePath + "-wal")
         }
     }
 }

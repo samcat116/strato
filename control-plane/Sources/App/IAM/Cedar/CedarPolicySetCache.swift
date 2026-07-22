@@ -21,6 +21,20 @@ protocol CedarEngine: Sendable {
     /// Parse and validate the schema and policy set into an evaluatable
     /// artifact. Throwing keeps the cache on its previous set.
     func compile(schemaText: String, policies: [CedarPolicySource]) throws -> any CedarCompiledPolicySet
+
+    /// Parse and validate a single policy against the schema; nil when it is
+    /// good, the reason otherwise. Cedar validation is per-policy, so this is
+    /// how the cache pre-screens *stored* policy text (role rows) and drops a
+    /// bad row loudly instead of letting it freeze the whole set on its stale
+    /// previous build — e.g. a role whose action was removed from the
+    /// registry by an upgrade.
+    func policyIssue(schemaText: String, policy: CedarPolicySource) -> String?
+}
+
+extension CedarEngine {
+    /// Engines that cannot screen individually (test fakes) skip nothing; the
+    /// full-set compile stays the backstop.
+    func policyIssue(schemaText: String, policy: CedarPolicySource) -> String? { nil }
 }
 
 /// One evaluated authorization decision from the compiled set.
@@ -78,10 +92,27 @@ actor CedarPolicySetCache {
         /// Static (platform + role) policies followed by the guardrail
         /// forbids.
         let policyText: String
+        /// The role-definition rows whose grants fields this build's schema
+        /// declares. The entity-slice context must emit exactly these — a
+        /// grants field the schema doesn't know fails strict validation for
+        /// the whole request — so the authorizer filters through this set.
+        let roleIDs: Set<UUID>
         let guardrailCount: Int
         let skippedGuardrails: [CedarPolicyAssembler.SkippedGuardrail]
+        /// Role rows whose stored Cedar text failed to parse or validate and
+        /// were left out (their grants fields stay declared; the role just
+        /// permits nothing). Loud in logs — a role granting nothing is the
+        /// safe failure, not a fine one.
+        let skippedRolePolicies: [SkippedRolePolicy]
         let artifact: any CedarCompiledPolicySet
         let builtAt: Date
+    }
+
+    /// A role row left out of the compiled set, with the reason.
+    struct SkippedRolePolicy: Equatable, Sendable {
+        let id: UUID
+        let name: String
+        let reason: String
     }
 
     private let engine: any CedarEngine
@@ -112,6 +143,12 @@ actor CedarPolicySetCache {
     /// guardrails missing, allow what a ceiling forbids).
     func rebuild(version: Int, on db: any Database) async {
         do {
+            // Every role definition — seeded and user-created. Sorted by id so
+            // two replicas building the same version produce identical text.
+            let roleRows = try await IAMRoleDefinition.query(on: db).all()
+            let roles = roleRows.compactMap(RoleDescriptor.init(row:))
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+
             let guardrails = try await Guardrail.query(on: db)
                 .filter(\.$enabled == true)
                 .all()
@@ -130,8 +167,38 @@ actor CedarPolicySetCache {
                 }
             }
 
-            let schemaText = CedarSchemaBuilder.schemaText()
-            let staticText = CedarPolicyAssembler.staticPolicyText()
+            let schemaText = CedarSchemaBuilder.schemaText(roles: roles)
+
+            // Pre-screen the *stored* role policy text individually. Cedar
+            // validation is per-policy, so a row that fails here (a role
+            // naming an action an upgrade removed from the registry) can be
+            // dropped alone — permitting nothing, its grants fields still
+            // declared — instead of failing the full-set compile and pinning
+            // every replica to its stale previous build until the row is
+            // fixed. Platform policies are code and take no screening; the
+            // full-set compile below stays the backstop for both.
+            var skippedRolePolicies: [SkippedRolePolicy] = []
+            let compilableRoles = roles.map { role -> RoleDescriptor in
+                guard !role.cedarText.isEmpty else { return role }
+                let source = CedarPolicySource(id: role.policyID, text: role.cedarText)
+                guard let issue = engine.policyIssue(schemaText: schemaText, policy: source) else {
+                    return role
+                }
+                skippedRolePolicies.append(SkippedRolePolicy(id: role.id, name: role.name, reason: issue))
+                return RoleDescriptor(id: role.id, name: role.name, cedarText: "", actions: role.actions)
+            }
+
+            for skipped in skippedRolePolicies {
+                logger.error(
+                    "Role definition left out of the compiled Cedar policy set; the role grants nothing",
+                    metadata: [
+                        "role_id": .string(skipped.id.uuidString),
+                        "role_name": .string(skipped.name),
+                        "reason": .string(skipped.reason),
+                    ])
+            }
+
+            let staticText = CedarPolicyAssembler.staticPolicyText(roles: compilableRoles)
             let compiledGuardrails = CedarPolicyAssembler.guardrailPolicyText(
                 guardrails, organizationIDsByGuardrail: organizationIDsByGuardrail)
 
@@ -155,14 +222,16 @@ actor CedarPolicySetCache {
                 : staticText + "\n" + compiledGuardrails.policyText
             let artifact = try engine.compile(
                 schemaText: schemaText,
-                policies: CedarPolicyAssembler.staticPolicies() + compiledGuardrails.policies)
+                policies: CedarPolicyAssembler.staticPolicies(roles: compilableRoles) + compiledGuardrails.policies)
 
             current = Built(
                 version: version,
                 schemaText: schemaText,
                 policyText: policyText,
+                roleIDs: Set(roles.map(\.id)),
                 guardrailCount: compiledGuardrails.compiledGuardrailIDs.count,
                 skippedGuardrails: compiledGuardrails.skipped,
+                skippedRolePolicies: skippedRolePolicies,
                 artifact: artifact,
                 builtAt: Date()
             )
@@ -170,6 +239,7 @@ actor CedarPolicySetCache {
                 "Compiled Cedar policy set",
                 metadata: [
                     "version": .stringConvertible(version),
+                    "roles": .stringConvertible(roles.count),
                     "guardrails": .stringConvertible(compiledGuardrails.compiledGuardrailIDs.count),
                 ])
         } catch {

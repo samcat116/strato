@@ -13,16 +13,21 @@ import Testing
 struct SwiftCedarEngineTests {
 
     /// The compiled static set (no guardrails), shared across tests — schema
-    /// parse + strict validation runs once.
+    /// parse + strict validation runs once. Roles come from the seeded
+    /// descriptors, exactly what `RoleRegistrySync` writes to the store.
     private static let compiled: any CedarCompiledPolicySet = {
         do {
             return try SwiftCedarEngine().compile(
-                schemaText: CedarSchemaBuilder.schemaText(),
-                policies: CedarPolicyAssembler.staticPolicies())
+                schemaText: CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults()),
+                policies: CedarPolicyAssembler.staticPolicies(roles: RoleDescriptor.seededDefaults()))
         } catch {
             fatalError("static Cedar set failed to compile: \(error)")
         }
     }()
+
+    /// The role ids the compiled schema declares — what `Built.roleIDs`
+    /// carries in production.
+    private static let seededRoleIDs = Set(IAMRole.allCases.map(\.seededID))
 
     private let userID = UUID()
 
@@ -63,14 +68,14 @@ struct SwiftCedarEngineTests {
 
         var grants = CedarRoleGrants()
         if let role {
-            grants.addUser(userID, role: role)
+            grants.addUser(userID, roleID: role.seededID)
         }
 
         return try Self.compiled.authorize(
             principal: principal,
             action: action,
             resource: resource,
-            context: .record(["grants": grants.contextValue]),
+            context: .record(["grants": grants.contextValue(roleIDs: Self.seededRoleIDs)]),
             entitiesJSON: CedarText.json(entities))
     }
 
@@ -94,7 +99,7 @@ struct SwiftCedarEngineTests {
                     "\(role.rawValue) on \(action): got \(decision.allowed), expected \(expected) \(decision.evaluationErrors)"
                 )
                 if expected {
-                    #expect(decision.determiningPolicyIDs == ["role-\(role.rawValue)"])
+                    #expect(decision.determiningPolicyIDs == [RoleDescriptor.policyID(role.seededID)])
                     #expect(decision.tier == "grant")
                 } else {
                     #expect(decision.tier == "default-deny")
@@ -181,8 +186,9 @@ struct SwiftCedarEngineTests {
         #expect(compiledGuardrails.skipped.isEmpty)
 
         let compiled = try SwiftCedarEngine().compile(
-            schemaText: CedarSchemaBuilder.schemaText(),
-            policies: CedarPolicyAssembler.staticPolicies() + compiledGuardrails.policies)
+            schemaText: CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults()),
+            policies: CedarPolicyAssembler.staticPolicies(roles: RoleDescriptor.seededDefaults())
+                + compiledGuardrails.policies)
 
         let principal = CedarEntityUID(type: .user, id: userID)
         let vmID = UUID()
@@ -200,13 +206,13 @@ struct SwiftCedarEngineTests {
             CedarEntity(uid: CedarEntityUID(type: .organization, id: orgID), attrs: [:], parents: []),
         ]
         var grants = CedarRoleGrants()
-        grants.addUser(userID, role: .admin)
+        grants.addUser(userID, roleID: IAMRole.admin.seededID)
 
         let decision = try compiled.authorize(
             principal: principal,
             action: "vm:start",
             resource: vm,
-            context: .record(["grants": grants.contextValue]),
+            context: .record(["grants": grants.contextValue(roleIDs: Self.seededRoleIDs)]),
             entitiesJSON: CedarText.json(entities))
 
         #expect(!decision.allowed)
@@ -218,7 +224,7 @@ struct SwiftCedarEngineTests {
             principal: principal,
             action: "vm:start",
             resource: vm,
-            context: .record(["grants": grants.contextValue]),
+            context: .record(["grants": grants.contextValue(roleIDs: Self.seededRoleIDs)]),
             entitiesJSON: CedarText.json([
                 entities[0],
                 CedarEntity(uid: vm, attrs: [:], parents: []),
@@ -241,16 +247,74 @@ struct SwiftCedarEngineTests {
             CedarEntity(uid: vm, attrs: [:], parents: []),
         ]
         var grants = CedarRoleGrants()
-        grants.addGroup(groupID, role: .viewer)
+        grants.addGroup(groupID, roleID: IAMRole.viewer.seededID)
 
         let decision = try Self.compiled.authorize(
             principal: principal,
             action: "vm:read",
             resource: vm,
-            context: .record(["grants": grants.contextValue]),
+            context: .record(["grants": grants.contextValue(roleIDs: Self.seededRoleIDs)]),
             entitiesJSON: CedarText.json(entities))
         #expect(decision.allowed)
-        #expect(decision.determiningPolicyIDs == ["role-viewer"])
+        #expect(decision.determiningPolicyIDs == [RoleDescriptor.policyID(IAMRole.viewer.seededID)])
+    }
+
+    @Test("A user-created role's permit works end-to-end, quoted UUID grants fields included")
+    func userCreatedRole() throws {
+        let roleID = UUID()
+        let custom = RoleDescriptor(
+            id: roleID,
+            name: "vm-auditor",
+            cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read", "vm:list"]),
+            actions: ["vm:list", "vm:read"]
+        )
+        let roles = RoleDescriptor.seededDefaults() + [custom]
+        let compiled = try SwiftCedarEngine().compile(
+            schemaText: CedarSchemaBuilder.schemaText(roles: roles),
+            policies: CedarPolicyAssembler.staticPolicies(roles: roles))
+        let roleIDs = Set(roles.map(\.id))
+
+        let principal = CedarEntityUID(type: .user, id: userID)
+        let vm = CedarEntityUID(type: .vm, id: UUID())
+        let entities: [CedarEntity] = [
+            CedarEntity(
+                uid: principal,
+                attrs: ["memberOfOrgs": .set([]), "systemAdmin": .bool(false)],
+                parents: []),
+            CedarEntity(uid: vm, attrs: [:], parents: []),
+        ]
+        var grants = CedarRoleGrants()
+        grants.addUser(userID, roleID: roleID)
+
+        let read = try compiled.authorize(
+            principal: principal,
+            action: "vm:read",
+            resource: vm,
+            context: .record(["grants": grants.contextValue(roleIDs: roleIDs)]),
+            entitiesJSON: CedarText.json(entities))
+        #expect(read.allowed)
+        #expect(read.determiningPolicyIDs == [custom.policyID])
+        #expect(read.tier == "grant")
+
+        // Outside the role's action list: default deny.
+        let start = try compiled.authorize(
+            principal: principal,
+            action: "vm:start",
+            resource: vm,
+            context: .record(["grants": grants.contextValue(roleIDs: roleIDs)]),
+            entitiesJSON: CedarText.json(entities))
+        #expect(!start.allowed)
+
+        // The stale-schema shape: a compiled set that predates the role. The
+        // context filter drops the grants (under-grant), and the request
+        // still evaluates — no unknown-attribute validation error.
+        let stale = try Self.compiled.authorize(
+            principal: principal,
+            action: "vm:read",
+            resource: vm,
+            context: .record(["grants": grants.contextValue(roleIDs: Self.seededRoleIDs)]),
+            entitiesJSON: CedarText.json(entities))
+        #expect(!stale.allowed)
     }
 
     @Test("A request whose action does not apply to the resource type errors instead of deciding")
@@ -267,8 +331,27 @@ struct SwiftCedarEngineTests {
             text: #"permit (principal, action == Action::"no:such-action", resource);"#)
         #expect(throws: (any Error).self) {
             _ = try SwiftCedarEngine().compile(
-                schemaText: CedarSchemaBuilder.schemaText(),
+                schemaText: CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults()),
                 policies: [bogus])
         }
+    }
+
+    @Test("policyIssue screens a single bad policy without failing the good ones")
+    func policyIssueScreening() throws {
+        let schema = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
+        let engine = SwiftCedarEngine()
+
+        let good = CedarPolicySource(
+            id: RoleDescriptor.seededDefaults()[0].policyID,
+            text: RoleDescriptor.seededDefaults()[0].cedarText)
+        #expect(engine.policyIssue(schemaText: schema, policy: good) == nil)
+
+        let unknownAction = CedarPolicySource(
+            id: "role-bogus",
+            text: #"permit (principal, action == Action::"no:such-action", resource);"#)
+        #expect(engine.policyIssue(schemaText: schema, policy: unknownAction) != nil)
+
+        let unparsable = CedarPolicySource(id: "role-broken", text: "permit (")
+        #expect(engine.policyIssue(schemaText: schema, policy: unparsable) != nil)
     }
 }

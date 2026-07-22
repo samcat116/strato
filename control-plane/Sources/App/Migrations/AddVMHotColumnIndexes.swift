@@ -1,6 +1,5 @@
 import Fluent
 import FluentPostgresDriver
-import FluentSQLiteDriver
 import SQLKit
 
 /// Adds indexes on the hottest `vms` columns (issue #182).

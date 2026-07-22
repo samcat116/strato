@@ -8,10 +8,9 @@ import VaporTesting
 /// Validates that the full migration set applies *and* reverses cleanly against
 /// the configured database engine.
 ///
-/// This is the guard for issue #195: run with `STRATO_TEST_DATABASE=postgres`
-/// (as CI's Postgres matrix leg does) and it exercises every migration's
-/// `prepare` and `revert` — including Postgres-specific SQL and engine-specific
-/// branches — against the real engine production uses, not just SQLite.
+/// This is the guard for issue #195: it exercises every migration's `prepare`
+/// and `revert` — including raw Postgres-specific SQL — against the real
+/// engine production uses.
 @Suite("Migration Round Trip", .serialized)
 struct MigrationRoundTripTests {
 

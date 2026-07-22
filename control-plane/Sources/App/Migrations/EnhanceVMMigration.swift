@@ -1,7 +1,6 @@
 import Fluent
 import Vapor
 import SQLKit
-import FluentSQLiteDriver
 
 struct EnhanceVM: AsyncMigration {
     func prepare(on database: Database) async throws {

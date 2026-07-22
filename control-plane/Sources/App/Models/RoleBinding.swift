@@ -24,6 +24,12 @@ final class RoleBinding: Model, @unchecked Sendable {
     @Field(key: "principal_id")
     var principalID: UUID
 
+    /// The granted role, as the `iam_roles` row id in `UUID.uuidString`
+    /// (uppercase) form. A string column rather than a typed uuid because
+    /// the table's five-column unique constraint predates role-row identity
+    /// and SQLite cannot drop a unique table constraint without a rebuild.
+    /// Rows whose value parses to no known role are dropped by every read
+    /// path (under-grant, never over-grant).
     @Field(key: "role")
     var role: String
 
@@ -57,7 +63,7 @@ final class RoleBinding: Model, @unchecked Sendable {
         id: UUID? = nil,
         principalType: IAMPrincipalType,
         principalID: UUID,
-        role: IAMRole,
+        roleID: UUID,
         nodeType: IAMNodeType,
         nodeID: UUID,
         condition: String? = nil,
@@ -67,12 +73,37 @@ final class RoleBinding: Model, @unchecked Sendable {
         self.id = id
         self.principalType = principalType.rawValue
         self.principalID = principalID
-        self.role = role.rawValue
+        self.role = roleID.uuidString
         self.nodeType = nodeType.rawValue
         self.nodeID = nodeID
         self.condition = condition
         self.expiresAt = expiresAt
         self.createdBy = createdBy
+    }
+
+    /// Convenience for the seeded roles, which most code paths grant.
+    convenience init(
+        id: UUID? = nil,
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        role: IAMRole,
+        nodeType: IAMNodeType,
+        nodeID: UUID,
+        condition: String? = nil,
+        expiresAt: Date? = nil,
+        createdBy: UUID? = nil
+    ) {
+        self.init(
+            id: id,
+            principalType: principalType,
+            principalID: principalID,
+            roleID: role.seededID,
+            nodeType: nodeType,
+            nodeID: nodeID,
+            condition: condition,
+            expiresAt: expiresAt,
+            createdBy: createdBy
+        )
     }
 }
 
@@ -86,54 +117,5 @@ extension QueryBuilder<RoleBinding> {
             group.filter(\.$expiresAt == nil)
             group.filter(\.$expiresAt > now)
         }
-    }
-}
-
-/// A row of the role registry: one global role and the role it implies.
-/// Mirrors `IAMRoleRegistry` (the code is the curated source of truth);
-/// `RoleRegistrySync` reconciles these tables at boot.
-final class IAMRoleRecord: Model, @unchecked Sendable {
-    static let schema = "iam_roles"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    /// The next role down the nesting chain (`admin` → `editor`, …).
-    @OptionalField(key: "implies")
-    var implies: String?
-
-    init() {}
-
-    init(id: UUID? = nil, name: String, implies: String?) {
-        self.id = id
-        self.name = name
-        self.implies = implies
-    }
-}
-
-/// One action in a role's *expanded* action group (direct actions plus
-/// everything inherited via `implies`), so `iam_role_actions` can answer
-/// "which roles contain action X" with a plain lookup.
-final class IAMRoleAction: Model, @unchecked Sendable {
-    static let schema = "iam_role_actions"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "role")
-    var role: String
-
-    @Field(key: "action")
-    var action: String
-
-    init() {}
-
-    init(id: UUID? = nil, role: IAMRole, action: String) {
-        self.id = id
-        self.role = role.rawValue
-        self.action = action
     }
 }

@@ -203,14 +203,60 @@ jobs:
       # actions/cache: the GitHub cache never helped here — PR-scoped saves
       # are unreadable by sibling PRs and nothing on main saves the key, so
       # every run paid a ~5 minute 1.4GB upload for a restore that always
-      # missed. The path is warm across runs if the ARC scale set backs the
-      # tool cache with a persistent volume; on a plain ephemeral pod these
-      # steps are harmless and the build runs cold.
+      # missed.
+      #
+      # BUT this scratch dir is never actually warm: /home/runner/_work is an
+      # emptyDir in the runner pod spec and every job gets a fresh pod, so
+      # RUNNER_TOOL_CACHE starts empty. Measured over the runs on 2026-07-21,
+      # every single one created all 61 dependency working copies and compiled
+      # ~3,500 files — fully cold, always. Keep the scratch dir (it costs
+      # nothing and pays off on a reused pod), but do not read run-to-run time
+      # differences as cache hits, and do not point SwiftPM cache flags at this
+      # volume — they are inert here. Genuinely shared state goes on the
+      # hostPath below instead.
+      #
+      # The SwiftPM shared cache (git mirrors, compiled manifests, binary
+      # artifacts) lives on a hostPath — /cache/swiftpm — mounted into every
+      # runner pod from the (single-node) runner host, provisioned by the
+      # github_runner Ansible role in samcat116/homelab (ghr_swiftpm_cache_*).
+      # The "Resolve SwiftPM shared cache path" step below probes that mount and
+      # exports SWIFTPM_CACHE_PATH: it uses /cache/swiftpm when it is present and
+      # writable, and otherwise falls back to a pod-local (cold) directory. That
+      # guard matters because SwiftPM does NOT create a missing cache root on its
+      # own — pointing --cache-path at an unwritable /cache/swiftpm fails the
+      # build outright ("error: invalid access to /cache/swiftpm"), so the mount
+      # being absent must degrade to cold rather than break the run. Only the
+      # shared cache lives there: --scratch-path must stay pod-local, because
+      # SwiftPM takes an exclusive lock on the build directory and concurrent
+      # jobs would serialize.
+      #
+      # The dominant cost was never the cache, though. Two runs the same evening
+      # did identical cold work: 29870517360 took 5.2 minutes total, 29873252059
+      # took 30.7. Every phase scaled together (fetch 71s → 456s,
+      # graph-load/plugin-build/planning 57s → 648s, compile 185s → 734s) —
+      # a starved pod, not a missing cache. The runner pods had no CPU limit, so
+      # the scheduler packed ~7 of them onto 16 cores while each ran an
+      # unconstrained parallel build. They now request and cap 4 CPU each, which
+      # is why the builds below pass a matching `-j 4`: SwiftPM sizes its own
+      # parallelism from the host's core count, not the cgroup quota, so without
+      # it a pod spawns 16 compile jobs inside a 4-core budget and thrashes.
+      # (`swift test --parallel` has no equivalent knob — swift-testing sizes its
+      # executor from activeProcessorCount — but the test phase is DB-bound
+      # rather than CPU-bound, so it matters much less.)
       #
       # Each job prunes only the scratch dirs it owns — the Swift test jobs
       # run concurrently, possibly against a shared tool-cache volume, so
       # wiping the strato-swift-build root could delete a sibling job's
       # in-flight build tree.
+      #
+      # --force-resolved-versions builds exactly what Package.resolved pins and
+      # skips re-resolution. With a cold cache the win is small (it avoids the
+      # remote branch checks that the branch-pinned deps — swift-scim and
+      # webauthn-swift at main, swift-qemu at main, swift-toml at master — force
+      # on every unforced resolve), but it also makes CI build the pinned graph
+      # rather than silently re-resolving. NOTE that makes a Package.swift change
+      # with an uncommitted Package.resolved a build failure instead of a silent
+      # re-resolve — intended, but a behavior change for anyone who forgets.
       - name: Prune build scratch dirs if oversized
         run: |
           for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent" "$RUNNER_TOOL_CACHE/strato-swift-build/cli" "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"; do
@@ -223,6 +269,25 @@ jobs:
             fi
           done
 
+      # Probe the shared SwiftPM cache hostPath and export SWIFTPM_CACHE_PATH.
+      # SwiftPM will not create a missing cache root itself — an unwritable
+      # /cache/swiftpm makes every `swift build` fail with "invalid access" — so
+      # when the homelab-provisioned mount is absent we fall back to a pod-local
+      # (cold) directory instead. Written to $GITHUB_ENV so the build/test steps
+      # below pick it up.
+      - name: Resolve SwiftPM shared cache path
+        run: |
+          shared=/cache/swiftpm
+          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+            echo "using shared SwiftPM cache at $shared"
+            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+          else
+            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+            mkdir -p "$fallback"
+            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+          fi
+
       # Each package's steps are gated on the paths that affect it: the job as a
       # whole also runs for spec-only changes (which rebuild the API client), and
       # those should not pay for a shared/agent build.
@@ -230,12 +295,12 @@ jobs:
         id: build-shared
         if: ${{ needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' }}
         working-directory: shared
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Shared Package
         if: ${{ !cancelled() && steps.build-shared.outcome == 'success' }}
         working-directory: shared
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build Agent
         # Run even if the shared tests failed — agent coverage should
@@ -243,12 +308,12 @@ jobs:
         id: build-agent
         if: ${{ !cancelled() && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: agent
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Agent
         if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
         working-directory: agent
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build CLI
         # Same always-report policy as the agent: CLI coverage runs even when
@@ -256,12 +321,12 @@ jobs:
         id: build-cli
         if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli"
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test CLI
         if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
         working-directory: cli
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # The generated API client (issue #583). Its openapi.yaml is a symlink to
       # the control plane's, so a spec change that breaks generation fails here
@@ -270,53 +335,32 @@ jobs:
         id: build-api-client
         if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: clients/swift
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Swift API Client
         if: ${{ !cancelled() && steps.build-api-client.outcome == 'success' }}
         working-directory: clients/swift
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
-  # One control-plane job running the identical suite twice: fast
-  # engine-independent coverage on SQLite, then against the real engine
-  # production uses, validating migrations and Postgres-specific SQL
-  # (issue #195). These used to be two parallel jobs, but the runner pool is
-  # small and queue time — not execution time — dominates PR wall clock:
-  # each job cost a runner slot, a swift-image pull, and its own full
-  # `swift build` of the same package into a separate scratch dir. Running
-  # both suites after a single build trades ~3 minutes of in-job serialism
-  # for a whole runner slot and a duplicate ~5-minute build, which under
-  # contention saved 20-40 minutes of queueing.
+  # Control-plane build + test against Postgres — the engine production uses,
+  # validating migrations and Postgres-specific SQL (issue #195). The suite
+  # used to also run a second leg on SQLite, but nothing used the SQLite
+  # backend (local runs are Postgres too now) and the leg took 4-8 minutes to
+  # the Postgres leg's ~1 (file-backed SQLite fsyncs on overlayfs vs a
+  # durability-off tmpfs Postgres), so it was removed along with the backend.
   test-control-plane:
     name: Test Control Plane
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    # Backstop for a hung build/test (see the test job above); this job runs
-    # the suite twice, so give it more headroom for a cold build.
-    timeout-minutes: 75
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: strato_test
-          POSTGRES_USER: strato
-          POSTGRES_PASSWORD: strato_password
-        # With no job container the job doesn't share a Docker network with
-        # the service, so the port must be published. The dind daemon shares
-        # the runner pod's network namespace, which puts the published port on
-        # the pod's loopback.
-        ports:
-          - 5432:5432
-        # The test databases are schema-only (no seed data), so the in-RAM data
-        # dir costs negligible memory against the 8Gi pod while removing the
-        # overlay-FS copy cost of each CREATE DATABASE ... TEMPLATE clone.
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-          --tmpfs /var/lib/postgresql/data:rw
+    # Backstop for a hung build/test (see the test job above).
+    timeout-minutes: 60
+    # Postgres is deliberately NOT a `services:` container. Service containers
+    # are pulled and started in `Initialize containers`, before checkout — ~90s
+    # (42s pull into the empty dind image store, 30s create/start, 15s of
+    # health polling) charged up front even though nothing connects until the
+    # test step ~20 minutes later. Starting it ourselves in the background
+    # right after checkout overlaps all of that with the Swift build.
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -339,6 +383,30 @@ jobs:
             fi
           fi
 
+      # Kick off the pull+boot and move on: the build below takes ~20 minutes,
+      # so by the time "Wait for Postgres" runs the server has long been up.
+      # nohup + & detaches it from this step's shell; the runner does not reap
+      # background processes between steps. Published on the pod loopback (the
+      # dind daemon shares the runner pod's network namespace), matching the
+      # DATABASE_HOST/PORT the test step passes.
+      #
+      # The test databases are schema-only (no seed data), so the in-RAM data
+      # dir costs negligible memory against the 8Gi pod while removing the
+      # overlay-FS copy cost of each CREATE DATABASE ... TEMPLATE clone.
+      - name: Start Postgres
+        run: |
+          nohup bash -c '
+            docker rm -f strato-ci-postgres >/dev/null 2>&1 || true
+            docker pull postgres:15
+            docker run -d --name strato-ci-postgres \
+              -p 5432:5432 \
+              --tmpfs /var/lib/postgresql/data:rw \
+              -e POSTGRES_DB=strato_test \
+              -e POSTGRES_USER=strato \
+              -e POSTGRES_PASSWORD=strato_password \
+              postgres:15
+          ' > "$RUNNER_TEMP/postgres-start.log" 2>&1 &
+
       # The write-time guardrail check and the role-nesting subsumption proof
       # (#484) skip themselves without a solver, which would leave them
       # silently covering nothing.
@@ -351,32 +419,55 @@ jobs:
           ./scripts/install-cvc5.sh "$RUNNER_TEMP/bin"
           echo "IAM_SYMCC_SOLVER_PATH=$RUNNER_TEMP/bin/cvc5" >> "$GITHUB_ENV"
 
+      # See the identical step in the `test` job: probe the shared cache mount
+      # and fall back to a pod-local (cold) directory when it is absent, so a
+      # missing /cache/swiftpm degrades instead of failing the build.
+      - name: Resolve SwiftPM shared cache path
+        run: |
+          shared=/cache/swiftpm
+          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+            echo "using shared SwiftPM cache at $shared"
+            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+          else
+            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+            mkdir -p "$fallback"
+            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+          fi
+
       - name: Build Control Plane
         id: build-cp
         working-directory: control-plane
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
-      - name: Test Control Plane (SQLite)
+      # Normally a no-op: the background start above had the whole build to
+      # finish. The generous budget only matters when the registry is slow —
+      # one pull took 6.5 minutes on 2026-07-21.
+      - name: Wait for Postgres
+        run: |
+          for _ in $(seq 1 300); do
+            if docker exec strato-ci-postgres pg_isready -U strato -d strato_test >/dev/null 2>&1; then
+              echo "postgres is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready; start log:"
+          cat "$RUNNER_TEMP/postgres-start.log" || true
+          docker logs strato-ci-postgres 2>&1 | tail -50 || true
+          exit 1
+
+      - name: Test Control Plane
         working-directory: control-plane
         env:
-          STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --xunit-output test-results-sqlite.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-      - name: Test Control Plane (Postgres)
-        # Run even if the SQLite leg failed (but not if the build did) —
-        # Postgres-specific breakage should always be visible on the PR.
-        if: ${{ !cancelled() && steps.build-cp.outcome == 'success' }}
-        working-directory: control-plane
-        env:
-          STRATO_TEST_DATABASE: postgres
-          # This Postgres is the ephemeral Actions service defined below and is
-          # torn down with the job, so the harness may disable durability
+          # This Postgres is the throwaway container started above and dies with
+          # the runner pod, so the harness may disable durability
           # (fsync/synchronous_commit/full_page_writes) for faster clones. Never
           # set this against a persistent cluster — the tuning is cluster-wide.
           STRATO_TEST_DISPOSABLE_POSTGRES: "1"
-          # The service publishes 5432 to the runner pod (see the `ports`
-          # mapping above). 127.0.0.1 rather than localhost: docker publishes
-          # on IPv4, and localhost can resolve to ::1 first.
+          # The container publishes 5432 to the runner pod. 127.0.0.1 rather
+          # than localhost: docker publishes on IPv4, and localhost can resolve
+          # to ::1 first.
           DATABASE_HOST: 127.0.0.1
           DATABASE_PORT: 5432
           DATABASE_NAME: strato_test
@@ -386,9 +477,9 @@ jobs:
         # (1 pooled connection per loop), and per-test database clones are
         # minted through one serialized admin connection — see
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
-        # stays far under Postgres's default max_connections=100. This leg
+        # stays far under Postgres's default max_connections=100. This
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --xunit-output test-results-postgres.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
       # since the raw job log is dominated by per-request debug output.
@@ -397,8 +488,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: control-plane-test-results
-          path: control-plane/test-results-*.xml
+          path: control-plane/test-results*.xml
           if-no-files-found: warn
+
+      # The runner pod (and its dind sidecar) is ephemeral, so this is belt and
+      # braces against a reused runner leaving a stale container on :5432.
+      - name: Stop Postgres
+        if: always()
+        run: docker rm -f strato-ci-postgres || true
 
   test-agent-macos:
     name: Build & Test Agent (macOS)

@@ -130,13 +130,27 @@ enum IAMAuthorizer {
             return denial
         }
 
+        // Grants for roles the compiled schema doesn't declare are dropped
+        // (under-grant) — a role created or deleted since this replica's last
+        // rebuild. Transient by design (the version nudge or 30s re-read
+        // converges it), but worth a trace when it happens.
+        let droppedRoleIDs = slice.grants.roleIDs.subtracting(built.roleIDs)
+        if !droppedRoleIDs.isEmpty {
+            app.logger.info(
+                "IAM check dropped grants for roles the compiled policy set does not know yet",
+                metadata: [
+                    "role_ids": .string(droppedRoleIDs.map(\.uuidString).sorted().joined(separator: ",")),
+                    "policy_version": .stringConvertible(built.version),
+                ])
+        }
+
         let decision: CedarCheckDecision
         do {
             decision = try await built.artifact.authorize(
                 principal: slice.principal,
                 action: action,
                 resource: slice.resource,
-                context: slice.baseContextValue,
+                context: slice.baseContextValue(roleIDs: built.roleIDs),
                 entitiesJSON: slice.entitiesJSON())
         } catch {
             app.logger.error(

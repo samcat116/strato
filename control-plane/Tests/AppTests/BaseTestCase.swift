@@ -1,12 +1,11 @@
 import Testing
 import Vapor
 import Fluent
-import FluentSQLiteDriver
 import VaporTesting
 @testable import App
 
-/// Base test case that provides common test infrastructure
-/// Uses in-memory SQLite database for each test
+/// Base test case that provides common test infrastructure.
+/// Each test runs against its own clone of the migrated template database.
 class BaseTestCase {
     // Common test data
     var testUser: User!

@@ -52,9 +52,9 @@ final class IAMPolicySetVersionTests {
         try await withApp { app in
             let start = try await PolicySetVersionService.current(on: app.db)
 
-            // Serialized rather than truly parallel: SQLite is single-writer, so
-            // this covers the allocator's arithmetic, and the uniqueness
-            // constraint plus the retry loop covers the real race in Postgres.
+            // Serialized rather than truly parallel: this covers the
+            // allocator's arithmetic, and the uniqueness constraint plus the
+            // retry loop covers the real concurrent race.
             var versions: [Int] = []
             for index in 1...5 {
                 versions.append(
@@ -136,23 +136,24 @@ final class IAMPolicySetVersionTests {
         try await withApp { app in
             let before = try await PolicySetVersionService.current(on: app.db)
 
-            // Simulate the tables drifting from the code-side registry, which is
+            // Simulate the store drifting from the code-side registry, which is
             // what a deploy carrying a registry change looks like to the sync.
-            try await IAMRoleAction.query(on: app.db)
-                .filter(\.$role == IAMRole.viewer.rawValue)
-                .filter(\.$action == "vm:read")
-                .delete()
+            guard let viewer = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db) else {
+                Issue.record("seeded viewer row missing")
+                return
+            }
+            viewer.actions = viewer.actions.filter { $0 != "vm:read" }
+            viewer.cedarText = ""
+            try await viewer.save(on: app.db)
 
             try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
 
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(after == before + 1)
 
-            let restored = try await IAMRoleAction.query(on: app.db)
-                .filter(\.$role == IAMRole.viewer.rawValue)
-                .filter(\.$action == "vm:read")
-                .count()
-            #expect(restored == 1)
+            let restored = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db)
+            #expect(restored?.actions.contains("vm:read") == true)
+            #expect(restored?.cedarText.isEmpty == false)
         }
     }
 

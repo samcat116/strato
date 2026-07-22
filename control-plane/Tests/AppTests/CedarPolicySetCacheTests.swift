@@ -51,6 +51,61 @@ final class CedarPolicySetCacheTests {
         }
     }
 
+    @Test("Role rows compile into the set and Built carries their ids")
+    func roleRowsCompile() async throws {
+        try await withApp { app in
+            // Boot seeded the four defaults; add a user-created role the way
+            // the role API will (issue #605).
+            let custom = IAMRoleDefinition(
+                name: "auditor",
+                ownerType: .organization,
+                ownerID: UUID(),
+                cedarText: "",
+                actions: ["vm:read"]
+            )
+            custom.id = UUID()
+            custom.cedarText = RoleDescriptor.canonicalPermitText(id: custom.id!, actions: ["vm:read"])
+            try await custom.create(on: app.db)
+
+            let cache = CedarPolicySetCache(logger: app.logger)
+            await cache.rebuild(version: 1, on: app.db)
+
+            let built = await cache.current
+            #expect(built?.roleIDs == Set(IAMRole.allCases.map(\.seededID) + [custom.id!]))
+            #expect(built?.skippedRolePolicies.isEmpty == true)
+            #expect(built?.policyText.contains(RoleDescriptor.policyID(custom.id!)) == true)
+            #expect(built?.schemaText.contains(RoleDescriptor.grantsUsersField(custom.id!)) == true)
+        }
+    }
+
+    @Test("A role row with broken Cedar is skipped alone; the rest of the set still compiles")
+    func brokenRoleRowSkipped() async throws {
+        try await withApp { app in
+            let broken = IAMRoleDefinition(
+                name: "broken",
+                ownerType: .organization,
+                ownerID: UUID(),
+                // An action the registry (and so the schema) does not know:
+                // the shape an upgrade that drops an action leaves behind.
+                cedarText: #"permit (principal, action == Action::"no:such-action", resource);"#,
+                actions: ["no:such-action"]
+            )
+            try await broken.create(on: app.db)
+
+            let cache = CedarPolicySetCache(logger: app.logger)
+            await cache.rebuild(version: 1, on: app.db)
+
+            let built = await cache.current
+            #expect(built != nil, "one bad row must not fail the whole build")
+            #expect(built?.skippedRolePolicies.map(\.id) == [broken.id!])
+            // Its grants fields stay declared (the row exists; it grants
+            // nothing), and the seeded roles still compiled.
+            #expect(built?.roleIDs.contains(broken.id!) == true)
+            #expect(built?.policyText.contains(RoleDescriptor.policyID(broken.id!)) == false)
+            #expect(built?.policyText.contains(RoleDescriptor.policyID(IAMRole.admin.seededID)) == true)
+        }
+    }
+
     @Test("Enabled guardrails compile into the set; disabled ones stay out")
     func guardrailsCompile() async throws {
         try await withApp { app in
