@@ -155,6 +155,50 @@ struct VMSpecTests {
         #expect(decoded.maxMemoryBytes == 1_073_741_824)
     }
 
+    // MARK: - Balloon targets (issue #567 phase 2)
+
+    @Test func balloonTargetRoundTrip() throws {
+        let spec = VMSpec(
+            cpus: 2, memoryBytes: 4_294_967_296, balloonTargetBytes: 2_147_483_648,
+            boot: .disk(firmware: nil))
+        let decoded = try roundTrip(spec)
+        #expect(decoded.balloonTargetBytes == 2_147_483_648)
+    }
+
+    /// No target is the default and means "guest keeps its whole grant" — the
+    /// state every VM was in before the field existed.
+    @Test func balloonTargetDefaultsToNil() throws {
+        let spec = VMSpec(cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil))
+        #expect(spec.balloonTargetBytes == nil)
+    }
+
+    /// A balloon can only take memory away, never hand out more than the
+    /// grant, so a target above `memoryBytes` clamps rather than encoding an
+    /// instruction the agent could not carry out.
+    @Test func balloonTargetAboveMemoryClamps() throws {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, balloonTargetBytes: 1_073_741_824,
+            boot: .disk(firmware: nil))
+        #expect(spec.balloonTargetBytes == 268_435_456)
+        let json = """
+            {"cpus":1,"maxCpus":1,"memoryBytes":268435456,"balloonTargetBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        #expect(try decodeJSON(VMSpec.self, from: json).balloonTargetBytes == 268_435_456)
+    }
+
+    /// A spec from a control plane that predates `balloonTargetBytes` has no
+    /// such key; a new agent must read it as "no target" rather than failing
+    /// the sync (rolling-upgrade skew).
+    @Test func specWithoutBalloonTargetKeyDecodesToNil() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
+             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        let decoded = try decodeJSON(VMSpec.self, from: json)
+        #expect(decoded.balloonTargetBytes == nil)
+    }
+
     @Test func userDataRoundTrip() throws {
         let payload = "#cloud-config\npackages:\n  - nginx\n"
         let spec = VMSpec(

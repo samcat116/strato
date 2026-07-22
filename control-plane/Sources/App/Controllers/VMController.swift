@@ -866,13 +866,37 @@ struct VMController: RouteCollection {
         let user = try req.auth.require(User.self)
         let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
-        struct UpdateVMRequest: Content {
+        // Decodable rather than Content: `balloonTarget` needs to tell an
+        // absent key from an explicit null, which needs a hand-written decode,
+        // and Content's Encodable half has nothing to encode here.
+        struct UpdateVMRequest: Decodable {
             let name: String?
             let description: String?
             /// Target boot vCPU count (issue #568).
             let cpu: Int?
             /// Target memory in bytes (issue #568).
             let memory: Int64?
+            /// Operator balloon target in bytes (issue #567 phase 2), doubly
+            /// optional so the two ways of "not a number" stay distinct:
+            /// `.none` (key absent) leaves the current target alone, while
+            /// `.some(nil)` (explicit null) clears it and hands the guest its
+            /// whole grant back.
+            let balloonTarget: Int64??
+
+            enum CodingKeys: String, CodingKey {
+                case name, description, cpu, memory, balloonTarget
+            }
+
+            init(from decoder: any Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                name = try c.decodeIfPresent(String.self, forKey: .name)
+                description = try c.decodeIfPresent(String.self, forKey: .description)
+                cpu = try c.decodeIfPresent(Int.self, forKey: .cpu)
+                memory = try c.decodeIfPresent(Int64.self, forKey: .memory)
+                balloonTarget =
+                    c.contains(.balloonTarget)
+                    ? .some(try c.decodeIfPresent(Int64.self, forKey: .balloonTarget)) : .none
+            }
         }
 
         let updateRequest = try req.content.decode(UpdateVMRequest.self)
@@ -887,7 +911,9 @@ struct VMController: RouteCollection {
 
         let newCPU = updateRequest.cpu ?? existingVM.cpu
         let newMemory = updateRequest.memory ?? existingVM.memory
-        guard newCPU != existingVM.cpu || newMemory != existingVM.memory else {
+        let newBalloonTarget = updateRequest.balloonTarget ?? existingVM.balloonTarget
+        let balloonChanged = newBalloonTarget != existingVM.balloonTarget
+        guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
             try await existingVM.save(on: req.db)
             return try await Self.detailResponse(for: existingVM, on: req)
         }
@@ -896,6 +922,25 @@ struct VMController: RouteCollection {
         guard newMemory > 0 else { throw Abort(.badRequest, reason: "'memory' must be positive") }
         guard newCPU <= Self.maxHotpluggableCPUs else {
             throw Abort(.badRequest, reason: "'cpu' must not exceed \(Self.maxHotpluggableCPUs)")
+        }
+        if let target = newBalloonTarget {
+            // A target is a reclaim floor within the grant, so it is bounded
+            // by the memory the VM will have — growing a guest is `memory`,
+            // not the balloon. The lower bound is the guard the issue calls
+            // for: a target small enough to OOM the guest is a mistake the
+            // API can catch, not a policy it should let through.
+            guard target <= newMemory else {
+                throw Abort(
+                    .badRequest,
+                    reason: "'balloonTarget' must not exceed the VM's memory (\(newMemory) bytes); "
+                        + "raise 'memory' to give the guest more")
+            }
+            guard target >= Self.minimumBalloonTargetBytes else {
+                throw Abort(
+                    .badRequest,
+                    reason: "'balloonTarget' must be at least \(Self.minimumBalloonTargetBytes) bytes; "
+                        + "a smaller target would leave the guest too little memory to stay alive")
+            }
         }
 
         guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
@@ -920,6 +965,7 @@ struct VMController: RouteCollection {
                     vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
                 existingVM.cpu = newCPU
                 existingVM.memory = newMemory
+                existingVM.balloonTarget = newBalloonTarget
                 existingVM.maxCpu = max(existingVM.maxCpu, newCPU)
                 existingVM.maxMemory = max(existingVM.maxMemory, newMemory)
                 // The stopped VM still has a desired-state entry the agent
@@ -945,10 +991,22 @@ struct VMController: RouteCollection {
                 reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
                     + "restart it to grow beyond that")
         }
-        guard await Self.agentSupportsOnlineResize(vm: existingVM, app: req.application) else {
-            throw Abort(
-                .unprocessableEntity,
-                reason: "This VM's agent is too old to resize a running VM; restart the VM to apply a new size")
+        if newCPU != existingVM.cpu || newMemory != existingVM.memory {
+            guard await Self.agentSupportsOnlineResize(vm: existingVM, app: req.application) else {
+                throw Abort(
+                    .unprocessableEntity,
+                    reason: "This VM's agent is too old to resize a running VM; restart the VM to apply a new size")
+            }
+        }
+        if balloonChanged {
+            // No "restart to apply" remedy to offer here, unlike a resize: a
+            // balloon target only exists on a running guest, so an agent that
+            // ignores the field can't realize it at any later point either.
+            guard await Self.agentSupportsBalloonTarget(vm: existingVM, app: req.application) else {
+                throw Abort(
+                    .unprocessableEntity,
+                    reason: "This VM's agent is too old to set a memory balloon target; upgrade the agent")
+            }
         }
 
         let operation = try await beginOperation(.resize, vm: existingVM, user: user, on: req.db) { @Sendable db in
@@ -957,6 +1015,11 @@ struct VMController: RouteCollection {
                 vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
             existingVM.cpu = newCPU
             existingVM.memory = newMemory
+            // Deliberately not a quota movement: ballooning reclaims memory
+            // opportunistically, the grant the project is charged for is
+            // still committed, and the guest takes it all back the moment the
+            // target is cleared.
+            existingVM.balloonTarget = newBalloonTarget
             // Desired status is unchanged — this is a spec change — but the
             // generation must still advance for the agent to apply it.
             existingVM.bumpGeneration()
@@ -971,6 +1034,12 @@ struct VMController: RouteCollection {
     /// that a mistyped ceiling can't produce an unbootable machine.
     static let maxHotpluggableCPUs = 512
 
+    /// Floor on an operator's balloon target (issue #567 phase 2). A guest
+    /// squeezed below this has no realistic chance of staying up — the point
+    /// where a mis-sized target stops being aggressive and starts being an
+    /// OOM — so the API refuses it rather than reclaiming a guest to death.
+    static let minimumBalloonTargetBytes: Int64 = 128 * 1024 * 1024
+
     /// Whether the VM's agent speaks the reconciler resize step. A pre-v17
     /// agent reports the bumped generation as converged without touching the
     /// guest, so the operation would succeed having changed nothing.
@@ -979,6 +1048,16 @@ struct VMController: RouteCollection {
             let agent = await app.agentService.getAgentInfo(agentId)
         else { return false }
         return WireProtocol.supportsVMResize(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// Whether the VM's agent realizes `VMSpec.balloonTargetBytes`. A pre-v19
+    /// agent reports the bumped generation as converged without touching the
+    /// balloon, so the operation would succeed having reclaimed nothing.
+    private static func agentSupportsBalloonTarget(vm: VM, app: Application) async -> Bool {
+        guard let agentId = vm.hypervisorId,
+            let agent = await app.agentService.getAgentInfo(agentId)
+        else { return false }
+        return WireProtocol.supportsBalloonTarget(agent.wireProtocolVersion ?? 0)
     }
 
     /// The VM detail DTO with its NIC children loaded. The DTO, not the model:

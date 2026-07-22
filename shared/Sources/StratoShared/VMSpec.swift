@@ -24,6 +24,18 @@ public struct VMSpec: Codable, Sendable {
     /// planes that predate the field (issue #568); consumers treat nil as
     /// `memoryBytes`.
     public let maxMemoryBytes: Int64
+    /// Memory the guest may keep, in bytes, when an operator has asked for
+    /// some of its grant back (issue #567 phase 2). Realized by inflating the
+    /// VM's virtio-balloon device to `memoryBytes - balloonTargetBytes`, which
+    /// lets the host reclaim the difference while the grant — and so the
+    /// quota and scheduler reservation — stays exactly as committed.
+    ///
+    /// Nil means no target: the balloon stays deflated and the guest keeps
+    /// everything, which is also what control planes predating the field
+    /// imply. Always at most `memoryBytes`; ballooning cannot hand a guest
+    /// more memory than it was granted (that is `maxMemoryBytes` and
+    /// virtio-mem).
+    public let balloonTargetBytes: Int64?
     /// Disk requirement in bytes — the figure the scheduler gated placement on
     /// (`vm.disk`), carried so agents can account committed disk without
     /// deriving it from volumes (which don't carry sizes). Nil from control
@@ -63,6 +75,7 @@ public struct VMSpec: Codable, Sendable {
         maxCpus: Int? = nil,
         memoryBytes: Int64,
         maxMemoryBytes: Int64? = nil,
+        balloonTargetBytes: Int64? = nil,
         diskBytes: Int64? = nil,
         sharedMemory: Bool = false,
         hugepages: Bool = false,
@@ -78,6 +91,7 @@ public struct VMSpec: Codable, Sendable {
         self.maxCpus = maxCpus ?? cpus
         self.memoryBytes = memoryBytes
         self.maxMemoryBytes = max(maxMemoryBytes ?? memoryBytes, memoryBytes)
+        self.balloonTargetBytes = balloonTargetBytes.map { min($0, memoryBytes) }
         self.diskBytes = diskBytes
         self.sharedMemory = sharedMemory
         self.hugepages = hugepages
@@ -95,7 +109,7 @@ public struct VMSpec: Codable, Sendable {
     public var effectiveMachine: MachineProfile { machine ?? .default }
 
     // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `maxMemoryBytes`,
-    // `machine`, and `userData` tolerate absence: a spec produced by an older
+    // `balloonTargetBytes`, `machine`, and `userData` tolerate absence: a spec produced by an older
     // control plane (before these fields existed) decodes to []/nil rather
     // than throwing, keeping
     // agent↔control-plane compatible across version skew. `encode(to:)` stays
@@ -108,6 +122,11 @@ public struct VMSpec: Codable, Sendable {
         memoryBytes = try c.decode(Int64.self, forKey: .memoryBytes)
         maxMemoryBytes = max(
             try c.decodeIfPresent(Int64.self, forKey: .maxMemoryBytes) ?? memoryBytes, memoryBytes)
+        if let requestedBalloonTarget = try c.decodeIfPresent(Int64.self, forKey: .balloonTargetBytes) {
+            balloonTargetBytes = min(requestedBalloonTarget, memoryBytes)
+        } else {
+            balloonTargetBytes = nil
+        }
         diskBytes = try c.decodeIfPresent(Int64.self, forKey: .diskBytes)
         sharedMemory = try c.decode(Bool.self, forKey: .sharedMemory)
         hugepages = try c.decode(Bool.self, forKey: .hugepages)

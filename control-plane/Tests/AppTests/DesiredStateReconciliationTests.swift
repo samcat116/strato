@@ -746,7 +746,8 @@ final class DesiredStateReconciliationTests {
                     ObservedVMState(
                         vmId: vm.id!, status: .running, observedGeneration: 1,
                         memoryStats: VMMemoryStats(
-                            totalBytes: 8_254_390_272, availableBytes: 6_442_450_944))
+                            totalBytes: 8_254_390_272, availableBytes: 6_442_450_944,
+                            balloonActualBytes: 8_589_934_592))
                 ]
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
@@ -754,6 +755,7 @@ final class DesiredStateReconciliationTests {
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(refreshed.guestMemoryTotalBytes == 8_254_390_272)
             #expect(refreshed.guestMemoryAvailableBytes == 6_442_450_944)
+            #expect(refreshed.guestMemoryBalloonActualBytes == 8_589_934_592)
             #expect(refreshed.guestMemoryStatsAt != nil)
         }
     }
@@ -791,6 +793,7 @@ final class DesiredStateReconciliationTests {
             refreshed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(refreshed.guestMemoryTotalBytes == nil)
             #expect(refreshed.guestMemoryAvailableBytes == nil)
+            #expect(refreshed.guestMemoryBalloonActualBytes == nil)
             #expect(refreshed.guestMemoryStatsAt == nil)
         }
     }

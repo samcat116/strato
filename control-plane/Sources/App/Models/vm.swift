@@ -70,6 +70,23 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "guest_memory_stats_at")
     var guestMemoryStatsAt: Date?
 
+    // Observed balloon size — `query-balloon`'s `actual`, the memory the
+    // balloon currently leaves the guest (issue #567 phase 2). Unlike the two
+    // above this comes from QEMU rather than the guest driver, and it is what
+    // says whether a `balloonTarget` was actually reached: it converges toward
+    // the target as the guest hands pages back.
+    @OptionalField(key: "guest_memory_balloon_actual_bytes")
+    var guestMemoryBalloonActualBytes: Int64?
+
+    /// Operator-requested memory ceiling for the running guest, in bytes
+    /// (issue #567 phase 2). Nil — the default — means no ballooning: the
+    /// guest keeps its whole `memory` grant. Setting it inflates the VM's
+    /// virtio-balloon so the host can reclaim the difference; it deliberately
+    /// does *not* change `memory`, so the quota charge and the scheduler's
+    /// reservation stay at what was committed. Always at most `memory`.
+    @OptionalField(key: "balloon_target")
+    var balloonTarget: Int64?
+
     @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
@@ -402,6 +419,13 @@ struct VMDetailResponse: Content {
     let guestMemoryUsedBytes: Int64?
     let guestMemoryUsedFormatted: String?
     let guestMemoryStatsAt: Date?
+    /// Balloon target (issue #567 phase 2): `balloonTarget` is what an
+    /// operator asked the guest to be held to, `guestMemoryBalloonActualBytes`
+    /// is what the balloon has actually reached. Both nil on a VM with no
+    /// target set; while a target is being applied the actual sits above it.
+    let balloonTarget: Int64?
+    let balloonTargetFormatted: String?
+    let guestMemoryBalloonActualBytes: Int64?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -441,6 +465,9 @@ struct VMDetailResponse: Content {
             self.guestMemoryUsedFormatted = nil
         }
         self.guestMemoryStatsAt = vm.guestMemoryStatsAt
+        self.balloonTarget = vm.balloonTarget
+        self.balloonTargetFormatted = vm.balloonTarget.map(VMDetailResponse.formatSize)
+        self.guestMemoryBalloonActualBytes = vm.guestMemoryBalloonActualBytes
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
     }

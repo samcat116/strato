@@ -33,13 +33,15 @@ struct ReconciliationTests {
         status: DesiredVMStatus = .running,
         generation: Int64 = 1,
         cpus: Int,
-        memoryBytes: Int64 = 1 << 30
+        memoryBytes: Int64 = 1 << 30,
+        balloonTargetBytes: Int64? = nil
     ) -> DesiredVMState {
         DesiredVMState(
             vmId: vmId,
             hypervisorType: .qemu,
             spec: VMSpec(
                 cpus: cpus, maxCpus: 8, memoryBytes: memoryBytes, maxMemoryBytes: 8 << 30,
+                balloonTargetBytes: balloonTargetBytes,
                 boot: .disk(firmware: nil)),
             desiredStatus: status,
             generation: generation
@@ -477,6 +479,50 @@ struct ReconciliationTests {
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 2],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.isEmpty)
+    }
+
+    // MARK: - Balloon targets (issue #567 phase 2)
+
+    @Test("Setting a balloon target on a running VM plans a resize")
+    func planResizesForNewBalloonTarget() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, balloonTargetBytes: 512 << 20)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+        #expect(items.map(\.steps) == [[.resize]])
+    }
+
+    /// Clearing a target is a real convergence step — the balloon has to
+    /// deflate — not the same as never having had one.
+    @Test("Clearing a balloon target on a running VM plans a resize")
+    func planResizesWhenBalloonTargetCleared() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [
+                vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
+            ]
+        )
+        #expect(items.map(\.steps) == [[.resize]])
+    }
+
+    @Test("A balloon target already applied plans nothing")
+    func planSkipsResizeWhenBalloonTargetMatches() {
+        let vmId = UUID()
+        let items = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, balloonTargetBytes: 512 << 20)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 2],
+            presentSizing: [
+                vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
+            ]
         )
         #expect(items.isEmpty)
     }

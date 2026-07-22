@@ -253,7 +253,33 @@ connects per probe, negotiates the greeting/`qmp_capabilities` handshake,
 and collects the stats. The same guest-info slow poll caches the result as
 `VMMemoryStats`, attached to each `ObservedVMState` (wire v16). Guests
 without the driver, or not yet reporting (`last-update == 0`, `-1`
-sentinels), yield nil — never a fabricated zero.
+sentinels), yield nil — never a fabricated zero. The same probe also reads
+`query-balloon`'s `actual` on that open channel (issue #567 phase 2) — QEMU's
+own view of how much memory the balloon currently leaves the guest, reported
+even when the guest driver never binds.
+
+### Operator balloon targets
+
+An operator can ask a running guest to give memory back: `VMSpec.balloonTargetBytes`
+(wire v19) names the memory the guest may keep, and the agent inflates the
+balloon to the difference with QMP `balloon <target>`. The grant itself does
+not move — the quota charge and the scheduler's reservation stay at what was
+committed — so this is reclaim, not resize; growing a guest is still
+`memoryBytes` and virtio-mem.
+
+Like a resize this is declarative, and it rides the same `.resize` step:
+`VMSizing` carries the applied target alongside cpus/memory, so a spec whose
+target differs plans convergence. Two things it does *not* share with a
+resize:
+
+- A fresh QEMU process starts with a fully deflated balloon, so `bootVM`
+  re-applies a spec's target after start. The reconciler cannot see that
+  difference on its own — its notion of applied sizing is the spec the VM was
+  created with.
+- The request is not the outcome. A guest hands pages back asynchronously and
+  a guest under pressure may hand back fewer than asked, so the agent logs a
+  failed request rather than failing convergence, and `balloonActualBytes` on
+  the next stats poll is what says whether the memory actually came back.
 
 ## CPU/memory hot-add (resize without a reboot)
 

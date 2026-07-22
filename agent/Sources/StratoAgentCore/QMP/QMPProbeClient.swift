@@ -57,6 +57,9 @@ public actor QMPProbeClient {
     /// `balloonPath` (a VM created before the device was attached) or the
     /// guest's virtio_balloon driver hasn't reported yet (stats are `-1`
     /// until the first guest update). Throws only for channel-level failures.
+    ///
+    /// Also carries `query-balloon`'s `actual` (issue #567 phase 2) when QEMU
+    /// answers, since the same open channel already serves the guest stats.
     public func collectMemoryStats(
         balloonPath: String = "/machine/peripheral/balloon0",
         pollingIntervalSeconds: Int = 10
@@ -98,11 +101,43 @@ public actor QMPProbeClient {
                 let available = reply.stats["stat-available-memory"] ?? nil
             else { return nil }
 
+            // The host's own view of the balloon (issue #567 phase 2), read on
+            // the same channel rather than a second probe. Best-effort: a
+            // failure here must not lose the guest stats we already have.
+            let actual = try? await self.command(
+                channel, framer, execute: "query-balloon",
+                arguments: QMPProbe.NoArguments?.none, as: QMPProbe.BalloonInfo.self)
+
             return VMMemoryStats(
                 totalBytes: total,
                 availableBytes: available,
-                freeBytes: reply.stats["stat-free-memory"] ?? nil
+                freeBytes: reply.stats["stat-free-memory"] ?? nil,
+                balloonActualBytes: actual?.actual
             )
+        }
+    }
+
+    // MARK: - Balloon targets (issue #567 phase 2)
+
+    /// Asks the VM's virtio-balloon device to leave the guest `bytes` of
+    /// memory, inflating (or deflating) the balloon by the difference from
+    /// its memory grant so the host can reclaim what the guest gives back.
+    ///
+    /// Returns as soon as QEMU accepts the request: the guest's driver hands
+    /// pages over asynchronously, and a guest under pressure may hand over
+    /// fewer than asked. The reached figure is `query-balloon`'s `actual`,
+    /// reported on the next stats poll — this is a request, not a guarantee.
+    ///
+    /// Throws `commandError` when the VM has no balloon device (created
+    /// before issue #567), which callers surface as a target that needs a
+    /// restart to take effect rather than silently doing nothing.
+    public func setBalloonTarget(bytes: Int64) async throws {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            _ = try await self.command(
+                channel, framer, execute: "balloon",
+                arguments: QMPProbe.BalloonArguments(value: bytes),
+                as: QMPProbe.Empty.self)
         }
     }
 
@@ -380,6 +415,17 @@ enum QMPProbe {
     struct QOMGetArguments: Encodable {
         let path: String
         let property: String
+    }
+
+    /// `balloon` arguments: the memory, in bytes, the guest is left with.
+    struct BalloonArguments: Encodable {
+        let value: Int64
+    }
+
+    /// `query-balloon` → `{"actual": N}`, the balloon's current view of how
+    /// much memory the guest holds.
+    struct BalloonInfo: Decodable {
+        let actual: Int64
     }
 
     /// `qom-get guest-stats` → `{"stats": {"stat-total-memory": N, ...},
