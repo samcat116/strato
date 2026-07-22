@@ -122,22 +122,28 @@ struct ServiceAccountController: RouteCollection {
 
         let account = ServiceAccount(name: name, description: body.description ?? "", projectID: projectID)
         let actorID = req.auth.get(User.self)?.id
-        try await req.db.transaction { db in
-            try await account.save(on: db)
-            // The creator's explicit, revocable binding on the account, in
-            // the create transaction (docs/architecture/iam.md: creating a
-            // resource writes an ordinary binding for the creator).
-            if let actorID {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: actorID,
-                    role: .admin,
-                    nodeType: .serviceAccount,
-                    nodeID: account.requireID(),
-                    createdBy: actorID,
-                    on: db
-                )
+        do {
+            try await req.db.transaction { db in
+                try await account.save(on: db)
+                // The creator's explicit, revocable binding on the account, in
+                // the create transaction (docs/architecture/iam.md: creating a
+                // resource writes an ordinary binding for the creator).
+                if let actorID {
+                    try await RoleBindingService.grant(
+                        principalType: .user,
+                        principalID: actorID,
+                        role: .admin,
+                        nodeType: .serviceAccount,
+                        nodeID: account.requireID(),
+                        createdBy: actorID,
+                        on: db
+                    )
+                }
             }
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            // A concurrent create won the (project, name) uniqueness race
+            // after our pre-check; same answer as losing the pre-check.
+            throw Abort(.conflict, reason: "A service account with this name already exists in the project")
         }
 
         let payload = try response(account, id: account.requireID(), projectID: projectID, projectRoles: [])
@@ -187,11 +193,8 @@ struct ServiceAccountController: RouteCollection {
             // held bindings behind would let a recreated principal id (never,
             // with UUIDs, but the offboarding rule stands) inherit them.
             try await RoleBindingService.revokeAll(nodeType: .serviceAccount, nodeID: accountID, on: db)
-            for binding in try await RoleBindingService.activeBindings(
+            try await RoleBindingService.revokeAll(
                 principalType: .serviceAccount, principalID: accountID, on: db)
-            {
-                try await binding.delete(on: db)
-            }
             try await account.delete(on: db)
         }
         return .noContent
@@ -283,18 +286,22 @@ struct ServiceAccountController: RouteCollection {
     /// POST /api/service-accounts/:serviceAccountID/registrations — register
     /// a SPIFFE identity as authenticating to this account. The identity is a
     /// lookup key only; nothing is ever parsed out of it.
+    ///
+    /// Gated on `iam:setPolicy` on the project, not `serviceaccount:update`:
+    /// attaching an identity is what lets a workload act as the account and
+    /// inherit everything it holds — grant-shaped power, so it sits behind
+    /// the same admin-level gate as the account's role grants, out of
+    /// editor reach.
     func createRegistration(req: Request) async throws -> Response {
         let account = try await loadAccount(req)
         let accountID = try account.requireID()
-        try await req.authorize("serviceaccount:update", on: IAMNode(type: .serviceAccount, id: accountID))
+        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.$project.id))
 
         let body = try req.content.decode(CreateRegistrationRequest.self)
-        guard SPIFFEIdentity(uri: body.spiffeId) != nil else {
-            throw Abort(.badRequest, reason: "Not a valid SPIFFE URI (spiffe://<trust-domain>/<path>)")
-        }
+        let spiffeID = try WorkloadRegistry.validateRegistrable(spiffeID: body.spiffeId)
 
         let registration = WorkloadRegistration(
-            spiffeID: body.spiffeId,
+            spiffeID: spiffeID,
             kind: .serviceAccount,
             serviceAccountID: accountID,
             createdBy: req.auth.get(User.self)?.id
@@ -312,10 +319,11 @@ struct ServiceAccountController: RouteCollection {
     }
 
     /// DELETE /api/service-accounts/:serviceAccountID/registrations/:registrationID
+    /// — same grant-shaped gate as attaching one.
     func deleteRegistration(req: Request) async throws -> HTTPStatus {
         let account = try await loadAccount(req)
         let accountID = try account.requireID()
-        try await req.authorize("serviceaccount:update", on: IAMNode(type: .serviceAccount, id: accountID))
+        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.$project.id))
 
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")

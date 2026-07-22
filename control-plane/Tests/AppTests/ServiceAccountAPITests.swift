@@ -258,12 +258,43 @@ final class ServiceAccountAPITests {
                 spiffeID: "spiffe://strato.local/sa/registered", on: app.db)
             #expect(resolved == .serviceAccount(id: accountID))
 
-            // Not a SPIFFE URI → 400; an already-registered URI → 409.
+            // Not a SPIFFE URI → 400; an already-registered URI → 409; the
+            // reserved agent namespace → 400 (identity squatting on an
+            // enrolled-but-unconnected node would deny it onboarding).
             try await app.test(.POST, "/api/service-accounts/\(accountID)/registrations") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
                 try req.content.encode(SpiffeBody(spiffeId: "https://not-spiffe.example"))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
+            }
+            try await app.test(.POST, "/api/service-accounts/\(accountID)/registrations") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+                try req.content.encode(SpiffeBody(spiffeId: "spiffe://strato.local/agent/node-a"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Attaching an identity is grant-shaped: a project *editor* can
+            // update the account but may not register identities to it.
+            let builder = TestDataBuilder(db: app.db)
+            let editor = try await builder.createUser(
+                username: "spiffe-editor", email: "spiffe-editor@example.com")
+            try await builder.addUserToOrganization(user: editor, organization: env.org, role: "member")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: editor.id!, role: .editor,
+                nodeType: .project, nodeID: projectID, createdBy: nil, on: app.db)
+            let editorToken = try await editor.generateAPIKey(on: app.db)
+            try await app.test(.PATCH, "/api/service-accounts/\(accountID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
+                try req.content.encode(["description": "editors may edit"])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.POST, "/api/service-accounts/\(accountID)/registrations") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
+                try req.content.encode(SpiffeBody(spiffeId: "spiffe://strato.local/sa/editor-try"))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
             }
             try await app.test(.POST, "/api/service-accounts/\(accountID)/registrations") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
@@ -291,6 +322,53 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WorkloadRegistry.resolve(
                     spiffeID: "spiffe://strato.local/sa/registered", on: app.db) == nil)
+        }
+    }
+
+    @Test("Deleting a project sweeps its service accounts' bindings on both sides")
+    func projectDeleteSweepsServiceAccountBindings() async throws {
+        try await withApp { app in
+            let env = try await makeEnv(app, prefix: "prjdel")
+            let projectID = try env.project.requireID()
+            var accountID: UUID!
+
+            // Created via the API so the creator binding exists, then granted
+            // a project role so a held binding exists too.
+            try await app.test(.POST, "/api/projects/\(projectID)/service-accounts") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+                try req.content.encode(CreateBody(name: "doomed"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+                accountID = try res.content.decode(
+                    ServiceAccountController.ServiceAccountResponse.self
+                ).id
+            }
+            try await app.test(.PUT, "/api/service-accounts/\(accountID!)/project-role") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+                try req.content.encode(RoleBody(role: "viewer"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            try await app.test(.DELETE, "/api/projects/\(projectID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent || res.status == .ok)
+            }
+
+            // The account cascaded away with the project — and neither the
+            // creator binding on its node nor the binding it held survived.
+            #expect(try await ServiceAccount.find(accountID, on: app.db) == nil)
+            let onNode = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.serviceAccount.rawValue)
+                .filter(\.$nodeID == accountID)
+                .count()
+            let held = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.serviceAccount.rawValue)
+                .filter(\.$principalID == accountID)
+                .count()
+            #expect(onNode == 0)
+            #expect(held == 0)
         }
     }
 

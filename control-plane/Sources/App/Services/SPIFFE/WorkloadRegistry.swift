@@ -31,6 +31,31 @@ enum ResolvedWorkload: Equatable, Sendable {
 
 enum WorkloadRegistry {
 
+    /// Validate a SPIFFE URI supplied to a registration API, returning it
+    /// normalized.
+    ///
+    /// Beyond the syntax check, the reserved `/agent/<name>` namespace is
+    /// refused outright: agent identities are claimable only by
+    /// trust-on-first-use at the mTLS edge, after SPIRE has verified the
+    /// certificate. Allowing an API caller to pre-register one would let a
+    /// low-privilege principal squat on an enrolled-but-not-yet-connected
+    /// node's identity — `requireAgentRegistration` would then refuse the
+    /// genuine agent (a cross-tenant onboarding denial of service), and
+    /// nothing short of manual registry surgery would clear the row.
+    static func validateRegistrable(spiffeID: String) throws -> String {
+        guard let identity = SPIFFEIdentity(uri: spiffeID) else {
+            throw Abort(.badRequest, reason: "Not a valid SPIFFE URI (spiffe://<trust-domain>/<path>)")
+        }
+        guard !identity.isAgent else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "The /agent/ SPIFFE namespace is reserved for hypervisor agents, which register automatically when they first connect"
+            )
+        }
+        return identity.uri
+    }
+
     /// Resolve a SPIFFE URI to the principal it registers, or nil for an
     /// unregistered identity.
     static func resolve(spiffeID: String, on db: any Database) async throws -> ResolvedWorkload? {

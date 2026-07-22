@@ -263,6 +263,85 @@ final class WorkloadPrincipalTests {
         }
     }
 
+    @Test("A populated user grant set never leaks to an ungranted machine principal")
+    func principalTypeConfusionWithPopulatedGrants() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(app, prefix: "sa-confusion")
+            let user = try await builder.createUser(
+                username: "sa-confusion-user", email: "sa-confusion@example.com")
+            try await builder.addUserToOrganization(user: user, organization: tree.org, role: "member")
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: .viewer,
+                nodeType: .project,
+                nodeID: tree.project.requireID(),
+                createdBy: nil,
+                on: app.db
+            )
+            let account = ServiceAccount(name: "bystander", projectID: try tree.project.requireID())
+            try await account.save(on: app.db)
+
+            // The viewer role's Users set is now non-empty on this chain; the
+            // `is User` guard is what keeps the service account out of it.
+            let vmNode = IAMNode(type: .virtualMachine, id: try tree.vm.requireID())
+            #expect(try await authorize(app, principal: .user(user.id!), action: "vm:read", node: vmNode))
+            #expect(
+                try await authorize(
+                    app, principal: .serviceAccount(account.requireID()), action: "vm:read", node: vmNode)
+                    == false)
+        }
+    }
+
+    @Test("The compiled external-org forbid binds machine principals and spares org members")
+    func externalCeilingEnforcedByEngine() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(app, prefix: "sa-forbid")
+            let projectID = try tree.project.requireID()
+
+            // Both principals hold editor on the project…
+            let member = try await builder.createUser(
+                username: "sa-forbid-user", email: "sa-forbid@example.com")
+            try await builder.addUserToOrganization(user: member, organization: tree.org, role: "member")
+            let account = ServiceAccount(name: "forbidden", projectID: projectID)
+            try await account.save(on: app.db)
+            for principal in [IAMPrincipal.user(member.id!), .serviceAccount(try account.requireID())] {
+                try await RoleBindingService.grant(
+                    principalType: principal.type,
+                    principalID: principal.id,
+                    role: .editor,
+                    nodeType: .project,
+                    nodeID: projectID,
+                    createdBy: nil,
+                    on: app.db
+                )
+            }
+
+            // …and an external-principal ceiling lands on the org. Compile it
+            // into the live policy set the way boot does.
+            _ = try await GuardrailStore.create(
+                name: "no-external", description: nil, effect: nil,
+                node: IAMNode(type: .organization, id: tree.org.requireID()),
+                actions: [], principalMatch: .externalToOrganization, resourceMatch: .any,
+                createdBy: nil, on: app.db)
+            _ = try await PolicySetVersionService.bump(reason: "test guardrail", on: app.db)
+            await app.startCedarPolicySetCache()
+            await app.policySetVersion.refresh(on: app.db)
+
+            // The org member's grant still works; the machine principal —
+            // external by definition — is stopped by the compiled forbid, not
+            // just the Swift-side predicate.
+            let vmNode = IAMNode(type: .virtualMachine, id: try tree.vm.requireID())
+            #expect(try await authorize(app, principal: .user(member.id!), action: "vm:read", node: vmNode))
+            #expect(
+                try await authorize(
+                    app, principal: .serviceAccount(account.requireID()), action: "vm:read", node: vmNode)
+                    == false)
+        }
+    }
+
     @Test("An external-principal ceiling always covers machine principals")
     func externalCeilingCoversMachinePrincipals() async throws {
         try await withApp { app in
@@ -364,5 +443,43 @@ final class WorkloadPrincipalTests {
             try await WorkloadRegistry.deregisterAgent(identity: nodeB, on: app.db)
             #expect(try await WorkloadRegistry.resolve(spiffeID: nodeB.key, on: app.db) == nil)
         }
+    }
+
+    @Test("Corrupted registry rows resolve to no principal, never to a guess")
+    func corruptedRegistryRows() async throws {
+        try await withApp { app in
+            // An agent row whose stored name diverges from its URI (only
+            // reachable by row surgery — registration derives one from the
+            // other) must fail agent authentication rather than answer with
+            // either name.
+            let nodeZ = AgentIdentity(trustDomain: "strato.local", name: "node-z")
+            try await WorkloadRegistration(
+                spiffeID: nodeZ.key, kind: .agent, agentName: "someone-else"
+            ).save(on: app.db)
+            await #expect(throws: (any Error).self) {
+                try await WorkloadRegistry.requireAgentRegistration(identity: nodeZ, on: app.db)
+            }
+
+            // A kind row missing its reference resolves to nil.
+            try await WorkloadRegistration(
+                spiffeID: "spiffe://strato.local/sa/dangling", kind: .serviceAccount
+            ).save(on: app.db)
+            #expect(
+                try await WorkloadRegistry.resolve(
+                    spiffeID: "spiffe://strato.local/sa/dangling", on: app.db) == nil)
+        }
+    }
+
+    @Test("The reserved agent namespace cannot be registered through the API surface")
+    func reservedNamespaceRejected() async throws {
+        #expect(throws: (any Error).self) {
+            try WorkloadRegistry.validateRegistrable(spiffeID: "spiffe://strato.local/agent/node-a")
+        }
+        #expect(throws: (any Error).self) {
+            try WorkloadRegistry.validateRegistrable(spiffeID: "not-a-spiffe-uri")
+        }
+        #expect(
+            try WorkloadRegistry.validateRegistrable(spiffeID: "spiffe://strato.local/sa/fine")
+                == "spiffe://strato.local/sa/fine")
     }
 }

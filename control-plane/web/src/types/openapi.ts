@@ -3184,7 +3184,7 @@ export interface paths {
         put?: never;
         /**
          * Register a SPIFFE identity to a service account
-         * @description Requires `serviceaccount:update` on the account. The SPIFFE ID is a lookup key into the workload registry — workloads presenting it over mTLS authenticate as this account. One identity registers to exactly one principal.
+         * @description Requires `iam:setPolicy` on the account's project — attaching an identity lets a workload act as the account, so it is gated like a grant. The SPIFFE ID is a lookup key into the workload registry — workloads presenting it over mTLS authenticate as this account. One identity registers to exactly one principal, and the reserved `/agent/` namespace cannot be registered through the API.
          */
         post: operations["createServiceAccountRegistration"];
         delete?: never;
@@ -3210,7 +3210,7 @@ export interface paths {
         post?: never;
         /**
          * Remove a SPIFFE identity registration from a service account
-         * @description Requires `serviceaccount:update` on the account.
+         * @description Requires `iam:setPolicy` on the account's project.
          */
         delete: operations["deleteServiceAccountRegistration"];
         options?: never;

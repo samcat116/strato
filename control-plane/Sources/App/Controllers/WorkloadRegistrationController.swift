@@ -55,15 +55,15 @@ struct WorkloadRegistrationController: RouteCollection {
         let admin = try req.requireSystemAdmin()
         let body = try req.content.decode(CreateWorkloadRegistrationRequest.self)
 
-        guard SPIFFEIdentity(uri: body.spiffeId) != nil else {
-            throw Abort(.badRequest, reason: "Not a valid SPIFFE URI (spiffe://<trust-domain>/<path>)")
-        }
+        // Same reserved-namespace rule as the service-account endpoint: even
+        // an admin does not hand out /agent/ identities through the registry.
+        let spiffeID = try WorkloadRegistry.validateRegistrable(spiffeID: body.spiffeId)
         guard try await Organization.find(body.organizationId, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
         let registration = WorkloadRegistration(
-            spiffeID: body.spiffeId,
+            spiffeID: spiffeID,
             kind: .workload,
             organizationID: body.organizationId,
             displayName: body.displayName,
@@ -93,11 +93,8 @@ struct WorkloadRegistrationController: RouteCollection {
         }
         try await req.db.transaction { db in
             if registration.kind == .workload {
-                for binding in try await RoleBindingService.activeBindings(
+                try await RoleBindingService.revokeAll(
                     principalType: .workload, principalID: registrationID, on: db)
-                {
-                    try await binding.delete(on: db)
-                }
             }
             try await registration.delete(on: db)
         }

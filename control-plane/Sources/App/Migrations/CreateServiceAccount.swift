@@ -24,10 +24,16 @@ struct CreateServiceAccount: AsyncMigration {
 
 struct CreateWorkloadRegistration: AsyncMigration {
     func prepare(on database: Database) async throws {
+        let kind = try await database.enum("workload_registration_kind")
+            .case("agent")
+            .case("service_account")
+            .case("workload")
+            .create()
+
         try await database.schema("workload_registrations")
             .id()
             .field("spiffe_id", .string, .required)
-            .field("kind", .string, .required)
+            .field("kind", kind, .required)
             .field("agent_name", .string)
             .field(
                 "service_account_id", .uuid,
@@ -48,5 +54,6 @@ struct CreateWorkloadRegistration: AsyncMigration {
 
     func revert(on database: Database) async throws {
         try await database.schema("workload_registrations").delete()
+        try await database.enum("workload_registration_kind").delete()
     }
 }
