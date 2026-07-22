@@ -29,30 +29,9 @@ final class Project: Model, @unchecked Sendable {
     @Field(key: "default_environment")
     var defaultEnvironment: String
 
-    // Available environments stored as JSON string for SQLite compatibility
+    // Available environments
     @Field(key: "environments")
-    var environmentsJSON: String
-
-    // Computed property for array access
-    var environments: [String] {
-        get {
-            guard let data = environmentsJSON.data(using: .utf8),
-                let array = try? JSONDecoder().decode([String].self, from: data)
-            else {
-                return ["development"]
-            }
-            return array
-        }
-        set {
-            guard let data = try? JSONEncoder().encode(newValue),
-                let string = String(data: data, encoding: .utf8)
-            else {
-                environmentsJSON = "[\"development\"]"
-                return
-            }
-            environmentsJSON = string
-        }
-    }
+    var environments: [String]
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
