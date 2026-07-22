@@ -47,6 +47,12 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     /// and dropping the row would make an un-revoked grant on a departed
     /// employee invisible to exactly the audit meant to catch it.
     let principalDisabled: Bool
+    /// The principal lives outside the resource's organization: a user with
+    /// no membership there, or a group owned by another org. Cross-org access
+    /// is exactly what most needs to be visible (issue #485), so it is marked
+    /// here the same way it is in the members lists — reported, never
+    /// filtered.
+    let principalExternalToOrg: Bool
 
     init(
         principal: WhoCanPrincipalRef,
@@ -55,7 +61,8 @@ struct WhoCanEntry: Content, Hashable, Sendable {
         grantedOn: IAMNode?,
         via: WhoCanPrincipalRef?,
         expiresAt: Date?,
-        principalDisabled: Bool = false
+        principalDisabled: Bool = false,
+        principalExternalToOrg: Bool = false
     ) {
         self.principal = principal
         self.source = source
@@ -64,12 +71,21 @@ struct WhoCanEntry: Content, Hashable, Sendable {
         self.via = via
         self.expiresAt = expiresAt
         self.principalDisabled = principalDisabled
+        self.principalExternalToOrg = principalExternalToOrg
     }
 
     fileprivate func markingPrincipalDisabled() -> WhoCanEntry {
         WhoCanEntry(
             principal: principal, source: source, role: role, grantedOn: grantedOn,
-            via: via, expiresAt: expiresAt, principalDisabled: true)
+            via: via, expiresAt: expiresAt, principalDisabled: true,
+            principalExternalToOrg: principalExternalToOrg)
+    }
+
+    fileprivate func markingPrincipalExternal() -> WhoCanEntry {
+        WhoCanEntry(
+            principal: principal, source: source, role: role, grantedOn: grantedOn,
+            via: via, expiresAt: expiresAt, principalDisabled: principalDisabled,
+            principalExternalToOrg: true)
     }
 }
 
@@ -117,11 +133,57 @@ enum WhoCanService {
         entries += try await membershipEntries(action: action, chain: chain, on: db)
         entries += try await systemAdminEntries(on: db)
 
+        var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db)
+        principals = try await markingExternalPrincipals(principals, chain: chain, on: db)
+
         return WhoCanResult(
-            principals: try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db),
+            principals: principals,
             openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
                 action: action, node: node, on: db)
         )
+    }
+
+    /// Flag entries whose holder lives outside the chain's organization —
+    /// cross-org grants are deliberately loud everywhere they surface
+    /// (issue #485). No org in the chain means nothing to be external to.
+    private static func markingExternalPrincipals(
+        _ entries: [WhoCanEntry], chain: [IAMNode], on db: any Database
+    ) async throws -> [WhoCanEntry] {
+        guard let root = chain.last, root.type == .organization else { return entries }
+        let orgID = root.id
+
+        let userIDs = Set(entries.filter { $0.principal.type == .user }.map(\.principal.id))
+        var internalUsers: Set<UUID> = []
+        if !userIDs.isEmpty {
+            internalUsers = Set(
+                try await UserOrganization.query(on: db)
+                    .filter(\.$organization.$id == orgID)
+                    .filter(\.$user.$id ~~ Array(userIDs))
+                    .all()
+                    .map { $0.$user.id }
+            )
+        }
+
+        let groupIDs = Set(entries.filter { $0.principal.type == .group }.map(\.principal.id))
+        var internalGroups: Set<UUID> = []
+        if !groupIDs.isEmpty {
+            internalGroups = Set(
+                try await Group.query(on: db)
+                    .filter(\.$id ~~ Array(groupIDs))
+                    .filter(\.$organization.$id == orgID)
+                    .all()
+                    .compactMap(\.id)
+            )
+        }
+
+        return entries.map { entry in
+            let isInternal =
+                switch entry.principal.type {
+                case .user: internalUsers.contains(entry.principal.id)
+                case .group: internalGroups.contains(entry.principal.id)
+                }
+            return isInternal ? entry : entry.markingPrincipalExternal()
+        }
     }
 
     /// Flag entries whose holder's account is disabled, so the list agrees with

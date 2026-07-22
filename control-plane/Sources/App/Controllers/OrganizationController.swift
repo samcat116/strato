@@ -446,14 +446,12 @@ struct OrganizationController: RouteCollection {
 
         try await req.db.transaction { db in
             try await membership.delete(on: db)
-            // Drop the departing member's bindings on the org node.
-            try await RoleBindingService.revoke(
-                principalType: .user,
-                principalID: userID,
-                nodeType: .organization,
-                nodeID: organizationID,
-                on: db
-            )
+            // Everything held inside the org goes with the membership — group
+            // memberships, project mirror rows, and bindings across the whole
+            // subtree, not just the org node (issue #485). Grants in other
+            // orgs stay: those are the other orgs' to revoke.
+            try await OffboardingSweep.userLeftOrganization(
+                userID: userID, organizationID: organizationID, on: db)
         }
 
         return .noContent

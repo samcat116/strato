@@ -306,20 +306,46 @@ environment-as-attribute.
   today's quirk where a member-created project had no administrator besides
   org admins. An offboarding sweep revokes a departing user's bindings.
 
-### Cross-org access
+### Cross-org access (shipped, #485)
 
 Cross-org access is allowed **only via explicit bindings**: a binding's
 principal may live in another org. Because `forbid` always wins and cannot be
 permitted through, there is no blanket platform forbid on cross-org access;
-instead:
+the controls are these (`CrossOrgBindingGate`):
 
-- Writing a binding for an external principal requires a dedicated permission
-  on the resource side (`iam:grantExternal`-shaped) and is loud in audit and
-  UI.
-- The **resource-side guardrail shape ships in v1** so orgs can ceiling it
-  themselves ("nothing in this subtree is reachable by external principals").
-- The entity-slice loader, `who-can`, and the offboarding sweep must all
-  handle principals outside the resource's org.
+- **Writing a binding for an external principal requires `iam:grantExternal`
+  on the resource side**, evaluated like everything else — the admin role
+  carries it by default, custom roles can withhold it, and a guardrail can
+  ceiling it away. "External" means a user with no membership in the node's
+  root org, or a group owned by another org; the root resolves through the
+  same ancestor walk the entity slice uses, and a node whose chain reaches no
+  org has nothing to be external to.
+- **Cross-org grants are loud.** A successful external grant (and the revoke
+  that ends one) is recorded with a distinct audit event
+  (`iam.cross_org_grant` / `iam.cross_org_revoke`) alongside the generic
+  `api.request` record, and every listing surface marks external principals
+  rather than filtering them: the members and group-grants APIs carry an
+  `external` flag (rendered as a prominent badge in the UI), `who-can`
+  carries `principalExternalToOrg`.
+- The **resource-side guardrail shape shipped in v1** so orgs can ceiling it
+  themselves ("nothing in this subtree is reachable by external principals" —
+  the `external_to_organization` principal match).
+- The entity-slice loader and `who-can` handle external principals by
+  construction (the chain's org is never a principal filter). The
+  **offboarding sweeps** are external-aware in both directions
+  (`OffboardingSweep`, `RoleBindingService.revokeAll(principal…)`): leaving
+  an org revokes everything held *inside that org's subtree* — not just the
+  org node, since a leftover project binding would silently keep working as
+  ungated cross-org access — while deliberately leaving the user's bindings
+  in other orgs alone (those are the other orgs' explicit grants); deleting a
+  user or group sweeps its bindings across **all** orgs, never assuming they
+  live only in the principal's own.
+
+Creator bindings are the one deliberate exception to the write-time gate: a
+resource created by an external principal (who necessarily already holds an
+explicitly gated grant) gets its creator binding without a second
+`iam:grantExternal` check — the grant that let them in was the loud, gated
+one.
 
 ## Identity
 

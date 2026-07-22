@@ -121,8 +121,17 @@ export function MembersTable({
             >
               <TableCell>
                 <div className="flex flex-col">
-                  <span className="font-medium text-foreground">
+                  <span className="font-medium text-foreground flex items-center gap-2">
                     {member.displayName || member.username}
+                    {member.external && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                        title="This user is not a member of the project's organization"
+                      >
+                        External
+                      </Badge>
+                    )}
                   </span>
                   <span className="text-sm text-muted-foreground">{member.email}</span>
                 </div>

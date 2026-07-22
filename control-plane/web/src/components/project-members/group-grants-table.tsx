@@ -92,7 +92,18 @@ export function GroupGrantsTable({
               className="border-border hover:bg-accent/60"
             >
               <TableCell className="font-medium text-foreground">
-                {grant.name}
+                <span className="flex items-center gap-2">
+                  {grant.name}
+                  {grant.external && (
+                    <Badge
+                      variant="outline"
+                      className="border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                      title="This group belongs to another organization"
+                    >
+                      External
+                    </Badge>
+                  )}
+                </span>
               </TableCell>
               <TableCell>
                 <Badge

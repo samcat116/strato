@@ -2540,7 +2540,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a user a role on a project
-         * @description Requires project admin. Identify the user by `userID` or `userEmail`. Returns an empty body. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. Identify the user by `userID` or `userEmail`. Returns an empty body. A user outside the project's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
          */
         post: operations["grantProjectMember"];
         delete?: never;
@@ -2566,14 +2566,14 @@ export interface paths {
         post?: never;
         /**
          * Revoke a user's role on a project
-         * @description Requires project admin.
+         * @description Requires project admin. Revoking an organization-external user's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
          */
         delete: operations["revokeProjectMember"];
         options?: never;
         head?: never;
         /**
          * Change a user's role on a project
-         * @description Requires project admin. Returns an empty body. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. Returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the project and is recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
          */
         patch: operations["updateProjectMemberRole"];
         trace?: never;
@@ -2592,7 +2592,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a group a role on a project
-         * @description Requires project admin. The group must belong to the project's root organization. Returns an empty body. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. Returns an empty body. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
          */
         post: operations["grantProjectGroup"];
         delete?: never;
@@ -2618,7 +2618,7 @@ export interface paths {
         post?: never;
         /**
          * Revoke a group's role on a project
-         * @description Requires project admin.
+         * @description Requires project admin. Revoking an organization-external group's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
          */
         delete: operations["revokeProjectGroup"];
         options?: never;
@@ -5467,6 +5467,8 @@ export interface components {
             role: components["schemas"]["ProjectRole"];
             /** Format: date-time */
             joinedAt?: string;
+            /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
         };
         ProjectGroupGrant: {
             /** Format: uuid */
@@ -5475,6 +5477,8 @@ export interface components {
             role: components["schemas"]["ProjectRole"];
             /** Format: date-time */
             grantedAt?: string;
+            /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
         };
         /**
          * @description A role grant on a project.
@@ -6050,6 +6054,8 @@ export interface components {
             expiresAt?: string;
             /** @description The grant is real but its holder's account is disabled, so they cannot currently act on it. Marked rather than filtered out, so an un-revoked grant on a departed employee stays visible. */
             principalDisabled: boolean;
+            /** @description The principal lives outside the resource's organization — a user with no membership there, or a group owned by another org. Cross-org access is reported and marked, never filtered; it is exactly what most needs to be visible. */
+            principalExternalToOrg: boolean;
         };
         IAMWhoCanResponse: {
             resource: components["schemas"]["IAMNode"];

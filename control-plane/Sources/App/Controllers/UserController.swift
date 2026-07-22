@@ -313,7 +313,15 @@ struct UserController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        try await user.delete(on: req.db)
+        try await req.db.transaction { db in
+            // Mirror rows (memberships, group memberships, project members)
+            // cascade with the user row; role bindings have no FK by design
+            // and must be swept by principal — across every org, because a
+            // departing user's bindings do not live only in their own org
+            // (cross-org bindings, issue #485).
+            try await RoleBindingService.revokeAll(principalType: .user, principalID: userID, on: db)
+            try await user.delete(on: db)
+        }
         return .noContent
     }
 

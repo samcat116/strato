@@ -209,24 +209,14 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         user.sessionEpoch += 1
         try await user.save(on: db)
 
-        // Remove user from all groups in this organization
-        try await App.UserGroup.query(on: db)
-            .join(App.Group.self, on: \App.UserGroup.$group.$id == \App.Group.$id)
-            .filter(App.Group.self, \.$organization.$id == organizationID)
-            .filter(\.$user.$id == uuid)
-            .delete()
-
-        // Remove organization membership from database, and any role bindings
-        // the user held on the org node.
+        // Remove the organization membership and everything held inside the
+        // org — group memberships, project mirror rows, and role bindings
+        // across the org's whole subtree (issue #485). Bindings the user
+        // holds in other orgs are those orgs' grants and stay.
         try await db.transaction { transaction in
             try await membership.delete(on: transaction)
-            try await RoleBindingService.revoke(
-                principalType: .user,
-                principalID: uuid,
-                nodeType: .organization,
-                nodeID: organizationID,
-                on: transaction
-            )
+            try await OffboardingSweep.userLeftOrganization(
+                userID: uuid, organizationID: organizationID, on: transaction)
         }
 
         // Delete external ID mapping

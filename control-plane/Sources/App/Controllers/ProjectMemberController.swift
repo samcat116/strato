@@ -8,6 +8,11 @@ import Foundation
 ///
 /// Listing requires `view_project`; all mutations require `manage_project` (enforced
 /// via `OrganizationAccessService`, which delegates to the Cedar evaluator).
+///
+/// A grant whose principal is outside the project's organization additionally
+/// requires `iam:grantExternal` on the project side and is recorded with a
+/// distinct audit event — cross-org access is explicit-only and loud
+/// (issue #485, `CrossOrgBindingGate`).
 struct ProjectMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let members = routes.grouped("api", "projects", ":projectID", "members")
@@ -30,6 +35,10 @@ struct ProjectMemberController: RouteCollection {
         let email: String
         let role: String
         let joinedAt: Date?
+        /// The user is not a member of the project's organization — cross-org
+        /// access, which is deliberately prominent wherever grants are listed
+        /// (issue #485).
+        let external: Bool
     }
 
     struct ProjectGroupGrantResponse: Content {
@@ -37,6 +46,8 @@ struct ProjectMemberController: RouteCollection {
         let name: String
         let role: String
         let grantedAt: Date?
+        /// The group belongs to another organization (issue #485).
+        let external: Bool
     }
 
     struct ProjectMembersResponse: Content {
@@ -77,23 +88,43 @@ struct ProjectMemberController: RouteCollection {
             .with(\.$group)
             .all()
 
+        // Mark cross-org principals so the UI can make them prominent
+        // (issue #485). One bulk membership read; no root org means nothing
+        // to be external to.
+        let rootOrgID = try await project.getRootOrganizationId(on: req.db)
+        var internalUserIDs: Set<UUID> = []
+        if let rootOrgID {
+            let memberUserIDs = members.compactMap { $0.user.id }
+            if !memberUserIDs.isEmpty {
+                internalUserIDs = Set(
+                    try await UserOrganization.query(on: req.db)
+                        .filter(\.$organization.$id == rootOrgID)
+                        .filter(\.$user.$id ~~ memberUserIDs)
+                        .all()
+                        .map { $0.$user.id }
+                )
+            }
+        }
+
         return ProjectMembersResponse(
-            users: members.map {
+            users: members.map { member in
                 ProjectMemberResponse(
-                    userId: $0.user.id,
-                    username: $0.user.username,
-                    displayName: $0.user.displayName,
-                    email: $0.user.email,
-                    role: $0.role,
-                    joinedAt: $0.createdAt
+                    userId: member.user.id,
+                    username: member.user.username,
+                    displayName: member.user.displayName,
+                    email: member.user.email,
+                    role: member.role,
+                    joinedAt: member.createdAt,
+                    external: rootOrgID != nil && member.user.id.map { !internalUserIDs.contains($0) } ?? false
                 )
             },
-            groups: groupGrants.map {
+            groups: groupGrants.map { grant in
                 ProjectGroupGrantResponse(
-                    groupId: $0.group.id,
-                    name: $0.group.name,
-                    role: $0.role,
-                    grantedAt: $0.createdAt
+                    groupId: grant.group.id,
+                    name: grant.group.name,
+                    role: grant.role,
+                    grantedAt: grant.createdAt,
+                    external: rootOrgID != nil && grant.group.$organization.id != rootOrgID
                 )
             }
         )
@@ -118,6 +149,14 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "User already has a role on this project")
         }
 
+        let node = IAMNode(type: .project, id: projectID)
+
+        // A principal outside the project's org needs the dedicated
+        // resource-side permission — cross-org grants are explicit-only and
+        // gated at write time (issue #485).
+        let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
+            principalType: .user, principalID: userID, node: node, req: req)
+
         // A ceiling in force on this project (or above it) may forbid what
         // this grant would reach — refuse now, with the reason, rather than
         // leaving it to be discovered as a denial days later (#484).
@@ -126,7 +165,7 @@ struct ProjectMemberController: RouteCollection {
                 principalType: .user,
                 principalID: userID,
                 role: .fromProjectRole(role),
-                node: IAMNode(type: .project, id: projectID)
+                node: node
             ), req: req)
 
         // The role binding lands in the same transaction as the mirror row.
@@ -142,6 +181,11 @@ struct ProjectMemberController: RouteCollection {
                 createdBy: actorID,
                 on: db
             )
+        }
+        if crossOrg {
+            await CrossOrgBindingGate.recordCrossOrgEvent(
+                .crossOrgGrant, principalType: .user, principalID: userID,
+                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
         }
         return .created
     }
@@ -167,6 +211,13 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.notFound, reason: "User has no role on this project")
         }
 
+        let node = IAMNode(type: .project, id: projectID)
+
+        // A role change for an external principal is a new cross-org grant —
+        // same gate as the initial one (issue #485).
+        let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
+            principalType: .user, principalID: userID, node: node, req: req)
+
         // Checked even though the user already holds a role here: the new role
         // is a different grant, and widening viewer to editor is exactly the
         // move a ceiling exists to stop.
@@ -175,7 +226,7 @@ struct ProjectMemberController: RouteCollection {
                 principalType: .user,
                 principalID: userID,
                 role: .fromProjectRole(role),
-                node: IAMNode(type: .project, id: projectID)
+                node: node
             ), req: req)
 
         let previousRole = membership.role
@@ -205,6 +256,11 @@ struct ProjectMemberController: RouteCollection {
                 on: db
             )
         }
+        if crossOrg {
+            await CrossOrgBindingGate.recordCrossOrgEvent(
+                .crossOrgGrant, principalType: .user, principalID: userID,
+                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
+        }
         return .ok
     }
 
@@ -227,6 +283,10 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.notFound, reason: "User has no role on this project")
         }
 
+        let node = IAMNode(type: .project, id: projectID)
+        let crossOrg = try await CrossOrgBindingGate.isCrossOrg(
+            principalType: .user, principalID: userID, node: node, on: req.db)
+
         try await req.db.transaction { db in
             try await membership.delete(on: db)
             try await RoleBindingService.revoke(
@@ -236,6 +296,15 @@ struct ProjectMemberController: RouteCollection {
                 nodeID: projectID,
                 on: db
             )
+        }
+        if crossOrg {
+            // Revokes need no gate — taking cross-org access away is always
+            // allowed — but they stay loud, so external access has a visible
+            // end in the trail (issue #485).
+            await CrossOrgBindingGate.recordCrossOrgEvent(
+                .crossOrgRevoke, principalType: .user, principalID: userID,
+                role: ProjectRole(rawValue: membership.role).map { IAMRole.fromProjectRole($0).rawValue },
+                node: node, req: req)
         }
         return .noContent
     }
@@ -249,14 +318,8 @@ struct ProjectMemberController: RouteCollection {
         let body = try req.content.decode(GrantGroupRequest.self)
         let role = try validatedRole(body.role)
 
-        guard let group = try await Group.find(body.groupID, on: req.db) else {
+        guard try await Group.find(body.groupID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Group not found")
-        }
-        // Keep grants within the project's organization.
-        if let rootOrgID = try await project.getRootOrganizationId(on: req.db),
-            group.$organization.id != rootOrgID
-        {
-            throw Abort(.badRequest, reason: "Group belongs to a different organization")
         }
 
         let existing = try await ProjectGroupGrant.query(on: req.db)
@@ -267,6 +330,14 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "Group already has a role on this project")
         }
 
+        let node = IAMNode(type: .project, id: projectID)
+
+        // A group from another organization is grantable — cross-org access is
+        // explicit-bindings-only, so it passes the same write-time gate as an
+        // external user rather than being flatly refused (issue #485).
+        let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
+            principalType: .group, principalID: body.groupID, node: node, req: req)
+
         // A group grant reaches every member, so the ceiling check asks
         // whether it covers the group or anyone in it (#484).
         try await GuardrailWriteCheck.requireNoViolation(
@@ -274,7 +345,7 @@ struct ProjectMemberController: RouteCollection {
                 principalType: .group,
                 principalID: body.groupID,
                 role: .fromProjectRole(role),
-                node: IAMNode(type: .project, id: projectID)
+                node: node
             ), req: req)
 
         let actorID = req.auth.get(User.self)?.id
@@ -290,6 +361,11 @@ struct ProjectMemberController: RouteCollection {
                 createdBy: actorID,
                 on: db
             )
+        }
+        if crossOrg {
+            await CrossOrgBindingGate.recordCrossOrgEvent(
+                .crossOrgGrant, principalType: .group, principalID: body.groupID,
+                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
         }
         return .created
     }
@@ -313,6 +389,10 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.notFound, reason: "Group has no role on this project")
         }
 
+        let node = IAMNode(type: .project, id: projectID)
+        let crossOrg = try await CrossOrgBindingGate.isCrossOrg(
+            principalType: .group, principalID: groupID, node: node, on: req.db)
+
         try await req.db.transaction { db in
             try await grant.delete(on: db)
             try await RoleBindingService.revoke(
@@ -322,6 +402,12 @@ struct ProjectMemberController: RouteCollection {
                 nodeID: projectID,
                 on: db
             )
+        }
+        if crossOrg {
+            await CrossOrgBindingGate.recordCrossOrgEvent(
+                .crossOrgRevoke, principalType: .group, principalID: groupID,
+                role: ProjectRole(rawValue: grant.role).map { IAMRole.fromProjectRole($0).rawValue },
+                node: node, req: req)
         }
         return .noContent
     }

@@ -25,6 +25,14 @@ enum AuditEventType: String, Sendable {
     /// record.
     case passkeyAdded = "auth.passkey_added"
     case passkeyRemoved = "auth.passkey_removed"
+    /// A role granted to a principal outside the resource's organization
+    /// (issue #485). Cross-org access is allowed only via explicit bindings,
+    /// and those bindings are deliberately loud: a distinct event type, so the
+    /// trail can be filtered to exactly the grants that cross an org boundary.
+    case crossOrgGrant = "iam.cross_org_grant"
+    /// A cross-org principal's role revoked — the other half of the trail, so
+    /// external access has a visible end as well as a visible start.
+    case crossOrgRevoke = "iam.cross_org_revoke"
 }
 
 // MARK: - Record

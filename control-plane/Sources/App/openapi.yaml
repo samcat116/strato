@@ -3346,6 +3346,10 @@ paths:
       description: >-
         Requires project admin. Identify the user by `userID` or `userEmail`.
         Returns an empty body.
+        A user outside the project's organization can be granted a role, but
+        only by a caller who also holds `iam:grantExternal` on the project;
+        such cross-org grants are recorded with a distinct
+        `iam.cross_org_grant` audit event.
         Checked against the tier-2 guardrails in force on the node before it
         is accepted: a grant that would reach past a ceiling is refused with
         `403`, naming the guardrail, who set it, and why.
@@ -3380,6 +3384,9 @@ paths:
       summary: Change a user's role on a project
       description: >-
         Requires project admin. Returns an empty body.
+        Changing an organization-external user's role is a new cross-org
+        grant: it requires `iam:grantExternal` on the project and is recorded
+        with a distinct `iam.cross_org_grant` audit event.
         Checked against the tier-2 guardrails in force on the node before it
         is accepted: a grant that would reach past a ceiling is refused with
         `403`, naming the guardrail, who set it, and why.
@@ -3401,7 +3408,9 @@ paths:
     delete:
       operationId: revokeProjectMember
       summary: Revoke a user's role on a project
-      description: Requires project admin.
+      description: >-
+        Requires project admin. Revoking an organization-external user's grant
+        is recorded with a distinct `iam.cross_org_revoke` audit event.
       tags: [Projects]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -3416,8 +3425,11 @@ paths:
       operationId: grantProjectGroup
       summary: Grant a group a role on a project
       description: >-
-        Requires project admin. The group must belong to the project's root
-        organization. Returns an empty body.
+        Requires project admin. Returns an empty body.
+        A group from another organization can be granted a role, but only by
+        a caller who also holds `iam:grantExternal` on the project; such
+        cross-org grants are recorded with a distinct `iam.cross_org_grant`
+        audit event.
         Checked against the tier-2 guardrails in force on the node before it
         is accepted: a grant that would reach past a ceiling is refused with
         `403`, naming the guardrail, who set it, and why.
@@ -3450,7 +3462,9 @@ paths:
     delete:
       operationId: revokeProjectGroup
       summary: Revoke a group's role on a project
-      description: Requires project admin.
+      description: >-
+        Requires project admin. Revoking an organization-external group's
+        grant is recorded with a distinct `iam.cross_org_revoke` audit event.
       tags: [Projects]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -9321,7 +9335,7 @@ components:
 
     ProjectMember:
       type: object
-      required: [username, displayName, email, role]
+      required: [username, displayName, email, role, external]
       properties:
         userId:
           type: string
@@ -9337,10 +9351,15 @@ components:
         joinedAt:
           type: string
           format: date-time
+        external:
+          type: boolean
+          description: >-
+            The user is not a member of the project's organization — a
+            cross-org grant, which UIs should render prominently.
 
     ProjectGroupGrant:
       type: object
-      required: [name, role]
+      required: [name, role, external]
       properties:
         groupId:
           type: string
@@ -9352,6 +9371,11 @@ components:
         grantedAt:
           type: string
           format: date-time
+        external:
+          type: boolean
+          description: >-
+            The group belongs to another organization — a cross-org grant,
+            which UIs should render prominently.
 
     ProjectRole:
       type: string
@@ -10477,7 +10501,7 @@ components:
         One reason one principal can perform the queried action. A principal
         may appear more than once, because each entry explains a distinct
         grant and revoking access means revoking all of them.
-      required: [principal, source, principalDisabled]
+      required: [principal, source, principalDisabled, principalExternalToOrg]
       properties:
         principal:
           $ref: "#/components/schemas/IAMPrincipalRef"
@@ -10507,6 +10531,13 @@ components:
             The grant is real but its holder's account is disabled, so they
             cannot currently act on it. Marked rather than filtered out, so an
             un-revoked grant on a departed employee stays visible.
+        principalExternalToOrg:
+          type: boolean
+          description: >-
+            The principal lives outside the resource's organization — a user
+            with no membership there, or a group owned by another org.
+            Cross-org access is reported and marked, never filtered; it is
+            exactly what most needs to be visible.
 
     IAMWhoCanResponse:
       type: object

@@ -134,6 +134,58 @@ enum RoleBindingService {
         try await query.delete()
     }
 
+    /// Remove every binding held by a principal, on any node in any
+    /// organization. Called when the principal itself ceases to exist (user or
+    /// group deletion): a departing principal's bindings do not live only in
+    /// its own org — cross-org bindings are supported by design (issue #485) —
+    /// so the sweep keys on the principal alone.
+    static func revokeAll(principalType: IAMPrincipalType, principalID: UUID, on db: Database) async throws {
+        try await RoleBinding.query(on: db)
+            .filter(\.$principalType == principalType.rawValue)
+            .filter(\.$principalID == principalID)
+            .delete()
+    }
+
+    /// Remove a principal's bindings on every node whose tree root is
+    /// `organizationID` — the offboarding sweep for leaving one org. Bindings
+    /// the principal holds in *other* orgs are deliberately untouched: those
+    /// are the other orgs' grants to revoke, not this one's.
+    ///
+    /// Sweeping the whole subtree (not just the org node) matters: a removed
+    /// member's project- and resource-level bindings inside the org would
+    /// otherwise outlive the membership as cross-org access nobody gated
+    /// through `iam:grantExternal` (issue #485). Bindings on nodes whose chain
+    /// no longer resolves to any org are left alone — they cannot be
+    /// attributed to this org, and a dangling node's bindings are dropped when
+    /// the node deletion's own `revokeAll(nodeType:nodeID:)` runs.
+    static func revokeAll(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        rootedInOrganization organizationID: UUID,
+        on db: Database
+    ) async throws {
+        let bindings = try await RoleBinding.query(on: db)
+            .filter(\.$principalType == principalType.rawValue)
+            .filter(\.$principalID == principalID)
+            .all()
+        var rootByNode: [IAMNode: UUID?] = [:]
+        for binding in bindings {
+            guard let nodeType = IAMNodeType(rawValue: binding.nodeType) else { continue }
+            let node = IAMNode(type: nodeType, id: binding.nodeID)
+            let root: UUID?
+            if let cached = rootByNode[node] {
+                root = cached
+            } else {
+                let chain = try await IAMResourceTree.ancestors(of: node, on: db)
+                root = chain.last?.type == .organization ? chain.last?.id : nil
+                rootByNode[node] = root
+            }
+            if root == organizationID {
+                try await binding.delete(on: db)
+            }
+        }
+    }
+
     /// Remove every binding attached to a node. Called when the node itself is
     /// deleted (bindings have no FK to the resources they protect).
     static func revokeAll(nodeType: IAMNodeType, nodeID: UUID, on db: Database) async throws {
