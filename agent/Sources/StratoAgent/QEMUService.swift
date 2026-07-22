@@ -15,7 +15,12 @@ actor QEMUService: HypervisorService {
     private let storage: (any StorageBackend)?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
-    private let configuredFirmwarePath: String?
+    /// Operator-configured EDK2 firmware paths (issue #565).
+    private let firmware: FirmwareOverrides
+    /// Runs each vTPM VM's swtpm, or nil on a host without swtpm — such a host
+    /// never advertises the TPM capability, so a spec asking for one here means
+    /// the placement gate was bypassed and the create must fail loudly.
+    private let swtpm: SwtpmSupervisor?
     /// Whether to back VMs with hardware acceleration (KVM on Linux, HVF on
     /// macOS). Resolved from `enable_kvm`/`enable_hvf` config; when false, VMs
     /// run under TCG emulation.
@@ -41,13 +46,15 @@ actor QEMUService: HypervisorService {
     init(
         logger: Logger,
         storage: (any StorageBackend)? = nil, vmStoragePath: String, qemuBinaryPath: String,
-        firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true
+        firmware: FirmwareOverrides = FirmwareOverrides(), swtpmBinaryPath: String? = nil,
+        hardwareAccelerationEnabled: Bool = true
     ) {
         self.logger = logger
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
-        self.configuredFirmwarePath = firmwarePath
+        self.firmware = firmware
+        self.swtpm = swtpmBinaryPath.map { SwtpmSupervisor(binaryPath: $0, logger: logger) }
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
 
         #if os(Linux)
@@ -205,7 +212,7 @@ actor QEMUService: HypervisorService {
 
         // Translate the neutral spec into QEMU's native configuration. Network
         // attachments were already realized by the agent's NetworkOrchestrator.
-        let qemuConfig = await convertToQEMUConfiguration(
+        let qemuConfig = try await convertToQEMUConfiguration(
             spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId)
 
         // Spawn the process under its own stage budget — QMP connection can
@@ -296,6 +303,14 @@ actor QEMUService: HypervisorService {
                 "VM control channel is dead; respawning QEMU process",
                 metadata: ["vmId": .string(vmId), "startError": .string(error.localizedDescription)])
             try? await vm.destroy()
+            // The stored configuration points at this VM's swtpm socket, and a
+            // guest that powered off may have outlived its swtpm. Restarting it
+            // here is safe and idempotent: the TPM's state directory persists,
+            // so the respawned guest sees the same TPM it had (issue #565).
+            if vmSpecs[vmId]?.effectiveMachine.tpm == true, let swtpm {
+                let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+                try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
+            }
             let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
             try await manager.createVM(
                 config: config, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
@@ -393,6 +408,12 @@ actor QEMUService: HypervisorService {
             try await qemuManager.destroy()
         }
 
+        // Stop the VM's swtpm, if it has one. Unconditional rather than gated
+        // on the spec's machine profile: a re-adopted VM has no spec here, and
+        // stopping is a no-op when no swtpm is running.
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
+
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
@@ -421,6 +442,15 @@ actor QEMUService: HypervisorService {
         // Clean up the deterministic balloon-stats QMP socket (issue #567)
         try? FileManager.default.removeItem(
             atPath: Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
+
+        // Clean up the UEFI variable store and the TPM's state directory
+        // (issue #565). Both are per-VM and meaningless once the VM is gone;
+        // keeping the NVRAM would also make a later VM reusing this id inherit
+        // a stranger's boot entries.
+        try? FileManager.default.removeItem(
+            atPath: Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId))
+        try? FileManager.default.removeItem(
+            atPath: SwtpmSupervisor.stateDirectory(vmDirectory: vmDir))
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
@@ -910,41 +940,37 @@ actor QEMUService: HypervisorService {
 
     // MARK: - Private Configuration Methods
 
-    /// Resolves the UEFI firmware path for the current architecture
-    /// Priority: 1) Explicit per-VM firmware path, 2) Agent config file path, 3) Platform default
-    /// Returns nil if no firmware is found
-    private func resolveFirmwarePath(_ explicitPath: String?) -> String? {
-        // 1. If explicit per-VM path provided, validate and return it
-        if let path = explicitPath, !path.isEmpty {
-            if FileManager.default.fileExists(atPath: path) {
-                logger.debug("Using explicit per-VM firmware path: \(path)")
-                return path
-            }
-            logger.warning("Specified per-VM firmware path does not exist: \(path), trying config file setting")
+    // MARK: - Firmware and NVRAM (issue #565)
+
+    /// The VM's persistent UEFI variable store. Copied from the firmware set's
+    /// VARS template on first boot and kept thereafter, so boot entries the
+    /// guest writes — and Secure Boot keys it enrolls — survive a respawn.
+    static func nvramPath(vmStoragePath: String, vmId: String) -> String {
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        return (vmDir as NSString).appendingPathComponent("nvram.fd")
+    }
+
+    /// Copies the VARS template into the VM's directory if the VM has no
+    /// variable store yet, and returns its path.
+    ///
+    /// Deliberately copy-if-absent rather than copy-always: overwriting on
+    /// every respawn is exactly the bug the pflash layout exists to fix — it
+    /// would reset the guest's boot order and wipe enrolled Secure Boot keys.
+    /// An existing VM gains its NVRAM file the first time it respawns under
+    /// this code.
+    private func ensureNVRAM(vmId: String, from template: String) throws -> String {
+        let path = Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard !FileManager.default.fileExists(atPath: path) else { return path }
+        do {
+            try FileManager.default.copyItem(atPath: template, toPath: path)
+        } catch {
+            throw QEMUServiceError.configurationError(
+                "failed to initialize UEFI variable store for VM \(vmId) from \(template): "
+                    + error.localizedDescription)
         }
-
-        // 2. Check agent config file setting
-        if let path = configuredFirmwarePath, !path.isEmpty {
-            if FileManager.default.fileExists(atPath: path) {
-                logger.debug("Using firmware path from config file: \(path)")
-                return path
-            }
-            logger.warning("Config file firmware path does not exist: \(path), trying platform defaults")
-        }
-
-        // 3. Use architecture-specific platform default
-        #if arch(arm64)
-        let defaultPath = AgentConfig.defaultFirmwarePathARM64
-        #else
-        let defaultPath = AgentConfig.defaultFirmwarePathX86_64
-        #endif
-
-        guard let path = defaultPath else {
-            logger.warning("No UEFI firmware found for this platform/architecture")
-            return nil
-        }
-
-        logger.debug("Using platform default firmware path: \(path)")
+        logger.info(
+            "Initialized UEFI variable store",
+            metadata: ["vmId": .string(vmId), "nvram": .string(path), "template": .string(template)])
         return path
     }
 
@@ -957,21 +983,39 @@ actor QEMUService: HypervisorService {
 
     private func convertToQEMUConfiguration(
         _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String
-    ) async
+    ) async throws
         -> QEMUConfiguration
     {
         var qemuConfig = QEMUConfiguration()
+        let machine = spec.effectiveMachine
+
+        // The VM directory holds the NVRAM store, the TPM state, and every
+        // socket below, so it must exist before any of them are resolved. It
+        // usually already does (disk materialization created it).
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: vmDir) {
+            do {
+                try fileManager.createDirectory(atPath: vmDir, withIntermediateDirectories: true, attributes: nil)
+                logger.debug("Created VM directory: \(vmDir)")
+            } catch {
+                throw QEMUServiceError.configurationError(
+                    "failed to create VM directory \(vmDir): \(error.localizedDescription)")
+            }
+        }
 
         // Determine boot mode: direct kernel boot or UEFI firmware boot
         let kernelBoot: (kernel: String, initramfs: String?, cmdline: String?)?
-        let firmware: String?
+        // Per-VM firmware override from the spec (`self.firmware` is the
+        // agent's own configuration).
+        let specFirmware: String?
         switch spec.boot {
         case .directKernel(let kernel, let initramfs, let cmdline):
             kernelBoot = (kernel, initramfs, cmdline)
-            firmware = nil
-        case .disk(let specFirmware):
+            specFirmware = nil
+        case .disk(let perVMFirmware):
             kernelBoot = nil
-            firmware = specFirmware
+            specFirmware = perVMFirmware
         }
 
         // Select the CPU model. `host` passes the physical CPU through and is
@@ -981,16 +1025,22 @@ actor QEMUService: HypervisorService {
         // features the emulator can provide.
         let cpuType = hardwareAccelerationEnabled ? "host" : "max"
 
-        // Configure machine type based on architecture and boot mode
+        // Configure machine type based on architecture and boot mode.
+        //
+        // Secure Boot on x86 additionally needs SMM: the signed OVMF build
+        // keeps the authenticated variable store writable only from System
+        // Management Mode, so without `smm=on` the firmware cannot protect
+        // `db`/`dbx` and Secure Boot is not actually enforced. ARM's `virt`
+        // machine has no SMM and needs no equivalent.
         #if arch(arm64)
         // For ARM64 UEFI boot, we need gic-version=3 for EDK2 firmware compatibility
         qemuConfig.machineType = kernelBoot != nil ? "virt" : "virt,gic-version=3"
         qemuConfig.cpuType = cpuType
         logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType), cpu: \(cpuType)")
         #else
-        qemuConfig.machineType = "q35"
+        qemuConfig.machineType = machine.secureBoot ? "q35,smm=on" : "q35"
         qemuConfig.cpuType = cpuType
-        logger.debug("Configuring x86_64 machine type: q35, cpu: \(cpuType)")
+        logger.debug("Configuring x86_64 machine type: \(qemuConfig.machineType), cpu: \(cpuType)")
         #endif
 
         // Configure CPU
@@ -1062,24 +1112,84 @@ actor QEMUService: HypervisorService {
                     "cmdline": .string(cmdline),
                 ])
         } else {
-            // UEFI firmware boot (disk-based)
-            // Resolve firmware path: explicit config > platform default
-            if let firmwarePath = resolveFirmwarePath(firmware) {
-                qemuConfig.additionalArgs.append(contentsOf: ["-bios", firmwarePath])
+            // UEFI firmware boot (disk-based). The split CODE/VARS pair is
+            // preferred over `-bios`: it gives the VM a writable variable store
+            // that persists across respawns (issue #565), which UEFI boot
+            // entries need on any guest and Secure Boot key enrollment needs on
+            // Windows.
+            let firmwareSet = try FirmwareResolver.resolve(
+                secureBoot: machine.secureBoot,
+                perVMPath: specFirmware,
+                overrides: self.firmware)
+
+            switch firmwareSet {
+            case .pflash(let code, let varsTemplate):
+                let nvram = try ensureNVRAM(vmId: vmId, from: varsTemplate)
+                qemuConfig.additionalArgs.append(contentsOf: [
+                    "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=\(code)",
+                    "-drive", "if=pflash,format=raw,unit=1,file=\(nvram)",
+                ])
+                #if !arch(arm64)
+                if machine.secureBoot {
+                    // Pairs with `smm=on`: marks the varstore pflash as
+                    // SMM-only, which is what stops a compromised guest from
+                    // rewriting the Secure Boot databases.
+                    qemuConfig.additionalArgs.append(contentsOf: [
+                        "-global", "driver=cfi.pflash01,property=secure,value=on",
+                    ])
+                }
+                #endif
                 logger.info(
-                    "UEFI firmware boot configured",
+                    "UEFI firmware boot configured (pflash)",
                     metadata: [
-                        "firmware": .string(firmwarePath),
+                        "code": .string(code),
+                        "nvram": .string(nvram),
+                        "secureBoot": .stringConvertible(machine.secureBoot),
                         "vmId": .string(vmId),
                     ])
-            } else {
-                // No firmware found - VM may fail to boot without UEFI firmware on ARM64
+            case .monolithic(let path):
+                // Legacy fallback: no writable varstore, so the guest's UEFI
+                // variables reset on every respawn. Warned about rather than
+                // silent, since it is a real (if pre-existing) limitation.
+                qemuConfig.additionalArgs.append(contentsOf: ["-bios", path])
                 logger.warning(
-                    "No UEFI firmware configured - VM may fail to boot on ARM64",
+                    """
+                    UEFI firmware boot configured with a monolithic image; the guest's UEFI variables \
+                    (boot entries) will not persist across restarts. Install the split EDK2 build \
+                    or set firmware_code_path/firmware_vars_template.
+                    """,
                     metadata: [
-                        "vmId": .string(vmId)
+                        "firmware": .string(path),
+                        "vmId": .string(vmId),
                     ])
             }
+        }
+
+        // Emulated TPM 2.0 (issue #565). swtpm runs as a separate host process
+        // holding the TPM's persistent state; QEMU talks to it over the control
+        // socket. Started before QEMU and torn down in `deleteVM`.
+        if machine.tpm {
+            guard let swtpm else {
+                throw QEMUServiceError.configurationError(
+                    "VM \(vmId) requires a TPM 2.0 but this host has no swtpm binary. The agent does not "
+                        + "advertise the TPM capability, so this VM should not have been placed here; install "
+                        + "swtpm (Debian/Ubuntu: `apt install swtpm swtpm-tools`) or set swtpm_binary_path.")
+            }
+            let socketPath = try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
+            // `tpm-tis` is the x86 TIS device; the ARM `virt` machine has no
+            // ISA/LPC bus, so it takes the MMIO variant instead.
+            #if arch(arm64)
+            let tpmDevice = "tpm-tis-device"
+            #else
+            let tpmDevice = "tpm-tis"
+            #endif
+            qemuConfig.additionalArgs.append(contentsOf: [
+                "-chardev", "socket,id=chrtpm,path=\(socketPath)",
+                "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+                "-device", "\(tpmDevice),tpmdev=tpm0",
+            ])
+            logger.info(
+                "vTPM configured", metadata: ["vmId": .string(vmId), "swtpmSocket": .string(socketPath)])
         }
 
         // Enable hardware acceleration based on platform and the operator's
@@ -1114,19 +1224,7 @@ actor QEMUService: HypervisorService {
 
         // Configure virtio-console for VM console streaming
         // Use the VM's storage directory for the socket (user-writable)
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
         let consoleSocketPath = (vmDir as NSString).appendingPathComponent("console.sock")
-
-        // Create VM directory if it doesn't exist (should already exist from disk creation)
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: vmDir) {
-            do {
-                try fileManager.createDirectory(atPath: vmDir, withIntermediateDirectories: true, attributes: nil)
-                logger.debug("Created VM directory for console socket: \(vmDir)")
-            } catch {
-                logger.warning("Failed to create VM directory for console socket: \(error)")
-            }
-        }
 
         // Add virtio-serial device and virtconsole
         qemuConfig.additionalArgs.append(contentsOf: [

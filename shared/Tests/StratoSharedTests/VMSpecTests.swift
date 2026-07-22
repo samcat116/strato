@@ -171,6 +171,41 @@ struct VMSpecTests {
         #expect(!decoded.dhcpEnabled)
     }
 
+    // MARK: - Machine profile (issue #565)
+
+    @Test func machineProfileRoundTrip() throws {
+        let spec = VMSpec(
+            cpus: 2, memoryBytes: 1 << 32, boot: .disk(firmware: nil),
+            machine: MachineProfile(secureBoot: true, tpm: true))
+        let decoded = try roundTrip(spec)
+        #expect(decoded.machine?.secureBoot == true)
+        #expect(decoded.machine?.tpm == true)
+        #expect(decoded.effectiveMachine == MachineProfile(secureBoot: true, tpm: true))
+    }
+
+    /// A spec from a control plane that predates the machine profile has no
+    /// `machine` key. It must decode to today's behavior — both features off —
+    /// rather than throwing, or a rolling upgrade would break every sync.
+    @Test func specWithoutMachineProfileDecodesToDefaults() throws {
+        let json = """
+            {"cpus":1,"maxCpus":1,"memoryBytes":1,"sharedMemory":false,"hugepages":false,
+             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        let decoded = try decodeJSON(VMSpec.self, from: json)
+        #expect(decoded.machine == nil)
+        #expect(decoded.effectiveMachine == .default)
+        #expect(decoded.effectiveMachine.secureBoot == false)
+        #expect(decoded.effectiveMachine.tpm == false)
+    }
+
+    /// A partial profile (a peer that carries only one of the flags) decodes
+    /// with the absent flag off, not as a failure.
+    @Test func partialMachineProfileDecodes() throws {
+        let decoded = try decodeJSON(MachineProfile.self, from: #"{"tpm":true}"#)
+        #expect(decoded.tpm)
+        #expect(!decoded.secureBoot)
+    }
+
     /// An unknown boot-source case from a newer peer must fail loudly (there
     /// is no tolerant fallback for BootSource) — pin that so a change here is
     /// a deliberate decision, not an accident.

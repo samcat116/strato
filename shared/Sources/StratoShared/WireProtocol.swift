@@ -204,7 +204,18 @@ public enum WireProtocol {
     /// v15's `guestInfo` — an older control plane ignores the key, an older
     /// agent never sends it, absence can never mean a destructive action — so
     /// there is no gate.
-    public static let currentVersion = 16
+    ///
+    /// Version 17: Windows guest support (issue #565). `VMSpec.machine`
+    /// (optional `MachineProfile`) carries `secureBoot`/`tpm`, and
+    /// `AgentRegisterMessage.tpmCapable` reports whether the host has swtpm.
+    /// The shape is additive and tolerant — a pre-v17 agent decodes the sync
+    /// and ignores the key — which is exactly the hazard, and it is the
+    /// *silent* kind: a Windows VM whose Secure Boot and vTPM were dropped
+    /// boots to a setup screen that refuses to proceed, with nothing in the
+    /// API saying why. So placement is gated on both signals
+    /// (`supportsMachineProfile(_:)` plus the explicit `tpmCapable` flag,
+    /// the `sandboxCapable` pattern from v5) rather than sent and hoped for.
+    public static let currentVersion = 17
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -345,6 +356,23 @@ public enum WireProtocol {
     /// ever backs.
     public static func supportsFloatingIPs(_ version: Int) -> Bool {
         version >= floatingIPMinimumVersion
+    }
+
+    /// The lowest protocol version that realizes `VMSpec.machine` — pflash
+    /// firmware with a persistent variable store, Secure Boot, and a vTPM
+    /// (see `currentVersion` version 17 notes).
+    public static let machineProfileMinimumVersion = 17
+
+    /// Whether an agent registered with `version` realizes a non-default
+    /// `MachineProfile`. A pre-v17 agent decodes the sync and boots the guest
+    /// without Secure Boot or a TPM, so a Windows VM placed there would fail
+    /// setup with no signal in the API. Placement of such VMs is refused
+    /// instead. Necessary but not sufficient for `tpm`: eligibility
+    /// additionally requires the agent to have advertised
+    /// `AgentRegisterMessage.tpmCapable`, since a v17 build on a host without
+    /// swtpm understands the field but cannot realize it.
+    public static func supportsMachineProfile(_ version: Int) -> Bool {
+        version >= machineProfileMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

@@ -129,12 +129,23 @@ private func launchAgent(options: AgentOptions) async throws {
     let finalVolumeStoragePath = config.volumeStoragePath ?? FileSystemStorageBackend.defaultStoragePath
     let finalQemuBinaryPath = options.qemuBinaryPath ?? config.qemuBinaryPath ?? AgentConfig.defaultQemuBinaryPath
 
-    // Resolve firmware path from config (architecture-specific)
+    // Resolve firmware configuration. The monolithic `firmware_path_*` keys
+    // stay architecture-specific (they name one host's image); the split
+    // CODE/VARS keys are not, since an agent only ever resolves firmware for
+    // the architecture it runs (issue #565).
     #if arch(arm64)
-    let finalFirmwarePath = config.firmwarePathARM64
+    let finalMonolithicFirmwarePath = config.firmwarePathARM64
     #else
-    let finalFirmwarePath = config.firmwarePathX86_64
+    let finalMonolithicFirmwarePath = config.firmwarePathX86_64
     #endif
+    let finalFirmware = FirmwareOverrides(
+        codePath: config.firmwareCodePath,
+        varsTemplatePath: config.firmwareVarsTemplate,
+        secureBootCodePath: config.secureBootFirmwareCodePath,
+        secureBootVarsTemplatePath: config.secureBootFirmwareVarsTemplate,
+        monolithicPath: finalMonolithicFirmwarePath
+    )
+    let finalSwtpmBinaryPath = config.swtpmBinaryPath ?? AgentConfig.defaultSwtpmBinaryPath
 
     // Resolve Firecracker configuration (Linux only)
     let finalFirecrackerBinaryPath =
@@ -200,7 +211,9 @@ private func launchAgent(options: AgentOptions) async throws {
             "sandboxImageCacheMaxSize": .string(
                 config.sandboxImageCacheMaxSizeGB.map { "\($0)GB" } ?? "unbounded"),
             "qemuBinaryPath": .string(finalQemuBinaryPath),
-            "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
+            "firmwarePath": .string(finalMonolithicFirmwarePath ?? "(platform default)"),
+            "firmwareCodePath": .string(config.firmwareCodePath ?? "(platform default)"),
+            "swtpmBinaryPath": .string(finalSwtpmBinaryPath ?? "(not installed)"),
             "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
             "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
             "sandboxGuestImagePath": .string(finalSandboxGuestImagePath),
@@ -256,7 +269,8 @@ private func launchAgent(options: AgentOptions) async throws {
         vmStoragePath: finalVMStoragePath,
         volumeStoragePath: finalVolumeStoragePath,
         qemuBinaryPath: finalQemuBinaryPath,
-        firmwarePath: finalFirmwarePath,
+        firmware: finalFirmware,
+        swtpmBinaryPath: finalSwtpmBinaryPath,
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
         firecrackerSocketDir: finalFirecrackerSocketDir,
         sandboxGuestImagePath: finalSandboxGuestImagePath,

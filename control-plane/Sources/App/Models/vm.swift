@@ -142,6 +142,16 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "firmware_path")
     var firmwarePath: String?
 
+    // Machine profile (issue #565): what Windows 11 / Server 2025 need beyond
+    // resource sizing. The control plane records the intent only — the agent
+    // realizes it by selecting the signed EDK2 firmware set and running a
+    // per-VM swtpm. Both default false, which is pre-#565 behavior.
+    @Field(key: "secure_boot")
+    var secureBoot: Bool
+
+    @Field(key: "tpm_enabled")
+    var tpmEnabled: Bool
+
     // Console configuration
     @Enum(key: "console_mode")
     var consoleMode: ConsoleMode
@@ -181,7 +191,9 @@ final class VM: Model, @unchecked Sendable {
         sharedMemory: Bool = false,
         readonlyDisk: Bool = false,
         consoleMode: ConsoleMode = .pty,
-        serialMode: ConsoleMode = .pty
+        serialMode: ConsoleMode = .pty,
+        secureBoot: Bool = false,
+        tpmEnabled: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -203,6 +215,8 @@ final class VM: Model, @unchecked Sendable {
         self.readonlyDisk = readonlyDisk
         self.consoleMode = consoleMode
         self.serialMode = serialMode
+        self.secureBoot = secureBoot
+        self.tpmEnabled = tpmEnabled
     }
 }
 
@@ -349,6 +363,10 @@ struct VMDetailResponse: Content {
     let disk: Int64
     let diskFormatted: String
     let networkInterfaces: [NetworkInterfaceResponse]
+    /// Machine profile (issue #565): whether the guest boots with UEFI Secure
+    /// Boot and whether it has an emulated TPM 2.0.
+    let secureBoot: Bool
+    let tpmEnabled: Bool
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -386,6 +404,8 @@ struct VMDetailResponse: Content {
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map(NetworkInterfaceResponse.init)
+        self.secureBoot = vm.secureBoot
+        self.tpmEnabled = vm.tpmEnabled
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

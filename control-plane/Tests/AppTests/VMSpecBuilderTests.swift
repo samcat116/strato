@@ -510,6 +510,36 @@ struct VMSpecBuilderTests {
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.userData == payload)
     }
+
+    // MARK: - Machine profile (issue #565)
+
+    @Test("VMSpecBuilder carries the VM's Secure Boot and TPM intent")
+    func testMachineProfilePassthrough() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+        vm.secureBoot = true
+        vm.tpmEnabled = true
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.machine?.secureBoot == true)
+        #expect(spec.machine?.tpm == true)
+
+        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.machine?.secureBoot == true)
+        #expect(specWithVolumes.machine?.tpm == true)
+    }
+
+    @Test("A VM with no machine features sends the default profile, not garbage")
+    func testDefaultMachineProfile() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.effectiveMachine == .default)
+        #expect(spec.machine?.secureBoot == false)
+        #expect(spec.machine?.tpm == false)
+    }
 }
 
 @Suite("VM create user-data validation")

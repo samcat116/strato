@@ -118,6 +118,52 @@ host cleanly rejects placements it can't serve.
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
 
+## Firmware and the machine profile
+
+`VMSpec.machine` (`MachineProfile`, wire v17) carries the two guest features
+that are not resource sizing: Secure Boot and a TPM 2.0. Both default off, so
+a spec that omits the field describes exactly the machine the agent built
+before issue #565.
+
+`StratoAgentCore/FirmwareResolver.swift` decides which EDK2 files a QEMU VM
+boots with. It prefers the **split CODE/VARS pair** every distribution
+actually ships, copying the VARS template into `nvram.fd` in the VM's own
+directory and attaching both as pflash drives. The pre-#565 agent passed a
+single blob as `-bios`, which runs firmware with no writable variable store:
+UEFI boot entries the guest writes are silently discarded on the next
+respawn — a bug Linux guests hit too — and Secure Boot keys can never be
+enrolled at all. The monolithic `-bios` form survives as a fallback so hosts
+(and operator configs) that only have a single image keep booting.
+
+Candidates are matched as **pairs**, never as a cross product: OVMF's 4MB
+build requires its own 4MB variable store, and pairing `OVMF_CODE_4M.fd` with
+the 2MB `OVMF_VARS.fd` yields a firmware that fails to boot in a way that
+looks like a corrupt guest image. Secure Boot narrows the candidate list to
+the signed build (`OVMF_CODE_4M.secboot.fd` plus the pre-enrolled
+`OVMF_VARS_4M.ms.fd`) and adds `q35,smm=on` with
+`-global driver=cfi.pflash01,property=secure,value=on`; if no signed pair
+resolves, the create **fails** rather than falling back to an unsigned build,
+since booting without Secure Boot would quietly contradict what the API says
+the VM has. macOS hosts ship no signed EDK2 build, so Secure Boot is a
+Linux-hypervisor-node feature.
+
+`StratoAgentCore/SwtpmSupervisor.swift` runs the vTPM: one `swtpm socket
+--tpm2` process per VM, state in `<vmdir>/tpm`, control socket at
+`<vmdir>/swtpm.sock`, pid file alongside it, attached to QEMU as
+`-chardev socket,id=chrtpm,... -tpmdev emulator,id=tpm0,chardev=chrtpm
+-device tpm-tis,tpmdev=tpm0` (`tpm-tis-device` on the ARM `virt` machine).
+swtpm is spawned with `--daemon`, so it reparents to init and outlives the
+agent exactly as QEMU does — a re-adopted VM keeps talking to the swtpm it was
+started with. The converse does not hold: a swtpm that died under a live QEMU
+cannot be reattached mid-flight and needs a VM stop/start. The state directory
+persists across that, so anything the guest sealed to the TPM (BitLocker keys)
+is not lost.
+
+Whether the host has a usable `swtpm` is what the agent advertises as
+`tpmCapable` at registration (plus a `vtpm` capability string), and the host
+preflight reports its absence as an advisory — a host without swtpm is
+perfectly useful, it just never receives a TPM placement.
+
 ## Guest provisioning (cloud-init)
 
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO

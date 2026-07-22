@@ -52,6 +52,14 @@ struct SchedulableAgent: Sendable {
     /// capable runtime behind a pre-v5 protocol could never receive the
     /// desired entries).
     let supportsSandboxWorkloads: Bool
+    /// Whether this agent can give a guest an emulated TPM 2.0 (issue #565):
+    /// it advertised swtpm AND speaks a wire protocol that carries the machine
+    /// profile. Same two-signal rule as `supportsSandboxWorkloads`.
+    let supportsVTPM: Bool
+    /// Whether this agent realizes `VMSpec.machine` at all. Secure Boot needs
+    /// only this — no host binary, just a firmware set the agent resolves — so
+    /// it is tracked separately from `supportsVTPM`.
+    let supportsMachineProfile: Bool
 
     init(
         id: String,
@@ -69,7 +77,9 @@ struct SchedulableAgent: Sendable {
         supportsInterVMNetworking: Bool = false,
         siteID: UUID? = nil,
         wireProtocolVersion: Int? = nil,
-        supportsSandboxWorkloads: Bool = false
+        supportsSandboxWorkloads: Bool = false,
+        supportsVTPM: Bool = false,
+        supportsMachineProfile: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -87,6 +97,8 @@ struct SchedulableAgent: Sendable {
         self.siteID = siteID
         self.wireProtocolVersion = wireProtocolVersion
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
+        self.supportsVTPM = supportsVTPM
+        self.supportsMachineProfile = supportsMachineProfile
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -140,7 +152,9 @@ struct SchedulableAgent: Sendable {
             supportsInterVMNetworking: supportsInterVMNetworking,
             siteID: siteID,
             wireProtocolVersion: wireProtocolVersion,
-            supportsSandboxWorkloads: supportsSandboxWorkloads
+            supportsSandboxWorkloads: supportsSandboxWorkloads,
+            supportsVTPM: supportsVTPM,
+            supportsMachineProfile: supportsMachineProfile
         )
     }
 }
@@ -171,6 +185,16 @@ struct VMPlacementRequirements: Sendable {
     /// support alone is not enough, since a Firecracker-capable agent may
     /// lack the runtime or the guest base image.
     let requiresSandboxRuntime: Bool
+    /// Whether the VM asks for an emulated TPM 2.0 (issue #565). Hard
+    /// constraint: only agents with swtpm can realize one, and a guest that
+    /// silently loses its TPM fails Windows setup with nothing in the API
+    /// explaining why.
+    let requiresVTPM: Bool
+    /// Whether the VM asks for UEFI Secure Boot. Hard constraint on the wire
+    /// protocol only — any agent that understands the machine profile can
+    /// resolve a signed firmware set (or fail the create loudly if its host
+    /// has none).
+    let requiresSecureBoot: Bool
 
     init(
         cpu: Int,
@@ -180,7 +204,9 @@ struct VMPlacementRequirements: Sendable {
         architecture: CPUArchitecture? = nil,
         requiresInterVMNetworking: Bool = false,
         siteID: UUID? = nil,
-        requiresSandboxRuntime: Bool = false
+        requiresSandboxRuntime: Bool = false,
+        requiresVTPM: Bool = false,
+        requiresSecureBoot: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -190,6 +216,8 @@ struct VMPlacementRequirements: Sendable {
         self.requiresInterVMNetworking = requiresInterVMNetworking
         self.siteID = siteID
         self.requiresSandboxRuntime = requiresSandboxRuntime
+        self.requiresVTPM = requiresVTPM
+        self.requiresSecureBoot = requiresSecureBoot
     }
 }
 
@@ -201,6 +229,8 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
+    case vtpmUnsatisfied(eligibleAgents: Int)
+    case machineProfileUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -229,6 +259,14 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .sandboxRuntimeUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent advertises the sandbox runtime (\(eligibleAgents) Firecracker-capable agent(s) checked) — each needs a working Firecracker/KVM setup and the sandbox guest base image installed"
+        case .vtpmUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent can provide a TPM 2.0 (\(eligibleAgents) agent(s) checked) — install swtpm on a "
+                + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`) and let its agent re-register"
+        case .machineProfileUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent is new enough to realize Secure Boot or a TPM (\(eligibleAgents) agent(s) "
+                + "checked) — upgrade the agents on your hypervisor nodes"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -295,7 +333,9 @@ final class SchedulerService: @unchecked Sendable {
             disk: vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
-            siteID: siteID
+            siteID: siteID,
+            requiresVTPM: vm.tpmEnabled,
+            requiresSecureBoot: vm.secureBoot
         )
     }
 
@@ -474,16 +514,37 @@ final class SchedulerService: @unchecked Sendable {
             runtimeCapable = hypervisorCapable
         }
 
+        // Secure Boot and vTPM both ride `VMSpec.machine`, which only a v17+
+        // agent acts on; a vTPM additionally needs swtpm on the host. Both are
+        // categorical, and both fail *silently* on an agent that can't serve
+        // them — the guest simply boots without the feature — so placement is
+        // refused rather than degraded (issue #565).
+        var machineCapable = runtimeCapable
+        if requirements.requiresVTPM || requirements.requiresSecureBoot {
+            let profileCapable = machineCapable.filter { $0.supportsMachineProfile }
+            guard !profileCapable.isEmpty else {
+                throw SchedulerError.machineProfileUnsatisfied(eligibleAgents: machineCapable.count)
+            }
+            machineCapable = profileCapable
+        }
+        if requirements.requiresVTPM {
+            let tpmCapable = machineCapable.filter { $0.supportsVTPM }
+            guard !tpmCapable.isEmpty else {
+                throw SchedulerError.vtpmUnsatisfied(eligibleAgents: machineCapable.count)
+            }
+            machineCapable = tpmCapable
+        }
+
         // An agent with unknown architecture cannot prove it satisfies an
         // explicit architecture requirement, so it is excluded.
         let architectureMatched: [SchedulableAgent]
         if let requiredArchitecture = requirements.architecture {
-            architectureMatched = runtimeCapable.filter { $0.architecture == requiredArchitecture }
+            architectureMatched = machineCapable.filter { $0.architecture == requiredArchitecture }
             guard !architectureMatched.isEmpty else {
                 throw SchedulerError.architectureMismatch(required: requiredArchitecture)
             }
         } else {
-            architectureMatched = runtimeCapable
+            architectureMatched = machineCapable
         }
 
         let networkCapable =

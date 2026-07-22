@@ -46,6 +46,10 @@ export function CreateVMDialog({
     sshPublicKey: "",
     userData: "",
   });
+  // Machine profile (backend issue #565). Off by default: they cost a signed
+  // firmware build and an swtpm process, and only Windows-class guests need them.
+  const [secureBoot, setSecureBoot] = useState(false);
+  const [tpm, setTpm] = useState(false);
 
   // The VM is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
@@ -60,6 +64,16 @@ export function CreateVMDialog({
     () => images?.filter((img) => img.status === "ready" && img.id) || [],
     [images]
   );
+
+  // The dialog never sends a hypervisor: the API infers one from the image's
+  // artifact set when that set is compatible with exactly one, else QEMU.
+  // Mirroring that inference here lets the firmware toggles disable themselves
+  // instead of letting the create fail with a 400.
+  const isFirecracker = useMemo(() => {
+    const selected = readyImages.find((img) => img.id === formData.imageId);
+    const compatible = selected?.compatibleHypervisors ?? [];
+    return compatible.length === 1 && compatible[0] === "firecracker";
+  }, [readyImages, formData.imageId]);
 
   // Handle image selection - applies defaults directly without useEffect
   const handleImageSelect = useCallback(
@@ -112,6 +126,10 @@ export function CreateVMDialog({
         // Sent verbatim (no trim): the first bytes are the format header
         // cloud-init dispatches on.
         userData: formData.userData.trim() ? formData.userData : undefined,
+        // Omitted unless on, so pre-#565 control planes ignore them harmlessly.
+        // Never sent for Firecracker, which the API rejects outright.
+        secureBoot: !isFirecracker && secureBoot ? true : undefined,
+        tpm: !isFirecracker && tpm ? true : undefined,
       });
       watch(operation, formData.name);
       toast.success(`Creating VM "${formData.name}"`);
@@ -129,6 +147,8 @@ export function CreateVMDialog({
         sshPublicKey: "",
         userData: "",
       });
+      setSecureBoot(false);
+      setTpm(false);
       setQuotaError(null);
     } catch (error) {
       const message =
@@ -343,6 +363,52 @@ export function CreateVMDialog({
                 The VM&apos;s IP is allocated automatically from the selected
                 network.
               </p>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  Windows / Secure Boot
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Windows 11 and Server 2025 require both. Leave off for Linux
+                  guests.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  id="secureBoot"
+                  type="checkbox"
+                  checked={!isFirecracker && secureBoot}
+                  onChange={(e) => setSecureBoot(e.target.checked)}
+                  disabled={isLoading || isFirecracker}
+                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                Secure Boot
+              </label>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  id="tpm"
+                  type="checkbox"
+                  checked={!isFirecracker && tpm}
+                  onChange={(e) => setTpm(e.target.checked)}
+                  disabled={isLoading || isFirecracker}
+                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                TPM 2.0
+              </label>
+              {isFirecracker ? (
+                <p className="text-xs text-muted-foreground">
+                  Unavailable for this image: it boots under Firecracker, which
+                  has no UEFI firmware or TPM device. Use a QEMU image.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Secure Boot boots signed firmware with Microsoft&apos;s keys
+                  enrolled. TPM 2.0 is emulated per VM and only places on nodes
+                  with <code>swtpm</code> installed.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">

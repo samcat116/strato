@@ -30,6 +30,7 @@ public enum HostPreflight {
         case firecrackerSocketDirectory = "firecracker_socket_dir"
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
+        case swtpmBinary = "swtpm"
         case ovnDatabaseSocket = "ovn_nb_socket"
         case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
@@ -75,9 +76,15 @@ public enum HostPreflight {
         public var qemuImgPath: String
         /// nil when Firecracker cannot exist on this platform (non-Linux).
         public var firecrackerSocketDirectory: String?
-        /// The resolved firmware path for this host's architecture, or nil
-        /// when no candidate exists.
+        /// The resolved firmware path for this host's architecture — the CODE
+        /// image of the split pair when one resolved, else the monolithic
+        /// image — or nil when no candidate exists.
         public var firmwarePath: String?
+        /// The configured `swtpm` binary, or nil when none was found. Its
+        /// presence is what makes the agent advertise the TPM capability
+        /// (issue #565); its absence is advisory, since only VMs that ask for
+        /// a vTPM are affected.
+        public var swtpmBinaryPath: String?
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
         public var ovnMode: Bool
@@ -103,6 +110,7 @@ public enum HostPreflight {
             qemuImgPath: String,
             firecrackerSocketDirectory: String? = nil,
             firmwarePath: String? = nil,
+            swtpmBinaryPath: String? = nil,
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovnNBTLSFilePaths: [String] = [],
@@ -117,6 +125,7 @@ public enum HostPreflight {
             self.qemuImgPath = qemuImgPath
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
             self.firmwarePath = firmwarePath
+            self.swtpmBinaryPath = swtpmBinaryPath
             self.ovnMode = ovnMode
             self.ovnNBConnection = ovnNBConnection
             self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
@@ -162,6 +171,12 @@ public enum HostPreflight {
                 }
             }
             return nil
+        }
+
+        /// Whether this host can back a guest TPM 2.0 — the signal the agent
+        /// reports as `AgentRegisterMessage.tpmCapable` (issue #565).
+        public var swtpmAvailable: Bool {
+            check(.swtpmBinary)?.passed ?? false
         }
 
         /// Whether the OVN-specific host dependencies (database sockets and
@@ -225,6 +240,7 @@ public enum HostPreflight {
 
         checks.append(checkQemuImg(inputs.qemuImgPath))
         checks.append(checkFirmware(inputs.firmwarePath))
+        checks.append(checkSwtpm(inputs.swtpmBinaryPath))
 
         if inputs.ovnMode {
             if inputs.ovnNBConnection.hasPrefix("unix:") {
@@ -322,6 +338,21 @@ public enum HostPreflight {
                     + "or set firmware_path_arm64/firmware_path_x86_64 in the agent configuration.")
         }
         return .pass(.uefiFirmware, severity: .advisory)
+    }
+
+    /// swtpm backs guest vTPMs (issue #565). Advisory, not gating: a host
+    /// without it runs every VM that doesn't ask for a TPM exactly as before,
+    /// and the scheduler keeps vTPM VMs away via the reported capability.
+    static func checkSwtpm(_ path: String?) -> Check {
+        guard let path, FileManager.default.isExecutableFile(atPath: path) else {
+            return .fail(
+                .swtpmBinary, severity: .advisory,
+                "swtpm not found\(path.map { " at \($0)" } ?? "") — this host cannot run VMs with a TPM 2.0 "
+                    + "(Windows 11 and Server 2025 require one). Install it "
+                    + "(Debian/Ubuntu: `apt install swtpm swtpm-tools`) or set swtpm_binary_path "
+                    + "in the agent configuration.")
+        }
+        return .pass(.swtpmBinary, severity: .advisory)
     }
 
     /// All PEM files configured for the ssl: NB endpoint must exist.

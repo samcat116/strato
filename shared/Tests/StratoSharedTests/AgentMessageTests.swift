@@ -59,6 +59,32 @@ struct AgentMessageTests {
         #expect(decodedCapable.sandboxCapable == true)
     }
 
+    /// The vTPM capability (issue #565) follows the `sandboxCapable` contract:
+    /// absent from an agent that predates it, and absence means "not capable"
+    /// rather than "unknown" — the scheduler must never place a Windows VM on
+    /// a host that never claimed it could give it a TPM.
+    @Test("TPM capability: absent for old builds, carried when advertised")
+    func agentRegisterTPMCapable() throws {
+        let implicit = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources
+        )
+        #expect(try throughEnvelope(implicit).tpmCapable == nil)
+
+        let capable = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            capabilities: ["kvm", "vtpm"],
+            resources: Fixtures.resources,
+            tpmCapable: true
+        )
+        #expect(try throughEnvelope(capable).tpmCapable == true)
+    }
+
     @Test("Operating system reporting: absent for old builds, carried when reported")
     func agentRegisterOperatingSystem() throws {
         let implicit = AgentRegisterMessage(

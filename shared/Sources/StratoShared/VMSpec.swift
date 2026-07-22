@@ -28,6 +28,11 @@ public struct VMSpec: Codable, Sendable {
     public let hugepages: Bool
     /// How the VM boots.
     public let boot: BootSource
+    /// Guest machine features that are not resource sizing: Secure Boot and a
+    /// vTPM (issue #565). Nil from control planes that predate the field, and
+    /// from callers that want today's behavior; consumers treat nil as
+    /// `MachineProfile.default` (both off).
+    public let machine: MachineProfile?
     /// Volumes to attach, in boot order. May be empty when the boot volume is
     /// materialized agent-side from an image (see `ImageInfo`).
     public let volumes: [VolumeSpec]
@@ -54,6 +59,7 @@ public struct VMSpec: Codable, Sendable {
         sharedMemory: Bool = false,
         hugepages: Bool = false,
         boot: BootSource,
+        machine: MachineProfile? = nil,
         volumes: [VolumeSpec] = [],
         networks: [NetworkSpec] = [],
         console: ConsoleSpec? = nil,
@@ -67,6 +73,7 @@ public struct VMSpec: Codable, Sendable {
         self.sharedMemory = sharedMemory
         self.hugepages = hugepages
         self.boot = boot
+        self.machine = machine
         self.volumes = volumes
         self.networks = networks
         self.console = console
@@ -74,9 +81,13 @@ public struct VMSpec: Codable, Sendable {
         self.userData = userData
     }
 
-    // Custom decode so `sshAuthorizedKeys`, `diskBytes`, and `userData`
-    // tolerate absence: a spec produced by an older control plane (before
-    // these fields existed) decodes to []/nil rather than throwing, keeping
+    /// The machine profile to realize, defaulting to today's behavior when the
+    /// sending control plane predates the field.
+    public var effectiveMachine: MachineProfile { machine ?? .default }
+
+    // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `machine`, and
+    // `userData` tolerate absence: a spec produced by an older control plane
+    // (before these fields existed) decodes to []/nil rather than throwing, keeping
     // agent↔control-plane compatible across version skew. `encode(to:)` stays
     // synthesized. All other keys remain required, matching the existing wire
     // contract.
@@ -89,11 +100,52 @@ public struct VMSpec: Codable, Sendable {
         sharedMemory = try c.decode(Bool.self, forKey: .sharedMemory)
         hugepages = try c.decode(Bool.self, forKey: .hugepages)
         boot = try c.decode(BootSource.self, forKey: .boot)
+        machine = try c.decodeIfPresent(MachineProfile.self, forKey: .machine)
         volumes = try c.decode([VolumeSpec].self, forKey: .volumes)
         networks = try c.decode([NetworkSpec].self, forKey: .networks)
         console = try c.decodeIfPresent(ConsoleSpec.self, forKey: .console)
         sshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
         userData = try c.decodeIfPresent(String.self, forKey: .userData)
+    }
+}
+
+// MARK: - Machine Profile
+
+/// Guest machine features beyond resource sizing (issue #565).
+///
+/// Both flags are what Windows 11 / Server 2025 refuse to install without, and
+/// both are realized entirely agent-side: Secure Boot selects the firmware set
+/// (the `.secboot` EDK2 build plus a pre-enrolled variable store) and `tpm`
+/// makes the agent run a per-VM `swtpm` alongside the guest. The control plane
+/// only records the *intent*; it never names a firmware file or a socket.
+///
+/// Defaults are both-off, so a VM that says nothing boots exactly as it did
+/// before this existed.
+public struct MachineProfile: Codable, Equatable, Sendable {
+    /// Whether the guest boots with UEFI Secure Boot enabled. Requires a
+    /// firmware set whose variable store ships Microsoft's KEK/db enrolled;
+    /// agents that cannot resolve one fail the create rather than booting the
+    /// guest insecurely under a name that promises otherwise.
+    public let secureBoot: Bool
+    /// Whether the guest gets an emulated TPM 2.0. Requires `swtpm` on the
+    /// host, which agents advertise as a capability so the scheduler never
+    /// places a TPM VM where it cannot be realized.
+    public let tpm: Bool
+
+    /// Today's behavior: no Secure Boot, no vTPM.
+    public static let `default` = MachineProfile(secureBoot: false, tpm: false)
+
+    public init(secureBoot: Bool = false, tpm: Bool = false) {
+        self.secureBoot = secureBoot
+        self.tpm = tpm
+    }
+
+    /// Tolerates a partial profile from a peer that carries only one of the
+    /// flags, treating an absent flag as off rather than failing the decode.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        secureBoot = try c.decodeIfPresent(Bool.self, forKey: .secureBoot) ?? false
+        tpm = try c.decodeIfPresent(Bool.self, forKey: .tpm) ?? false
     }
 }
 

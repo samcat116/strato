@@ -324,6 +324,7 @@ actor AgentService {
             agent.networkCapability = message.networkCapability?.rawValue
             agent.hostInfo = message.hostInfo ?? agent.hostInfo
             agent.sandboxCapable = message.sandboxCapable ?? false
+            agent.tpmCapable = message.tpmCapable ?? false
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
@@ -3171,7 +3172,13 @@ actor AgentService {
                 // runtime proves the agent can boot sandboxes, and a v5+
                 // protocol proves desired sandbox entries actually reach it.
                 supportsSandboxWorkloads: agent.sandboxCapable
-                    && WireProtocol.supportsSandboxSync(agent.wireProtocolVersion ?? 0)
+                    && WireProtocol.supportsSandboxSync(agent.wireProtocolVersion ?? 0),
+                // Same two-signal rule for vTPM (issue #565): swtpm on the host
+                // proves it can be realized, and a v17+ protocol proves the
+                // machine profile reaches the agent at all.
+                supportsVTPM: agent.tpmCapable
+                    && WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
+                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0)
             )
         }
     }
