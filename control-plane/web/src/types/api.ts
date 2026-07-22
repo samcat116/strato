@@ -193,6 +193,8 @@ export interface ProjectMember {
   email: string;
   role: ProjectRole;
   joinedAt: string | null;
+  /** Not a member of the project's organization — a cross-org grant. */
+  external: boolean;
 }
 
 export interface ProjectGroupGrant {
@@ -200,6 +202,8 @@ export interface ProjectGroupGrant {
   name: string;
   role: ProjectRole;
   grantedAt: string | null;
+  /** Belongs to another organization — a cross-org grant. */
+  external: boolean;
 }
 
 export interface ProjectMembers {
