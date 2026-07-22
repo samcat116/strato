@@ -300,7 +300,7 @@ final class WorkloadPrincipalTests {
                 organizationID: try tree.org.requireID())
             try await workloadRow.save(on: app.db)
             try await WorkloadRegistry.registerAgent(
-                spiffeID: "spiffe://strato.local/agent/node-a", agentName: "node-a", on: app.db)
+                identity: AgentIdentity(trustDomain: "strato.local", name: "node-a"), on: app.db)
 
             #expect(
                 try await WorkloadRegistry.resolve(
@@ -330,34 +330,39 @@ final class WorkloadPrincipalTests {
     func registryUniqueness() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "registry-unique")
+            let nodeB = AgentIdentity(trustDomain: "strato.local", name: "node-b")
 
-            // Re-registering the same agent identity is idempotent…
-            try await WorkloadRegistry.registerAgent(
-                spiffeID: "spiffe://strato.local/agent/node-b", agentName: "node-b", on: app.db)
-            try await WorkloadRegistry.registerAgent(
-                spiffeID: "spiffe://strato.local/agent/node-b", agentName: "node-b", on: app.db)
+            // Registering (and re-requiring) the same agent identity is
+            // idempotent…
+            try await WorkloadRegistry.registerAgent(identity: nodeB, on: app.db)
+            try await WorkloadRegistry.requireAgentRegistration(identity: nodeB, on: app.db)
             let rows = try await WorkloadRegistration.query(on: app.db)
-                .filter(\.$spiffeID == "spiffe://strato.local/agent/node-b")
+                .filter(\.$spiffeID == nodeB.key)
                 .count()
             #expect(rows == 1)
 
-            // …but the same URI cannot become a different principal.
-            await #expect(throws: (any Error).self) {
-                try await WorkloadRegistry.registerAgent(
-                    spiffeID: "spiffe://strato.local/agent/node-b", agentName: "impostor", on: app.db)
-            }
+            // …but the same URI cannot become a second principal.
             await #expect(throws: (any Error).self) {
                 try await WorkloadRegistration(
-                    spiffeID: "spiffe://strato.local/agent/node-b", kind: .workload,
+                    spiffeID: nodeB.key, kind: .workload,
                     organizationID: try tree.org.requireID()
                 ).save(on: app.db)
             }
 
-            // Deregistering removes the agent's rows.
-            try await WorkloadRegistry.deregisterAgent(named: "node-b", on: app.db)
-            #expect(
-                try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/agent/node-b", on: app.db) == nil)
+            // An agent-shaped URI already registered to a *different* kind of
+            // principal must fail agent authentication outright.
+            let claimed = AgentIdentity(trustDomain: "strato.local", name: "node-c")
+            try await WorkloadRegistration(
+                spiffeID: claimed.key, kind: .workload,
+                organizationID: try tree.org.requireID()
+            ).save(on: app.db)
+            await #expect(throws: (any Error).self) {
+                try await WorkloadRegistry.requireAgentRegistration(identity: claimed, on: app.db)
+            }
+
+            // Deregistering removes the agent's row.
+            try await WorkloadRegistry.deregisterAgent(identity: nodeB, on: app.db)
+            #expect(try await WorkloadRegistry.resolve(spiffeID: nodeB.key, on: app.db) == nil)
         }
     }
 }

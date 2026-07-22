@@ -21,7 +21,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
     struct ConsoleSessionInfo: Sendable {
         let sessionId: String
         let vmId: String
-        let agentName: String
+        let agentKey: String
         let userId: String?
         let createdAt: Date
     }
@@ -36,7 +36,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
     func createSession(
         sessionId: String,
         vmId: String,
-        agentName: String,
+        agentKey: String,
         userId: String?,
         websocket: WebSocket?
     ) {
@@ -44,7 +44,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
             let sessionInfo = ConsoleSessionInfo(
                 sessionId: sessionId,
                 vmId: vmId,
-                agentName: agentName,
+                agentKey: agentKey,
                 userId: userId,
                 createdAt: Date()
             )
@@ -65,7 +65,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
             metadata: [
                 "sessionId": .string(sessionId),
                 "vmId": .string(vmId),
-                "agentName": .string(agentName),
+                "agentKey": .string(agentKey),
             ])
     }
 
@@ -95,17 +95,17 @@ final class ConsoleSessionManager: @unchecked Sendable {
     /// removing it, so a compromised agent cannot tear down another session by
     /// guessing its (random) id. The frontend-initiated `removeSession` needs
     /// no such check — a browser can only ever close its own session.
-    func removeSession(sessionId: String, fromAgentNamed agentName: String) {
+    func removeSession(sessionId: String, fromAgentKey agentKey: String) {
         let owns = lock.withLock { () -> Bool in
             guard let session = sessions[sessionId] else { return false }
-            return session.agentName == agentName
+            return session.agentKey == agentKey
         }
         guard owns else {
             app.logger.warning(
                 "Dropping console disconnect from an agent that does not own the session",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
+                    "agentKey": .string(agentKey),
                 ])
             return
         }
@@ -134,14 +134,14 @@ final class ConsoleSessionManager: @unchecked Sendable {
         }
     }
 
-    /// Tear down every console session targeting `agentName` because its
+    /// Tear down every console session targeting `agentKey` because its
     /// socket is gone (crash, network drop, or graceful unregister). Each
     /// attached browser gets a terminal error frame and a close — instead of
     /// a silently frozen terminal whose keystrokes go nowhere.
-    func closeAllSessions(forAgent agentName: String, reason: String) {
+    func closeAllSessions(forAgent agentKey: String, reason: String) {
         let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
             var closed: [(String, WebSocket?)] = []
-            for (sessionId, session) in sessions where session.agentName == agentName {
+            for (sessionId, session) in sessions where session.agentKey == agentKey {
                 sessions.removeValue(forKey: sessionId)
                 let websocket = frontendConnections.removeValue(forKey: sessionId)
                 vmSessions[session.vmId]?.remove(sessionId)
@@ -158,7 +158,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 "Closed console session: agent disconnected",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
+                    "agentKey": .string(agentKey),
                 ])
             guard let websocket else { continue }
             websocket.send("error: \(reason)")
@@ -174,7 +174,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
     /// or signal readiness on, a session it does not host. Mirrors the
     /// ownership gate `SandboxExecSessionManager.frontendConnection` enforces.
     private func frontendConnection(
-        sessionId: String, fromAgentNamed agentName: String, event: String
+        sessionId: String, fromAgentKey agentKey: String, event: String
     ) -> WebSocket? {
         let (session, websocket) = lock.withLock {
             (sessions[sessionId], frontendConnections[sessionId])
@@ -182,16 +182,16 @@ final class ConsoleSessionManager: @unchecked Sendable {
         guard let session else {
             app.logger.debug(
                 "Console \(event) for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentName": .string(agentName)])
+                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
             return nil
         }
-        guard session.agentName == agentName else {
+        guard session.agentKey == agentKey else {
             app.logger.warning(
                 "Dropping console \(event) from an agent that does not own the session",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
-                    "sessionAgentName": .string(session.agentName),
+                    "agentKey": .string(agentKey),
+                    "sessionAgentName": .string(session.agentKey),
                 ])
             return nil
         }
@@ -199,8 +199,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
     }
 
     /// Route console data from agent to frontend(s)
-    func routeToFrontend(vmId: String, sessionId: String, data: Data, fromAgentNamed agentName: String) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "data")
+    func routeToFrontend(vmId: String, sessionId: String, data: Data, fromAgentKey agentKey: String) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "data")
         else {
             return
         }
@@ -210,8 +210,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
     }
 
     /// Notify the frontend that the console is ready for input
-    func notifyFrontendReady(sessionId: String, fromAgentNamed agentName: String) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "ready")
+    func notifyFrontendReady(sessionId: String, fromAgentKey agentKey: String) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "ready")
         else {
             return
         }
@@ -243,17 +243,17 @@ final class ConsoleSessionManager: @unchecked Sendable {
             rawData: data
         )
 
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     /// Send console connect message to agent
-    func sendConsoleConnect(sessionId: String, vmId: String, agentName: String) async throws {
+    func sendConsoleConnect(sessionId: String, vmId: String, agentKey: String) async throws {
         app.logger.info(
             "Sending console connect to agent",
             metadata: [
                 "sessionId": .string(sessionId),
                 "vmId": .string(vmId),
-                "agentName": .string(agentName),
+                "agentKey": .string(agentKey),
             ])
 
         let message = ConsoleConnectMessage(
@@ -261,7 +261,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
             sessionId: sessionId
         )
 
-        try await sendMessageToAgent(message, agentName: agentName)
+        try await sendMessageToAgent(message, agentKey: agentKey)
 
         app.logger.info(
             "Console connect message sent successfully",
@@ -287,17 +287,17 @@ final class ConsoleSessionManager: @unchecked Sendable {
             sessionId: sessionId
         )
 
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     // MARK: - Private Helpers
 
-    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentName: String) async throws {
-        app.logger.debug("Looking up WebSocket for agent", metadata: ["agentName": .string(agentName)])
+    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
+        app.logger.debug("Looking up WebSocket for agent", metadata: ["agentKey": .string(agentKey)])
 
-        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else {
-            app.logger.error("Agent WebSocket not found", metadata: ["agentName": .string(agentName)])
-            throw ConsoleSessionError.agentNotConnected(agentName)
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
+            app.logger.error("Agent WebSocket not found", metadata: ["agentKey": .string(agentKey)])
+            throw ConsoleSessionError.agentNotConnected(agentKey)
         }
 
         let envelope = try MessageEnvelope(message: message)
@@ -306,7 +306,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.debug(
             "Sending message to agent",
             metadata: [
-                "agentName": .string(agentName),
+                "agentKey": .string(agentKey),
                 "messageType": .string(message.type.rawValue),
                 "dataSize": .stringConvertible(data.count),
             ])
@@ -326,8 +326,8 @@ enum ConsoleSessionError: Error, LocalizedError {
         switch self {
         case .sessionNotFound(let sessionId):
             return "Console session not found: \(sessionId)"
-        case .agentNotConnected(let agentName):
-            return "Agent not connected: \(agentName)"
+        case .agentNotConnected(let agentKey):
+            return "Agent not connected: \(agentKey)"
         case .vmNotRunning(let vmId):
             return "VM is not running: \(vmId)"
         }

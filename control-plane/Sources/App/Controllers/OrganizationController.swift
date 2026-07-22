@@ -139,6 +139,12 @@ struct OrganizationController: RouteCollection {
                 createdBy: user.id,
                 on: db
             )
+            // Claim the organization's trust domain in the same transaction as
+            // its Cedar bindings, so an org can never exist without the row the
+            // reconciler (issue #614) provisions its SPIRE instance from. Off
+            // by default: with the feature flag down no row is written and only
+            // the platform trust domain exists.
+            try await OrgTrustDomainProvisioning.claim(organizationID: organization.id!, on: db)
         }
 
         // Set as current organization if user doesn't have one
@@ -266,14 +272,35 @@ struct OrganizationController: RouteCollection {
                 .compactMap { $0.id }
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
-        try await req.db.transaction { db in
+        // Roles owned by the org (or by a project cascading away with it) go
+        // too — a role outliving its owner is bindable nowhere and listed
+        // nowhere, while still contributing a grants-field pair to the Cedar
+        // schema. That makes this a policy-set change, so it runs inside
+        // `withPolicySetChange` and bumps the version when roles actually went.
+        let removedRoles = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             try await organization.delete(on: db)
+            // The trust domain row deliberately outlives the organization: it
+            // is the instruction to destroy the org's CA, and the reconciler
+            // has to be able to read it after the org is gone. Mark it for
+            // teardown rather than deleting it.
+            try await OrgTrustDomainProvisioning.markForTeardown(organizationID: organizationID, on: db)
             try await RoleBindingService.revokeAll(
                 nodeType: .organization, nodeID: organizationID, on: db)
+            var removedRoles = try await RoleStore.deleteOwned(
+                by: .organization, ownerID: organizationID, on: db)
             for projectID in cascadedProjectIDs {
                 try await RoleBindingService.revokeAll(
                     nodeType: .project, nodeID: projectID, on: db)
+                removedRoles += try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             }
+            if removedRoles > 0 {
+                try await PolicySetVersionService.bump(
+                    reason: "organization deleted: \(removedRoles) owned role(s) removed", on: db)
+            }
+            return removedRoles
+        }
+        if removedRoles > 0 {
+            await req.application.announcePolicySetChange()
         }
 
         return .noContent
@@ -446,14 +473,12 @@ struct OrganizationController: RouteCollection {
 
         try await req.db.transaction { db in
             try await membership.delete(on: db)
-            // Drop the departing member's bindings on the org node.
-            try await RoleBindingService.revoke(
-                principalType: .user,
-                principalID: userID,
-                nodeType: .organization,
-                nodeID: organizationID,
-                on: db
-            )
+            // Everything held inside the org goes with the membership — group
+            // memberships, project mirror rows, and bindings across the whole
+            // subtree, not just the org node (issue #485). Grants in other
+            // orgs stay: those are the other orgs' to revoke.
+            try await OffboardingSweep.userLeftOrganization(
+                userID: userID, organizationID: organizationID, on: db)
         }
 
         return .noContent

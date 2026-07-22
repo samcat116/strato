@@ -239,8 +239,16 @@ struct AgentController: RouteCollection {
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
+        // Names are unique per trust domain, not globally (issue #613): with a
+        // trust domain per organization, two organizations may each enroll an
+        // `agent-1` without either shadowing the other. Until per-org domains
+        // are switched on this is the single platform domain, so the checks are
+        // exactly as global as they were.
+        let trustDomain = spire.trustDomain
+
         // Check if agent name is already in use by an existing agent
         let existingAgent = try await Agent.query(on: req.db)
+            .filter(\.$trustDomain == trustDomain)
             .filter(\.$name == createRequest.agentName)
             .first()
 
@@ -248,10 +256,12 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "Agent name '\(createRequest.agentName)' is already registered")
         }
 
-        // One enrollment per name (the column is unique). Re-enrolling a node
-        // means revoking the old one first, so its SPIRE grant is withdrawn
-        // rather than orphaned alongside a second grant for the same identity.
+        // One enrollment per name per trust domain (the pair is unique).
+        // Re-enrolling a node means revoking the old one first, so its SPIRE
+        // grant is withdrawn rather than orphaned alongside a second grant for
+        // the same identity.
         let existingEnrollment = try await AgentEnrollment.query(on: req.db)
+            .filter(\.$trustDomain == trustDomain)
             .filter(\.$agentName == createRequest.agentName)
             .first()
 
@@ -321,6 +331,7 @@ struct AgentController: RouteCollection {
         let enrollment = AgentEnrollment(
             agentName: createRequest.agentName,
             spiffeID: provisioning.spiffeID,
+            trustDomain: provisioning.trustDomain,
             expirationHours: expirationHours,
             siteID: createRequest.siteId,
             organizationScope: scope
@@ -342,6 +353,7 @@ struct AgentController: RouteCollection {
             // which keeps the rollback behaviour for a genuine save failure.
             let claimed =
                 ((try? await AgentEnrollment.query(on: req.db)
+                    .filter(\.$trustDomain == trustDomain)
                     .filter(\.$agentName == createRequest.agentName)
                     .first()) ?? nil) != nil
 
@@ -447,8 +459,12 @@ struct AgentController: RouteCollection {
         //
         // Fail closed: if SPIRE is unreachable the enrollment stays revocable
         // later.
+        // Scoped to the enrollment's own trust domain: a same-named agent in
+        // another organization's domain is a different node entirely, and
+        // matching it here would leave this enrollment's SPIRE grant standing.
         let agentIsRegistered =
             try await Agent.query(on: req.db)
+            .filter(\.$trustDomain == enrollment.trustDomain)
             .filter(\.$name == enrollment.agentName)
             .first() != nil
 
@@ -478,9 +494,11 @@ struct AgentController: RouteCollection {
 
         try await enrollment.delete(on: req.db)
         if enrollmentOwnsGrant {
-            // No agent row exists, so any workload-registry row for the name
-            // is an orphan of the just-revoked SPIRE grant (issue #491).
-            try await WorkloadRegistry.deregisterAgent(named: enrollment.agentName, on: req.db)
+            // No agent row exists, so any workload-registry row for the
+            // identity is an orphan of the just-revoked SPIRE grant (#491).
+            try await WorkloadRegistry.deregisterAgent(
+                identity: AgentIdentity(trustDomain: enrollment.trustDomain, name: enrollment.agentName),
+                on: req.db)
         }
 
         req.logger.info(
@@ -613,13 +631,13 @@ struct AgentController: RouteCollection {
         }
 
         // Remove from in-memory registry if present
-        await req.agentService.forceUnregisterAgent(agent.name)
+        await req.agentService.forceUnregisterAgent(agent.identity)
 
         // Delete from database, along with the workload-registry rows mapping
         // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
         // behind them were just deprovisioned.
         try await agent.delete(on: req.db)
-        try await WorkloadRegistry.deregisterAgent(named: agent.name, on: req.db)
+        try await WorkloadRegistry.deregisterAgent(identity: agent.identity, on: req.db)
 
         // Deregistration retires the node: delete its enrollment so the name can
         // be enrolled again. Left behind, the row would block a fresh enrollment
@@ -627,6 +645,7 @@ struct AgentController: RouteCollection {
         // entries for the name were already deprovisioned above, so the row
         // carries no external grant.
         try await AgentEnrollment.query(on: req.db)
+            .filter(\.$trustDomain == agent.trustDomain)
             .filter(\.$agentName == agent.name)
             .delete()
 
@@ -653,7 +672,7 @@ struct AgentController: RouteCollection {
         try await requireNoForeignWorkloads(req, agent: agent)
 
         // Force agent offline in in-memory registry
-        await req.agentService.forceUnregisterAgent(agent.name)
+        await req.agentService.forceUnregisterAgent(agent.identity)
 
         // Update database status
         agent.status = .offline

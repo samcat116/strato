@@ -153,8 +153,13 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
-        // Delete the group (cascade will remove UserGroup entries)
-        try await group.delete(on: db)
+        // Mirror rows cascade with the group row; role bindings have no FK by
+        // design and are swept by principal — across every org, since a group
+        // may hold cross-org bindings (issue #485).
+        try await db.transaction { transaction in
+            try await RoleBindingService.revokeAll(principalType: .group, principalID: uuid, on: transaction)
+            try await group.delete(on: transaction)
+        }
 
         // Delete external ID mapping
         try await SCIMExternalID.deleteMapping(

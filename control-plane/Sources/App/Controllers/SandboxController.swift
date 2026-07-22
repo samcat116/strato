@@ -806,7 +806,7 @@ struct SandboxController: RouteCollection {
         // Exec frames flow over the agent's WebSocket, which only this
         // process can write to. If another replica holds the socket the
         // client must retry against that replica (console parity).
-        guard req.application.websocketManager.getConnection(agentName: agent.name) != nil else {
+        guard req.application.websocketManager.getConnection(agentKey: agent.identity.key) != nil else {
             throw Abort(
                 .serviceUnavailable,
                 reason:
@@ -816,7 +816,7 @@ struct SandboxController: RouteCollection {
 
         let session = req.sandboxExecSessionManager.createPendingSession(
             sandboxId: sandboxID.uuidString,
-            agentName: agent.name,
+            agentKey: agent.identity.key,
             userId: try user.requireID().uuidString,
             command: execRequest.command,
             env: execRequest.env,

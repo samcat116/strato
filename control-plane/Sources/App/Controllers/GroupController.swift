@@ -192,8 +192,14 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
         }
 
-        // Delete from database (this will cascade delete user_groups)
-        try await group.delete(on: req.db)
+        // Mirror rows (user_groups, project_group_grants) cascade with the
+        // group row; role bindings have no FK by design and must be swept by
+        // principal — across every org, since a group may hold cross-org
+        // bindings (issue #485).
+        try await req.db.transaction { db in
+            try await RoleBindingService.revokeAll(principalType: .group, principalID: groupID, on: db)
+            try await group.delete(on: db)
+        }
         return .noContent
     }
 

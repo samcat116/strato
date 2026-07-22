@@ -387,7 +387,7 @@ final class DesiredStateReconciliationTests {
                 agentId: agentId,
                 vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1)]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .running)
@@ -419,7 +419,7 @@ final class DesiredStateReconciliationTests {
                         failedGeneration: 1)
                 ]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let failed = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(failed?.status == .failed)
@@ -457,7 +457,7 @@ final class DesiredStateReconciliationTests {
                         failedGeneration: 1)
                 ]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             // The fresh operation must not be failed by the stale error.
             let stillPending = try await ResourceOperation.find(operation.id, on: app.db)
@@ -483,7 +483,7 @@ final class DesiredStateReconciliationTests {
                         convergencePhase: "downloading image")
                 ]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .created)  // untouched
@@ -505,7 +505,7 @@ final class DesiredStateReconciliationTests {
 
             // Full-list semantics: the VM is missing from the agent's report.
             let envelope = try self.report(agentId: agentId, vms: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let gone = try await VM.find(vm.id, on: app.db)
             #expect(gone == nil)
@@ -525,7 +525,7 @@ final class DesiredStateReconciliationTests {
             try await vm.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, vms: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .error)
@@ -543,7 +543,7 @@ final class DesiredStateReconciliationTests {
             try await vm.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, vms: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .created)
@@ -565,7 +565,7 @@ final class DesiredStateReconciliationTests {
                 agentId: agentId,
                 vms: [ObservedVMState(vmId: vm.id!, status: .paused, observedGeneration: 1)]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .paused)
@@ -585,7 +585,7 @@ final class DesiredStateReconciliationTests {
                 vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1)]
             )
             // Delivered over a connection authenticated as a different agent.
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "impostor")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("impostor"))
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .created)
@@ -624,7 +624,7 @@ final class DesiredStateReconciliationTests {
                 agentId: agentId,
                 vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(refreshed.qgaAvailable == true)
@@ -658,7 +658,7 @@ final class DesiredStateReconciliationTests {
                     agentId: agentId,
                     vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
                 )
-                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+                await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
             }
 
             // First: the guest has a DHCP address.
@@ -706,7 +706,7 @@ final class DesiredStateReconciliationTests {
                     agentId: agentId,
                     vms: [ObservedVMState(vmId: vm.id!, status: status, observedGeneration: 1, guestInfo: guestInfo)]
                 )
-                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+                await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
             }
 
             // Running with a live guest agent: hostname, availability, addresses recorded.
@@ -750,7 +750,7 @@ final class DesiredStateReconciliationTests {
                             balloonActualBytes: 8_589_934_592))
                 ]
             )
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(refreshed.guestMemoryTotalBytes == 8_254_390_272)
@@ -774,7 +774,7 @@ final class DesiredStateReconciliationTests {
                             memoryStats: memoryStats)
                     ]
                 )
-                await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+                await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
             }
 
             try await send(

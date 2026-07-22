@@ -22,6 +22,8 @@ Event types:
 | `auth.logout` | Session logout |
 | `auth.register` | Passkey registration completing (also creates a session) |
 | `auth.oidc_login` / `auth.oidc_login_failed` | OIDC callback success / failure |
+| `iam.cross_org_grant` | A role granted to a principal (user or group) outside the resource's organization. Cross-org access is explicit-only and deliberately loud; the metadata names the principal and the role. |
+| `iam.cross_org_revoke` | A cross-org principal's role revoked — the visible end of external access. |
 
 ## Configuration
 

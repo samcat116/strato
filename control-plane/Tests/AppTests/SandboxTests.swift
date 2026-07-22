@@ -1104,7 +1104,7 @@ final class SandboxTests {
                         sandboxId: sandbox.id!, status: .running,
                         observedGeneration: sandbox.generation)
                 ])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .running)
@@ -1133,7 +1133,7 @@ final class SandboxTests {
                         sandboxId: sandbox.id!, status: .exited,
                         observedGeneration: sandbox.generation, exitCode: 0)
                 ])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .exited)
@@ -1165,7 +1165,7 @@ final class SandboxTests {
                         lastError: "image pull failed",
                         failedGeneration: generation)
                 ])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
             #expect(completed.status == .failed)
@@ -1188,7 +1188,7 @@ final class SandboxTests {
             try await operation.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
             #expect(completed.status == .succeeded)
@@ -1207,7 +1207,7 @@ final class SandboxTests {
             try await sandbox.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .stopped)
@@ -1225,7 +1225,7 @@ final class SandboxTests {
             try await sandbox.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
-            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "sandbox-agent")
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .error)

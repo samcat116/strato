@@ -285,7 +285,7 @@ extension SandboxController {
                 .unauthorized,
                 reason: "Snapshot artifact transfer requires agent mTLS authentication")
         }
-        let agentName = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
 
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self),
             let snapshotID = req.parameters.get("snapshotID", as: UUID.self),
@@ -302,7 +302,7 @@ extension SandboxController {
         req.logger.info(
             "Agent snapshot artifact transfer authenticated",
             metadata: [
-                "agent": .string(agentName),
+                "agent": .string(agent.identity.key),
                 "snapshot_id": .string(snapshotID.uuidString),
                 "kind": .string(kind.rawValue),
                 "method": .string(req.method.rawValue),

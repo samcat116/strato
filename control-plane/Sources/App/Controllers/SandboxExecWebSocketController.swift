@@ -74,7 +74,7 @@ struct SandboxExecWebSocketController: RouteCollection {
                 metadata: [
                     "sandboxId": .string(sandboxId.uuidString),
                     "sessionId": .string(sessionId),
-                    "agentName": .string(session.agentName),
+                    "agentName": .string(session.agentKey),
                 ])
 
             // Everything sent to the agent for this session flows through a

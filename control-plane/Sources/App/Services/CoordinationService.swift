@@ -499,33 +499,33 @@ actor CoordinationService {
 
     // MARK: Agent presence
 
-    nonisolated static func presenceKey(agentName: String) -> String {
-        "agent:\(agentName):presence"
+    nonisolated static func presenceKey(agentKey: String) -> String {
+        "agent:\(agentKey):presence"
     }
 
     /// Record (or refresh) an agent's presence. Failures are logged, not
     /// thrown: a missed refresh costs one TTL window of cross-process
     /// visibility and the next heartbeat repairs it.
-    func recordAgentPresence(agentName: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds) async {
+    func recordAgentPresence(agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds) async {
         do {
-            try await store.setKey(Self.presenceKey(agentName: agentName), ttlSeconds: ttlSeconds)
+            try await store.setKey(Self.presenceKey(agentKey: agentKey), ttlSeconds: ttlSeconds)
         } catch {
             logger.warning(
                 "Failed to record agent presence in coordination store",
-                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
         }
     }
 
     /// Whether the agent's presence key is live. Returns nil when the store
     /// can't answer, so callers can fall back to their in-memory view instead
     /// of treating an outage as universal agent death.
-    func isAgentPresent(agentName: String) async -> Bool? {
+    func isAgentPresent(agentKey: String) async -> Bool? {
         do {
-            return try await store.keyExists(Self.presenceKey(agentName: agentName))
+            return try await store.keyExists(Self.presenceKey(agentKey: agentKey))
         } catch {
             logger.warning(
                 "Failed to read agent presence from coordination store",
-                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
             return nil
         }
     }
@@ -691,8 +691,8 @@ actor CoordinationService {
     /// window (the agent is effectively offline until it reconnects anyway).
     static let routeTTLSeconds = presenceTTLSeconds
 
-    nonisolated static func routeKey(agentName: String) -> String {
-        "agent:\(agentName):replica"
+    nonisolated static func routeKey(agentKey: String) -> String {
+        "agent:\(agentKey):replica"
     }
 
     nonisolated static func nudgeChannel(replicaId: String) -> String {
@@ -711,27 +711,27 @@ actor CoordinationService {
     /// are logged, not thrown: without the route, cross-replica mutations lose
     /// only their nudge latency — the periodic sync converges the agent.
     func recordAgentRoute(
-        agentName: String, replicaId: String, ttlSeconds: Int = CoordinationService.routeTTLSeconds
+        agentKey: String, replicaId: String, ttlSeconds: Int = CoordinationService.routeTTLSeconds
     ) async {
         do {
             try await store.setValue(
-                Self.routeKey(agentName: agentName), value: replicaId, ttlSeconds: ttlSeconds)
+                Self.routeKey(agentKey: agentKey), value: replicaId, ttlSeconds: ttlSeconds)
         } catch {
             logger.warning(
                 "Failed to record agent socket route in coordination store",
-                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
         }
     }
 
     /// The replica currently holding the agent's socket, or nil when unknown
     /// (agent offline, route expired, or store unavailable).
-    func agentRoute(agentName: String) async -> String? {
+    func agentRoute(agentKey: String) async -> String? {
         do {
-            return try await store.getValue(Self.routeKey(agentName: agentName))
+            return try await store.getValue(Self.routeKey(agentKey: agentKey))
         } catch {
             logger.warning(
                 "Failed to read agent socket route from coordination store",
-                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
             return nil
         }
     }
@@ -739,29 +739,29 @@ actor CoordinationService {
     /// Clear the agent's route only if this replica still owns it, so a
     /// delayed close after the agent reconnected elsewhere cannot erase the
     /// successor's claim. Best-effort: the TTL is the backstop.
-    func clearAgentRoute(agentName: String, replicaId: String) async {
+    func clearAgentRoute(agentKey: String, replicaId: String) async {
         do {
-            try await store.deleteValue(Self.routeKey(agentName: agentName), ifEquals: replicaId)
+            try await store.deleteValue(Self.routeKey(agentKey: agentKey), ifEquals: replicaId)
         } catch {
             logger.warning(
                 "Failed to clear agent socket route; TTL will reclaim it",
-                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
         }
     }
 
     // MARK: Replica pub/sub (issue #261)
 
-    /// Publish a sync nudge for `agentName` to the replica holding its socket.
+    /// Publish a sync nudge for `agentKey` to the replica holding its socket.
     /// Best-effort by design: a lost nudge costs one periodic-sync interval of
     /// latency, never correctness.
-    func publishNudge(agentName: String, toReplica replicaId: String) async {
+    func publishNudge(agentKey: String, toReplica replicaId: String) async {
         do {
-            try await store.publish(channel: Self.nudgeChannel(replicaId: replicaId), message: agentName)
+            try await store.publish(channel: Self.nudgeChannel(replicaId: replicaId), message: agentKey)
         } catch {
             logger.warning(
                 "Failed to publish sync nudge; periodic sync will converge the agent",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "agentKey": .string(agentKey),
                     "replicaId": .string(replicaId),
                     "error": .string("\(error)"),
                 ])

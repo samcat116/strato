@@ -46,7 +46,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     struct PendingExecSession: Sendable {
         let sessionId: String
         let sandboxId: String
-        let agentName: String
+        let agentKey: String
         let userId: String
         let command: [String]
         let env: [String: String]?
@@ -61,7 +61,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     struct AttachedExecSession: Sendable {
         let sessionId: String
         let sandboxId: String
-        let agentName: String
+        let agentKey: String
         let userId: String
         let attachedAt: Date
     }
@@ -76,7 +76,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// session (including `expiresAt`) for the 201 response.
     func createPendingSession(
         sandboxId: String,
-        agentName: String,
+        agentKey: String,
         userId: String,
         command: [String],
         env: [String: String]?,
@@ -89,7 +89,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         let session = PendingExecSession(
             sessionId: UUID().uuidString,
             sandboxId: sandboxId,
-            agentName: agentName,
+            agentKey: agentKey,
             userId: userId,
             command: command,
             env: env,
@@ -111,7 +111,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             metadata: [
                 "sessionId": .string(session.sessionId),
                 "sandboxId": .string(sandboxId),
-                "agentName": .string(agentName),
+                "agentKey": .string(agentKey),
             ])
 
         return session
@@ -167,7 +167,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             sessions[sessionId] = AttachedExecSession(
                 sessionId: sessionId,
                 sandboxId: pending.sandboxId,
-                agentName: pending.agentName,
+                agentKey: pending.agentKey,
                 userId: pending.userId,
                 attachedAt: now
             )
@@ -183,7 +183,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             metadata: [
                 "sessionId": .string(sessionId),
                 "sandboxId": .string(session.sandboxId),
-                "agentName": .string(session.agentName),
+                "agentKey": .string(session.agentKey),
             ])
 
         return session
@@ -224,18 +224,18 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         }
     }
 
-    /// Tear down every session targeting `agentName` because its socket is
+    /// Tear down every session targeting `agentKey` because its socket is
     /// gone (crash, network drop, or graceful unregister). Each attached
     /// browser gets a terminal error frame and a close — instead of a
     /// silently frozen terminal — and pending sessions that could never
     /// start are dropped.
-    func closeAllSessions(forAgent agentName: String, reason: String) {
+    func closeAllSessions(forAgent agentKey: String, reason: String) {
         let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
-            for (sessionId, pending) in pendingSessions where pending.agentName == agentName {
+            for (sessionId, pending) in pendingSessions where pending.agentKey == agentKey {
                 pendingSessions.removeValue(forKey: sessionId)
             }
             var closed: [(String, WebSocket?)] = []
-            for (sessionId, session) in sessions where session.agentName == agentName {
+            for (sessionId, session) in sessions where session.agentKey == agentKey {
                 sessions.removeValue(forKey: sessionId)
                 let websocket = frontendConnections.removeValue(forKey: sessionId)
                 sandboxSessions[session.sandboxId]?.remove(sessionId)
@@ -252,7 +252,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
                 "Closed sandbox exec session: agent disconnected",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
+                    "agentKey": .string(agentKey),
                 ])
             guard let websocket else { continue }
             websocket.send(Self.controlFrame(BrowserControlFrame(type: "error", message: reason)))
@@ -274,7 +274,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             rows: session.rows,
             cols: session.cols
         )
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     /// Relay browser stdin bytes (and/or EOF) to the agent.
@@ -288,7 +288,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         } else {
             message = SandboxExecInputMessage(sessionId: sessionId, eof: eof)
         }
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     /// Relay a browser resize request to the agent.
@@ -297,7 +297,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             throw SandboxExecSessionError.sessionNotFound(sessionId)
         }
         let message = SandboxExecResizeMessage(sessionId: sessionId, rows: rows, cols: cols)
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     /// Tell the agent to tear down the exec session (browser disconnected).
@@ -305,22 +305,22 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     func sendExecClose(sessionId: String, reason: String? = nil) async throws {
         guard let session = getSession(sessionId: sessionId) else { return }
         let message = SandboxExecCloseMessage(sessionId: sessionId, reason: reason)
-        try await sendMessageToAgent(message, agentName: session.agentName)
+        try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
     // MARK: - Agent → browser
 
     /// The exec process spawned: tell the browser it may start sending input.
-    func handleStarted(sessionId: String, fromAgentNamed agentName: String) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "started")
+    func handleStarted(sessionId: String, fromAgentKey agentKey: String) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "started")
         else { return }
         ws.send(Self.controlFrame(BrowserControlFrame(type: "ready")))
     }
 
     /// Output bytes from the exec process, relayed to the browser as a binary
     /// frame (stdout and stderr interleaved).
-    func handleOutput(sessionId: String, fromAgentNamed agentName: String, data: Data) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "output")
+    func handleOutput(sessionId: String, fromAgentKey agentKey: String, data: Data) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "output")
         else {
             // An entirely unknown session (control-plane restart, or the
             // session was already cleaned up) means the agent is streaming
@@ -332,7 +332,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             // round-trips.
             let sessionExists = lock.withLock { sessions[sessionId] != nil }
             if !sessionExists {
-                sendOrphanedBridgeClose(sessionId: sessionId, toAgentNamed: agentName)
+                sendOrphanedBridgeClose(sessionId: sessionId, toAgentKey: agentKey)
             }
             return
         }
@@ -340,10 +340,10 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     }
 
     /// The exec process ended: report the exit code and close normally.
-    func handleExit(sessionId: String, fromAgentNamed agentName: String, exitCode: Int) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "exit")
+    func handleExit(sessionId: String, fromAgentKey agentKey: String, exitCode: Int) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "exit")
         else {
-            removeSessionIfOwned(sessionId: sessionId, byAgentNamed: agentName)
+            removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
             return
         }
         ws.send(Self.controlFrame(BrowserControlFrame(type: "exit", exitCode: exitCode)))
@@ -353,10 +353,10 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
     /// The exec session ended without an exit code (spawn failure, vsock
     /// died, sandbox stopped): report the error and close.
-    func handleClosed(sessionId: String, fromAgentNamed agentName: String, reason: String?) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "closed")
+    func handleClosed(sessionId: String, fromAgentKey agentKey: String, reason: String?) {
+        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "closed")
         else {
-            removeSessionIfOwned(sessionId: sessionId, byAgentNamed: agentName)
+            removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
             return
         }
         let message = reason ?? "exec session closed by agent"
@@ -372,7 +372,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// otherwise a compromised agent could inject frames into another
     /// tenant's exec session by guessing session ids.
     private func frontendConnection(
-        sessionId: String, fromAgentNamed agentName: String, event: String
+        sessionId: String, fromAgentKey agentKey: String, event: String
     ) -> WebSocket? {
         let (session, websocket) = lock.withLock {
             (sessions[sessionId], frontendConnections[sessionId])
@@ -380,16 +380,16 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         guard let session else {
             app.logger.debug(
                 "Sandbox exec \(event) for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentName": .string(agentName)])
+                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
             return nil
         }
-        guard session.agentName == agentName else {
+        guard session.agentKey == agentKey else {
             app.logger.warning(
                 "Dropping sandbox exec \(event) from an agent that does not own the session",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
-                    "sessionAgentName": .string(session.agentName),
+                    "agentKey": .string(agentKey),
+                    "sessionAgentName": .string(session.agentKey),
                 ])
             return nil
         }
@@ -401,8 +401,8 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// orphaned bridge down instead of streaming forever. Errors are swallowed:
     /// this is advisory, and the agent's own sandbox-stop path also reaps
     /// bridges.
-    private func sendOrphanedBridgeClose(sessionId: String, toAgentNamed agentName: String) {
-        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else { return }
+    private func sendOrphanedBridgeClose(sessionId: String, toAgentKey agentKey: String) {
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else { return }
         let message = SandboxExecCloseMessage(sessionId: sessionId, reason: "unknown exec session")
         guard
             let envelope = try? MessageEnvelope(message: message),
@@ -411,15 +411,15 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         websocket.send(data)
         app.logger.debug(
             "Sent exec close for unknown session back to reporting agent",
-            metadata: ["sessionId": .string(sessionId), "agentName": .string(agentName)])
+            metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
     }
 
     /// Remove a session on a terminal agent event when no browser socket is
     /// bound (unit tests, or the browser already went away), still requiring
     /// the reporting agent to own the session.
-    private func removeSessionIfOwned(sessionId: String, byAgentNamed agentName: String) {
+    private func removeSessionIfOwned(sessionId: String, byAgentKey agentKey: String) {
         let owned = lock.withLock {
-            sessions[sessionId]?.agentName == agentName
+            sessions[sessionId]?.agentKey == agentKey
         }
         if owned {
             removeSession(sessionId: sessionId)
@@ -457,12 +457,12 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Console parity: agent messages go out over this replica's socket only.
     /// The exec endpoint already refused the request when the agent's socket
     /// lives on another replica.
-    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentName: String) async throws {
-        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else {
+    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
             app.logger.error(
                 "Agent WebSocket not found for sandbox exec message",
-                metadata: ["agentName": .string(agentName)])
-            throw SandboxExecSessionError.agentNotConnected(agentName)
+                metadata: ["agentKey": .string(agentKey)])
+            throw SandboxExecSessionError.agentNotConnected(agentKey)
         }
 
         let envelope = try MessageEnvelope(message: message)
@@ -490,8 +490,8 @@ enum SandboxExecSessionError: Error, LocalizedError, Equatable {
             return "Exec session does not match this sandbox or user: \(sessionId)"
         case .alreadyAttached(let sessionId):
             return "Exec session is already attached: \(sessionId)"
-        case .agentNotConnected(let agentName):
-            return "Agent not connected: \(agentName)"
+        case .agentNotConnected(let agentKey):
+            return "Agent not connected: \(agentKey)"
         }
     }
 }

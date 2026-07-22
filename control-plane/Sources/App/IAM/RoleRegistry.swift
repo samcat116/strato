@@ -130,7 +130,11 @@ enum IAMRoleRegistry {
             "project:update",
         ],
         .admin: [
-            "iam:setPolicy", "iam:readPolicy",
+            // `iam:grantExternal` gates writing a binding whose principal is
+            // outside the resource's organization (issue #485). It is a
+            // *distinct* action rather than part of `iam:setPolicy` so custom
+            // roles can withhold it and guardrails can ceiling it on its own.
+            "iam:setPolicy", "iam:readPolicy", "iam:grantExternal",
             // Impersonation lets a caller act as the service account — a
             // grant-shaped power, so it sits with the other admin actions
             // rather than in editor (issue #491).

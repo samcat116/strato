@@ -298,6 +298,58 @@ Today's environment roles (`environment_manager`, deployer, approver) become
 `resource.environment == "staging"`), consistent with
 environment-as-attribute.
 
+### Roles are rows, defaults included (shipped with #604/#605)
+
+The four roles above are not a Swift enum: they are rows in `iam_roles`,
+seeded with fixed well-known ids and reconciled from the code registry at boot
+(`RoleRegistrySync`). Custom roles are ordinary rows alongside them. One
+machinery, so a custom role compiles, binds, and shows up in `who-can` exactly
+the way `admin` does.
+
+A row's `cedar_text` is the source of truth for what it grants — compiled into
+the policy set verbatim under the id `role-<row uuid>` — and its `actions`
+column is *derived* from that text on every write, never sent by the client.
+The derivation parses the policy and reads its action scope off Cedar's EST
+(`CedarPolicyInspector`), so a role cannot say one thing to the evaluator and
+another to the catalog or the editor.
+
+**Ownership scopes a role.** `owner_type` is `platform` (the seeded defaults,
+with a zero-UUID sentinel owner), `organization`, or `project`. A role is
+bindable on its owner and everything beneath it, and nowhere else — the same
+containment the ancestor chain already gives bindings and ceilings. Deleting
+an org or project removes the roles it owns.
+
+**The role API** (`/api/iam/roles`, issue #605) is admin-gated on the owner
+(`iam:readPolicy` / `iam:setPolicy`), the same gate guardrails use. A write
+takes **either** an action list — the server generates the canonical permit —
+**or** hand-written `cedarText` for the cases an action list cannot express
+(`resource.environment == "staging"`, an MFA condition). Advanced text is held
+to the role shape, and only that shape:
+
+- **permit-only** — a `forbid` here would be a ceiling invisible to the
+  guardrail API;
+- **unconstrained principal scope** — bindings decide who holds a role;
+- **enumerable action scope** (`action in [...]`, all from the registry) — an
+  action list that silently grew with the next release is exactly what the
+  curated registry exists to prevent;
+- **its own grants fields, both of them** — the permit must be gated on this
+  role's bindings and no other role's, or it would grant to everyone.
+
+Everything else is left alone, and the candidate is compiled against the
+schema the store *would* have once the row exists, so Cedar's own errors
+surface as a `400` at the write instead of as a role that silently grants
+nothing after the next boot. `POST /api/iam/roles/validate` runs the same
+preparation without saving (the editor's compile button), and
+`GET /api/iam/actions` publishes the action vocabulary — grouped by service,
+with each action's applicable resource types and the default roles carrying
+it — so the picker can never offer something the write path would reject.
+
+Seeded roles are immutable through the API (`403`): they are reconciled from
+the code registry, and an edit would be reverted at the next boot. A role with
+live bindings cannot be deleted (`409` with the count) — dropping it would
+silently revoke whatever those bindings grant, with nothing in the bindings
+list to show it happened.
+
 ### Membership and visibility
 
 - **Bare org membership grants `org:read` and `project:create` — nothing
@@ -309,20 +361,46 @@ environment-as-attribute.
   today's quirk where a member-created project had no administrator besides
   org admins. An offboarding sweep revokes a departing user's bindings.
 
-### Cross-org access
+### Cross-org access (shipped, #485)
 
 Cross-org access is allowed **only via explicit bindings**: a binding's
 principal may live in another org. Because `forbid` always wins and cannot be
 permitted through, there is no blanket platform forbid on cross-org access;
-instead:
+the controls are these (`CrossOrgBindingGate`):
 
-- Writing a binding for an external principal requires a dedicated permission
-  on the resource side (`iam:grantExternal`-shaped) and is loud in audit and
-  UI.
-- The **resource-side guardrail shape ships in v1** so orgs can ceiling it
-  themselves ("nothing in this subtree is reachable by external principals").
-- The entity-slice loader, `who-can`, and the offboarding sweep must all
-  handle principals outside the resource's org.
+- **Writing a binding for an external principal requires `iam:grantExternal`
+  on the resource side**, evaluated like everything else — the admin role
+  carries it by default, custom roles can withhold it, and a guardrail can
+  ceiling it away. "External" means a user with no membership in the node's
+  root org, or a group owned by another org; the root resolves through the
+  same ancestor walk the entity slice uses, and a node whose chain reaches no
+  org has nothing to be external to.
+- **Cross-org grants are loud.** A successful external grant (and the revoke
+  that ends one) is recorded with a distinct audit event
+  (`iam.cross_org_grant` / `iam.cross_org_revoke`) alongside the generic
+  `api.request` record, and every listing surface marks external principals
+  rather than filtering them: the members and group-grants APIs carry an
+  `external` flag (rendered as a prominent badge in the UI), `who-can`
+  carries `principalExternalToOrg`.
+- The **resource-side guardrail shape shipped in v1** so orgs can ceiling it
+  themselves ("nothing in this subtree is reachable by external principals" —
+  the `external_to_organization` principal match).
+- The entity-slice loader and `who-can` handle external principals by
+  construction (the chain's org is never a principal filter). The
+  **offboarding sweeps** are external-aware in both directions
+  (`OffboardingSweep`, `RoleBindingService.revokeAll(principal…)`): leaving
+  an org revokes everything held *inside that org's subtree* — not just the
+  org node, since a leftover project binding would silently keep working as
+  ungated cross-org access — while deliberately leaving the user's bindings
+  in other orgs alone (those are the other orgs' explicit grants); deleting a
+  user or group sweeps its bindings across **all** orgs, never assuming they
+  live only in the principal's own.
+
+Creator bindings are the one deliberate exception to the write-time gate: a
+resource created by an external principal (who necessarily already holds an
+explicitly gated grant) gets its creator binding without a second
+`iam:grantExternal` check — the grant that let them in was the loud, gated
+one.
 
 ## Identity
 
@@ -388,8 +466,13 @@ inverted the data flow:
   a revoke is effective on the next request on every replica.
 
   **Versioning (shipped).** `iam_policy_set_versions` is an append-only log:
-  every change to the platform policy, the guardrails, or the role registry
+  every change to the platform policy, the guardrails, or the role store
   appends a row carrying a monotonic `version`, the reason, and who made it.
+  For roles that means role CRUD (`/api/iam/roles`), the boot-time
+  reconciliation of the seeded rows, and the org/project delete cascades that
+  remove owned roles — each inside `withPolicySetChange`, each bumping only
+  when something actually changed, so a rolling deploy of an unchanged
+  registry is silent.
   Allocation is `max + 1` under a uniqueness constraint, so two replicas
   bumping concurrently get two versions rather than one lost update. Version
   and change commit in the same transaction — a change without its bump leaves

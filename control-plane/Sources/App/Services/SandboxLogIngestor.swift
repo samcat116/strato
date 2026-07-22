@@ -20,7 +20,7 @@ import Vapor
 /// without an application (see `Application.sandboxLogIngestor` for the
 /// production wiring).
 final class SandboxLogIngestor: @unchecked Sendable {
-    typealias OwnershipCheck = @Sendable (_ sandboxId: String, _ agentName: String) async -> Bool
+    typealias OwnershipCheck = @Sendable (_ sandboxId: String, _ agentKey: String) async -> Bool
     typealias Push = @Sendable (_ message: SandboxLogMessage) async throws -> Void
 
     /// How long a positive or negative ownership answer is reused before the
@@ -34,12 +34,12 @@ final class SandboxLogIngestor: @unchecked Sendable {
 
     private struct Entry: Sendable {
         let message: SandboxLogMessage
-        let agentName: String
+        let agentKey: String
     }
 
     private struct CacheKey: Hashable {
         let sandboxId: String
-        let agentName: String
+        let agentKey: String
     }
 
     private let logger: Logger
@@ -83,8 +83,8 @@ final class SandboxLogIngestor: @unchecked Sendable {
 
     /// Queue one log line and return immediately. Called from the agent
     /// WebSocket's event loop, so it must never block or await.
-    func enqueue(_ message: SandboxLogMessage, fromAgentNamed agentName: String) {
-        continuation.yield(Entry(message: message, agentName: agentName))
+    func enqueue(_ message: SandboxLogMessage, fromAgentKey agentKey: String) {
+        continuation.yield(Entry(message: message, agentKey: agentKey))
     }
 
     /// Stop the consumer once the queue drains (tests).
@@ -95,13 +95,13 @@ final class SandboxLogIngestor: @unchecked Sendable {
     private func process(_ entry: Entry) async {
         // Only accept logs for a sandbox actually assigned to the reporting
         // agent — anti-spoofing parity with the `.vmLog` path.
-        let owned = await sandboxIsOwned(sandboxId: entry.message.sandboxId, agentName: entry.agentName)
+        let owned = await sandboxIsOwned(sandboxId: entry.message.sandboxId, agentKey: entry.agentKey)
         guard owned else {
             logger.warning(
                 "Dropping sandbox log for a sandbox not owned by the reporting agent",
                 metadata: [
                     "sandboxId": .string(entry.message.sandboxId),
-                    "agentName": .string(entry.agentName),
+                    "agentKey": .string(entry.agentKey),
                 ])
             return
         }
@@ -112,13 +112,13 @@ final class SandboxLogIngestor: @unchecked Sendable {
         }
     }
 
-    private func sandboxIsOwned(sandboxId: String, agentName: String) async -> Bool {
-        let key = CacheKey(sandboxId: sandboxId, agentName: agentName)
+    private func sandboxIsOwned(sandboxId: String, agentKey: String) async -> Bool {
+        let key = CacheKey(sandboxId: sandboxId, agentKey: agentKey)
         let currentTime = now()
         if let cached = ownershipCache[key], cached.expiresAt > currentTime {
             return cached.owned
         }
-        let owned = await checkOwnership(sandboxId, agentName)
+        let owned = await checkOwnership(sandboxId, agentKey)
         ownershipCache[key] = (owned: owned, expiresAt: currentTime.addingTimeInterval(Self.ownershipTTL))
         if ownershipCache.count > Self.ownershipCacheSweepThreshold {
             ownershipCache = ownershipCache.filter { $0.value.expiresAt > currentTime }
@@ -143,8 +143,8 @@ extension Application {
                 let lokiService = self.lokiService
                 return SandboxLogIngestor(
                     logger: logger,
-                    checkOwnership: { sandboxId, agentName in
-                        await agentService.sandboxIsOwnedByAgent(sandboxId: sandboxId, agentName: agentName)
+                    checkOwnership: { sandboxId, agentKey in
+                        await agentService.sandboxIsOwnedByAgent(sandboxId: sandboxId, agentKey: agentKey)
                     },
                     push: { message in
                         try await lokiService.pushSandboxLog(message)

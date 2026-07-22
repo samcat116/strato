@@ -360,13 +360,13 @@ final class AgentAutoUpdateTests {
                 reason: "1 reconcile work item(s) are in flight"
             )
             await app.agentService.applyObservedStateReport(
-                try self.report(from: agent, status: blocked), fromAgentNamed: agent.name)
+                try self.report(from: agent, status: blocked), fromAgentKey: agent.identity.key)
             var row = try await self.reload(agent, on: app)
             #expect(row.updateBlockedReason == "1 reconcile work item(s) are in flight")
             #expect(row.updateFailureReason == nil)
 
             await app.agentService.applyObservedStateReport(
-                try self.report(from: agent, status: nil), fromAgentNamed: agent.name)
+                try self.report(from: agent, status: nil), fromAgentKey: agent.identity.key)
             row = try await self.reload(agent, on: app)
             #expect(row.updateBlockedReason == nil)
         }
@@ -387,7 +387,7 @@ final class AgentAutoUpdateTests {
                 reason: "artifact checksum mismatch"
             )
             await app.agentService.applyObservedStateReport(
-                try self.report(from: first, status: failed), fromAgentNamed: first.name)
+                try self.report(from: first, status: failed), fromAgentKey: first.identity.key)
 
             let firstRow = try await self.reload(first, on: app)
             #expect(firstRow.updateFailureReason == "artifact checksum mismatch")
@@ -412,7 +412,7 @@ final class AgentAutoUpdateTests {
                 reason: "old news"
             )
             await app.agentService.applyObservedStateReport(
-                try self.report(from: agent, status: stale), fromAgentNamed: agent.name)
+                try self.report(from: agent, status: stale), fromAgentKey: agent.identity.key)
 
             let row = try await self.reload(agent, on: app)
             #expect(row.updateFailureReason == nil)

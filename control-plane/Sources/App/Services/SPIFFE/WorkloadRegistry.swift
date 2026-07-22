@@ -59,15 +59,17 @@ enum WorkloadRegistry {
         }
     }
 
-    /// Idempotently register an agent's SPIFFE identity.
+    /// Idempotently register an agent's SPIFFE identity. The registration is
+    /// keyed by `identity.key` — the full SPIFFE URI, so two same-named
+    /// agents in different trust domains stay distinct rows.
     ///
     /// Called from the mTLS edge after the certificate chain verified and the
-    /// path-derived agent name was validated — the registry row then makes
-    /// the mapping first-class for every later connection, which is rejected
-    /// if the same URI ever resolves to a different principal.
-    static func registerAgent(spiffeID: String, agentName: String, on db: any Database) async throws {
+    /// trust-domain/path validation passed — the registry row then makes the
+    /// mapping first-class for every later connection, which is rejected if
+    /// the same URI ever resolves to a different principal.
+    static func registerAgent(identity: AgentIdentity, on db: any Database) async throws {
         do {
-            try await WorkloadRegistration(spiffeID: spiffeID, kind: .agent, agentName: agentName)
+            try await WorkloadRegistration(spiffeID: identity.key, kind: .agent, agentName: identity.name)
                 .save(on: db)
         } catch {
             guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
@@ -75,17 +77,32 @@ enum WorkloadRegistry {
             // guarantees the winner registered the same URI. Verify it names
             // the same agent rather than adopting it blind.
             guard
-                let existing = try await resolve(spiffeID: spiffeID, on: db),
-                existing == .agent(name: agentName)
+                let existing = try await resolve(spiffeID: identity.key, on: db),
+                existing == .agent(name: identity.name)
             else { throw error }
         }
     }
 
-    /// Remove an agent's registration rows when the agent is deprovisioned.
-    static func deregisterAgent(named agentName: String, on db: any Database) async throws {
+    /// Remove an agent's registration row when the agent is deprovisioned.
+    /// Exact-URI deletion, for the same reason registration is URI-keyed.
+    static func deregisterAgent(identity: AgentIdentity, on db: any Database) async throws {
         try await WorkloadRegistration.query(on: db)
             .filter(\.$kind == .agent)
-            .filter(\.$agentName == agentName)
+            .filter(\.$spiffeID == identity.key)
             .delete()
+    }
+
+    /// Enforce the registry mapping for a verified agent identity: a URI
+    /// registered to a different principal is rejected even with a valid
+    /// agent path, and a first-seen identity is registered so every later
+    /// connection resolves through the registry (issue #491).
+    static func requireAgentRegistration(identity: AgentIdentity, on db: any Database) async throws {
+        if let registered = try await resolve(spiffeID: identity.key, on: db) {
+            guard case .agent(let registeredName) = registered, registeredName == identity.name else {
+                throw Abort(.forbidden, reason: "SPIFFE identity is registered to a different principal")
+            }
+            return
+        }
+        try await registerAgent(identity: identity, on: db)
     }
 }

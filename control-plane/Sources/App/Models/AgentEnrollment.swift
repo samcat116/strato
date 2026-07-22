@@ -19,6 +19,13 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
     @Field(key: "agent_name")
     var agentName: String
 
+    /// Trust domain the node is enrolled into. Enrollment names are unique
+    /// *within* a domain, not globally: once each organization has its own
+    /// trust domain (issue #613), two organizations may each enroll `agent-1`
+    /// and neither may shadow the other.
+    @Field(key: "trust_domain")
+    var trustDomain: String
+
     /// SPIFFE ID provisioned for this node. Recorded so listing and revocation
     /// can show the identity without a round trip to the SPIRE server.
     @Field(key: "spiffe_id")
@@ -67,6 +74,7 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         id: UUID? = nil,
         agentName: String,
         spiffeID: String,
+        trustDomain: String = PlatformTrustDomain.current,
         expirationHours: Int = 1,
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil
@@ -74,6 +82,7 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         self.id = id
         self.agentName = agentName
         self.spiffeID = spiffeID
+        self.trustDomain = trustDomain
         self.isUsed = false
         self.siteID = siteID
         self.organizationID = organizationScope?.organizationID
