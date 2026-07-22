@@ -94,6 +94,10 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         "/api/hierarchy",
         "/api/audit-events",
         "/api/workload-identity",
+        // Workload principals (issue #491): service-account CRUD authorizes
+        // per-node via the evaluator; the registry surface is system-admin.
+        "/api/service-accounts",
+        "/api/workload-registrations",
         // SCIM token management (the data plane under /scim/v2 is public,
         // matched earlier).
         "/organizations",

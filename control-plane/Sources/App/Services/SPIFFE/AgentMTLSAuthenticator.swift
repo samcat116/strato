@@ -1,3 +1,4 @@
+import Fluent
 import Vapor
 
 /// Authenticates a request as a Strato agent from the `X-Forwarded-Client-Cert`
@@ -113,10 +114,39 @@ enum AgentMTLSAuthenticator {
         }
 
         do {
-            return try await spireService.validateAgentIdentity(spiffeID)
+            return try await resolveAgent(spiffeID: spiffeID, spireService: spireService, on: req.db)
+        } catch let abort as Abort {
+            throw abort
         } catch {
             req.logger.error("SPIFFE ID validation failed: \(error)")
             throw Abort(.forbidden, reason: "SPIFFE identity validation failed")
         }
+    }
+
+    /// Resolve a verified SPIFFE identity to an agent name through the
+    /// workload registry (issue #491).
+    ///
+    /// The trust-domain and path-shape validation still runs — SPIRE only
+    /// ever provisions agents under `/agent/<name>`, so the path names the
+    /// identity — but the registry is authoritative for the *mapping*: a URI
+    /// registered to any other principal is rejected even with a valid agent
+    /// path, and a first-seen identity is registered so every later
+    /// connection resolves through the registry.
+    static func resolveAgent(
+        spiffeID: SPIFFEIdentity, spireService: SPIREService, on db: any Database
+    ) async throws -> String {
+        let agentName = try await spireService.validateAgentIdentity(spiffeID)
+
+        if let registered = try await WorkloadRegistry.resolve(spiffeID: spiffeID.uri, on: db) {
+            guard case .agent(let registeredName) = registered, registeredName == agentName else {
+                throw Abort(
+                    .forbidden,
+                    reason: "SPIFFE identity is registered to a different principal")
+            }
+            return agentName
+        }
+
+        try await WorkloadRegistry.registerAgent(spiffeID: spiffeID.uri, agentName: agentName, on: db)
+        return agentName
     }
 }

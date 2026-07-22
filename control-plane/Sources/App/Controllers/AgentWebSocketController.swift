@@ -170,7 +170,12 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             do {
-                let agentID = try await spireService.validateAgentIdentity(spiffeID)
+                // Registry-aware resolution (issue #491): the verified SPIFFE
+                // URI is a lookup key into the workload registry — a URI
+                // registered to a different principal is rejected, and a
+                // first-seen agent identity is registered.
+                let agentID = try await AgentMTLSAuthenticator.resolveAgent(
+                    spiffeID: spiffeID, spireService: spireService, on: req.db)
 
                 req.logger.info(
                     "Agent authenticated via XFCC header (Envoy mTLS)",

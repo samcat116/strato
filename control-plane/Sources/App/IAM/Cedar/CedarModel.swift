@@ -16,6 +16,9 @@ import Foundation
 enum CedarEntityType: String, CaseIterable, Sendable {
     case user = "User"
     case group = "Group"
+    /// A directly registered SPIFFE workload identity (issue #491) — a
+    /// principal-only type, like `User` and `Group`.
+    case workload = "Workload"
     case organization = "Organization"
     case folder = "Folder"
     case project = "Project"
@@ -29,6 +32,9 @@ enum CedarEntityType: String, CaseIterable, Sendable {
     case sandboxSnapshot = "SandboxSnapshot"
     case site = "Site"
     case agent = "Agent"
+    /// Both a node type (a project-scoped resource with `serviceaccount:*`
+    /// actions, including `impersonate`) and a principal type (issue #491).
+    case serviceAccount = "ServiceAccount"
 
     /// The types a role binding or guardrail node can be — every entity type
     /// except the principals.
@@ -52,6 +58,19 @@ extension IAMNodeType {
         case .sandboxSnapshot: return .sandboxSnapshot
         case .site: return .site
         case .agent: return .agent
+        case .serviceAccount: return .serviceAccount
+        }
+    }
+}
+
+extension IAMPrincipalType {
+    /// The Cedar entity type standing for this principal type.
+    var cedarEntityType: CedarEntityType {
+        switch self {
+        case .user: return .user
+        case .group: return .group
+        case .serviceAccount: return .serviceAccount
+        case .workload: return .workload
         }
     }
 }
@@ -78,6 +97,12 @@ struct CedarEntityUID: Hashable, Sendable, Encodable {
 }
 
 extension IAMNode {
+    var cedarUID: CedarEntityUID {
+        CedarEntityUID(type: type.cedarEntityType, id: id)
+    }
+}
+
+extension IAMPrincipal {
     var cedarUID: CedarEntityUID {
         CedarEntityUID(type: type.cedarEntityType, id: id)
     }

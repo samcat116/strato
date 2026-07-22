@@ -77,6 +77,11 @@ func routes(_ app: Application) throws {
     // Workload Identity (SPIFFE / SPIRE) read API
     try app.register(collection: WorkloadIdentityController())
 
+    // Workload principals (issue #491): service accounts and the workload
+    // registry mapping SPIFFE IDs to principals.
+    try app.register(collection: ServiceAccountController())
+    try app.register(collection: WorkloadRegistrationController())
+
     // OpenAPI Vapor transport (spec-first, issue #583): surfaces whose handlers
     // are generated from Sources/App/openapi.yaml. Registered last so a
     // hand-written controller can never shadow a generated route unnoticed —

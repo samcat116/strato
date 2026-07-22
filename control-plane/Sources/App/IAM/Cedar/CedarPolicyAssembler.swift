@@ -40,13 +40,17 @@ enum CedarPolicyAssembler {
 
         // The system-admin bypass as a tier-1 platform policy — the design's
         // replacement for today's middleware short-circuit, so it flows
-        // through the evaluator and shows up in decision logs.
+        // through the evaluator and shows up in decision logs. Scoped to
+        // `principal is User` (as is org-membership below): system-admin and
+        // org membership are user concepts, and the workload principal types
+        // (issue #491) carry neither attribute — an unscoped `principal.…`
+        // access would fail strict validation in their request environments.
         policies.append(
             CedarPolicySource(
                 id: "platform-system-admin",
                 text: """
                     @id("platform-system-admin")
-                    permit (principal, action, resource)
+                    permit (principal is User, action, resource)
                     when { principal.systemAdmin };
                     """))
 
@@ -75,7 +79,7 @@ enum CedarPolicyAssembler {
                 id: "org-membership",
                 text: """
                     @id("org-membership")
-                    permit (principal, action in [\(membershipActions)], resource)
+                    permit (principal is User, action in [\(membershipActions)], resource)
                     when { resource in principal.memberOfOrgs };
                     """))
 
@@ -193,7 +197,12 @@ enum CedarPolicyAssembler {
                 }
                 principalClause = "principal"
                 let orgLiteral = CedarEntityUID(type: .organization, id: organizationID).cedarLiteral
-                conditions.append("!(principal.memberOfOrgs.contains(\(orgLiteral)))")
+                // The `is User` guard keeps strict validation happy in the
+                // workload-principal environments (they have no
+                // `memberOfOrgs`), and makes the semantics explicit: a
+                // machine principal is a member of nothing, so an
+                // external-principal ceiling always covers it.
+                conditions.append("!(principal is User && principal.memberOfOrgs.contains(\(orgLiteral)))")
             }
 
             let actionClause = self.actionClause(for: guardrail.actions)

@@ -477,6 +477,11 @@ struct AgentController: RouteCollection {
         }
 
         try await enrollment.delete(on: req.db)
+        if enrollmentOwnsGrant {
+            // No agent row exists, so any workload-registry row for the name
+            // is an orphan of the just-revoked SPIRE grant (issue #491).
+            try await WorkloadRegistry.deregisterAgent(named: enrollment.agentName, on: req.db)
+        }
 
         req.logger.info(
             "Revoked agent enrollment",
@@ -610,8 +615,11 @@ struct AgentController: RouteCollection {
         // Remove from in-memory registry if present
         await req.agentService.forceUnregisterAgent(agent.name)
 
-        // Delete from database
+        // Delete from database, along with the workload-registry rows mapping
+        // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
+        // behind them were just deprovisioned.
         try await agent.delete(on: req.db)
+        try await WorkloadRegistry.deregisterAgent(named: agent.name, on: req.db)
 
         // Deregistration retires the node: delete its enrollment so the name can
         // be enrolled again. Left behind, the row would block a fresh enrollment

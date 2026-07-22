@@ -75,6 +75,7 @@ enum CedarSchemaBuilder {
         case "image": return [.image] + projectContainers
         case "network": return [.network] + projectContainers
         case "floatingip": return [.floatingIP] + projectContainers
+        case "serviceaccount": return [.serviceAccount] + projectContainers
         case "operation": return [.vm, .sandbox] + projectContainers
         case "project": return projectContainers
         case "folder": return [.folder, .organization]
@@ -105,14 +106,16 @@ enum CedarSchemaBuilder {
         // The flattened per-request grants the entity-slice loader computes
         // from `role_bindings`: bindings stay data read per-request from
         // Postgres (docs/architecture/iam.md), so they arrive in the request
-        // context rather than in the compiled policy set. Users and groups are
-        // separate sets because Cedar sets are homogeneous. One field pair per
-        // role row, ordered by id: rebuilds on two replicas must produce
+        // context rather than in the compiled policy set. Each principal type
+        // gets its own set because Cedar sets are homogeneous. One field group
+        // per role row, ordered by id: rebuilds on two replicas must produce
         // identical text for the same version.
         lines.append("type Grants = {")
         for role in roles.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
             lines.append("    \(CedarText.stringLiteral(role.grantsUsersField)): Set<User>,")
             lines.append("    \(CedarText.stringLiteral(role.grantsGroupsField)): Set<Group>,")
+            lines.append("    \(CedarText.stringLiteral(role.grantsServiceAccountsField)): Set<ServiceAccount>,")
+            lines.append("    \(CedarText.stringLiteral(role.grantsWorkloadsField)): Set<Workload>,")
         }
         lines.append("};")
         lines.append("")
@@ -132,6 +135,14 @@ enum CedarSchemaBuilder {
         lines.append("    \(CedarText.stringLiteral("memberOfOrgs")): Set<Organization>,")
         lines.append("    \(CedarText.stringLiteral("systemAdmin")): Bool,")
         lines.append("};")
+        // A directly registered SPIFFE workload identity (issue #491).
+        // Principal-only and deliberately attribute-free: a workload is not a
+        // member of anything — no groups, no orgs — so every grant it has is
+        // an explicit binding, and the membership-shaped platform policies
+        // (`principal is User`-scoped) never apply to it. ServiceAccount is
+        // declared with the node types below: it is a resource as well as a
+        // principal.
+        lines.append("entity Workload;")
 
         // `environment` is declared (optionally) on every node type, not just
         // the three that store one: an environment-conditioned guardrail
@@ -169,7 +180,7 @@ enum CedarSchemaBuilder {
                 continue
             }
             lines.append("\(head) appliesTo {")
-            lines.append("    principal: [User],")
+            lines.append("    principal: [User, ServiceAccount, Workload],")
             lines.append("    resource: [\(resourceTypes.map(\.rawValue).joined(separator: ", "))],")
             lines.append("    context: Context,")
             lines.append("};")
@@ -207,14 +218,14 @@ enum CedarSchemaBuilder {
         case .organization: return []
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
-        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP:
+        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP, .serviceAccount:
             return [.project]
         case .network:
             // Project-scoped normally; a site-scoped network climbs to the
             // org or folder owning the site's capacity (`IAMResourceTree`).
             return [.project, .organization, .folder]
         case .site, .agent: return [.organization, .folder]
-        case .user, .group: return []
+        case .user, .group, .workload: return []
         }
     }
 }

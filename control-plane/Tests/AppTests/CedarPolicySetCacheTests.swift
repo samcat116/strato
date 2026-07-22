@@ -154,7 +154,7 @@ final class CedarPolicySetCacheTests {
             #expect(built?.guardrailCount == 1)
             #expect(built?.skippedGuardrails.isEmpty == true)
             let expectedCondition =
-                "!(principal.memberOfOrgs.contains(Organization::\"\(org.id!.uuidString.lowercased())\"))"
+                "!(principal is User && principal.memberOfOrgs.contains(Organization::\"\(org.id!.uuidString.lowercased())\"))"
             #expect(built?.policyText.contains(expectedCondition) == true)
         }
     }

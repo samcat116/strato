@@ -4,11 +4,40 @@ import Foundation
 // vocabulary the Cedar-based evaluator consumes (see
 // docs/architecture/iam.md).
 
-/// The kinds of principal a role binding can name. Workloads and service
-/// accounts arrive in later phases.
+/// The kinds of principal a role binding can name.
+///
+/// `serviceAccount` and `workload` are the machine principals of the workload
+/// registry (issue #491): a service account is a durable, project-scoped
+/// principal that SPIFFE identities authenticate *as*; a `workload` is a
+/// directly registered SPIFFE identity (`workload_registrations` row) with no
+/// service account behind it. Machine principals hold nothing by membership —
+/// no groups, no org membership — so every grant they have is an explicit,
+/// listable binding.
 enum IAMPrincipalType: String, Codable, Sendable, CaseIterable {
     case user
     case group
+    case serviceAccount = "service_account"
+    case workload
+}
+
+/// A typed principal reference — the subject of an authorization check.
+///
+/// Groups are deliberately representable (they are binding subjects) but are
+/// never *request* principals: a group does not act, its members do.
+struct IAMPrincipal: Hashable, Sendable {
+    let type: IAMPrincipalType
+    let id: UUID
+
+    static func user(_ id: UUID) -> IAMPrincipal { IAMPrincipal(type: .user, id: id) }
+    static func serviceAccount(_ id: UUID) -> IAMPrincipal { IAMPrincipal(type: .serviceAccount, id: id) }
+    static func workload(_ id: UUID) -> IAMPrincipal { IAMPrincipal(type: .workload, id: id) }
+
+    /// The decision-log subject string. Users keep the bare UUID the log has
+    /// always recorded; other principal types are disambiguated with their
+    /// type (`service_account:<uuid>`), which cannot collide with a UUID.
+    var subject: String {
+        type == .user ? id.uuidString : "\(type.rawValue):\(id.uuidString)"
+    }
 }
 
 /// The tree nodes a role binding can attach to: the org hierarchy plus any
@@ -32,6 +61,10 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     /// reverse lookups must be able to name them.
     case site
     case agent
+    /// A service account is both a resource (it can be read, deleted, and
+    /// impersonated — bindings and guardrails attach to it under its project)
+    /// and a principal (`IAMPrincipalType.serviceAccount`).
+    case serviceAccount = "service_account"
 }
 
 /// The global roles. Each role is a curated action group that implies the one
@@ -68,6 +101,7 @@ enum IAMRoleRegistry {
             "image:read", "image:list", "image:download",
             "network:read", "network:list",
             "floatingip:read", "floatingip:list",
+            "serviceaccount:read", "serviceaccount:list",
             "project:read",
             "folder:read",
             "org:read",
@@ -92,10 +126,15 @@ enum IAMRoleRegistry {
             "network:create", "network:update", "network:delete",
             "floatingip:create", "floatingip:release",
             "floatingip:attach", "floatingip:detach",
+            "serviceaccount:create", "serviceaccount:update", "serviceaccount:delete",
             "project:update",
         ],
         .admin: [
             "iam:setPolicy", "iam:readPolicy",
+            // Impersonation lets a caller act as the service account — a
+            // grant-shaped power, so it sits with the other admin actions
+            // rather than in editor (issue #491).
+            "serviceaccount:impersonate",
             "project:transfer", "project:delete",
             "quota:manage",
             "group:manage",

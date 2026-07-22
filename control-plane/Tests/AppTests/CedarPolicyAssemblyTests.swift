@@ -155,7 +155,8 @@ struct CedarPolicyAssemblyTests {
         #expect(groupText.contains("principal in Group::\"\(groupID.uuidString.lowercased())\""))
         #expect(
             externalText.contains(
-                "when { !(principal.memberOfOrgs.contains(Organization::\"\(orgID.uuidString.lowercased())\")) }"))
+                "when { !(principal is User && principal.memberOfOrgs.contains(Organization::\"\(orgID.uuidString.lowercased())\")) }"
+            ))
     }
 
     @Test("An external-principal guardrail with no resolvable org is skipped, not misdirected")
