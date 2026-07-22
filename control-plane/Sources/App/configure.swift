@@ -516,6 +516,12 @@ public func configure(_ app: Application) async throws {
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 
+    // CPU/memory hot-add (issue #568): the memory headroom column, and the
+    // `resize` operation kind its online path records. Both ordered after
+    // EnforcePersistedEnumValues, whose constraint the latter re-installs.
+    app.migrations.add(AddMaxMemoryToVM())
+    app.migrations.add(AddResizeOperationKind())
+
     // Replace the constant "platform" device type on existing passkeys with the
     // value implied by their backup-eligible flag.
     app.migrations.add(BackfillPasskeyDeviceType())

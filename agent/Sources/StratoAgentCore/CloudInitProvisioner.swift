@@ -193,6 +193,13 @@ public struct CloudInitProvisioner {
                 filename: "strato-qga-setup.sh",
                 content: qgaSetupScript
             ),
+            // Hot-plug onlining, likewise a script part so a caller's
+            // `write_files`/`runcmd` cannot replace it (issue #568).
+            MIMEPart(
+                mimeType: "text/x-shellscript",
+                filename: "strato-hotplug-online.sh",
+                content: hotplugOnlineScript
+            ),
             // Unrecognized payloads (only reachable when something bypassed the
             // control plane's validation) travel as text/plain: cloud-init
             // ignores them with a logged warning instead of misinterpreting.
@@ -264,6 +271,14 @@ public struct CloudInitProvisioner {
             # already ship it; this covers those that don't.
             packages:
               - qemu-guest-agent
+            # Bring hot-added vCPUs/memory online automatically (issue #568).
+            # Modern distros ship equivalent udev rules; this covers older
+            # images, and is harmless where they already exist.
+            write_files:
+              - path: /etc/udev/rules.d/80-strato-hotplug.rules
+                content: |
+                  SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{online}="1"
+                  SUBSYSTEM=="memory", ACTION=="add", TEST=="state", ATTR{state}=="offline", ATTR{state}="online"
             # Enable serial console output
             bootcmd:
               # Update GRUB to output to serial console
@@ -277,6 +292,11 @@ public struct CloudInitProvisioner {
               - systemctl enable --now serial-getty@hvc0.service || true
               # Start the guest agent (installed above) without a reboot.
               - systemctl enable --now qemu-guest-agent 2>/dev/null || systemctl enable --now qemu-ga 2>/dev/null || true
+              # Apply the hot-plug rules now, and online anything already
+              # offline (a resize that landed mid-boot) — issue #568.
+              - udevadm control --reload-rules 2>/dev/null || true
+              - "sh -c 'for c in /sys/devices/system/cpu/cpu[0-9]*/online; do echo 1 > $c 2>/dev/null || true; done'"
+              - "sh -c 'for m in /sys/devices/system/memory/memory[0-9]*/state; do grep -q offline $m 2>/dev/null && echo online > $m 2>/dev/null || true; done'"
               # Emit a marker so we can verify console output quickly
               - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
               - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
@@ -375,6 +395,45 @@ public struct CloudInitProvisioner {
         # Service name differs across distros (qemu-guest-agent vs qemu-ga).
         systemctl enable --now qemu-guest-agent 2>/dev/null \
             || systemctl enable --now qemu-ga 2>/dev/null || true
+        """
+
+    /// Guest-side onlining for hot-added vCPUs and memory (issue #568).
+    ///
+    /// Hot-plugged resources arrive *offline*: the host's `device_add` /
+    /// virtio-mem request only makes them visible to the guest kernel, which
+    /// then has to bring them up. systemd-udev ships rules that do this on
+    /// modern distros, so this script is for the older images that don't —
+    /// and it also onlines whatever is already offline at first boot, so a
+    /// resize applied while the guest was still booting isn't missed.
+    ///
+    /// Written as a script part for the same reason as the console and qga
+    /// setup: a caller cloud-config's own list keys can't replace it.
+    static let hotplugOnlineScript = """
+        #!/bin/sh
+        # Strato CPU/memory hot-add support: bring hot-plugged resources online
+        # automatically (issue #568). Modern distros already do this via
+        # systemd's 40-redhat.rules / 80-hotplug-cpu-mem.rules; installing our
+        # own rule is harmless where those exist (both just write "online").
+        if [ -d /etc/udev/rules.d ]; then
+            cat > /etc/udev/rules.d/80-strato-hotplug.rules <<'EOF'
+        SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{online}="1"
+        SUBSYSTEM=="memory", ACTION=="add", TEST=="state", ATTR{state}=="offline", ATTR{state}="online"
+        EOF
+            udevadm control --reload-rules 2>/dev/null || true
+        fi
+        # Online anything already present but offline (e.g. a resize that
+        # landed while the guest was booting, before the rule existed).
+        for cpu in /sys/devices/system/cpu/cpu[0-9]*/online; do
+            [ -f "$cpu" ] && echo 1 > "$cpu" 2>/dev/null || true
+        done
+        for mem in /sys/devices/system/memory/memory[0-9]*/state; do
+            [ -f "$mem" ] && grep -q offline "$mem" 2>/dev/null && echo online > "$mem" 2>/dev/null || true
+        done
+        # Let the kernel place onlined blocks in the movable zone where it can,
+        # so memory added by virtio-mem stays unpluggable later.
+        [ -f /sys/devices/system/memory/auto_online_blocks ] \\
+            && echo online_movable > /sys/devices/system/memory/auto_online_blocks 2>/dev/null || true
+        exit 0
         """
 
     /// Renders a NoCloud `network-config` (version 2), matched by MAC address:

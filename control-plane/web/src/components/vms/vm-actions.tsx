@@ -52,6 +52,8 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   pause: "pause",
   resume: "resume",
   delete: "delete",
+  // Resize is driven from the VM's settings form, not a lifecycle button.
+  resize: null,
   // Sandbox-only kinds; VMs never carry them but the map stays total.
   snapshot: null,
   snapshot_delete: null,

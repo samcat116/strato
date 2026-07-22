@@ -122,6 +122,8 @@ export interface VM {
   maxCpu: number;
   memory: number;
   memoryFormatted: string;
+  /** Ceiling for online memory growth (backend issue #568); equals `memory` when the VM has no headroom. */
+  maxMemory: number;
   disk: number;
   diskFormatted: string;
   networkInterfaces: VMNetworkInterface[];
@@ -669,6 +671,8 @@ export type OperationKind =
   | "pause"
   | "resume"
   | "delete"
+  // Online vCPU/memory resize of a running VM (backend issue #568).
+  | "resize"
   // Sandbox checkpoint/restore (backend issue #426).
   | "snapshot"
   | "snapshot_delete"

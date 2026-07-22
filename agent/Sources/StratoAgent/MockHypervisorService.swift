@@ -139,6 +139,23 @@ actor MockHypervisorService: HypervisorService {
             ])
     }
 
+    /// Applies a sizing change to a tracked VM, so a simulated fleet's
+    /// reported reservations follow resizes exactly as a real agent's do.
+    func resizeVM(vmId: String, spec: VMSpec) async throws {
+        guard var vm = vms[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        vm.spec = spec
+        vms[vmId] = vm
+        logger.info(
+            "Mock: resized VM (mock mode)",
+            metadata: [
+                "vmId": .string(vmId),
+                "cpus": .stringConvertible(spec.cpus),
+                "memoryBytes": .stringConvertible(spec.memoryBytes),
+            ])
+    }
+
     /// Re-adopts a VM across an agent restart. Unlike real drivers there is no
     /// process to reattach — the mock simply resumes tracking the spec so the
     /// re-adopted VM keeps reserving capacity and reports as running. This lets

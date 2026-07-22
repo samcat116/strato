@@ -34,6 +34,12 @@ actor QEMUService: HypervisorService {
     // bootVM. Absent for re-adopted VMs, which were spawned by a previous
     // agent incarnation.
     private var vmConfigs: [String: QEMUConfiguration] = [:]
+    // What each running process was actually spawned with (issue #568). A
+    // resize can only move within the headroom baked into the QEMU command
+    // line, and `vmSpecs` tracks the *current* sizing (it feeds scheduler
+    // reservations), so the spawn-time bounds are kept separately rather than
+    // inferred from a spec that resizes mutate.
+    private var vmSpawnSizing: [String: SpawnSizing] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
@@ -234,6 +240,7 @@ actor QEMUService: HypervisorService {
 
         activeVMs[vmId] = qemuManager
         vmSpecs[vmId] = spec
+        vmSpawnSizing[vmId] = Self.spawnSizing(for: spec)
         vmConfigs[vmId] = qemuConfig
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
@@ -396,6 +403,7 @@ actor QEMUService: HypervisorService {
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
+        vmSpawnSizing.removeValue(forKey: vmId)
         vmConfigs.removeValue(forKey: vmId)
 
         // Clean up console socket
@@ -692,6 +700,169 @@ actor QEMUService: HypervisorService {
         }
     }
 
+    // MARK: - CPU/memory hot-add (issue #568)
+
+    /// The QOM id of the hot-pluggable memory device, giving `qom-set` a
+    /// deterministic `/machine/peripheral/<id>` path.
+    static let virtioMemDeviceID = "memhp0"
+
+    /// virtio-mem plugs memory in fixed-size blocks: the memory backend and
+    /// every requested size must be a multiple of the device's block size,
+    /// which QEMU derives from the guest's page size. Aligning to 512 MiB on
+    /// arm64 — where 64 KiB-page guests push the block size that high — is
+    /// safe on smaller-block hosts too, since block sizes are powers of two
+    /// and a multiple of the larger is a multiple of the smaller.
+    static var virtioMemBlockBytes: Int64 {
+        #if arch(arm64)
+        return 512 * 1024 * 1024
+        #else
+        return 2 * 1024 * 1024
+        #endif
+    }
+
+    /// What a running QEMU process was spawned with, bounding what a resize
+    /// can do to it without a restart.
+    private struct SpawnSizing {
+        let maxCpus: Int
+        /// Boot memory: the floor a virtio-mem resize works up from, since
+        /// only the hot-plugged region above it can be given back.
+        let baseMemoryBytes: Int64
+        /// Size of the hot-pluggable region, already block-aligned. Zero when
+        /// the VM spawned without a virtio-mem device.
+        let hotplugMemoryBytes: Int64
+
+        var maxMemoryBytes: Int64 { baseMemoryBytes + hotplugMemoryBytes }
+    }
+
+    /// Adds the `-smp`/`-m` refinements and the virtio-mem device that make a
+    /// VM resizable while it runs. No-op when the spec asks for no headroom.
+    private func appendHotAddHeadroom(_ config: inout QEMUConfiguration, spec: VMSpec) {
+        if spec.maxCpus > spec.cpus {
+            // Restating `cpus` alongside `maxcpus` keeps the merged option set
+            // unambiguous regardless of argument order.
+            config.additionalArgs.append(contentsOf: [
+                "-smp", "cpus=\(spec.cpus),maxcpus=\(spec.maxCpus)",
+            ])
+            logger.debug("Configuring vCPU hot-add headroom: \(spec.cpus) → \(spec.maxCpus)")
+        }
+
+        let hotplugBytes = Self.alignedHotplugMemory(spec: spec)
+        guard hotplugBytes > 0 else { return }
+
+        let maxMemoryMB = Int((spec.memoryBytes + hotplugBytes) / (1024 * 1024))
+        // `slots` is the DIMM slot count, which QEMU requires alongside
+        // `maxmem` even though virtio-mem consumes none of them.
+        config.additionalArgs.append(contentsOf: [
+            "-m", "\(config.memoryMB)M,slots=1,maxmem=\(maxMemoryMB)M",
+            "-object", "memory-backend-ram,id=\(Self.virtioMemDeviceID)-backend,size=\(hotplugBytes)",
+            "-device",
+            "virtio-mem-pci,id=\(Self.virtioMemDeviceID),memdev=\(Self.virtioMemDeviceID)-backend,requested-size=0",
+        ])
+        logger.debug(
+            "Configuring memory hot-add headroom: \(spec.memoryBytes) bytes + \(hotplugBytes) bytes virtio-mem")
+    }
+
+    /// The headroom a process spawned from `spec` actually carries — the same
+    /// derivation `appendHotAddHeadroom` used to build its argument vector.
+    private static func spawnSizing(for spec: VMSpec) -> SpawnSizing {
+        SpawnSizing(
+            maxCpus: max(spec.maxCpus, spec.cpus),
+            baseMemoryBytes: spec.memoryBytes,
+            hotplugMemoryBytes: alignedHotplugMemory(spec: spec))
+    }
+
+    /// The block-aligned hot-pluggable region a spec asks for, or 0 when the
+    /// requested headroom is absent or smaller than a single virtio-mem block
+    /// (in which case a device could never plug anything anyway).
+    private static func alignedHotplugMemory(spec: VMSpec) -> Int64 {
+        let requested = spec.maxMemoryBytes - spec.memoryBytes
+        guard requested > 0 else { return 0 }
+        return requested - (requested % virtioMemBlockBytes)
+    }
+
+    /// Converges a *running* VM's vCPU count and memory size on `spec`
+    /// (issue #568), within the headroom its process was spawned with.
+    ///
+    /// Growth is applied online: vCPUs via `device_add` against the free
+    /// hotplug slots, memory via the virtio-mem device's `requested-size`.
+    /// Shrinking vCPUs is not attempted at all (guest support for unplug is
+    /// unreliable) and memory shrinks only down to the boot size; either way
+    /// the smaller figure takes effect at the next reboot, which is why this
+    /// records `spec` as the VM's sizing regardless.
+    ///
+    /// Exceeding the spawned headroom is a permanent failure: no retry can
+    /// widen a running process's `maxcpus`/`maxmem`.
+    func resizeVM(vmId: String, spec: VMSpec) async throws {
+        guard activeVMs[vmId] != nil, let sizing = vmSpawnSizing[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+        let current = vmSpecs[vmId]
+
+        guard spec.cpus <= sizing.maxCpus else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "VM \(vmId) was started with maxcpus=\(sizing.maxCpus); "
+                    + "growing to \(spec.cpus) vCPUs requires a restart")
+        }
+        guard spec.memoryBytes <= sizing.maxMemoryBytes else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "VM \(vmId) was started with \(sizing.maxMemoryBytes) bytes of maximum memory; "
+                    + "growing to \(spec.memoryBytes) bytes requires a restart")
+        }
+
+        if spec.cpus > (current?.cpus ?? spec.cpus) {
+            let present = try await controlled("qmp-resize-cpus", vmId: vmId) {
+                try await self.requireProbeClient(vmId: vmId).plugCPUs(target: spec.cpus)
+            }
+            logger.info(
+                "Hot-added vCPUs",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "target": .stringConvertible(spec.cpus),
+                    "present": .stringConvertible(present),
+                ])
+        } else if spec.cpus < (current?.cpus ?? spec.cpus) {
+            logger.info(
+                "vCPU shrink deferred to the next reboot; hot-remove is not attempted",
+                metadata: ["vmId": .string(vmId), "target": .stringConvertible(spec.cpus)])
+        }
+
+        if spec.memoryBytes != current?.memoryBytes, sizing.hotplugMemoryBytes > 0 {
+            // Only the region above boot memory is plug/unpluggable, and it
+            // moves in whole blocks.
+            let delta = max(spec.memoryBytes - sizing.baseMemoryBytes, 0)
+            let requested = min(delta - (delta % Self.virtioMemBlockBytes), sizing.hotplugMemoryBytes)
+            try await controlled("qmp-resize-memory", vmId: vmId) {
+                try await self.requireProbeClient(vmId: vmId).setVirtioMemRequestedSize(
+                    devicePath: "/machine/peripheral/\(Self.virtioMemDeviceID)", bytes: requested)
+            }
+            logger.info(
+                "Requested virtio-mem resize",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "targetBytes": .stringConvertible(spec.memoryBytes),
+                    "requestedSize": .stringConvertible(requested),
+                ])
+        } else if spec.memoryBytes != current?.memoryBytes {
+            logger.info(
+                "Memory resize deferred to the next reboot; VM has no virtio-mem device",
+                metadata: ["vmId": .string(vmId), "targetBytes": .stringConvertible(spec.memoryBytes)])
+        }
+
+        vmSpecs[vmId] = spec
+    }
+
+    /// A probe client on the VM's dedicated stats monitor, which is also the
+    /// only free QMP socket for hot-plug commands. Throws when the VM predates
+    /// the socket (created before issue #567) rather than hanging on a connect.
+    private func requireProbeClient(vmId: String) throws -> QMPProbeClient {
+        let socketPath = Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            throw HypervisorServiceError.notSupported(
+                "VM \(vmId) has no QMP stats monitor; restart it to pick up hot-plug support")
+        }
+        return QMPProbeClient(transport: NIOQGATransport(socketPath: socketPath, logger: logger), logger: logger)
+    }
+
     // MARK: - Balloon memory stats (issue #567)
 
     /// The QOM id every VM's virtio-balloon device is attached under, giving
@@ -808,6 +979,9 @@ actor QEMUService: HypervisorService {
 
         activeVMs[vmId] = adopted
         vmSpecs[vmId] = spec
+        // The manifest spec is what the surviving process was spawned from,
+        // so its headroom is the re-adopted VM's headroom too.
+        vmSpawnSizing[vmId] = Self.spawnSizing(for: spec)
 
         return Self.vmStatus(from: qemuStatus)
     }
@@ -1000,6 +1174,15 @@ actor QEMUService: HypervisorService {
         // Configure Memory (convert bytes to MB)
         qemuConfig.memoryMB = Int(spec.memoryBytes / (1024 * 1024))
         logger.debug("Configuring memory: \(spec.memoryBytes) bytes (\(qemuConfig.memoryMB) MB)")
+
+        // Hot-add headroom (issue #568). Both `-smp` and `-m` are merge-list
+        // options in QEMU, so re-stating them here refines the bare
+        // `-smp <n>` / `-m <mb>` SwiftQEMU emits rather than conflicting with
+        // it. Only emitted when the spec actually asks for headroom: a VM
+        // sized `maxCpus == cpus` and `maxMemoryBytes == memoryBytes` spawns
+        // with exactly the argument vector it did before this feature, so the
+        // overwhelmingly common case carries none of its risk.
+        appendHotAddHeadroom(&qemuConfig, spec: spec)
 
         // Configure disks
         qemuConfig.disks = disks.map { disk in

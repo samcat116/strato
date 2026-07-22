@@ -11,6 +11,10 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     case pause
     case resume
     case delete
+    /// Online vCPU/memory resize of a running VM (issue #568). Completed by
+    /// the agent's observed-state report, like the other desired-state
+    /// mutations; resizing a stopped VM records no operation at all.
+    case resize
     // Sandbox checkpoint/restore (issue #426). Snapshot deletion gets its own
     // kind so a failed cleanup is distinguishable from a failed delete of the
     // sandbox itself.

@@ -64,6 +64,7 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
+| `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -81,6 +82,15 @@ Version 16 follows the same pattern: `ObservedVMState.memoryStats` (issue
 #567) carries the guest's virtio-balloon memory statistics on the
 observed-state report — optional, nil-tolerant both ways, informational only,
 so no gate.
+
+Version 17 adds CPU/memory hot-add (issue #568). The new spec field —
+`VMSpec.maxMemoryBytes`, defaulting to `memoryBytes` — is additive and
+nil-tolerant, but the *behavior* is not: a pre-v17 agent plans no work for a
+generation that changed only sizing and reports it converged, so the resize
+would silently succeed having changed nothing. Hence `supportsVMResize`: the
+control plane refuses an online resize below it and tells the caller to
+restart the VM. Resizing a stopped VM needs no gate, since the next boot
+uses the whole spec.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded

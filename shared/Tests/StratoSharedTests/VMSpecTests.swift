@@ -119,6 +119,42 @@ struct VMSpecTests {
         #expect(decoded.cpus == 2)
     }
 
+    @Test func maxMemoryBytesRoundTrip() throws {
+        let spec = VMSpec(
+            cpus: 2, maxCpus: 8, memoryBytes: 1_073_741_824, maxMemoryBytes: 8_589_934_592,
+            boot: .disk(firmware: nil))
+        let decoded = try roundTrip(spec)
+        #expect(decoded.maxMemoryBytes == 8_589_934_592)
+        #expect(decoded.memoryBytes == 1_073_741_824)
+    }
+
+    /// No headroom requested: the ceiling is the boot size, which is what
+    /// tells the agent not to realize a hot-pluggable memory device at all.
+    @Test func maxMemoryBytesDefaultsToMemory() throws {
+        let spec = VMSpec(cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil))
+        #expect(spec.maxMemoryBytes == 268_435_456)
+    }
+
+    /// A ceiling below the boot size is meaningless; it clamps rather than
+    /// producing a spec that claims memory can shrink below what it booted.
+    @Test func maxMemoryBytesBelowMemoryClamps() throws {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, maxMemoryBytes: 1024, boot: .disk(firmware: nil))
+        #expect(spec.maxMemoryBytes == 268_435_456)
+    }
+
+    /// A spec from a control plane that predates `maxMemoryBytes` (issue
+    /// #568) has no such key; a new agent must read it as "no headroom"
+    /// rather than failing the sync (rolling-upgrade skew).
+    @Test func specWithoutMaxMemoryKeyDecodesToMemory() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
+             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        let decoded = try decodeJSON(VMSpec.self, from: json)
+        #expect(decoded.maxMemoryBytes == 1_073_741_824)
+    }
+
     @Test func userDataRoundTrip() throws {
         let payload = "#cloud-config\npackages:\n  - nginx\n"
         let spec = VMSpec(

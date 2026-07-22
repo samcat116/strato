@@ -97,6 +97,14 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-unplug disks
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws
 
+    /// Converges a running VM's vCPU count and memory size on `spec`
+    /// (issue #568), within the headroom the VM was created with. Growth
+    /// applies online; anything the backend cannot do without a restart is
+    /// left for the next boot, which uses the spec wholesale.
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   resize a running VM at all
+    func resizeVM(vmId: String, spec: VMSpec) async throws
+
     /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
     /// Used to compute accurate available-resource figures for the scheduler.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
@@ -112,6 +120,13 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    /// Backends must opt in to online resize; without an explicit
+    /// implementation a sizing change waits for the VM's next boot.
+    func resizeVM(vmId: String, spec: VMSpec) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support resizing a running VM")
+    }
+
     /// Backends must opt in to orphan re-adoption; without an explicit
     /// implementation an orphan cannot be reattached.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {

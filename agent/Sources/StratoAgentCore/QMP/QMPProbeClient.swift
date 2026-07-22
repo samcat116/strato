@@ -70,7 +70,7 @@ public actor QMPProbeClient {
                     arguments: QMPProbe.QOMSetArguments(
                         path: balloonPath,
                         property: "guest-stats-polling-interval",
-                        value: pollingIntervalSeconds),
+                        value: Int64(pollingIntervalSeconds)),
                     as: QMPProbe.Empty.self)
             } catch QMPProbeError.commandError {
                 // No balloon device at that path — QEMU rejects the qom-set.
@@ -103,6 +103,67 @@ public actor QMPProbeClient {
                 availableBytes: available,
                 freeBytes: reply.stats["stat-free-memory"] ?? nil
             )
+        }
+    }
+
+    // MARK: - CPU hot-add (issue #568)
+
+    /// Plugs vCPUs until the VM presents at least `target` of them, and
+    /// returns the resulting count.
+    ///
+    /// `query-hotpluggable-cpus` enumerates every CPU slot the machine was
+    /// spawned with (`-smp cpus=<n>,maxcpus=<max>`); slots already realized
+    /// carry a `qom-path`, the rest are free. Each free slot is realized with
+    /// `device_add` using the driver and topology properties QEMU itself
+    /// reported, in ascending topology order so slots fill deterministically.
+    ///
+    /// Hot-*remove* is deliberately absent: guest support for CPU unplug is
+    /// unreliable, so shrinking applies at the next reboot instead. A target
+    /// at or below the present count is therefore a no-op, not an error.
+    public func plugCPUs(target: Int) async throws -> Int {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+
+            let slots = try await self.command(
+                channel, framer, execute: "query-hotpluggable-cpus",
+                arguments: QMPProbe.NoArguments?.none, as: [QMPProbe.HotpluggableCPU].self)
+
+            var present = slots.filter { $0.qomPath != nil }.reduce(0) { $0 + $1.vcpusCount }
+            let free = slots.filter { $0.qomPath == nil }
+                .sorted { $0.topologyOrder.lexicographicallyPrecedes($1.topologyOrder) }
+
+            for slot in free where present < target {
+                try await self.command(
+                    channel, framer, execute: "device_add",
+                    arguments: QMPProbe.DeviceAddArguments(
+                        driver: slot.type, id: slot.deviceID, props: slot.props),
+                    as: QMPProbe.Empty.self)
+                present += slot.vcpusCount
+            }
+            return present
+        }
+    }
+
+    // MARK: - Memory hot-add (issue #568)
+
+    /// Asks the VM's virtio-mem device to expose `bytes` of hot-plugged
+    /// memory on top of its boot memory. The guest's virtio_mem driver plugs
+    /// (or unplugs) blocks toward that target asynchronously, so this returns
+    /// as soon as QEMU accepts the request.
+    ///
+    /// `bytes` must be a multiple of the device's block size — the caller
+    /// aligns, since the alignment also constrains the backend size chosen at
+    /// spawn. Throws `commandError` when the VM has no virtio-mem device
+    /// (created without memory headroom), which callers surface as a resize
+    /// that needs a restart rather than silently doing nothing.
+    public func setVirtioMemRequestedSize(devicePath: String, bytes: Int64) async throws {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            _ = try await self.command(
+                channel, framer, execute: "qom-set",
+                arguments: QMPProbe.QOMSetArguments(
+                    path: devicePath, property: "requested-size", value: bytes),
+                as: QMPProbe.Empty.self)
         }
     }
 
@@ -229,7 +290,91 @@ enum QMPProbe {
     struct QOMSetArguments: Encodable {
         let path: String
         let property: String
-        let value: Int
+        /// Int64 so the same command carries both small scalars (a polling
+        /// interval) and byte counts beyond 32 bits (virtio-mem sizes).
+        let value: Int64
+    }
+
+    /// One entry of `query-hotpluggable-cpus`: a CPU slot the machine was
+    /// spawned with. `qom-path` is present only for slots already realized,
+    /// which is how a free slot is recognized.
+    struct HotpluggableCPU: Decodable {
+        let type: String
+        let vcpusCount: Int
+        let qomPath: String?
+        /// Topology properties (socket-id, die-id, core-id, thread-id,
+        /// node-id, ...) echoed back verbatim in `device_add`. QEMU's own
+        /// vocabulary, and all-integer; non-integer values are dropped rather
+        /// than failing the decode, since an unknown property we cannot
+        /// forward is better than no hot-add at all.
+        let props: [String: Int]
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case vcpusCount = "vcpus-count"
+            case qomPath = "qom-path"
+            case props
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.type = try container.decode(String.self, forKey: .type)
+            // `vcpus-count` is absent on machines whose slots are single-vCPU.
+            self.vcpusCount = try container.decodeIfPresent(Int.self, forKey: .vcpusCount) ?? 1
+            self.qomPath = try container.decodeIfPresent(String.self, forKey: .qomPath)
+            let raw = try container.decodeIfPresent([String: IntegerProperty].self, forKey: .props) ?? [:]
+            self.props = raw.compactMapValues(\.value)
+        }
+
+        /// Deterministic fill order: outermost topology component first, so
+        /// repeated resizes of the same VM realize the same slots in the same
+        /// sequence.
+        var topologyOrder: [Int] {
+            ["node-id", "socket-id", "die-id", "cluster-id", "core-id", "thread-id"].map { props[$0] ?? -1 }
+        }
+
+        /// QOM id for the device this slot realizes, unique per slot and
+        /// stable across attempts (a retried `device_add` for an already
+        /// realized slot is rejected by id, which is the desired outcome).
+        var deviceID: String {
+            "cpu-" + topologyOrder.map(String.init).joined(separator: "-")
+        }
+    }
+
+    /// A `props` value, kept only when it is an integer.
+    struct IntegerProperty: Decodable {
+        let value: Int?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            value = try? container.decode(Int.self)
+        }
+    }
+
+    /// `device_add` arguments: the fixed `driver`/`id` plus the slot's
+    /// topology properties flattened alongside them, which is the shape QEMU
+    /// expects (properties are not nested under a `props` key on the wire).
+    struct DeviceAddArguments: Encodable {
+        let driver: String
+        let id: String
+        let props: [String: Int]
+
+        struct Key: CodingKey {
+            let stringValue: String
+            var intValue: Int? { nil }
+            init(_ stringValue: String) { self.stringValue = stringValue }
+            init?(stringValue: String) { self.init(stringValue) }
+            init?(intValue: Int) { nil }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: Key.self)
+            try container.encode(driver, forKey: Key("driver"))
+            try container.encode(id, forKey: Key("id"))
+            for (name, value) in props.sorted(by: { $0.key < $1.key }) {
+                try container.encode(value, forKey: Key(name))
+            }
+        }
     }
 
     struct QOMGetArguments: Encodable {

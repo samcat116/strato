@@ -48,6 +48,7 @@ const pendingOperationLabels: Record<OperationKind, string> = {
   pause: "Pausing",
   resume: "Resuming",
   delete: "Deleting",
+  resize: "Resizing",
   snapshot: "Snapshotting",
   snapshot_delete: "Deleting snapshot",
   restore: "Restoring",

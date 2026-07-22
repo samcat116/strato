@@ -24,8 +24,17 @@ struct QMPProbeClientTests {
     final class Recorder: @unchecked Sendable {
         private let lock = NSLock()
         private var items: [String] = []
-        func record(_ execute: String) { lock.withLock { items.append(execute) } }
+        private var requests: [[String: Any]] = []
+        func record(_ execute: String, request: [String: Any]) {
+            lock.withLock {
+                items.append(execute)
+                requests.append(request)
+            }
+        }
         var all: [String] { lock.withLock { items } }
+        /// Full request objects, for assertions about arguments (issue #568's
+        /// `device_add` topology properties).
+        var allRequests: [[String: Any]] { lock.withLock { requests } }
     }
 
     /// A transport whose channels greet like a QMP server and answer requests
@@ -48,6 +57,7 @@ struct QMPProbeClientTests {
         }
 
         var executes: [String] { recorder.all }
+        var requests: [[String: Any]] { recorder.allRequests }
 
         func openChannel() async throws -> any QGAByteChannel {
             FakeQMPChannel(
@@ -88,7 +98,7 @@ struct QMPProbeClientTests {
         private func handle(_ object: [UInt8]) throws {
             let json = try JSONSerialization.jsonObject(with: Data(object)) as? [String: Any]
             let execute = json?["execute"] as? String ?? ""
-            recorder.record(execute)
+            recorder.record(execute, request: json ?? [:])
 
             switch handler(execute) {
             case .object(let bytes):
@@ -256,6 +266,101 @@ struct QMPProbeClientTests {
         let transport = FakeQMPTransport { _ in .close }
         await #expect(throws: QMPProbeClient.QMPProbeError.connectionClosed) {
             _ = try await collect(transport)
+        }
+    }
+
+    // MARK: - CPU/memory hot-add (issue #568)
+
+    /// `query-hotpluggable-cpus` output for a 2-of-4 vCPU machine: QEMU lists
+    /// slots newest-first, with `qom-path` only on the realized ones.
+    private static let hotpluggableCPUs = Array(
+        """
+        {"return": [
+          {"type": "host-x86_64-cpu", "vcpus-count": 1, "props": {"core-id": 0, "socket-id": 3, "thread-id": 0}},
+          {"type": "host-x86_64-cpu", "vcpus-count": 1, "props": {"core-id": 0, "socket-id": 2, "thread-id": 0}},
+          {"type": "host-x86_64-cpu", "vcpus-count": 1, "qom-path": "/machine/unattached/device[1]",
+           "props": {"core-id": 0, "socket-id": 1, "thread-id": 0}},
+          {"type": "host-x86_64-cpu", "vcpus-count": 1, "qom-path": "/machine/unattached/device[0]",
+           "props": {"core-id": 0, "socket-id": 0, "thread-id": 0}}
+        ]}
+        """.utf8)
+
+    private static func hotplugHandler() -> @Sendable (String) -> Reply {
+        { execute in
+            switch execute {
+            case "qmp_capabilities", "device_add", "qom-set":
+                return .object(emptyReturn)
+            case "query-hotpluggable-cpus":
+                return .object(hotpluggableCPUs)
+            default:
+                return .object(Array(#"{"error": {"class": "CommandNotFound", "desc": "\#(execute)"}}"#.utf8))
+            }
+        }
+    }
+
+    private func client(_ transport: FakeQMPTransport) -> QMPProbeClient {
+        QMPProbeClient(transport: transport, logger: Logger(label: "test.qmp"))
+    }
+
+    @Test("plugging vCPUs realizes only as many free slots as the target needs")
+    func plugCPUsToTarget() async throws {
+        let transport = FakeQMPTransport(handler: Self.hotplugHandler())
+        let present = try await client(transport).plugCPUs(target: 3)
+
+        #expect(present == 3)
+        #expect(transport.executes == ["qmp_capabilities", "query-hotpluggable-cpus", "device_add"])
+
+        let add = try #require(transport.requests.last)
+        let arguments = try #require(add["arguments"] as? [String: Any])
+        #expect(arguments["driver"] as? String == "host-x86_64-cpu")
+        // The lowest free slot, and the topology properties echoed back verbatim.
+        #expect(arguments["socket-id"] as? Int == 2)
+        #expect(arguments["core-id"] as? Int == 0)
+        #expect(arguments["thread-id"] as? Int == 0)
+        #expect(arguments["id"] as? String != nil)
+    }
+
+    @Test("a target the VM already meets adds no CPUs")
+    func plugCPUsNoOpAtTarget() async throws {
+        let transport = FakeQMPTransport(handler: Self.hotplugHandler())
+        let present = try await client(transport).plugCPUs(target: 2)
+
+        #expect(present == 2)
+        #expect(transport.executes == ["qmp_capabilities", "query-hotpluggable-cpus"])
+    }
+
+    @Test("a target beyond the spawned slots plugs every free slot it has")
+    func plugCPUsStopsAtAvailableSlots() async throws {
+        let transport = FakeQMPTransport(handler: Self.hotplugHandler())
+        let present = try await client(transport).plugCPUs(target: 8)
+
+        #expect(present == 4)
+        #expect(transport.executes.filter { $0 == "device_add" }.count == 2)
+    }
+
+    @Test("memory resize sets the virtio-mem device's requested size")
+    func setRequestedSize() async throws {
+        let transport = FakeQMPTransport(handler: Self.hotplugHandler())
+        try await client(transport).setVirtioMemRequestedSize(
+            devicePath: "/machine/peripheral/memhp0", bytes: 2_147_483_648)
+
+        #expect(transport.executes == ["qmp_capabilities", "qom-set"])
+        let arguments = try #require(transport.requests.last?["arguments"] as? [String: Any])
+        #expect(arguments["path"] as? String == "/machine/peripheral/memhp0")
+        #expect(arguments["property"] as? String == "requested-size")
+        #expect((arguments["value"] as? NSNumber)?.int64Value == 2_147_483_648)
+    }
+
+    @Test("a VM without a virtio-mem device surfaces the QMP error")
+    func setRequestedSizeWithoutDevice() async throws {
+        let transport = FakeQMPTransport { execute in
+            execute == "qmp_capabilities"
+                ? .object(Self.emptyReturn)
+                : .object(Array(#"{"error": {"class": "DeviceNotFound", "desc": "no memhp0"}}"#.utf8))
+        }
+        await #expect(throws: (any Error).self) {
+            try await self.client(transport).setVirtioMemRequestedSize(
+                devicePath: "/machine/peripheral/memhp0", bytes: 0)
         }
     }
 }
