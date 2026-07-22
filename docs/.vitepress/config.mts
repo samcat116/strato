@@ -6,6 +6,9 @@ export default defineConfig({
   description: "Fast, secure, and easy to deploy private cloud platform",
   base: '/strato/',
 
+  // Internal agent-tooling config lives under docs/agents/; keep it out of the published site.
+  srcExclude: ['agents/**'],
+
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     logo: '/logo.svg',
