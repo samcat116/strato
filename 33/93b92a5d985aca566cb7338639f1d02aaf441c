@@ -1,0 +1,58 @@
+control-plane/Tests/AppTests/SPIREServerAPIClientMTLSTests.swift
+  s_1035380040c2d0::t_ba593e39e6fcb3 128-219
+  s_1035380040c2d0::t_f0c47f14ea4d95 332-335,345-349
+  s_1035380040c2d0::t_e712c79150cd76 424-482
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_1035380040c2d0::t_317cd37c6ad823 35-40,45-47,50-54
+  s_1035380040c2d0::t_652c16899e936f 1095-1162
+  s_1035380040c2d0::t_33f08369a8a8e1 1026-1035
+  s_1035380040c2d0::t_d5556f8f1637de 1249,1261-1269,1272,1287
+  s_1035380040c2d0::t_073a77713888ed 631-655,659
+  s_1035380040c2d0::t_a8a422a5695b56 937-939
+  s_1035380040c2d0::t_99115f8fbbf082 527-562,571-581
+  s_1035380040c2d0::t_5b84aa946bb9f2 793
+  s_1035380040c2d0::t_e05a954ae07ed4 306-444
+  s_1035380040c2d0::t_3711cb8aa18318 919-936,940-980,984-1002,1006-1023
+  s_1035380040c2d0::t_d1843f3193988f 981-983
+  s_1035380040c2d0::t_fa5a0d66b2e857 735-792,794-804
+  s_1035380040c2d0::t_b33bd2ec8b49a8 78-123
+  s_1035380040c2d0::t_b8ffd06d9b114d 1003-1005
+  s_1035380040c2d0::t_092afde8d31c84 701-703,708,710-711
+  s_1035380040c2d0::t_e2c74649372484 55
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/bundle/v1/bundle.proto
+  s_1035380040c2d0::t_238be5354f806a 1-253
+control-plane/Tests/AppTests/SPIREServerAPIClientTests.swift
+  s_1035380040c2d0::t_4f64954cf0c871 630-673
+  s_1035380040c2d0::t_3b681367467766 527-534
+  s_1035380040c2d0::t_c813e2f63693fb 842-953
+  s_1035380040c2d0::t_c4885cc4461077 275-526,535-544
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_1035380040c2d0::t_bd183fefe30165 5-7
+  s_1035380040c2d0::t_5eaac3bf5f6784 16-20
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_1035380040c2d0::t_39c62c7872e82d 676
+  s_1035380040c2d0::t_65bc539d2fa126 643-644
+  s_1035380040c2d0::t_77915d1c192663 649,652-654
+  s_1035380040c2d0::t_adc0fe4d88e968 703-705,715-717,722-724
+  s_1035380040c2d0::t_f9050bc100d7c1 666
+  s_1035380040c2d0::t_54396bbab61e12 725,759-793
+  s_1035380040c2d0::t_f9be986f1b9bce 726
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_bundle_v1_bundle.pb.swift
+  s_1035380040c2d0::t_54d026d30e22b2 1-1383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3393b92a5d985aca566cb7338639f1d02aaf441c",
+  "prompts": {},
+  "sessions": {
+    "s_1035380040c2d0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5c38ce75-184b-49fe-ab93-6e12a36714e0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
