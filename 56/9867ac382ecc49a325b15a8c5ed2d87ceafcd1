@@ -1,0 +1,91 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_b8a95666dc0476::t_a243b0f78863bc 33,67-68,79-80,121,123,126-127,131,163,174-178,183-185,188-195,222,224-228,267-268,317,332,349,358,369,383,396,401,407,413,418,432,446,537,539-545,576,589,591,595,604,606,614,619
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_b8a95666dc0476::t_d9c243c2d46888 29,38,45,117,128,135,206-207,214
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b8a95666dc0476::t_003b2fdddf4cd4 903,905,911-912,957-958,961-963,965-967,969
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_b8a95666dc0476::t_bb5acaf9c8cd2d 809,819
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_b8a95666dc0476::t_39b9bc2e0804fc 77
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_b8a95666dc0476::t_dbc912fc30a5d3 288,305
+control-plane/Sources/App/Services/AgentService.swift
+  s_b8a95666dc0476::t_27df86ff2d1e88 21-26,36,38-39,46,48,53,55,59-61,68,70,74-75,77,85,87-88,94-96,98-99,283-284,288-316,337,375,382-398,404,439,502,520,531,536-537,540,545,553-562,565,567-568,574,577,579,588,591,593,601-604,609,612,627,632-633,640,645,650-652,655,659-660,662,669,672-674,678,684,687,691,696,700,703,709-713,724,727,736,741-742,757-758,967,1528,1572-1573,1577,1583,1588,1600,1606,1609,1651-1652,1727-1728,1732,1735,1738,2304,2307,2310-2311,2313,2318-2320,2328,2331,2347,2352,2372-2373,3216,3271-3273,3279-3280,3299,3302,3305,3308,3319,3333,3348,3396,3425,3433,3484,3488,3643,3665,3668
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_b8a95666dc0476::t_6450ec45c2bcee 24,39,47,68,98,101,108,137,141,144,161,177,185,188,193-194,202-203,213-214,246,250,256,264,290,295-296,298-300,309,329-330
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_b8a95666dc0476::t_65342c3a67362e 502-503,509,511,515,522,524,528,694-695,714,718,722,728,730,734,742,744,748,754,757,759,764
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainRegistry.swift
+  s_b8a95666dc0476::t_24710b3baff68a 1-76
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_b8a95666dc0476::t_a737fd0a2f66e5 49,64,79,92,114,170,186,227,232,234,238,255,277,291,300,308,314-315,322-323,335,343-344,346,356-357,359,375,383,386,391-392,404-405,414,420,422,460-461,464-465,493-494
+control-plane/Sources/App/Services/SandboxLogIngestor.swift
+  s_b8a95666dc0476::t_b8d52c9c8f771d 23,37,42,86-87,98,104,115-116,121,146-147
+control-plane/Tests/AppTests/AgentAutoUpdateTests.swift
+  s_b8a95666dc0476::t_e24a75ed0c4991 363,369,390,415
+control-plane/Tests/AppTests/ConsoleSessionManagerTests.swift
+  s_b8a95666dc0476::t_02b15bfc38b27f 21,29,54,61,73,78
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_b8a95666dc0476::t_d1ba6a82ac105c 23,25-27,34-35,38,45,47,51
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_b8a95666dc0476::t_55a4d0392e5d80 390,422,460,486,508,528,546,568,588,627,661,709,753,777
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_b8a95666dc0476::t_e51b081e6f5d0e 88,90-91,95-96,98-99,111-112,184-185,196,207,216,237-238,245,254,264,272,301,324
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_b8a95666dc0476::t_2f98a3b978b8cb 117-121,133-134,229-230
+control-plane/Tests/AppTests/SandboxExecAttachIntegrationTests.swift
+  s_b8a95666dc0476::t_4cc15f8d21f258 81
+control-plane/Tests/AppTests/SandboxExecTests.swift
+  s_b8a95666dc0476::t_6d902ab21cf36a 222,353,391,395,422,438,476,480,484
+control-plane/Tests/AppTests/SandboxLogIngestorTests.swift
+  s_b8a95666dc0476::t_6d2f324592a7e2 50,79-80,112-113,122
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_b8a95666dc0476::t_f2dde3b508b6a9 1107,1136,1168,1191,1210,1228
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_b8a95666dc0476::t_08b6a75a45e598 612-622
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b8a95666dc0476::t_05c06507d43c7a 242-248,251,259-262,264,334,356
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_b8a95666dc0476::t_c09c2fe0007bfa 142-147,277-281
+control-plane/Sources/App/Migrations/AddTrustDomainToAgentIdentities.swift
+  s_b8a95666dc0476::t_1c35c0d8195a38 1-59
+control-plane/Sources/App/Migrations/CreateOrgTrustDomain.swift
+  s_b8a95666dc0476::t_d977f5422af6d2 1-51
+control-plane/Sources/App/Models/Agent.swift
+  s_b8a95666dc0476::t_a9c87e5ee0550a 14-20,166,181,231-235,238,256-261
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_b8a95666dc0476::t_ddd359ad4c2ffc 22-28,77,85
+control-plane/Sources/App/Models/OrgTrustDomain.swift
+  s_b8a95666dc0476::t_a119d9d5683855 1-146
+control-plane/Sources/App/Services/SPIFFE/AgentIdentity.swift
+  s_b8a95666dc0476::t_6582a923513001 1-49
+control-plane/Sources/App/Services/SPIFFE/AgentMTLSAuthenticator.swift
+  s_b8a95666dc0476::t_73514b70b9e517 1,4-19,53-60,84,88-89,94,98-100,110,115-120,138,144,149-153
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainProvisioning.swift
+  s_b8a95666dc0476::t_c31bab7305d02c 1-59
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_b8a95666dc0476::t_66ca2eaa664bb9 100-120,207-219,222-237,241,296,298,304-307,309-315,321-329,331-333,338,356-370,379,383,388-390,393,399-403,405,426-454,456-460,470-512,527-528,589-590,693-697
+control-plane/Sources/App/configure.swift
+  s_b8a95666dc0476::t_77696e3bed4492 546-551
+control-plane/Tests/AppTests/OrgTrustDomainTests.swift
+  s_b8a95666dc0476::t_6826ba68c9a9f2 1-384
+docs/architecture/control-plane.md
+  s_b8a95666dc0476::t_a0f92ae300372b 184-192,207-247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "569867ac382ecc49a325b15a8c5ed2d87ceafcd1",
+  "prompts": {},
+  "sessions": {
+    "s_b8a95666dc0476": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15c44b7f-6928-4d7b-9f9a-a551cd5d72a7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
