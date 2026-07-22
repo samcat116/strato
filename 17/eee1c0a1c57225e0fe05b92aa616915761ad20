@@ -1,0 +1,41 @@
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_678a17198c0285::t_65e097659082b8 891-898,905-906,941-997
+control-plane/Sources/App/Services/AgentService.swift
+  s_678a17198c0285::t_54a14a1de2570d 1678-1680,1727-1735
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_678a17198c0285::t_27b4a5367f74ce 446-448,485-491,543-590
+control-plane/Sources/App/Services/VolumeService.swift
+  s_678a17198c0285::t_4febe1e6f1791d 237-244
+control-plane/Tests/AppTests/ImageDownloadMTLSTests.swift
+  s_b8cfff041f0853::t_38c657f14803a6 38-58,61-65,67-68,70,73,91,96,135,175-176,187-228
+docs/architecture/multi-replica.md
+  s_b8cfff041f0853::t_658e1c384b395f 19
+docs/architecture/storage.md
+  s_b8cfff041f0853::t_f20c390ce1fd07 38-49
+control-plane/Tests/AppTests/ImageDownloadScopingTests.swift
+  s_678a17198c0285::t_a8a7f073a94e33 1-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "17eee1c0a1c57225e0fe05b92aa616915761ad20",
+  "prompts": {},
+  "sessions": {
+    "s_678a17198c0285": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbf28cde-0dc8-4853-8580-387b35f7703f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b8cfff041f0853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c13793-5dc7-4e02-a4e1-962d9f381ce1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
