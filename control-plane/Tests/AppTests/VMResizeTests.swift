@@ -8,7 +8,9 @@ import StratoShared
 /// Tests for online CPU/memory resize (issue #568): `PUT /api/vms/:id` moves a
 /// VM's sizing, applying it as a desired-state change with a `resize`
 /// operation while the VM runs, or as a plain edit (which may also raise the
-/// hot-add ceilings) while it rests.
+/// hot-add ceilings) while it rests. The same endpoint carries an operator's
+/// balloon target (issue #567 phase 2), which moves the guest's usable memory
+/// without moving the grant it is charged for.
 @Suite("VM Resize Tests", .serialized)
 final class VMResizeTests {
 
@@ -261,6 +263,136 @@ final class VMResizeTests {
             try await put(app, vm, token: token, body: ["cpu": 4]) { res in
                 #expect(res.status == .conflict)
             }
+        }
+    }
+
+    // MARK: - Balloon targets (issue #567 phase 2)
+
+    @Test("Setting a balloon target on a running VM returns 202 and leaves the grant alone")
+    func balloonTargetOnRunningVM() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            try await running(vm, on: app.db)
+            let generationBefore = vm.generation
+            let oneGB = Int64(1024 * 1024 * 1024)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": oneGB]) { res in
+                #expect(res.status == .accepted)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.kind == .resize)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.balloonTarget == oneGB)
+            // The grant — and so the quota charge — is untouched: reclaim is
+            // opportunistic, the memory is still committed to this VM.
+            #expect(refreshed.memory == vm.memory)
+            #expect(refreshed.generation > generationBefore)
+
+            let quotas = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            let quota = try #require(quotas.first)
+            #expect(quota.reservedVCPUs == 2)
+        }
+    }
+
+    @Test("Clearing a balloon target with an explicit null hands the grant back")
+    func balloonTargetCleared() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            vm.balloonTarget = 1024 * 1024 * 1024
+            try await vm.save(on: app.db)
+            try await running(vm, on: app.db)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": NSNull()]) { res in
+                #expect(res.status == .accepted)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.balloonTarget == nil)
+        }
+    }
+
+    /// Absence and null are different requests: a rename must not silently
+    /// deflate a guest that an operator deliberately squeezed.
+    @Test("An update that omits balloonTarget leaves the existing target alone")
+    func balloonTargetUntouchedWhenOmitted() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            let oneGB = Int64(1024 * 1024 * 1024)
+            vm.balloonTarget = oneGB
+            try await vm.save(on: app.db)
+            try await running(vm, on: app.db)
+
+            try await put(app, vm, token: token, body: ["name": "renamed"]) { res in
+                #expect(res.status == .ok)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.balloonTarget == oneGB)
+        }
+    }
+
+    @Test("A balloon target on a stopped VM is a plain edit the next boot applies")
+    func balloonTargetOnStoppedVM() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            let oneGB = Int64(1024 * 1024 * 1024)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": oneGB]) { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(detail.balloonTarget == oneGB)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.balloonTarget == oneGB)
+            #expect(refreshed.generation > vm.generation)
+        }
+    }
+
+    @Test("A balloon target above the VM's memory is a 400")
+    func balloonTargetAboveMemoryRejected() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            try await running(vm, on: app.db)
+            let tenGB = Int64(10 * 1024 * 1024 * 1024)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": tenGB]) { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("memory"))
+            }
+
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.balloonTarget == nil)
+        }
+    }
+
+    @Test("A balloon target below the survivable floor is a 400")
+    func balloonTargetBelowFloorRejected() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            try await running(vm, on: app.db)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": 1024]) { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.balloonTarget == nil)
+        }
+    }
+
+    /// No "restart to apply" remedy here, unlike a resize: a target only ever
+    /// exists on a running guest, so an agent that ignores the field never
+    /// realizes it.
+    @Test("An agent too old to balloon is refused with 422")
+    func balloonTargetOldAgentRejected() async throws {
+        try await withResizeTestApp(agentWireVersion: WireProtocol.balloonTargetMinimumVersion - 1) {
+            app, _, vm, _, token in
+            try await running(vm, on: app.db)
+
+            try await put(app, vm, token: token, body: ["balloonTarget": 1024 * 1024 * 1024]) { res in
+                #expect(res.status == .unprocessableEntity)
+                #expect(res.body.string.contains("upgrade the agent"))
+            }
+
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.balloonTarget == nil)
         }
     }
 }

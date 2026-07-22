@@ -153,6 +153,15 @@ export interface VM {
   guestMemoryUsedBytes?: number;
   guestMemoryUsedFormatted?: string;
   guestMemoryStatsAt?: string;
+  /**
+   * Balloon target (issue #567 phase 2). `balloonTarget` is the memory an
+   * operator asked the guest to be held to; `guestMemoryBalloonActualBytes` is
+   * what the balloon has actually reached, and sits above the target while the
+   * guest is still handing pages back.
+   */
+  balloonTarget?: number;
+  balloonTargetFormatted?: string;
+  guestMemoryBalloonActualBytes?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -678,6 +687,13 @@ export interface CreateVMRequest {
 export interface UpdateVMRequest {
   name?: string;
   description?: string;
+  /**
+   * Operator balloon target in bytes (issue #567 phase 2). Omit to leave the
+   * current target alone; send `null` to clear it and give the guest its whole
+   * memory grant back. On a running VM this responds 202 with an Operation,
+   * not the VM.
+   */
+  balloonTarget?: number | null;
 }
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an

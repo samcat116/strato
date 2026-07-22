@@ -148,6 +148,18 @@ sizing, never the ceiling: reserving to the maximum would strand capacity
 the VM may never use, and the scheduler's placement figures are the same
 current values.
 
+The same endpoint carries `balloonTarget` (issue #567 phase 2), the memory an
+operator will hold the guest to. It is deliberately *not* a quota movement:
+ballooning reclaims opportunistically, the grant stays committed, and the
+guest takes it all back the moment the target is cleared — so only the
+generation bump and the `resize` operation are shared with a real resize. The
+field is doubly optional on the wire: omitting it leaves the current target
+alone, while an explicit `null` clears it. Bounds are `<= memory` (a balloon
+can only take memory away; growing a guest is `memory`) and a 128 MiB floor,
+the point where an over-aggressive target stops being reclaim and starts being
+an OOM. A running VM whose agent predates `supportsBalloonTarget` is a `422`
+with no restart remedy to offer, since the target only exists on a live guest.
+
 **Operations complete from observed state, not from the HTTP request**: when
 an agent's `ObservedStateReport` shows the VM's observed status/generation
 caught up to desired, `completeIfPending` marks the row terminal. The

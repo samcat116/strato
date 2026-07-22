@@ -522,6 +522,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddMaxMemoryToVM())
     app.migrations.add(AddResizeOperationKind())
 
+    // Operator balloon targets (issue #567 phase 2): the requested guest
+    // ceiling and the balloon size actually reached.
+    app.migrations.add(AddBalloonTargetToVM())
+
     // Replace the constant "platform" device type on existing passkeys with the
     // value implied by their backup-eligible flag.
     app.migrations.add(BackfillPasskeyDeviceType())

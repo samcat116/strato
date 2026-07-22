@@ -227,7 +227,20 @@ public enum WireProtocol {
     /// API saying why. So placement is gated on both signals
     /// (`supportsMachineProfile(_:)` plus the explicit `tpmCapable` flag,
     /// the `sandboxCapable` pattern from v5) rather than sent and hoped for.
-    public static let currentVersion = 18
+    ///
+    /// Version 19: operator balloon targets (issue #567 phase 2). Adds
+    /// `VMSpec.balloonTargetBytes` (optional; nil means "no target, balloon
+    /// deflated") and `VMMemoryStats.balloonActualBytes` on the way back. The
+    /// observed field is additive and nil-tolerant with v16's contract and
+    /// needs no gate. The spec field has v17's hazard rather than v15's: a
+    /// pre-v19 agent decodes the sync, ignores the key, plans no work, and
+    /// reports the bumped generation as converged — so setting a target on a
+    /// running VM would report success having reclaimed nothing. The control
+    /// plane therefore refuses to set a target for agents below this version
+    /// (see `supportsBalloonTarget(_:)`). Unlike v17 there is no
+    /// "restart to apply" remedy to offer, because the target only exists on
+    /// a running guest in the first place.
+    public static let currentVersion = 19
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -397,6 +410,19 @@ public enum WireProtocol {
     /// swtpm understands the field but cannot realize it.
     public static func supportsMachineProfile(_ version: Int) -> Bool {
         version >= machineProfileMinimumVersion
+    }
+
+    /// The lowest protocol version that realizes `VMSpec.balloonTargetBytes`
+    /// (see `currentVersion` version 19 notes).
+    public static let balloonTargetMinimumVersion = 19
+
+    /// Whether an agent registered with `version` inflates a VM's balloon to
+    /// an operator's target. A pre-v19 agent ignores the spec field and
+    /// reports the bumped generation as converged, so the control plane
+    /// refuses to set a target there rather than completing an operation that
+    /// reclaimed nothing.
+    public static func supportsBalloonTarget(_ version: Int) -> Bool {
+        version >= balloonTargetMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

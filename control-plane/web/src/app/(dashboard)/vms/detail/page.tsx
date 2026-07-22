@@ -202,6 +202,18 @@ export default function VMDetailPage() {
                       </div>
                     </>
                   )}
+                {/* Operator balloon target (issue #567 phase 2): what the
+                    guest is being held to, and — while the guest is still
+                    handing pages back — how far the balloon has got. */}
+                {vm.balloonTargetFormatted != null && (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Limited to {vm.balloonTargetFormatted}
+                    {vm.guestMemoryBalloonActualBytes != null &&
+                      vm.balloonTarget != null &&
+                      vm.guestMemoryBalloonActualBytes >
+                        vm.balloonTarget && " (reclaiming…)"}
+                  </p>
+                )}
               </CardContent>
             </Card>
             <Card className="bg-card border-border">

@@ -640,12 +640,18 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         let parentID: String
         let selectors: [SPIRESelector]
         let x509SVIDTTLSeconds: Int32
+        let federatesWith: [String]
+        let admin: Bool
     }
 
     private(set) var joinTokenRequests: [JoinTokenRequest] = []
     private(set) var createdEntries: [CreateEntryRequest] = []
+    private(set) var entryUpdates: [SPIREEntryUpdate] = []
     private(set) var deletedSPIFFEIDs: [String] = []
     private(set) var evictedAgentIDs: [String] = []
+    private(set) var createdFederationRelationships: [SPIREFederationRelationshipInput] = []
+    private(set) var updatedFederationRelationships: [SPIREFederationRelationshipInput] = []
+    private(set) var deletedFederationTrustDomains: [String] = []
 
     private var failJoinToken = false
     private var failCreateEntry = false
@@ -657,6 +663,7 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var agents: [SPIREAgent] = []
     private var federationRelationships: [SPIREFederationRelationship] = []
     private var failFederation = false
+    private var bundle = SPIREBundle(trustDomain: "strato.local", x509Authorities: [])
 
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
@@ -666,6 +673,7 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     func setFederationRelationships(_ relationships: [SPIREFederationRelationship]) {
         self.federationRelationships = relationships
     }
+    func setBundle(_ bundle: SPIREBundle) { self.bundle = bundle }
     /// listFederationRelationships throws, as SPIRE does when the trustdomain
     /// API is unreachable.
     func setFailFederation(_ fail: Bool) { failFederation = fail }
@@ -692,7 +700,9 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         spiffeID: String,
         parentID: String,
         selectors: [SPIRESelector],
-        x509SVIDTTLSeconds: Int32
+        x509SVIDTTLSeconds: Int32,
+        federatesWith: [String],
+        admin: Bool
     ) async throws -> SPIREEntryCreationResult {
         if failCreateEntry {
             throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
@@ -702,9 +712,16 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
                 spiffeID: spiffeID,
                 parentID: parentID,
                 selectors: selectors,
-                x509SVIDTTLSeconds: x509SVIDTTLSeconds
+                x509SVIDTTLSeconds: x509SVIDTTLSeconds,
+                federatesWith: federatesWith,
+                admin: admin
             ))
         return entryResult
+    }
+
+    func updateEntries(_ updates: [SPIREEntryUpdate]) async throws -> [SPIREEntry] {
+        entryUpdates.append(contentsOf: updates)
+        return []
     }
 
     func deleteEntries(spiffeID: String) async throws -> Int {
@@ -738,5 +755,40 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
             throw SPIREServerAPIError.unreachable("fake: SPIRE trustdomain API down")
         }
         return federationRelationships
+    }
+
+    func getBundle() async throws -> SPIREBundle {
+        if failFederation {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE bundle API down")
+        }
+        return bundle
+    }
+
+    func createFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationshipCreationResult] {
+        if failFederation {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE trustdomain API down")
+        }
+        createdFederationRelationships.append(contentsOf: relationships)
+        return relationships.map { .created(trustDomain: $0.trustDomain) }
+    }
+
+    func updateFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationship] {
+        if failFederation {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE trustdomain API down")
+        }
+        updatedFederationRelationships.append(contentsOf: relationships)
+        return federationRelationships
+    }
+
+    func deleteFederationRelationships(trustDomains: [String]) async throws -> [String] {
+        if failFederation {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE trustdomain API down")
+        }
+        deletedFederationTrustDomains.append(contentsOf: trustDomains)
+        return trustDomains
     }
 }

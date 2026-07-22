@@ -327,6 +327,14 @@ actor QEMUService: HypervisorService {
             }
         }
 
+        // A fresh QEMU process starts with a fully deflated balloon, so a VM
+        // whose spec carries an operator target must have it re-applied here
+        // — the reconciler cannot see the difference, since its notion of
+        // applied sizing is the spec this VM was created with.
+        if let spec = vmSpecs[vmId], spec.balloonTargetBytes != nil {
+            await applyBalloonTarget(vmId: vmId, spec: spec)
+        }
+
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
     }
 
@@ -878,7 +886,42 @@ actor QEMUService: HypervisorService {
                 metadata: ["vmId": .string(vmId), "targetBytes": .stringConvertible(spec.memoryBytes)])
         }
 
+        if spec.balloonTargetBytes != current?.balloonTargetBytes {
+            await applyBalloonTarget(vmId: vmId, spec: spec)
+        }
+
         vmSpecs[vmId] = spec
+    }
+
+    /// Drives the VM's balloon to `spec.balloonTargetBytes` — or back to its
+    /// full grant when the spec carries no target (issue #567 phase 2).
+    ///
+    /// Best-effort by design, and never fatal to the caller: a VM created
+    /// before the balloon device existed has nothing to drive, and a guest
+    /// that ignores the request is not a convergence failure the agent can
+    /// act on. Either way `query-balloon`'s `actual`, reported on the next
+    /// stats poll, is what tells the operator whether memory came back —
+    /// which is why this reports failure to the log rather than pretending
+    /// the request is the outcome.
+    private func applyBalloonTarget(vmId: String, spec: VMSpec) async {
+        // Clearing a target means deflating all the way back to the grant,
+        // which is a real command and not a no-op.
+        let target = min(spec.balloonTargetBytes ?? spec.memoryBytes, spec.memoryBytes)
+        do {
+            try await controlled("qmp-balloon-target", vmId: vmId) {
+                try await self.requireProbeClient(vmId: vmId).setBalloonTarget(bytes: target)
+            }
+            logger.info(
+                "Requested balloon target",
+                metadata: ["vmId": .string(vmId), "targetBytes": .stringConvertible(target)])
+        } catch {
+            logger.warning(
+                "Balloon target could not be applied",
+                metadata: [
+                    "vmId": .string(vmId), "targetBytes": .stringConvertible(target),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     /// A probe client on the VM's dedicated stats monitor, which is also the

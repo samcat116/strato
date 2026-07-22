@@ -150,7 +150,8 @@ struct QMPProbeClientTests {
     /// individual tests can vary them.
     private static func healthyHandler(
         qomSetReply: Reply = .object(emptyReturn),
-        qomGetReply: Reply = .object(statsReply())
+        qomGetReply: Reply = .object(statsReply()),
+        queryBalloonReply: Reply = .object(Array(#"{"return": {"actual": 8589934592}}"#.utf8))
     ) -> @Sendable (String) -> Reply {
         { execute in
             switch execute {
@@ -160,6 +161,8 @@ struct QMPProbeClientTests {
                 return qomSetReply
             case "qom-get":
                 return qomGetReply
+            case "query-balloon":
+                return queryBalloonReply
             default:
                 return .object(Array(#"{"error": {"class": "CommandNotFound", "desc": "\#(execute)"}}"#.utf8))
             }
@@ -181,7 +184,8 @@ struct QMPProbeClientTests {
         #expect(stats.totalBytes == 8_254_390_272)
         #expect(stats.availableBytes == 6_442_450_944)
         #expect(stats.freeBytes == 4_294_967_296)
-        #expect(transport.executes == ["qmp_capabilities", "qom-set", "qom-get"])
+        #expect(stats.balloonActualBytes == 8_589_934_592)
+        #expect(transport.executes == ["qmp_capabilities", "qom-set", "qom-get", "query-balloon"])
     }
 
     @Test("replies reassemble when delivered one byte at a time")
@@ -362,5 +366,48 @@ struct QMPProbeClientTests {
             try await self.client(transport).setVirtioMemRequestedSize(
                 devicePath: "/machine/peripheral/memhp0", bytes: 0)
         }
+    }
+
+    // MARK: - Balloon targets (issue #567 phase 2)
+
+    @Test("setting a balloon target issues `balloon` with the target in bytes")
+    func setBalloonTarget() async throws {
+        let transport = FakeQMPTransport { execute in
+            execute == "qmp_capabilities" || execute == "balloon"
+                ? .object(Self.emptyReturn)
+                : .object(Array(#"{"error": {"class": "CommandNotFound", "desc": "\#(execute)"}}"#.utf8))
+        }
+        try await client(transport).setBalloonTarget(bytes: 2_147_483_648)
+
+        #expect(transport.executes == ["qmp_capabilities", "balloon"])
+        let arguments = try #require(transport.requests.last?["arguments"] as? [String: Any])
+        #expect((arguments["value"] as? NSNumber)?.int64Value == 2_147_483_648)
+    }
+
+    @Test("a VM without a balloon device surfaces the QMP error")
+    func setBalloonTargetWithoutDevice() async throws {
+        let transport = FakeQMPTransport { execute in
+            execute == "qmp_capabilities"
+                ? .object(Self.emptyReturn)
+                : .object(
+                    Array(#"{"error": {"class": "DeviceNotActive", "desc": "no balloon"}}"#.utf8))
+        }
+        await #expect(throws: (any Error).self) {
+            try await self.client(transport).setBalloonTarget(bytes: 1 << 30)
+        }
+    }
+
+    /// The balloon size is the host's own view, so losing it must not cost us
+    /// the guest statistics that were already read on the same channel.
+    @Test("a failed query-balloon still returns the guest stats")
+    func balloonQueryFailureKeepsStats() async throws {
+        let transport = FakeQMPTransport(
+            handler: Self.healthyHandler(
+                queryBalloonReply: .object(
+                    Array(#"{"error": {"class": "DeviceNotActive", "desc": "no balloon"}}"#.utf8))))
+        let collected = try await collect(transport)
+        let stats = try #require(collected)
+        #expect(stats.totalBytes == 8_254_390_272)
+        #expect(stats.balloonActualBytes == nil)
     }
 }

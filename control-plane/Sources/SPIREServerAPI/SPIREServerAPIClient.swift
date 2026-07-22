@@ -32,12 +32,26 @@ public protocol SPIREServerAPI: Sendable {
     /// Create a workload registration entry. Returns the entry ID; creating an
     /// entry identical to an existing one reports `alreadyExists` with the
     /// existing entry's ID rather than failing.
+    ///
+    /// - Parameters:
+    ///   - federatesWith: Trust domains the identity federates with, so its
+    ///     workloads receive those domains' bundles alongside their SVID.
+    ///   - admin: Whether the identity may call the server's managerial APIs
+    ///     (the entitlement the control plane's own admin SVID carries).
     func createEntry(
         spiffeID: String,
         parentID: String,
         selectors: [SPIRESelector],
-        x509SVIDTTLSeconds: Int32
+        x509SVIDTTLSeconds: Int32,
+        federatesWith: [String],
+        admin: Bool
     ) async throws -> SPIREEntryCreationResult
+
+    /// Update existing registration entries in one batch. Each update carries
+    /// the entry ID plus only the fields to change; unset fields are left
+    /// alone (they are excluded from the request's field mask). Returns the
+    /// updated entries in request order; any per-entry failure throws.
+    func updateEntries(_ updates: [SPIREEntryUpdate]) async throws -> [SPIREEntry]
 
     /// Delete all registration entries whose SPIFFE ID matches. Returns the
     /// number of entries deleted (0 when none matched).
@@ -61,6 +75,52 @@ public protocol SPIREServerAPI: Sendable {
     /// currently holds for each. Read-only; backs the Federation panel of the
     /// Workload Identity view.
     func listFederationRelationships() async throws -> [SPIREFederationRelationship]
+
+    /// Fetch this server's own trust bundle — the authorities a peer trust
+    /// domain must hold to verify identities issued here. Seeding federation
+    /// in both directions is a matter of reading each side's bundle and
+    /// handing it to the other.
+    func getBundle() async throws -> SPIREBundle
+
+    /// Create federation relationships with foreign trust domains. A
+    /// relationship for a trust domain that already has one reports
+    /// `alreadyExists` rather than failing, so provisioning can be replayed.
+    func createFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationshipCreationResult]
+
+    /// Replace existing federation relationships. The endpoint URL and profile
+    /// are always updated; the peer bundle is only touched for inputs that
+    /// carry one, so an update without a bundle leaves the bundle SPIRE
+    /// already holds intact. Any per-relationship failure throws.
+    func updateFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationship]
+
+    /// Delete federation relationships by peer trust domain name. Returns the
+    /// trust domains actually deleted — a name with no relationship is not an
+    /// error, so teardown is idempotent.
+    func deleteFederationRelationships(trustDomains: [String]) async throws -> [String]
+}
+
+extension SPIREServerAPI {
+    /// Create an entry that neither federates nor carries admin rights — the
+    /// shape the node/agent registration flow provisions.
+    public func createEntry(
+        spiffeID: String,
+        parentID: String,
+        selectors: [SPIRESelector],
+        x509SVIDTTLSeconds: Int32
+    ) async throws -> SPIREEntryCreationResult {
+        try await createEntry(
+            spiffeID: spiffeID,
+            parentID: parentID,
+            selectors: selectors,
+            x509SVIDTTLSeconds: x509SVIDTTLSeconds,
+            federatesWith: [],
+            admin: false
+        )
+    }
 }
 
 // MARK: - Data types
@@ -243,6 +303,145 @@ public struct SPIREFederationRelationship: Sendable, Equatable {
     }
 }
 
+/// An X.509 authority in a trust bundle: a CA certificate SVIDs of that trust
+/// domain chain to.
+public struct SPIREX509Authority: Sendable, Equatable {
+    /// The ASN.1 DER encoding of the CA certificate.
+    public let der: Data
+    /// SPIRE has marked this authority compromised; it must not be used.
+    public let tainted: Bool
+
+    public init(der: Data, tainted: Bool = false) {
+        self.der = der
+        self.tainted = tainted
+    }
+}
+
+/// A JWT signing authority in a trust bundle.
+public struct SPIREJWTAuthority: Sendable, Equatable {
+    public let keyID: String
+    /// The PKIX-encoded public key.
+    public let publicKey: Data
+    /// When the key expires; nil when it does not.
+    public let expiresAt: Date?
+    /// SPIRE has marked this authority compromised; it must not be used.
+    public let tainted: Bool
+
+    public init(keyID: String, publicKey: Data, expiresAt: Date?, tainted: Bool = false) {
+        self.keyID = keyID
+        self.publicKey = publicKey
+        self.expiresAt = expiresAt
+        self.tainted = tainted
+    }
+}
+
+/// A trust domain's bundle: the authorities that verify identities issued in
+/// that domain. A projection of `spire.api.types.Bundle`. Federating two trust
+/// domains means giving each one the other's bundle.
+public struct SPIREBundle: Sendable, Equatable {
+    public let trustDomain: String
+    public let x509Authorities: [SPIREX509Authority]
+    public let jwtAuthorities: [SPIREJWTAuthority]
+    /// How often SPIRE suggests refetching this bundle, in seconds; `0` when
+    /// the server offers no hint.
+    public let refreshHintSeconds: Int64
+    /// Bumped by SPIRE every time the bundle's contents change.
+    public let sequenceNumber: UInt64
+
+    public init(
+        trustDomain: String,
+        x509Authorities: [SPIREX509Authority],
+        jwtAuthorities: [SPIREJWTAuthority] = [],
+        refreshHintSeconds: Int64 = 0,
+        sequenceNumber: UInt64 = 0
+    ) {
+        self.trustDomain = trustDomain
+        self.x509Authorities = x509Authorities
+        self.jwtAuthorities = jwtAuthorities
+        self.refreshHintSeconds = refreshHintSeconds
+        self.sequenceNumber = sequenceNumber
+    }
+}
+
+/// How a peer trust domain's bundle endpoint authenticates itself.
+public enum SPIREBundleEndpointProfile: Sendable, Equatable {
+    /// The endpoint presents a Web PKI certificate.
+    case httpsWeb
+    /// The endpoint presents an SVID with this SPIFFE ID — verifying it needs
+    /// a bundle for that domain to already be in place, which is what the
+    /// `trustDomainBundle` on a relationship input supplies.
+    case httpsSPIFFE(endpointSPIFFEID: String)
+}
+
+/// A federation relationship to create or replace: which peer trust domain,
+/// where to fetch its bundle, how to authenticate that endpoint, and
+/// optionally the peer bundle to seed so the first fetch can be verified.
+public struct SPIREFederationRelationshipInput: Sendable, Equatable {
+    public let trustDomain: String
+    public let bundleEndpointURL: String
+    public let bundleEndpointProfile: SPIREBundleEndpointProfile
+    /// The peer's bundle to store alongside the relationship. Required to
+    /// bootstrap an `https_spiffe` relationship (SPIRE cannot verify the
+    /// endpoint's SVID without it); omit to leave a stored bundle untouched.
+    public let trustDomainBundle: SPIREBundle?
+
+    public init(
+        trustDomain: String,
+        bundleEndpointURL: String,
+        bundleEndpointProfile: SPIREBundleEndpointProfile,
+        trustDomainBundle: SPIREBundle? = nil
+    ) {
+        self.trustDomain = trustDomain
+        self.bundleEndpointURL = bundleEndpointURL
+        self.bundleEndpointProfile = bundleEndpointProfile
+        self.trustDomainBundle = trustDomainBundle
+    }
+}
+
+public enum SPIREFederationRelationshipCreationResult: Sendable, Equatable {
+    case created(trustDomain: String)
+    case alreadyExists(trustDomain: String)
+
+    public var trustDomain: String {
+        switch self {
+        case .created(let trustDomain), .alreadyExists(let trustDomain):
+            return trustDomain
+        }
+    }
+}
+
+/// A change to an existing registration entry: the entry ID plus the fields to
+/// set. Every field is optional — only those provided are sent (and named in
+/// the request's field mask), so an update never disturbs the rest of the
+/// entry.
+public struct SPIREEntryUpdate: Sendable, Equatable {
+    public let id: String
+    public let spiffeID: String?
+    public let parentID: String?
+    public let selectors: [SPIRESelector]?
+    public let x509SVIDTTLSeconds: Int32?
+    public let federatesWith: [String]?
+    public let admin: Bool?
+
+    public init(
+        id: String,
+        spiffeID: String? = nil,
+        parentID: String? = nil,
+        selectors: [SPIRESelector]? = nil,
+        x509SVIDTTLSeconds: Int32? = nil,
+        federatesWith: [String]? = nil,
+        admin: Bool? = nil
+    ) {
+        self.id = id
+        self.spiffeID = spiffeID
+        self.parentID = parentID
+        self.selectors = selectors
+        self.x509SVIDTTLSeconds = x509SVIDTTLSeconds
+        self.federatesWith = federatesWith
+        self.admin = admin
+    }
+}
+
 public enum SPIREServerAPIError: Error, LocalizedError {
     case invalidAddress(String)
     case unreachable(String)
@@ -325,6 +524,42 @@ public enum SPIREServerAPIAddress: Sendable, Equatable {
 
 // MARK: - Transport security
 
+/// Which SPIRE server the mTLS path expects to find at the far end, and what
+/// to verify its certificate against.
+///
+/// The default (`own`) is the single-trust-domain case: the server must be
+/// `spiffe://<own-td>/spire/server`, chaining to the client's own bundle.
+/// Dialing a server in a *different* trust domain — a per-organization SPIRE
+/// instance federated with the platform domain — means presenting the same
+/// platform SVID but pinning and verifying against that domain instead, which
+/// is what `trustDomain(_:bundlePEM:)` expresses.
+public struct SPIREServerPeer: Sendable, Equatable {
+    /// SPIFFE ID the server must present, or nil to derive
+    /// `spiffe://<td>/spire/server` from the client's own SVID.
+    public let expectedServerSPIFFEID: String?
+    /// PEM X.509 authorities to verify the server chain against, or nil to use
+    /// the client's own trust bundle.
+    public let trustRootsPEM: [String]?
+
+    /// The SPIRE server of the client's own trust domain.
+    public static let own = SPIREServerPeer(expectedServerSPIFFEID: nil, trustRootsPEM: nil)
+
+    /// The SPIRE server of `trustDomain`, verified against that domain's own
+    /// bundle. A union with the client's bundle would let either domain's CA
+    /// vouch for the peer, so the peer's roots are used alone.
+    public static func trustDomain(_ trustDomain: String, bundlePEM: [String]) -> SPIREServerPeer {
+        SPIREServerPeer(
+            expectedServerSPIFFEID: "spiffe://\(trustDomain)/spire/server",
+            trustRootsPEM: bundlePEM
+        )
+    }
+
+    public init(expectedServerSPIFFEID: String?, trustRootsPEM: [String]?) {
+        self.expectedServerSPIFFEID = expectedServerSPIFFEID
+        self.trustRootsPEM = trustRootsPEM
+    }
+}
+
 /// How the client secures its connection to the SPIRE server API.
 public enum SPIREServerAPITransportSecurity: Sendable {
     /// Plaintext gRPC: the admin Unix socket (callers are implicitly admin)
@@ -333,12 +568,17 @@ public enum SPIREServerAPITransportSecurity: Sendable {
 
     /// Mutual TLS for the SPIRE server's network TCP endpoint: the client
     /// presents its own SVID (whose registration entry must carry
-    /// `admin = true`) and verifies the server's certificate against the
-    /// trust bundle, both obtained from `identityProvider`. Hostname
-    /// verification is skipped — SPIRE server TLS certificates carry a SPIFFE
-    /// URI SAN, not the DNS name of a Kubernetes Service — so trust rests on
-    /// the chain to the trust domain's CA.
-    case mtls(identityProvider: any SPIREClientIdentityProvider)
+    /// `admin = true`) from `identityProvider` and verifies the server against
+    /// `peer`. Hostname verification is skipped — SPIRE server TLS
+    /// certificates carry a SPIFFE URI SAN, not the DNS name of a Kubernetes
+    /// Service — so trust rests on the chain to a trust domain's CA plus the
+    /// pinned server SPIFFE ID.
+    case mtls(identityProvider: any SPIREClientIdentityProvider, peer: SPIREServerPeer)
+
+    /// mTLS to the SPIRE server of the client's own trust domain.
+    public static func mtls(identityProvider: any SPIREClientIdentityProvider) -> Self {
+        .mtls(identityProvider: identityProvider, peer: .own)
+    }
 }
 
 // MARK: - gRPC client
@@ -388,9 +628,35 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         method: "ListFederationRelationships"
     )
 
+    private static let batchUpdateEntryDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.entry.v1.Entry"),
+        method: "BatchUpdateEntry"
+    )
+
+    private static let getBundleDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.bundle.v1.Bundle"),
+        method: "GetBundle"
+    )
+
+    private static let batchCreateFederationRelationshipDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.trustdomain.v1.TrustDomain"),
+        method: "BatchCreateFederationRelationship"
+    )
+
+    private static let batchUpdateFederationRelationshipDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.trustdomain.v1.TrustDomain"),
+        method: "BatchUpdateFederationRelationship"
+    )
+
+    private static let batchDeleteFederationRelationshipDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.trustdomain.v1.TrustDomain"),
+        method: "BatchDeleteFederationRelationship"
+    )
+
     /// google.rpc.Code values SPIRE reports in per-entry batch results.
     private enum RPCCode {
         static let ok: Int32 = 0
+        static let notFound: Int32 = 5
         static let alreadyExists: Int32 = 6
     }
 
@@ -432,18 +698,17 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         spiffeID: String,
         parentID: String,
         selectors: [SPIRESelector],
-        x509SVIDTTLSeconds: Int32
+        x509SVIDTTLSeconds: Int32,
+        federatesWith: [String],
+        admin: Bool
     ) async throws -> SPIREEntryCreationResult {
         var entry = Spire_Api_Types_Entry()
         entry.spiffeID = try Self.spiffeIDPayload(spiffeID)
         entry.parentID = try Self.spiffeIDPayload(parentID)
-        entry.selectors = selectors.map { selector in
-            var payload = Spire_Api_Types_Selector()
-            payload.type = selector.type
-            payload.value = selector.value
-            return payload
-        }
+        entry.selectors = selectors.map(Self.selectorPayload(_:))
         entry.x509SvidTtl = x509SVIDTTLSeconds
+        entry.federatesWith = federatesWith
+        entry.admin = admin
 
         var request = Spire_Api_Server_Entry_V1_BatchCreateEntryRequest()
         request.entries = [entry]
@@ -464,6 +729,76 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         default:
             throw SPIREServerAPIError.requestFailed(
                 "BatchCreateEntry failed for \(spiffeID): \(result.status.code) \(result.status.message)")
+        }
+    }
+
+    public func updateEntries(_ updates: [SPIREEntryUpdate]) async throws -> [SPIREEntry] {
+        guard !updates.isEmpty else { return [] }
+
+        // SPIRE applies one input mask to the whole batch, so the mask is the
+        // union of the fields any update touches. An update that leaves a
+        // masked field unset would therefore clear it — reject mixed batches
+        // rather than silently wiping fields off the other entries.
+        var mask = Spire_Api_Types_EntryMask()
+        mask.spiffeID = updates.contains { $0.spiffeID != nil }
+        mask.parentID = updates.contains { $0.parentID != nil }
+        mask.selectors = updates.contains { $0.selectors != nil }
+        mask.x509SvidTtl = updates.contains { $0.x509SVIDTTLSeconds != nil }
+        mask.federatesWith = updates.contains { $0.federatesWith != nil }
+        mask.admin = updates.contains { $0.admin != nil }
+
+        for update in updates {
+            let inconsistent =
+                (mask.spiffeID && update.spiffeID == nil)
+                || (mask.parentID && update.parentID == nil)
+                || (mask.selectors && update.selectors == nil)
+                || (mask.x509SvidTtl && update.x509SVIDTTLSeconds == nil)
+                || (mask.federatesWith && update.federatesWith == nil)
+                || (mask.admin && update.admin == nil)
+            guard !inconsistent else {
+                throw SPIREServerAPIError.invalidArgument(
+                    "BatchUpdateEntry: every update in a batch must set the same fields; entry \(update.id) does not"
+                )
+            }
+        }
+
+        var request = Spire_Api_Server_Entry_V1_BatchUpdateEntryRequest()
+        request.inputMask = mask
+        request.entries = try updates.map { update in
+            var entry = Spire_Api_Types_Entry()
+            entry.id = update.id
+            if let spiffeID = update.spiffeID {
+                entry.spiffeID = try Self.spiffeIDPayload(spiffeID)
+            }
+            if let parentID = update.parentID {
+                entry.parentID = try Self.spiffeIDPayload(parentID)
+            }
+            if let selectors = update.selectors {
+                entry.selectors = selectors.map(Self.selectorPayload(_:))
+            }
+            if let ttl = update.x509SVIDTTLSeconds {
+                entry.x509SvidTtl = ttl
+            }
+            if let federatesWith = update.federatesWith {
+                entry.federatesWith = federatesWith
+            }
+            if let admin = update.admin {
+                entry.admin = admin
+            }
+            return entry
+        }
+
+        let response: Spire_Api_Server_Entry_V1_BatchUpdateEntryResponse = try await unary(
+            request, descriptor: Self.batchUpdateEntryDescriptor)
+        try Self.expectResultCount(response.results.count, requested: updates.count, rpc: "BatchUpdateEntry")
+
+        return try response.results.map { result in
+            guard result.status.code == RPCCode.ok else {
+                throw SPIREServerAPIError.requestFailed(
+                    "BatchUpdateEntry failed for entry \(result.entry.id): \(result.status.code) \(result.status.message)"
+                )
+            }
+            return Self.entry(from: result.entry)
         }
     }
 
@@ -581,7 +916,122 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         return relationships
     }
 
+    public func getBundle() async throws -> SPIREBundle {
+        // No output mask: the caller wants the whole bundle (an unset mask
+        // means "all fields" for this RPC).
+        let bundle: Spire_Api_Types_Bundle = try await unary(
+            Spire_Api_Server_Bundle_V1_GetBundleRequest(), descriptor: Self.getBundleDescriptor)
+        return Self.bundle(from: bundle)
+    }
+
+    public func createFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationshipCreationResult] {
+        guard !relationships.isEmpty else { return [] }
+
+        var request = Spire_Api_Server_Trustdomain_V1_BatchCreateFederationRelationshipRequest()
+        request.federationRelationships = relationships.map(Self.federationRelationshipPayload(from:))
+
+        let response: Spire_Api_Server_Trustdomain_V1_BatchCreateFederationRelationshipResponse =
+            try await unary(request, descriptor: Self.batchCreateFederationRelationshipDescriptor)
+        try Self.expectResultCount(
+            response.results.count, requested: relationships.count,
+            rpc: "BatchCreateFederationRelationship")
+
+        return try zip(relationships, response.results).map { input, result in
+            switch result.status.code {
+            case RPCCode.ok:
+                return .created(trustDomain: input.trustDomain)
+            case RPCCode.alreadyExists:
+                return .alreadyExists(trustDomain: input.trustDomain)
+            default:
+                throw SPIREServerAPIError.requestFailed(
+                    "BatchCreateFederationRelationship failed for \(input.trustDomain): \(result.status.code) \(result.status.message)"
+                )
+            }
+        }
+    }
+
+    public func updateFederationRelationships(
+        _ relationships: [SPIREFederationRelationshipInput]
+    ) async throws -> [SPIREFederationRelationship] {
+        guard !relationships.isEmpty else { return [] }
+
+        var request = Spire_Api_Server_Trustdomain_V1_BatchUpdateFederationRelationshipRequest()
+        request.federationRelationships = relationships.map(Self.federationRelationshipPayload(from:))
+
+        // The endpoint URL and profile always move; the bundle is only masked
+        // in when every input carries one, since a masked-but-absent bundle
+        // would replace the peer bundle SPIRE holds with an empty one.
+        var inputMask = Spire_Api_Types_FederationRelationshipMask()
+        inputMask.bundleEndpointURL = true
+        inputMask.bundleEndpointProfile = true
+        inputMask.trustDomainBundle = relationships.allSatisfy { $0.trustDomainBundle != nil }
+        request.inputMask = inputMask
+
+        // Ask for the stored bundle back so callers can confirm what landed.
+        var outputMask = Spire_Api_Types_FederationRelationshipMask()
+        outputMask.bundleEndpointURL = true
+        outputMask.bundleEndpointProfile = true
+        outputMask.trustDomainBundle = true
+        request.outputMask = outputMask
+
+        let response: Spire_Api_Server_Trustdomain_V1_BatchUpdateFederationRelationshipResponse =
+            try await unary(request, descriptor: Self.batchUpdateFederationRelationshipDescriptor)
+        try Self.expectResultCount(
+            response.results.count, requested: relationships.count,
+            rpc: "BatchUpdateFederationRelationship")
+
+        return try zip(relationships, response.results).map { input, result in
+            guard result.status.code == RPCCode.ok else {
+                throw SPIREServerAPIError.requestFailed(
+                    "BatchUpdateFederationRelationship failed for \(input.trustDomain): \(result.status.code) \(result.status.message)"
+                )
+            }
+            return Self.federationRelationship(from: result.federationRelationship)
+        }
+    }
+
+    public func deleteFederationRelationships(trustDomains: [String]) async throws -> [String] {
+        guard !trustDomains.isEmpty else { return [] }
+
+        var request = Spire_Api_Server_Trustdomain_V1_BatchDeleteFederationRelationshipRequest()
+        request.trustDomains = trustDomains
+
+        let response: Spire_Api_Server_Trustdomain_V1_BatchDeleteFederationRelationshipResponse =
+            try await unary(request, descriptor: Self.batchDeleteFederationRelationshipDescriptor)
+        try Self.expectResultCount(
+            response.results.count, requested: trustDomains.count,
+            rpc: "BatchDeleteFederationRelationship")
+
+        var deleted: [String] = []
+        for (trustDomain, result) in zip(trustDomains, response.results) {
+            switch result.status.code {
+            case RPCCode.ok:
+                deleted.append(trustDomain)
+            case RPCCode.notFound:
+                // Already gone: teardown replays without failing.
+                continue
+            default:
+                throw SPIREServerAPIError.requestFailed(
+                    "BatchDeleteFederationRelationship failed for \(trustDomain): \(result.status.code) \(result.status.message)"
+                )
+            }
+        }
+        return deleted
+    }
+
     // MARK: Read-model mapping
+
+    /// SPIRE's batch RPCs return one result per request item, in order. A
+    /// short result list would silently drop items from the zip below, so the
+    /// pairing is checked rather than assumed.
+    private static func expectResultCount(_ count: Int, requested: Int, rpc: String) throws {
+        guard count == requested else {
+            throw SPIREServerAPIError.requestFailed(
+                "\(rpc) returned \(count) results for \(requested) requested items")
+        }
+    }
 
     private static func date(fromEpochSeconds seconds: Int64) -> Date? {
         seconds > 0 ? Date(timeIntervalSince1970: TimeInterval(seconds)) : nil
@@ -640,6 +1090,74 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             bundleJWTAuthorityCount: jwtCount,
             bundleSequenceNumber: sequence
         )
+    }
+
+    static func bundle(from proto: Spire_Api_Types_Bundle) -> SPIREBundle {
+        SPIREBundle(
+            trustDomain: proto.trustDomain,
+            x509Authorities: proto.x509Authorities.map {
+                SPIREX509Authority(der: $0.asn1, tainted: $0.tainted)
+            },
+            jwtAuthorities: proto.jwtAuthorities.map {
+                SPIREJWTAuthority(
+                    keyID: $0.keyID,
+                    publicKey: $0.publicKey,
+                    expiresAt: date(fromEpochSeconds: $0.expiresAt),
+                    tainted: $0.tainted
+                )
+            },
+            refreshHintSeconds: proto.refreshHint,
+            sequenceNumber: proto.sequenceNumber
+        )
+    }
+
+    static func bundlePayload(from bundle: SPIREBundle) -> Spire_Api_Types_Bundle {
+        var proto = Spire_Api_Types_Bundle()
+        proto.trustDomain = bundle.trustDomain
+        proto.x509Authorities = bundle.x509Authorities.map { authority in
+            var payload = Spire_Api_Types_X509Certificate()
+            payload.asn1 = authority.der
+            payload.tainted = authority.tainted
+            return payload
+        }
+        proto.jwtAuthorities = bundle.jwtAuthorities.map { authority in
+            var payload = Spire_Api_Types_JWTKey()
+            payload.keyID = authority.keyID
+            payload.publicKey = authority.publicKey
+            payload.expiresAt = Int64(authority.expiresAt?.timeIntervalSince1970 ?? 0)
+            payload.tainted = authority.tainted
+            return payload
+        }
+        proto.refreshHint = bundle.refreshHintSeconds
+        proto.sequenceNumber = bundle.sequenceNumber
+        return proto
+    }
+
+    static func federationRelationshipPayload(
+        from input: SPIREFederationRelationshipInput
+    ) -> Spire_Api_Types_FederationRelationship {
+        var proto = Spire_Api_Types_FederationRelationship()
+        proto.trustDomain = input.trustDomain
+        proto.bundleEndpointURL = input.bundleEndpointURL
+        switch input.bundleEndpointProfile {
+        case .httpsWeb:
+            proto.httpsWeb = Spire_Api_Types_HTTPSWebProfile()
+        case .httpsSPIFFE(let endpointSPIFFEID):
+            var profile = Spire_Api_Types_HTTPSSPIFFEProfile()
+            profile.endpointSpiffeID = endpointSPIFFEID
+            proto.httpsSpiffe = profile
+        }
+        if let bundle = input.trustDomainBundle {
+            proto.trustDomainBundle = bundlePayload(from: bundle)
+        }
+        return proto
+    }
+
+    private static func selectorPayload(_ selector: SPIRESelector) -> Spire_Api_Types_Selector {
+        var payload = Spire_Api_Types_Selector()
+        payload.type = selector.type
+        payload.value = selector.value
+        return payload
     }
 
     private static func agent(from proto: Spire_Api_Types_Agent) -> SPIREAgent {
@@ -728,7 +1246,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         switch transportSecurity {
         case .plaintext:
             return .plaintext
-        case .mtls(let identityProvider):
+        case .mtls(let identityProvider, let peer):
             let identity = try await identityProvider.currentIdentity()
 
             // SPIRE server TLS certificates carry a SPIFFE URI SAN, not the
@@ -740,10 +1258,18 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             // (spiffe://<td>/spire/server — fixed in SPIRE, not configurable)
             // via a verification callback that chain-verifies against the
             // bundle and then requires that exact URI SAN on the leaf.
-            let expectedServerID = try Self.spireServerSPIFFEID(fromMemberID: identity.spiffeID)
+            //
+            // For a peer in another trust domain both halves come from `peer`:
+            // that domain's server ID, verified against that domain's roots.
+            // The client certificate stays our own SVID — federation is what
+            // makes the peer server accept it.
+            let expectedServerID =
+                try peer.expectedServerSPIFFEID
+                ?? Self.spireServerSPIFFEID(fromMemberID: identity.spiffeID)
+            let rootsPEM = peer.trustRootsPEM ?? identity.trustBundlePEM
             let roots: [Certificate]
             do {
-                roots = try identity.trustBundlePEM.map { try Certificate(pemEncoded: $0) }
+                roots = try rootsPEM.map { try Certificate(pemEncoded: $0) }
             } catch {
                 throw SPIREServerAPIError.workloadIdentityUnavailable(
                     "Failed to parse trust bundle certificate: \(error)")
@@ -758,7 +1284,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
                     privateKey: .bytes(Array(identity.privateKeyPEM.utf8), format: .pem)
                 ) { config in
                     config.trustRoots = .certificates(
-                        identity.trustBundlePEM.map { .bytes(Array($0.utf8), format: .pem) })
+                        rootsPEM.map { .bytes(Array($0.utf8), format: .pem) })
                     config.serverCertificateVerification = .noHostnameVerification
                     config.customVerificationCallback = { presented, promise in
                         Self.verifySPIREServerChain(
