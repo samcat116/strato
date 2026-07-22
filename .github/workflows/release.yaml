@@ -859,6 +859,13 @@ jobs:
                       proxy_pass http://control-plane;
                   }
 
+                  # OAuth device grant for the CLI (/oauth/device_authorization,
+                  # /oauth/token, /oauth/revoke). Bare control-plane routes, so
+                  # they must bypass the frontend catch-all below.
+                  location /oauth/ {
+                      proxy_pass http://control-plane;
+                  }
+
                   location /agent/ {
                       proxy_pass http://control-plane;
                       proxy_read_timeout 3600s;
@@ -870,6 +877,13 @@ jobs:
                   }
 
                   location /organizations/ {
+                      proxy_pass http://control-plane;
+                  }
+
+                  # RFC 8935 SSF push-delivery callback (POST /ssf/events/:streamID)
+                  # that external SSF transmitters POST to. Bare control-plane route,
+                  # so it must bypass the frontend catch-all below.
+                  location /ssf/ {
                       proxy_pass http://control-plane;
                   }
 
