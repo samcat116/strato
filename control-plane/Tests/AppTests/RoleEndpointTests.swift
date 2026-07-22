@@ -266,6 +266,35 @@ final class RoleEndpointTests {
                 "foreign grants",
                 "permit (principal, action in [Action::\"vm:read\"], resource) when { principal in context.grants[\"00000000-0000-0000-0000-000000000004Users\"] };"
             ),
+            // Both own fields named, then neutralized by a tautology in the
+            // same disjunction. Mentioning the fields is not being gated by
+            // them: this permit matches every principal on every resource with
+            // no binding behind it, while its derived action list still reads
+            // like an ordinary role.
+            (
+                "neutralized gate",
+                """
+                permit (principal, action in [Action::"vm:read"], resource)
+                when {
+                    principal in context.grants["%USERS%"] ||
+                    principal in context.grants["%GROUPS%"] ||
+                    principal == principal
+                };
+                """
+            ),
+            // The same escape by a different spelling — no constant-folding to
+            // rely on, and no `||` on the gate itself.
+            (
+                "gate widened by a second clause",
+                """
+                permit (principal, action in [Action::"vm:read"], resource)
+                when {
+                    principal in context.grants["%USERS%"] ||
+                    principal in context.grants["%GROUPS%"] ||
+                    context.grants["%USERS%"] == context.grants["%USERS%"]
+                };
+                """
+            ),
         ])
     func shapeRejections(label: String, text: String) async throws {
         try await withApp { app, fixture in
@@ -274,7 +303,11 @@ final class RoleEndpointTests {
                 name: "bad-\(label.replacingOccurrences(of: " ", with: "-"))",
                 org: fixture.org,
                 actions: nil,
-                cedarText: text.replacingOccurrences(of: "%GRANTS%", with: id.uuidString),
+                cedarText:
+                    text
+                    .replacingOccurrences(of: "%GRANTS%", with: id.uuidString)
+                    .replacingOccurrences(of: "%USERS%", with: RoleDescriptor.grantsUsersField(id))
+                    .replacingOccurrences(of: "%GROUPS%", with: RoleDescriptor.grantsGroupsField(id)),
                 id: id
             )
             try await app.test(
@@ -538,6 +571,15 @@ final class RoleEndpointTests {
                     #expect(ids.contains(orgRole.id))
                     #expect(ids.contains(projectRole.id))
                     #expect(ids.contains(IAMRole.admin.seededID))
+
+                    // Names and actions, never policy text: this listing is
+                    // gated on read of the node, and `cedarText` can describe
+                    // the org's security posture.
+                    let listedOrgRole = listed.roles.first { $0.id == orgRole.id }
+                    #expect(listedOrgRole?.actions == ["vm:list", "vm:read"])
+                    let raw = res.body.string
+                    #expect(!raw.contains("cedarText"))
+                    #expect(!raw.contains("context.grants"))
                 })
 
             // The project's own role is not bindable on the organization

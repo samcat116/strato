@@ -13,8 +13,10 @@ import Vapor
 /// The exception is `bindable`, which is gated on the node's own `read` action
 /// instead. Choosing a role to grant is part of the grant flow, and someone
 /// who can see a project needs to see what is grantable there without being an
-/// admin of it — the list contains no more than the role names and action
-/// sets, which the catalog already publishes.
+/// admin of it. That weaker gate is why it answers in `BindableRoleDTO` rather
+/// than `RoleDTO`: names and action sets — which the catalog already publishes
+/// — and not the policy text, which can describe the org's security posture
+/// and stays an `iam:readPolicy` act to read.
 struct RoleController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let iam = routes.grouped("api", "iam")
@@ -119,12 +121,45 @@ struct RoleController: RouteCollection {
         let roles: [RoleDTO]
     }
 
+    /// A role as the *grant* flow needs to see it: enough to choose one and
+    /// know what it confers, and no policy text.
+    ///
+    /// Deliberately not `RoleDTO`. This listing is gated on read of the node
+    /// rather than on `iam:readPolicy`, so it reaches a wider audience than
+    /// the role API proper — and a role's `cedarText` can carry conditions
+    /// that describe the org's security posture (which environments are
+    /// fenced off, where MFA is demanded). Names and action sets are what
+    /// choosing a role requires, and are already public via the catalog; the
+    /// policy text is not, and reading it stays an `iam:readPolicy` act.
+    struct BindableRoleDTO: Content {
+        let id: UUID
+        let name: String
+        let description: String?
+        let ownerType: IAMRoleOwnerType
+        let ownerId: UUID
+        let actions: [String]
+        let managed: Bool
+
+        init(_ role: IAMRoleDefinition) throws {
+            guard let id = role.id, let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
+                throw Abort(.internalServerError, reason: "Role row is missing its id or names an unknown owner type")
+            }
+            self.id = id
+            self.name = role.name
+            self.description = role.description
+            self.ownerType = ownerType
+            self.ownerId = role.ownerID
+            self.actions = role.actions
+            self.managed = role.managed
+        }
+    }
+
     struct BindableRolesResponse: Content {
         let node: IAMNode
         /// The chain the answer was assembled from, resource first, so an
         /// inherited role is explicable without a second round trip.
         let ancestors: [IAMNode]
-        let roles: [RoleDTO]
+        let roles: [BindableRoleDTO]
     }
 
     // MARK: - Routes
@@ -309,7 +344,7 @@ struct RoleController: RouteCollection {
         let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
         let roles = try await RoleStore.bindable(along: ancestors, on: req.db)
         return BindableRolesResponse(
-            node: node, ancestors: ancestors, roles: try roles.map(RoleDTO.init))
+            node: node, ancestors: ancestors, roles: try roles.map(BindableRoleDTO.init))
     }
 
     /// GET /api/iam/actions

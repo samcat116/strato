@@ -3251,7 +3251,7 @@ export interface paths {
         };
         /**
          * List the roles bindable on a node
-         * @description The platform-owned defaults plus every role owned by an organization or project on the node's ancestor chain — ownership is what scopes a role, so a project's role is bindable on that project and below it and nowhere else. The ancestor chain the answer was assembled from is returned with it. Gated on read access to the node, not on admin: choosing a role to grant is part of the grant flow.
+         * @description The platform-owned defaults plus every role owned by an organization or project on the node's ancestor chain — ownership is what scopes a role, so a project's role is bindable on that project and below it and nowhere else. The ancestor chain the answer was assembled from is returned with it. Gated on read access to the node, not on admin: choosing a role to grant is part of the grant flow. Because that gate is weaker than the rest of the role API's, entries carry names and action sets but not `cedarText` — reading a role's policy text stays an `iam:readPolicy` act.
          */
         get: operations["listBindableRoles"];
         put?: never;
@@ -6235,7 +6235,19 @@ export interface components {
             node: components["schemas"]["IAMNode"];
             /** @description The chain the answer was assembled from, resource first, so an inherited role is explicable without a second round trip. */
             ancestors: components["schemas"]["IAMNode"][];
-            roles: components["schemas"]["IAMRole"][];
+            roles: components["schemas"]["IAMBindableRole"][];
+        };
+        /** @description A role as the grant flow needs it: enough to choose one and know what it confers, without the policy text. This listing is gated on read of the node rather than on `iam:readPolicy`, and a role's `cedarText` can describe the organization's security posture — which environments are fenced off, where MFA is demanded — so reading it stays an `iam:readPolicy` act. */
+        IAMBindableRole: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /** Format: uuid */
+            ownerId: string;
+            actions: string[];
+            managed: boolean;
         };
         IAMRoleCreateRequest: {
             name: string;

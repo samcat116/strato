@@ -59,7 +59,7 @@ enum CedarRoleTextError: Error, AbortError, Equatable {
                 "The role's text reads another role's grants (\(fields.joined(separator: ", "))). A role may only be conditioned on its own bindings."
         case .grantsShapeMismatch:
             return
-                "A role's permit must be conditioned on its own grants — `principal in context.grants[\"<id>Users\"] || principal in context.grants[\"<id>Groups\"]`. Without it the role would grant to everyone; extra `when` conditions on top are fine."
+                "A role's permit must be gated by its own grants: one `when` clause has to be exactly `principal in context.grants[\"<id>Users\"] || principal in context.grants[\"<id>Groups\"]`, written that way. Naming those fields inside a larger condition is not enough — a disjunction can widen the gate back to everyone. Add further `when`/`unless` clauses for extra conditions; they narrow, so they are always safe."
         case .rejectedByCedar(let detail):
             return "Cedar rejected the role's policy: \(detail)"
         }
@@ -79,11 +79,14 @@ enum CedarPolicyInspector {
     /// - **unconstrained principal scope** — bindings decide who holds a role.
     /// - **enumerable action scope** — the `actions` column, and therefore the
     ///   catalog, who-can, and the editor, are derived from it.
-    /// - **its own grants fields, both of them** — the permit must be gated on
-    ///   this role's bindings and no other role's.
+    /// - **gated by its own grants** — one `when` clause must be exactly the
+    ///   canonical disjunction over this role's grants fields, and no other
+    ///   role's fields may appear anywhere.
     ///
     /// Everything else an author might add — `resource is VM`,
-    /// `resource.environment == "staging"`, an MFA condition — is left alone.
+    /// `resource.environment == "staging"`, an MFA condition — is left alone,
+    /// because Cedar conjoins condition clauses and so extra ones can only
+    /// narrow what the gate already bounds.
     static func inspect(cedarText: String, roleID: UUID) throws -> CedarRoleInspection {
         let est = try parse(cedarText, roleID: roleID)
 
@@ -100,7 +103,7 @@ enum CedarPolicyInspector {
             throw CedarRoleTextError.unknownAction(action)
         }
 
-        try checkGrantsFields(est, roleID: roleID)
+        try checkGrantsGate(est, roleID: roleID)
 
         return CedarRoleInspection(actions: actions)
     }
@@ -182,26 +185,94 @@ enum CedarPolicyInspector {
 
     // MARK: - Grants fields
 
-    /// Require the permit to read exactly this role's two grants fields.
+    /// Require the permit to be *gated* by this role's grants, and to read no
+    /// other role's.
     ///
-    /// The check is on attribute *references* anywhere in the policy rather
-    /// than on a particular condition shape, because there are many ways to
-    /// spell the same disjunction and only one thing that matters: which
-    /// role's bindings gate this permit.
-    private static func checkGrantsFields(_ est: [String: Any], roleID: UUID) throws {
+    /// Two separate questions, and the difference between them is a security
+    /// boundary:
+    ///
+    /// - **Which grants does it read?** Answered over attribute references
+    ///   anywhere in the policy, since a reference to another role's fields is
+    ///   wrong wherever it appears.
+    /// - **Is it gated by them?** Answered structurally: one of the permit's
+    ///   `when` clauses must be *exactly* the canonical disjunction. Merely
+    ///   mentioning the fields is not being gated by them — a permit can name
+    ///   both and neutralize them in the same breath:
+    ///
+    ///   ```
+    ///   when { principal in context.grants["…Users"]
+    ///       || principal in context.grants["…Groups"]
+    ///       || principal == principal }
+    ///   ```
+    ///
+    ///   which references exactly the right fields and grants to everyone on
+    ///   everything, with no binding behind it. `||` can always widen a
+    ///   disjunct back to true, and no amount of looking at *which* names
+    ///   appear can see that; only the shape of the clause can.
+    ///
+    /// Requiring exact equality on one clause is safe to build on because
+    /// Cedar conjoins condition clauses: with the canonical disjunction as one
+    /// clause, the permit cannot match a principal outside the role's grants,
+    /// and every further `when`/`unless` can only narrow it. That is what lets
+    /// arbitrary extra conditions stay legal without weakening anything.
+    ///
+    /// The comparison is on the parsed EST, not the text, so formatting,
+    /// comments, and whitespace are free — but the disjunction itself must be
+    /// written the way `RoleDescriptor.canonicalPermitText` writes it. That is
+    /// a real constraint on hand-written text, and the error message spells
+    /// out the required clause rather than leaving the author to guess.
+    private static func checkGrantsGate(_ est: [String: Any], roleID: UUID) throws {
         var attributes: Set<String> = []
         collectAttributeNames(est, into: &attributes)
 
-        let referenced = attributes.filter(isGrantsFieldName)
         let own: Set<String> = [
             RoleDescriptor.grantsUsersField(roleID),
             RoleDescriptor.grantsGroupsField(roleID),
         ]
-        let foreign = referenced.subtracting(own)
+        let foreign = attributes.filter(isGrantsFieldName).subtracting(own)
         guard foreign.isEmpty else {
             throw CedarRoleTextError.foreignGrantsFields(foreign.sorted())
         }
-        guard referenced == own else { throw CedarRoleTextError.grantsShapeMismatch }
+
+        let canonical = try canonicalGrantsCondition(roleID: roleID)
+        let clauses = est["conditions"] as? [[String: Any]] ?? []
+        let gated = clauses.contains { clause in
+            guard clause["kind"] as? String == "when", let body = clause["body"] else { return false }
+            return stableJSON(body) == canonical
+        }
+        guard gated else { throw CedarRoleTextError.grantsShapeMismatch }
+    }
+
+    /// The canonical grants disjunction for a role, as a stable JSON rendering
+    /// of its EST — read from the generated permit itself, so the accepted
+    /// shape and the generated one cannot drift apart.
+    ///
+    /// The action list is irrelevant to the condition and is only here because
+    /// a permit needs one to parse; nothing validates it against the registry
+    /// at this point.
+    private static func canonicalGrantsCondition(roleID: UUID) throws -> String {
+        let text = RoleDescriptor.canonicalPermitText(id: roleID, actions: ["placeholder"])
+        let est = try parse(text, roleID: roleID)
+        guard let clauses = est["conditions"] as? [[String: Any]],
+            let body = clauses.first(where: { $0["kind"] as? String == "when" })?["body"]
+        else {
+            throw CedarRoleTextError.unparseable("the canonical role permit has no `when` clause")
+        }
+        return stableJSON(body)
+    }
+
+    /// A comparable rendering of an EST fragment: sorted keys, so two
+    /// structurally identical conditions compare equal regardless of the order
+    /// the parser happened to emit their fields in.
+    private static func stableJSON(_ value: Any) -> String {
+        guard JSONSerialization.isValidJSONObject([value]),
+            let data = try? JSONSerialization.data(withJSONObject: [value], options: [.sortedKeys])
+        else {
+            // Unrenderable means "not equal to the canonical clause", which is
+            // the safe answer: it fails the gate check rather than passing it.
+            return "<unrenderable>"
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Every attribute name the EST reads (`x.foo` and `x["foo"]` are the same
