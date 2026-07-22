@@ -27,9 +27,28 @@ public struct VMMemoryStats: Codable, Sendable, Equatable {
     /// when the guest driver reports it. Nil when unreported.
     public let freeBytes: Int64?
 
-    public init(totalBytes: Int64, availableBytes: Int64, freeBytes: Int64? = nil) {
+    /// Memory the balloon currently leaves to the guest (`query-balloon`'s
+    /// `actual`), in bytes — the host-side view of an operator's balloon
+    /// target (issue #567 phase 2). Equal to the VM's memory grant on a VM
+    /// with no target set, and it converges *toward* a newly set target as
+    /// the guest's driver hands pages back, so a value above the target
+    /// mid-inflation is expected, not a fault.
+    ///
+    /// Unlike the `stat-*` fields this comes from QEMU, not the guest, so it
+    /// is reported even for a guest whose driver never loaded. Nil only when
+    /// the VM has no balloon device (created before issue #567) or the query
+    /// failed.
+    public let balloonActualBytes: Int64?
+
+    public init(
+        totalBytes: Int64,
+        availableBytes: Int64,
+        freeBytes: Int64? = nil,
+        balloonActualBytes: Int64? = nil
+    ) {
         self.totalBytes = totalBytes
         self.availableBytes = availableBytes
         self.freeBytes = freeBytes
+        self.balloonActualBytes = balloonActualBytes
     }
 }

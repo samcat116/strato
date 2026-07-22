@@ -3528,7 +3528,11 @@ extension Agent: ReconcileActuator {
     /// Orphans are omitted: an unadopted VM has no control session to resize
     /// over, and adoption is planned for it first anyway.
     func observedSizing() async -> [String: VMSizing] {
-        managedVMs.mapValues { VMSizing(cpus: $0.spec.cpus, memoryBytes: $0.spec.memoryBytes) }
+        managedVMs.mapValues {
+            VMSizing(
+                cpus: $0.spec.cpus, memoryBytes: $0.spec.memoryBytes,
+                balloonTargetBytes: $0.spec.balloonTargetBytes)
+        }
     }
 
     func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus {

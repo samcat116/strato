@@ -2611,9 +2611,11 @@ actor AgentService {
         guard
             vm.guestMemoryTotalBytes != stats.totalBytes
                 || vm.guestMemoryAvailableBytes != stats.availableBytes
+                || vm.guestMemoryBalloonActualBytes != stats.balloonActualBytes
         else { return }
         vm.guestMemoryTotalBytes = stats.totalBytes
         vm.guestMemoryAvailableBytes = stats.availableBytes
+        vm.guestMemoryBalloonActualBytes = stats.balloonActualBytes
         vm.guestMemoryStatsAt = Date()
         try await vm.save(on: db)
     }
@@ -2622,9 +2624,13 @@ actor AgentService {
     /// running — a stopped guest's last-known usage is stale, and surfacing it
     /// as current would mislead the "committed vs used" view.
     private func clearMemoryStats(vm: VM, on db: Database) async throws {
-        guard vm.guestMemoryTotalBytes != nil || vm.guestMemoryAvailableBytes != nil else { return }
+        guard
+            vm.guestMemoryTotalBytes != nil || vm.guestMemoryAvailableBytes != nil
+                || vm.guestMemoryBalloonActualBytes != nil
+        else { return }
         vm.guestMemoryTotalBytes = nil
         vm.guestMemoryAvailableBytes = nil
+        vm.guestMemoryBalloonActualBytes = nil
         vm.guestMemoryStatsAt = nil
         try await vm.save(on: db)
     }

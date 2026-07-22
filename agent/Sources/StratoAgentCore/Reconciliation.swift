@@ -33,20 +33,26 @@ public typealias VMPresence = WorkloadPresence<VMStatus>
 public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
 
 /// The sizing a VM on this host is actually running with, as opposed to the
-/// sizing its desired spec asks for. Only the two hot-addable dimensions
-/// (issue #568) — everything else in a spec still needs a recreate.
+/// sizing its desired spec asks for. Only the dimensions that can move on a
+/// live guest: the two hot-addable ones (issue #568) plus its balloon target
+/// (issue #567 phase 2) — everything else in a spec still needs a recreate.
 public struct VMSizing: Equatable, Sendable {
     public let cpus: Int
     public let memoryBytes: Int64
+    /// The balloon target last applied to this VM, or nil when none has been
+    /// (the balloon is deflated and the guest holds its whole grant).
+    public let balloonTargetBytes: Int64?
 
-    public init(cpus: Int, memoryBytes: Int64) {
+    public init(cpus: Int, memoryBytes: Int64, balloonTargetBytes: Int64? = nil) {
         self.cpus = cpus
         self.memoryBytes = memoryBytes
+        self.balloonTargetBytes = balloonTargetBytes
     }
 
     /// Whether `spec` asks for a different size than this.
     public func differs(from spec: VMSpec) -> Bool {
         cpus != spec.cpus || memoryBytes != spec.memoryBytes
+            || balloonTargetBytes != spec.balloonTargetBytes
     }
 }
 

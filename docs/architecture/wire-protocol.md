@@ -106,6 +106,15 @@ yes to the first and no to the second, which is why the version number alone
 cannot stand in for the capability flag. The scheduler treats both as hard
 constraints.
 
+Version 19 adds operator balloon targets (issue #567 phase 2):
+`VMSpec.balloonTargetBytes` outbound and `VMMemoryStats.balloonActualBytes`
+back. The observed field follows v16's contract and needs no gate; the spec
+field repeats v17's hazard, since a pre-v19 agent reports the bumped
+generation converged without touching the balloon. Hence
+`supportsBalloonTarget`, which the control plane refuses below — and unlike
+v17 there is no "restart to apply" remedy to offer, because a balloon target
+only exists on a running guest in the first place.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -136,7 +145,7 @@ dual-mode rollout.
 | `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
-| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567) |
+| `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
 | `status_update` | Push notification of a VM status change |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
