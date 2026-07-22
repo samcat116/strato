@@ -125,6 +125,98 @@ struct SPIREServerAPIClientMTLSTests {
         }
     }
 
+    // MARK: - Cross-trust-domain (federated) peer
+
+    @Test("Dials a SPIRE server in another trust domain with a peer override", .timeLimit(.minutes(1)))
+    func dialsFederatedPeer() async throws {
+        // The per-org topology: the control plane holds a platform-domain SVID
+        // and must reach the org domain's SPIRE server, whose certificate
+        // chains to a completely separate CA.
+        let pki = try MTLSTestPKI()
+        let workloadState = FakeWorkloadAPIState(response: pki.workloadResponse())
+
+        try await withFakeWorkloadAPI(state: workloadState) { workloadSocketPath in
+            try await withTLSFakeSPIREServer(
+                pki: pki, serverCertDER: pki.peerServerDER, serverKey: pki.peerServerKey
+            ) { port in
+                let identityProvider = WorkloadAPISVIDSource(
+                    socketPath: workloadSocketPath, logger: Self.testLogger)
+
+                // Without the override the client pins
+                // spiffe://strato.local/spire/server against its own bundle,
+                // which neither matches nor chains: the connection must fail.
+                let ownDomainClient = SPIREServerAPIClient(
+                    address: .tcp(host: "localhost", port: port),
+                    transportSecurity: .mtls(identityProvider: identityProvider),
+                    logger: Self.testLogger,
+                    timeout: .seconds(5)
+                )
+                await #expect(throws: SPIREServerAPIError.self) {
+                    _ = try await ownDomainClient.listEntries()
+                }
+
+                let federatedClient = SPIREServerAPIClient(
+                    address: .tcp(host: "localhost", port: port),
+                    transportSecurity: .mtls(
+                        identityProvider: identityProvider,
+                        peer: .trustDomain(
+                            "org-a.strato.local",
+                            bundlePEM: [
+                                WorkloadAPISVIDSource.pemEncode(
+                                    der: Data(pki.peerCADER), label: "CERTIFICATE")
+                            ])
+                    ),
+                    logger: Self.testLogger,
+                    timeout: .seconds(10)
+                )
+                let entries = try await federatedClient.listEntries()
+                #expect(entries.map(\.id) == ["entry-1"])
+            }
+        }
+    }
+
+    @Test("A peer override rejects a server that is not the peer domain's SPIRE server", .timeLimit(.minutes(1)))
+    func rejectsWrongIdentityInPeerDomain() async throws {
+        // The peer CA is trusted, but the certificate it signed belongs to a
+        // workload rather than spiffe://org-a.strato.local/spire/server.
+        let pki = try MTLSTestPKI()
+        let workloadState = FakeWorkloadAPIState(response: pki.workloadResponse())
+
+        try await withFakeWorkloadAPI(state: workloadState) { workloadSocketPath in
+            try await withTLSFakeSPIREServer(
+                pki: pki, serverCertDER: pki.peerWorkloadDER, serverKey: pki.peerWorkloadKey
+            ) { port in
+                let client = SPIREServerAPIClient(
+                    address: .tcp(host: "localhost", port: port),
+                    transportSecurity: .mtls(
+                        identityProvider: WorkloadAPISVIDSource(
+                            socketPath: workloadSocketPath, logger: Self.testLogger),
+                        peer: .trustDomain(
+                            "org-a.strato.local",
+                            bundlePEM: [
+                                WorkloadAPISVIDSource.pemEncode(
+                                    der: Data(pki.peerCADER), label: "CERTIFICATE")
+                            ])
+                    ),
+                    logger: Self.testLogger,
+                    timeout: .seconds(5)
+                )
+                await #expect(throws: SPIREServerAPIError.self) {
+                    _ = try await client.listEntries()
+                }
+            }
+        }
+    }
+
+    @Test("A peer override pins that domain's SPIRE server")
+    func peerOverrideDerivesServerID() {
+        let peer = SPIREServerPeer.trustDomain("org-a.strato.local", bundlePEM: ["pem"])
+        #expect(peer.expectedServerSPIFFEID == "spiffe://org-a.strato.local/spire/server")
+        #expect(peer.trustRootsPEM == ["pem"])
+        #expect(SPIREServerPeer.own.expectedServerSPIFFEID == nil)
+        #expect(SPIREServerPeer.own.trustRootsPEM == nil)
+    }
+
     @Test("Derives the pinned server ID from the client's trust domain")
     func derivesServerSPIFFEID() throws {
         let serverID = try SPIREServerAPIClient.spireServerSPIFFEID(
@@ -237,6 +329,10 @@ struct SPIREServerAPIClientMTLSTests {
 /// A miniature SPIRE-shaped PKI: one CA, a server certificate for the SPIRE
 /// server's TLS endpoint, and a client SVID for the control plane — plus the
 /// DER encodings the Workload API would deliver.
+///
+/// A second, unrelated CA stands in for a federated peer trust domain
+/// (`org-a.strato.local`): its own SPIRE server and a plain workload, neither
+/// of which chains to the platform CA.
 private struct MTLSTestPKI {
     let caDER: [UInt8]
     let serverDER: [UInt8]
@@ -246,6 +342,11 @@ private struct MTLSTestPKI {
     let leafDER: [UInt8]
     let leafKey: P256.Signing.PrivateKey
     let leafNotValidAfter: Date
+    let peerCADER: [UInt8]
+    let peerServerDER: [UInt8]
+    let peerServerKey: P256.Signing.PrivateKey
+    let peerWorkloadDER: [UInt8]
+    let peerWorkloadKey: P256.Signing.PrivateKey
 
     init() throws {
         let caKey = P256.Signing.PrivateKey()
@@ -320,6 +421,65 @@ private struct MTLSTestPKI {
             notValidAfter: leafNotValidAfter
         )
         leafDER = try leaf.serializeAsPEM().derBytes
+
+        // A separate trust domain with its own root: nothing it issues chains
+        // to the platform CA, which is the point of per-org trust domains.
+        let peerCAKey = P256.Signing.PrivateKey()
+        let peerCAPrivateKey = Certificate.PrivateKey(peerCAKey)
+        let peerCAName = try DistinguishedName {
+            CommonName("Test Org SPIRE CA \(UUID().uuidString.prefix(8))")
+        }
+        let peerCA = try Certificate(
+            version: .v3,
+            serialNumber: .init(),
+            publicKey: peerCAPrivateKey.publicKey,
+            notValidBefore: Date().addingTimeInterval(-3600),
+            notValidAfter: Date().addingTimeInterval(86400),
+            issuer: peerCAName,
+            subject: peerCAName,
+            signatureAlgorithm: .ecdsaWithSHA256,
+            extensions: try Certificate.Extensions {
+                Critical(BasicConstraints.isCertificateAuthority(maxPathLength: nil))
+                Critical(KeyUsage(keyCertSign: true))
+            },
+            issuerPrivateKey: peerCAPrivateKey
+        )
+        peerCADER = try peerCA.serializeAsPEM().derBytes
+
+        func issuePeerLeaf(
+            commonName: String, spiffeURI: String, key: P256.Signing.PrivateKey
+        ) throws -> Certificate {
+            try Certificate(
+                version: .v3,
+                serialNumber: .init(),
+                publicKey: Certificate.PrivateKey(key).publicKey,
+                notValidBefore: Date().addingTimeInterval(-60),
+                notValidAfter: Date().addingTimeInterval(3600),
+                issuer: peerCAName,
+                subject: try DistinguishedName { CommonName(commonName) },
+                signatureAlgorithm: .ecdsaWithSHA256,
+                extensions: try Certificate.Extensions {
+                    Critical(BasicConstraints.notCertificateAuthority)
+                    KeyUsage(digitalSignature: true)
+                    SubjectAlternativeNames([.uniformResourceIdentifier(spiffeURI)])
+                },
+                issuerPrivateKey: peerCAPrivateKey
+            )
+        }
+
+        peerServerKey = P256.Signing.PrivateKey()
+        peerServerDER = try issuePeerLeaf(
+            commonName: "org-a-spire-server",
+            spiffeURI: "spiffe://org-a.strato.local/spire/server",
+            key: peerServerKey
+        ).serializeAsPEM().derBytes
+
+        peerWorkloadKey = P256.Signing.PrivateKey()
+        peerWorkloadDER = try issuePeerLeaf(
+            commonName: "org-a-workload",
+            spiffeURI: "spiffe://org-a.strato.local/agent/node-a",
+            key: peerWorkloadKey
+        ).serializeAsPEM().derBytes
     }
 
     /// The X509SVIDResponse a SPIRE agent would deliver for the control
