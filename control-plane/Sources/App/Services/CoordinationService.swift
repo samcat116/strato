@@ -443,6 +443,9 @@ actor InMemoryCoordinationStore: CoordinationStore {
 /// - `agent:{name}:replica` — which replica holds the agent's WebSocket,
 ///   written on socket accept and refreshed with presence. Lets any replica
 ///   route a sync nudge to the process that can actually reach the agent.
+/// - `imggrant:agent:{agentId}:image:{imageId}` — the images an agent has been
+///   handed download URLs for, written at sync assembly and volume create; the
+///   image-download route authorizes an agent's fetch against them (#562).
 /// - `lock:sweep:{name}` — expiring locks that make the background sweeps
 ///   cluster-singletons without leader election.
 /// - `resv:agent:{agentId}:*` — placement reservations the scheduler holds
@@ -478,6 +481,13 @@ actor CoordinationService {
     /// Generous enough to cover a slow create, short enough that leaked
     /// reservations don't wedge placement.
     static let reservationTTLSeconds = 120
+
+    /// Image-download grant TTL (issue #562). This is the grace window: an
+    /// agent whose placement is revoked mid-pull keeps fetching until the
+    /// grant expires, rather than failing an in-progress download. Long enough
+    /// to cover a slow multi-gigabyte pull and its retries, and refreshed by
+    /// every periodic sync (~60s) for as long as the placement stands.
+    static let imageDownloadGrantTTLSeconds = 30 * 60
 
     private let store: any CoordinationStore
     private let logger: Logger
@@ -528,6 +538,54 @@ actor CoordinationService {
     /// fail-open policy still holds where it matters.
     func probe() async throws {
         _ = try await store.keyExists("health:probe")
+    }
+
+    // MARK: Image download grants (issue #562)
+
+    nonisolated static func imageDownloadGrantKey(agentId: String, imageId: UUID) -> String {
+        "imggrant:agent:\(agentId):image:\(imageId.uuidString.lowercased())"
+    }
+
+    /// Record that the agent was handed download URLs for `imageId` — by a
+    /// desired-state sync carrying a VM that boots from it, or by a volume
+    /// create that clones it. Written as the URLs are produced, so the grant
+    /// is never later than the URL the agent is about to fetch.
+    ///
+    /// Failures are logged, not thrown: the fetch it authorizes fails open on
+    /// the read side, and the next periodic sync rewrites the grant anyway.
+    func grantImageDownload(
+        agentId: String, imageId: UUID, ttlSeconds: Int = CoordinationService.imageDownloadGrantTTLSeconds
+    ) async {
+        do {
+            try await store.setKey(
+                Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId), ttlSeconds: ttlSeconds)
+        } catch {
+            logger.warning(
+                "Failed to record image download grant in coordination store",
+                metadata: [
+                    "agentId": .string(agentId),
+                    "imageId": .string(imageId.uuidString),
+                    "error": .string("\(error)"),
+                ])
+        }
+    }
+
+    /// Whether the agent currently holds a grant for `imageId`. Returns nil
+    /// when the store can't answer, so the caller can fail open rather than
+    /// turn a Valkey outage into a fleet-wide image-pull outage.
+    func hasImageDownloadGrant(agentId: String, imageId: UUID) async -> Bool? {
+        do {
+            return try await store.keyExists(Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId))
+        } catch {
+            logger.warning(
+                "Failed to read image download grant from coordination store",
+                metadata: [
+                    "agentId": .string(agentId),
+                    "imageId": .string(imageId.uuidString),
+                    "error": .string("\(error)"),
+                ])
+            return nil
+        }
     }
 
     // MARK: Singleton sweeps

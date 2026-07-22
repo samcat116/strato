@@ -35,17 +35,42 @@ struct ImageDownloadMTLSTests {
         ("X-Forwarded-Client-Cert", "URI=spiffe://strato.local/\(identity)")
     }
 
+    /// Registers `name` as an agent row and grants it `image`, standing in for
+    /// the desired-state sync that would have handed it the download URLs
+    /// (issue #562). The route serves an agent only images it holds a grant
+    /// for, so every success path here needs one.
+    private func grantImage(app: Application, agentName: String, image: Image) async throws {
+        let agent = Agent(
+            name: agentName,
+            hostname: "\(agentName).test",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            status: .online,
+            resources: AgentResources(
+                totalCPU: 8, availableCPU: 8,
+                totalMemory: 1 << 33, availableMemory: 1 << 33,
+                totalDisk: 1 << 40, availableDisk: 1 << 40
+            )
+        )
+        try await agent.save(on: app.db)
+        await app.coordination.grantImageDownload(agentId: agent.id!.uuidString, imageId: image.id!)
+    }
+
     /// A ready image whose bytes live in the app's object store, plus the
     /// content the download should stream back.
-    private func makeReadyImage(app: Application) async throws -> (project: Project, image: Image, bytes: String) {
+    /// `suffix` distinguishes a second image in the same test (unique username,
+    /// email, and object key).
+    private func makeReadyImage(app: Application, suffix: String = "") async throws -> (
+        project: Project, image: Image, bytes: String
+    ) {
         let builder = TestDataBuilder(db: app.db)
-        let user = try await builder.createUser(username: "dl-user", email: "dl@example.com")
-        let org = try await builder.createOrganization(name: "DL Org")
+        let user = try await builder.createUser(username: "dl-user\(suffix)", email: "dl\(suffix)@example.com")
+        let org = try await builder.createOrganization(name: "DL Org\(suffix)")
         let project = try await builder.createProject(
-            name: "DL Project", description: "image download tests", organization: org)
+            name: "DL Project\(suffix)", description: "image download tests", organization: org)
 
         let bytes = "image bytes served over agent mTLS"
-        let key = "dl-tests/disk.qcow2"
+        let key = "dl-tests/disk\(suffix).qcow2"
         let writer = try await app.imageObjectStore.openWriter(key: key)
         try await writer.write(ByteBuffer(string: bytes))
         try await writer.finish()
@@ -63,11 +88,12 @@ struct ImageDownloadMTLSTests {
         "/api/projects/\(project.id!)/images/\(image.id!)/download"
     }
 
-    @Test("An agent SVID identity downloads image bytes")
+    @Test("An agent SVID identity downloads an image it was assigned")
     func agentIdentityDownloads() async throws {
         try await withRunningImageApp { app, port in
             self.enableSPIRE(on: app)
             let (project, image, bytes) = try await self.makeReadyImage(app: app)
+            try await self.grantImage(app: app, agentName: "dl-agent", image: image)
 
             let header = self.xfccHeader(identity: "agent/dl-agent")
             let response = try await app.client.get(
@@ -106,6 +132,7 @@ struct ImageDownloadMTLSTests {
         try await withRunningImageApp { app, port in
             self.enableSPIRE(on: app)
             let (project, image, _) = try await self.makeReadyImage(app: app)
+            try await self.grantImage(app: app, agentName: "dl-agent", image: image)
 
             let header = self.xfccHeader(identity: "agent/dl-agent")
             let response = try await app.client.get(
@@ -145,6 +172,8 @@ struct ImageDownloadMTLSTests {
         try await withRunningImageApp { app, port in
             self.enableSPIRE(on: app)
             let (project, image, _) = try await self.makeReadyImage(app: app)
+            // Granted, so a rejection here can only be the provenance check.
+            try await self.grantImage(app: app, agentName: "dl-agent", image: image)
 
             // Only the co-located Envoy sidecar forwards on loopback. The very
             // same header from anywhere else is a spoofing attempt: an
@@ -153,6 +182,48 @@ struct ImageDownloadMTLSTests {
             let header = self.xfccHeader(identity: "agent/dl-agent")
             let response = try await app.client.get(
                 URI(string: "http://\(hostIP):\(port)\(self.downloadPath(project: project, image: image))")
+            ) { req in
+                req.headers.add(name: header.name, value: header.value)
+            }
+
+            #expect(response.status == .forbidden)
+        }
+    }
+
+    @Test("An agent is refused an image it was never assigned")
+    func unassignedImageRefused() async throws {
+        try await withRunningImageApp { app, port in
+            self.enableSPIRE(on: app)
+            let (project, image, _) = try await self.makeReadyImage(app: app)
+
+            // Enrolled and authenticated, but holding no claim on this image:
+            // before issue #562 any agent identity could pull any ready image
+            // in any project given the UUIDs.
+            let other = try await self.makeReadyImage(app: app, suffix: "-other")
+            try await self.grantImage(app: app, agentName: "dl-agent", image: other.image)
+
+            let header = self.xfccHeader(identity: "agent/dl-agent")
+            let response = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)\(self.downloadPath(project: project, image: image))")
+            ) { req in
+                req.headers.add(name: header.name, value: header.value)
+            }
+
+            #expect(response.status == .forbidden)
+        }
+    }
+
+    @Test("An agent identity with no registered agent is refused")
+    func unregisteredAgentRefused() async throws {
+        try await withRunningImageApp { app, port in
+            self.enableSPIRE(on: app)
+            let (project, image, _) = try await self.makeReadyImage(app: app)
+
+            // A valid SVID for a node that enrolled but never registered holds
+            // no placements, so it can hold no grant either.
+            let header = self.xfccHeader(identity: "agent/never-registered")
+            let response = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)\(self.downloadPath(project: project, image: image))")
             ) { req in
                 req.headers.add(name: header.name, value: header.value)
             }

@@ -16,6 +16,7 @@ what happens during deploys and failures.
 | Sync nudges | Valkey pub/sub `replica:{id}:nudges` | Latency optimization only |
 | Imperative RPC forwarding | Valkey pub/sub `replica:{id}:rpc`, `replica:{id}:rpc-replies` | Volume operations and reboot |
 | Placement reservations, sweep locks | Valkey (`resv:*`, `lock:sweep:*`) | Phase 0 (issue #258) |
+| Image download grants | Valkey `imggrant:agent:{agentId}:image:{imageId}` (TTL 30m) | Written by the replica that emits the download URLs; read by whichever replica serves the fetch (issue #562) |
 
 `AgentService` holds no cross-request in-memory state beyond per-connection
 socket bookkeeping (the socket map, request correlation for in-flight
