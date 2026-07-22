@@ -4459,6 +4459,197 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/iam/roles:
+    get:
+      operationId: listRoles
+      summary: List the roles an owner defines
+      description: >-
+        The roles owned by one organization or project. This is not the set
+        bindable at a node — that includes the platform defaults and everything
+        inherited from above, and is served by `/api/iam/roles/bindable`.
+        Admin-gated on the owner.
+      tags: [IAM]
+      parameters:
+        - $ref: "#/components/parameters/RoleOwnerTypeQuery"
+        - $ref: "#/components/parameters/RoleOwnerIdQuery"
+      responses:
+        "200":
+          description: The roles the owner defines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMRoleListResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createRole
+      summary: Create a role
+      description: >-
+        Defines a role owned by an organization or project. Send **either**
+        `actions` — the server generates the canonical Cedar permit — **or**
+        `cedarText` for the conditions an action list cannot express. Advanced
+        text must keep the role shape: a permit, an unconstrained principal
+        scope, an enumerable action scope drawn from the action catalog, and a
+        condition on this role's own grants fields. The row and the policy-set
+        version bump commit in one transaction. Platform-owned (seeded) roles
+        cannot be created here.
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMRoleCreateRequest"
+      responses:
+        "201":
+          description: The created role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMRole"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/iam/roles/validate:
+    post:
+      operationId: validateRole
+      summary: Compile a role without saving it
+      description: >-
+        Runs the same preparation a write does — generate or accept the Cedar
+        text, enforce the role shape, compile against the schema the store
+        would have — and returns the result instead of storing it. Authenticated
+        rather than admin-gated: it touches no stored policy, and it validates
+        against the vocabulary `/api/iam/actions` already publishes.
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMRoleValidateRequest"
+      responses:
+        "200":
+          description: The accepted Cedar text and the actions derived from it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMRoleValidateResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/iam/roles/bindable:
+    get:
+      operationId: listBindableRoles
+      summary: List the roles bindable on a node
+      description: >-
+        The platform-owned defaults plus every role owned by an organization or
+        project on the node's ancestor chain — ownership is what scopes a role,
+        so a project's role is bindable on that project and below it and nowhere
+        else. The ancestor chain the answer was assembled from is returned with
+        it. Gated on read access to the node, not on admin: choosing a role to
+        grant is part of the grant flow.
+      tags: [IAM]
+      parameters:
+        - $ref: "#/components/parameters/RoleBindableNodeTypeQuery"
+        - $ref: "#/components/parameters/RoleBindableNodeIdQuery"
+      responses:
+        "200":
+          description: The bindable roles and the chain they were gathered from.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMBindableRolesResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/iam/roles/{roleID}:
+    parameters:
+      - $ref: "#/components/parameters/RoleID"
+    get:
+      operationId: getRole
+      summary: Get a role
+      description: >-
+        Admin-gated on the role's owner. Platform-owned (seeded) roles are
+        readable by any authenticated user — they are the same defaults the
+        bindable listing and the action catalog already publish.
+      tags: [IAM]
+      responses:
+        "200":
+          description: The role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMRole"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateRole
+      summary: Update a role
+      description: >-
+        Partial update; omitted fields are left unchanged. Sending `actions` or
+        `cedarText` rewrites the permit under the same shape rules a create
+        applies. The role's owner is immutable — moving a role changes where it
+        is bindable, which is a different role. Seeded roles are immutable
+        (`403`).
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMRoleUpdateRequest"
+      responses:
+        "200":
+          description: The updated role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMRole"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteRole
+      summary: Delete a role
+      description: >-
+        Refused with `409` while active bindings still name the role: dropping
+        it out from under them would silently revoke whatever they grant, with
+        nothing in the bindings list to show it happened. Seeded roles are
+        immutable (`403`). The delete and the policy-set version bump commit
+        together.
+      tags: [IAM]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/iam/actions:
+    get:
+      operationId: listIAMActions
+      summary: The action catalog
+      description: >-
+        The action vocabulary a role can be built from, grouped by service,
+        with each action's applicable resource types and the seeded roles that
+        carry it. Generated from the same registry the Cedar schema is, so the
+        catalog can never offer an action a role write would reject. Describes
+        the software, not any deployment's policy — authenticated only.
+      tags: [IAM]
+      responses:
+        "200":
+          description: The action catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMActionCatalogResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/iam/policy-set/version:
     get:
       operationId: getPolicySetVersion
@@ -6223,6 +6414,44 @@ components:
       schema:
         type: boolean
         default: false
+    RoleID:
+      name: roleID
+      in: path
+      required: true
+      description: The role definition's id.
+      schema:
+        type: string
+        format: uuid
+    RoleOwnerTypeQuery:
+      name: ownerType
+      in: query
+      required: true
+      description: Which kind of owner defines the roles being listed.
+      schema:
+        $ref: "#/components/schemas/IAMRoleOwnerType"
+    RoleOwnerIdQuery:
+      name: ownerId
+      in: query
+      required: true
+      description: The id of the organization or project defining the roles.
+      schema:
+        type: string
+        format: uuid
+    RoleBindableNodeTypeQuery:
+      name: nodeType
+      in: query
+      required: true
+      description: The type of the tree node a role would be bound on.
+      schema:
+        $ref: "#/components/schemas/IAMNodeType"
+    RoleBindableNodeIdQuery:
+      name: nodeId
+      in: query
+      required: true
+      description: The id of the tree node a role would be bound on.
+      schema:
+        type: string
+        format: uuid
     DecisionLogMismatchesOnlyQuery:
       name: mismatchesOnly
       in: query
@@ -10562,6 +10791,221 @@ components:
           type: string
           description: The environment name; required for `environment`, absent otherwise.
 
+    IAMRoleOwnerType:
+      type: string
+      description: >-
+        Who owns a role definition. `platform` rows are the seeded defaults,
+        reconciled from the code registry and immutable through the API;
+        organization- and project-owned rows are user-created and bindable at
+        or below their owner.
+      enum: [platform, organization, project]
+    IAMRole:
+      type: object
+      description: >-
+        A role definition: a named Cedar permit whose action scope is an
+        explicit, enumerable action list. The four defaults are seeded rows,
+        not a separate kind of thing.
+      required: [id, name, ownerType, ownerId, cedarText, actions, managed]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        ownerType:
+          $ref: "#/components/schemas/IAMRoleOwnerType"
+        ownerId:
+          type: string
+          format: uuid
+          description: >-
+            The owning organization or project. Platform rows carry the
+            all-zero sentinel.
+        cedarText:
+          type: string
+          description: >-
+            The role's permit, in Cedar policy language, compiled into the
+            policy set verbatim. Round-trips: this value is accepted as
+            `cedarText` on a later write.
+        actions:
+          type: array
+          description: >-
+            Derived from `cedarText`'s action scope on every write, never sent
+            by the client.
+          items:
+            type: string
+        managed:
+          type: boolean
+          description: >-
+            A seeded default, reconciled from the code registry at boot and
+            immutable through this API.
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    IAMRoleListResponse:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/IAMRole"
+    IAMBindableRolesResponse:
+      type: object
+      required: [node, ancestors, roles]
+      properties:
+        node:
+          $ref: "#/components/schemas/IAMNode"
+        ancestors:
+          type: array
+          description: >-
+            The chain the answer was assembled from, resource first, so an
+            inherited role is explicable without a second round trip.
+          items:
+            $ref: "#/components/schemas/IAMNode"
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/IAMRole"
+    IAMRoleCreateRequest:
+      type: object
+      required: [name, ownerType, ownerId]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        ownerType:
+          $ref: "#/components/schemas/IAMRoleOwnerType"
+        ownerId:
+          type: string
+          format: uuid
+        actions:
+          type: array
+          description: >-
+            Pick actions and the server writes the canonical permit. Mutually
+            exclusive with `cedarText`; exactly one is required.
+          items:
+            type: string
+        cedarText:
+          type: string
+          description: >-
+            Write the permit yourself. Mutually exclusive with `actions`.
+            Because the permit is conditioned on grants fields whose names
+            embed the role id, a client supplying its own text supplies `id`
+            too — `/api/iam/roles/validate` hands out one to build against.
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The id to create the role under. Optional; the server allocates one
+            when it is omitted, in which case only the `actions` mode can be
+            used.
+    IAMRoleUpdateRequest:
+      type: object
+      description: >-
+        Partial update. Sending `actions` or `cedarText` rewrites the permit;
+        sending neither leaves it as it is. The two remain mutually exclusive.
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+        cedarText:
+          type: string
+    IAMRoleValidateRequest:
+      type: object
+      description: >-
+        Exactly one of `actions` or `cedarText`, as on a write.
+      properties:
+        actions:
+          type: array
+          items:
+            type: string
+        cedarText:
+          type: string
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The role being edited, so its own grants fields are the accepted
+            ones. Omit for a role that does not exist yet and the response
+            carries a freshly allocated id to build against.
+    IAMRoleValidateResponse:
+      type: object
+      required: [id, cedarText, actions]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The id the text was checked against — the one being edited, or a
+            freshly allocated one to write `cedarText` against and then send
+            back as the create request's `id`.
+        cedarText:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+    IAMActionCatalogEntry:
+      type: object
+      required: [action, service, resourceTypes, roles, membershipDerived]
+      properties:
+        action:
+          type: string
+        service:
+          type: string
+        resourceTypes:
+          type: array
+          description: >-
+            The tree-node types this action can be requested against. Container
+            types appear because `create`/`list` checks target the container.
+          items:
+            $ref: "#/components/schemas/IAMNodeType"
+        roles:
+          type: array
+          description: >-
+            The seeded roles carrying this action. Empty for an action no
+            default role grants — which is a fine thing for a custom role to
+            grant.
+          items:
+            type: string
+        membershipDerived:
+          type: boolean
+          description: >-
+            Granted by bare organization membership, with no binding behind it.
+            Including such an action in a custom role is legal but buys nothing
+            inside the org.
+    IAMActionCatalogService:
+      type: object
+      required: [service, actions]
+      properties:
+        service:
+          type: string
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/IAMActionCatalogEntry"
+    IAMActionCatalogResponse:
+      type: object
+      required: [services]
+      properties:
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/IAMActionCatalogService"
     IAMGuardrail:
       type: object
       description: >-

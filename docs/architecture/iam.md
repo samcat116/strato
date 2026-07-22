@@ -295,6 +295,58 @@ Today's environment roles (`environment_manager`, deployer, approver) become
 `resource.environment == "staging"`), consistent with
 environment-as-attribute.
 
+### Roles are rows, defaults included (shipped with #604/#605)
+
+The four roles above are not a Swift enum: they are rows in `iam_roles`,
+seeded with fixed well-known ids and reconciled from the code registry at boot
+(`RoleRegistrySync`). Custom roles are ordinary rows alongside them. One
+machinery, so a custom role compiles, binds, and shows up in `who-can` exactly
+the way `admin` does.
+
+A row's `cedar_text` is the source of truth for what it grants — compiled into
+the policy set verbatim under the id `role-<row uuid>` — and its `actions`
+column is *derived* from that text on every write, never sent by the client.
+The derivation parses the policy and reads its action scope off Cedar's EST
+(`CedarPolicyInspector`), so a role cannot say one thing to the evaluator and
+another to the catalog or the editor.
+
+**Ownership scopes a role.** `owner_type` is `platform` (the seeded defaults,
+with a zero-UUID sentinel owner), `organization`, or `project`. A role is
+bindable on its owner and everything beneath it, and nowhere else — the same
+containment the ancestor chain already gives bindings and ceilings. Deleting
+an org or project removes the roles it owns.
+
+**The role API** (`/api/iam/roles`, issue #605) is admin-gated on the owner
+(`iam:readPolicy` / `iam:setPolicy`), the same gate guardrails use. A write
+takes **either** an action list — the server generates the canonical permit —
+**or** hand-written `cedarText` for the cases an action list cannot express
+(`resource.environment == "staging"`, an MFA condition). Advanced text is held
+to the role shape, and only that shape:
+
+- **permit-only** — a `forbid` here would be a ceiling invisible to the
+  guardrail API;
+- **unconstrained principal scope** — bindings decide who holds a role;
+- **enumerable action scope** (`action in [...]`, all from the registry) — an
+  action list that silently grew with the next release is exactly what the
+  curated registry exists to prevent;
+- **its own grants fields, both of them** — the permit must be gated on this
+  role's bindings and no other role's, or it would grant to everyone.
+
+Everything else is left alone, and the candidate is compiled against the
+schema the store *would* have once the row exists, so Cedar's own errors
+surface as a `400` at the write instead of as a role that silently grants
+nothing after the next boot. `POST /api/iam/roles/validate` runs the same
+preparation without saving (the editor's compile button), and
+`GET /api/iam/actions` publishes the action vocabulary — grouped by service,
+with each action's applicable resource types and the default roles carrying
+it — so the picker can never offer something the write path would reject.
+
+Seeded roles are immutable through the API (`403`): they are reconciled from
+the code registry, and an edit would be reverted at the next boot. A role with
+live bindings cannot be deleted (`409` with the count) — dropping it would
+silently revoke whatever those bindings grant, with nothing in the bindings
+list to show it happened.
+
 ### Membership and visibility
 
 - **Bare org membership grants `org:read` and `project:create` — nothing
@@ -357,8 +409,13 @@ inverted the data flow:
   a revoke is effective on the next request on every replica.
 
   **Versioning (shipped).** `iam_policy_set_versions` is an append-only log:
-  every change to the platform policy, the guardrails, or the role registry
+  every change to the platform policy, the guardrails, or the role store
   appends a row carrying a monotonic `version`, the reason, and who made it.
+  For roles that means role CRUD (`/api/iam/roles`), the boot-time
+  reconciliation of the seeded rows, and the org/project delete cascades that
+  remove owned roles — each inside `withPolicySetChange`, each bumping only
+  when something actually changed, so a rolling deploy of an unchanged
+  registry is silent.
   Allocation is `max + 1` under a uniqueness constraint, so two replicas
   bumping concurrently get two versions rather than one lost update. Version
   and change commit in the same transaction — a change without its bump leaves
