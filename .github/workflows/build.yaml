@@ -200,15 +200,20 @@ jobs:
       # volume — they are inert here. Genuinely shared state goes on the
       # hostPath below instead.
       #
-      # --cache-path /cache/swiftpm is that hostPath: a directory on the
-      # (single-node) runner host mounted into every runner pod, holding
-      # SwiftPM's shared cache — git mirrors, compiled manifests, and binary
-      # artifacts. It is provisioned by the github_runner Ansible role in
-      # samcat116/homelab (ghr_swiftpm_cache_*); if that mount is ever missing,
-      # SwiftPM just creates the directory in the pod and every run is cold
-      # again — slower, never broken. Only the shared cache lives there:
-      # --scratch-path must stay pod-local, because SwiftPM takes an exclusive
-      # lock on the build directory and concurrent jobs would serialize.
+      # The SwiftPM shared cache (git mirrors, compiled manifests, binary
+      # artifacts) lives on a hostPath — /cache/swiftpm — mounted into every
+      # runner pod from the (single-node) runner host, provisioned by the
+      # github_runner Ansible role in samcat116/homelab (ghr_swiftpm_cache_*).
+      # The "Resolve SwiftPM shared cache path" step below probes that mount and
+      # exports SWIFTPM_CACHE_PATH: it uses /cache/swiftpm when it is present and
+      # writable, and otherwise falls back to a pod-local (cold) directory. That
+      # guard matters because SwiftPM does NOT create a missing cache root on its
+      # own — pointing --cache-path at an unwritable /cache/swiftpm fails the
+      # build outright ("error: invalid access to /cache/swiftpm"), so the mount
+      # being absent must degrade to cold rather than break the run. Only the
+      # shared cache lives there: --scratch-path must stay pod-local, because
+      # SwiftPM takes an exclusive lock on the build directory and concurrent
+      # jobs would serialize.
       #
       # The dominant cost was never the cache, though. Two runs the same evening
       # did identical cold work: 29870517360 took 5.2 minutes total, 29873252059
@@ -249,13 +254,32 @@ jobs:
             fi
           done
 
+      # Probe the shared SwiftPM cache hostPath and export SWIFTPM_CACHE_PATH.
+      # SwiftPM will not create a missing cache root itself — an unwritable
+      # /cache/swiftpm makes every `swift build` fail with "invalid access" — so
+      # when the homelab-provisioned mount is absent we fall back to a pod-local
+      # (cold) directory instead. Written to $GITHUB_ENV so the build/test steps
+      # below pick it up.
+      - name: Resolve SwiftPM shared cache path
+        run: |
+          shared=/cache/swiftpm
+          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+            echo "using shared SwiftPM cache at $shared"
+            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+          else
+            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+            mkdir -p "$fallback"
+            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+          fi
+
       - name: Build Shared Package
         working-directory: shared
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Shared Package
         working-directory: shared
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build Agent
         # Run even if the shared tests failed — agent coverage should
@@ -263,12 +287,12 @@ jobs:
         id: build-agent
         if: ${{ !cancelled() }}
         working-directory: agent
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Agent
         if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
         working-directory: agent
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build CLI
         # Same always-report policy as the agent: CLI coverage runs even when
@@ -276,12 +300,12 @@ jobs:
         id: build-cli
         if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test CLI
         if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
         working-directory: cli
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
   # Control-plane build + test against Postgres — the engine production uses,
   # validating migrations and Postgres-specific SQL (issue #195). The suite
@@ -360,10 +384,26 @@ jobs:
           ./scripts/install-cvc5.sh "$RUNNER_TEMP/bin"
           echo "IAM_SYMCC_SOLVER_PATH=$RUNNER_TEMP/bin/cvc5" >> "$GITHUB_ENV"
 
+      # See the identical step in the `test` job: probe the shared cache mount
+      # and fall back to a pod-local (cold) directory when it is absent, so a
+      # missing /cache/swiftpm degrades instead of failing the build.
+      - name: Resolve SwiftPM shared cache path
+        run: |
+          shared=/cache/swiftpm
+          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+            echo "using shared SwiftPM cache at $shared"
+            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+          else
+            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+            mkdir -p "$fallback"
+            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+          fi
+
       - name: Build Control Plane
         id: build-cp
         working-directory: control-plane
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Normally a no-op: the background start above had the whole build to
       # finish. The generous budget only matters when the registry is slow —
@@ -404,7 +444,7 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path /cache/swiftpm --force-resolved-versions
+        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
       # since the raw job log is dominated by per-request debug output.
