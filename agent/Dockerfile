@@ -129,8 +129,9 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     # fabric and redistributes it. Inert until the operator configures it
     # (see deploy/frr/) and enables [ovn_dynamic_routing] in the agent config.
     frr \
-    # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
-    # libcurl4 \
+    # The agent imports FoundationNetworking (AgentUpdater, ImageCacheService,
+    # OCI transport), whose Swift runtime library links libcurl at load time.
+    libcurl4 \
     # If your app or its dependencies import FoundationXML, also install `libxml2`.
     # libxml2 \
     && rm -r /var/lib/apt/lists/*
