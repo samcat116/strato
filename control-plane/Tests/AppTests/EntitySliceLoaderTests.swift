@@ -425,7 +425,9 @@ final class EntitySliceLoaderTests {
                 Issue.record("base context is not a record with grants")
                 return
             }
-            #expect(grants.count == IAMRole.allCases.count * 2)
+            // Four fields per role: users, groups, service accounts, and
+            // workloads (issue #491).
+            #expect(grants.count == IAMRole.allCases.count * 4)
             #expect(grants[RoleDescriptor.grantsUsersField(unknownRoleID)] == nil)
             #expect(
                 grants[RoleDescriptor.grantsUsersField(IAMRole.viewer.seededID)]

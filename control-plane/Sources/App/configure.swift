@@ -549,6 +549,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateOrgTrustDomain())
     app.migrations.add(AddTrustDomainToAgentIdentities())
 
+    // IAM workload principals (issue #491): service accounts and the workload
+    // registry mapping SPIFFE IDs to registered principals.
+    app.migrations.add(CreateServiceAccount())
+    app.migrations.add(CreateWorkloadRegistration())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

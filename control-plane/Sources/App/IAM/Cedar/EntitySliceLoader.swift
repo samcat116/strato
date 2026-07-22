@@ -18,6 +18,8 @@ import Foundation
 struct CedarRoleGrants: Equatable, Sendable {
     private(set) var users: [UUID: Set<UUID>] = [:]
     private(set) var groups: [UUID: Set<UUID>] = [:]
+    private(set) var serviceAccounts: [UUID: Set<UUID>] = [:]
+    private(set) var workloads: [UUID: Set<UUID>] = [:]
 
     mutating func addUser(_ id: UUID, roleID: UUID) {
         users[roleID, default: []].insert(id)
@@ -27,12 +29,24 @@ struct CedarRoleGrants: Equatable, Sendable {
         groups[roleID, default: []].insert(id)
     }
 
+    mutating func addServiceAccount(_ id: UUID, roleID: UUID) {
+        serviceAccounts[roleID, default: []].insert(id)
+    }
+
+    mutating func addWorkload(_ id: UUID, roleID: UUID) {
+        workloads[roleID, default: []].insert(id)
+    }
+
     func users(for roleID: UUID) -> Set<UUID> { users[roleID] ?? [] }
     func groups(for roleID: UUID) -> Set<UUID> { groups[roleID] ?? [] }
+    func serviceAccounts(for roleID: UUID) -> Set<UUID> { serviceAccounts[roleID] ?? [] }
+    func workloads(for roleID: UUID) -> Set<UUID> { workloads[roleID] ?? [] }
 
     /// The role ids the chain's bindings named — for logging what a stale
     /// schema dropped.
-    var roleIDs: Set<UUID> { Set(users.keys).union(groups.keys) }
+    var roleIDs: Set<UUID> {
+        Set(users.keys).union(groups.keys).union(serviceAccounts.keys).union(workloads.keys)
+    }
 
     /// The `Grants` record for `context.grants`: one field pair for **every**
     /// role the compiled schema declares (they are required fields — empty
@@ -43,18 +57,20 @@ struct CedarRoleGrants: Equatable, Sendable {
     /// are dropped: under-grant, never over-grant, converging on the next
     /// version nudge or 30s re-read.
     func contextValue(roleIDs: Set<UUID>) -> CedarValue {
+        func set(_ ids: Set<UUID>, type: CedarEntityType) -> CedarValue {
+            .set(
+                ids
+                    .map { CedarEntityUID(type: type, id: $0) }
+                    .sorted { $0.id < $1.id }
+                    .map { .entity($0) })
+        }
         var fields: [String: CedarValue] = [:]
         for roleID in roleIDs {
-            fields[RoleDescriptor.grantsUsersField(roleID)] = .set(
-                users(for: roleID)
-                    .map { CedarEntityUID(type: .user, id: $0) }
-                    .sorted { $0.id < $1.id }
-                    .map { .entity($0) })
-            fields[RoleDescriptor.grantsGroupsField(roleID)] = .set(
-                groups(for: roleID)
-                    .map { CedarEntityUID(type: .group, id: $0) }
-                    .sorted { $0.id < $1.id }
-                    .map { .entity($0) })
+            fields[RoleDescriptor.grantsUsersField(roleID)] = set(users(for: roleID), type: .user)
+            fields[RoleDescriptor.grantsGroupsField(roleID)] = set(groups(for: roleID), type: .group)
+            fields[RoleDescriptor.grantsServiceAccountsField(roleID)] = set(
+                serviceAccounts(for: roleID), type: .serviceAccount)
+            fields[RoleDescriptor.grantsWorkloadsField(roleID)] = set(workloads(for: roleID), type: .workload)
         }
         return .record(fields)
     }
@@ -120,17 +136,32 @@ enum EntitySliceLoader {
     /// action on the node — and there is no per-action code path here to get
     /// out of sync.
     static func load(userID: UUID, node: IAMNode, on db: any Database) async throws -> CedarEntitySlice {
+        try await load(principal: .user(userID), node: node, on: db)
+    }
+
+    /// Gather the slice for "may `principal` act on `node`?" — the typed form
+    /// covering machine principals (issue #491). A service-account or
+    /// workload principal has no group or org memberships to expand: its
+    /// grants are exactly its own bindings along the chain.
+    static func load(principal: IAMPrincipal, node: IAMNode, on db: any Database) async throws -> CedarEntitySlice {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
 
-        let user = try await User.find(userID, on: db)
-        let groupIDs = try await UserGroup.query(on: db)
-            .filter(\.$user.$id == userID)
-            .all()
-            .map { $0.$group.id }
-        let organizationIDs = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .all()
-            .map { $0.$organization.id }
+        let user = principal.type == .user ? try await User.find(principal.id, on: db) : nil
+        let groupIDs: [UUID]
+        let organizationIDs: [UUID]
+        if principal.type == .user {
+            groupIDs = try await UserGroup.query(on: db)
+                .filter(\.$user.$id == principal.id)
+                .all()
+                .map { $0.$group.id }
+            organizationIDs = try await UserOrganization.query(on: db)
+                .filter(\.$user.$id == principal.id)
+                .all()
+                .map { $0.$organization.id }
+        } else {
+            groupIDs = []
+            organizationIDs = []
+        }
 
         var grants = CedarRoleGrants()
         var skippedConditionedBindings = 0
@@ -139,7 +170,7 @@ enum EntitySliceLoader {
             // belongs to, on any node in the chain. Filtering to this
             // principal is what keeps the slice per-check-sized; `who-can`
             // answers the all-principals question from the table directly.
-            var principals: [(IAMPrincipalType, UUID)] = [(.user, userID)]
+            var principals: [(IAMPrincipalType, UUID)] = [(principal.type, principal.id)]
             principals += groupIDs.map { (IAMPrincipalType.group, $0) }
 
             let bindings = try await RoleBinding.query(on: db)
@@ -176,6 +207,8 @@ enum EntitySliceLoader {
                 switch IAMPrincipalType(rawValue: binding.principalType) {
                 case .user: grants.addUser(binding.principalID, roleID: roleID)
                 case .group: grants.addGroup(binding.principalID, roleID: roleID)
+                case .serviceAccount: grants.addServiceAccount(binding.principalID, roleID: roleID)
+                case .workload: grants.addWorkload(binding.principalID, roleID: roleID)
                 case nil: continue
                 }
             }
@@ -195,20 +228,30 @@ enum EntitySliceLoader {
 
         var entities: [CedarEntity] = []
 
-        let principalUID = CedarEntityUID(type: .user, id: userID)
-        entities.append(
-            CedarEntity(
-                uid: principalUID,
-                attrs: [
-                    "memberOfOrgs": .set(
-                        organizationIDs
-                            .map { CedarEntityUID(type: .organization, id: $0) }
-                            .sorted { $0.id < $1.id }
-                            .map { .entity($0) }),
-                    "systemAdmin": .bool(user?.isSystemAdmin ?? false),
-                ],
-                parents: groupIDs.map { CedarEntityUID(type: .group, id: $0) }.sorted { $0.id < $1.id }
-            ))
+        let principalUID = principal.cedarUID
+        if principal.type == .user {
+            entities.append(
+                CedarEntity(
+                    uid: principalUID,
+                    attrs: [
+                        "memberOfOrgs": .set(
+                            organizationIDs
+                                .map { CedarEntityUID(type: .organization, id: $0) }
+                                .sorted { $0.id < $1.id }
+                                .map { .entity($0) }),
+                        "systemAdmin": .bool(user?.isSystemAdmin ?? false),
+                    ],
+                    parents: groupIDs.map { CedarEntityUID(type: .group, id: $0) }.sorted { $0.id < $1.id }
+                ))
+        } else if !chain.contains(where: { $0.cedarUID == principalUID }) {
+            // Machine principals are attribute- and parent-free by design:
+            // the schema declares them memberships-less, so the
+            // membership-shaped platform policies can never apply. When the
+            // principal *is* the resource (a service account checked against
+            // its own node), the chain entity below already carries the UID —
+            // adding it twice would duplicate the entity in the store.
+            entities.append(CedarEntity(uid: principalUID, attrs: [:], parents: []))
+        }
         for groupID in groupIDs {
             entities.append(CedarEntity(uid: CedarEntityUID(type: .group, id: groupID), attrs: [:], parents: []))
         }

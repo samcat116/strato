@@ -24,6 +24,8 @@ struct RoleDescriptor: Equatable, Sendable {
     var policyID: String { Self.policyID(id) }
     var grantsUsersField: String { Self.grantsUsersField(id) }
     var grantsGroupsField: String { Self.grantsGroupsField(id) }
+    var grantsServiceAccountsField: String { Self.grantsServiceAccountsField(id) }
+    var grantsWorkloadsField: String { Self.grantsWorkloadsField(id) }
 
     /// Cedar-side names use lowercased UUIDs, matching `CedarEntityUID`'s
     /// convention. (The `role_bindings.role` column stores `UUID.uuidString`
@@ -31,6 +33,8 @@ struct RoleDescriptor: Equatable, Sendable {
     static func policyID(_ id: UUID) -> String { "role-\(id.uuidString.lowercased())" }
     static func grantsUsersField(_ id: UUID) -> String { "\(id.uuidString.lowercased())Users" }
     static func grantsGroupsField(_ id: UUID) -> String { "\(id.uuidString.lowercased())Groups" }
+    static func grantsServiceAccountsField(_ id: UUID) -> String { "\(id.uuidString.lowercased())ServiceAccounts" }
+    static func grantsWorkloadsField(_ id: UUID) -> String { "\(id.uuidString.lowercased())Workloads" }
 
     /// The canonical permit for an enumerable action list — what the server
     /// generates when a role is defined by picking actions. Advanced
@@ -45,12 +49,23 @@ struct RoleDescriptor: Equatable, Sendable {
             .map { "Action::\(CedarText.stringLiteral($0))" }
             .joined(separator: ", ")
         let policyID = policyID(id)
+        // Each grants clause is guarded by `principal is <Type>`: the schema
+        // admits three principal types, and the strict validator rejects an
+        // unguarded `in` between unrelated entity types (a ServiceAccount can
+        // never be in a `Set<User>`). The guard types to `false` in the other
+        // environments, which short-circuits the clause out of typechecking —
+        // the same pattern the schema's own `has`-guard note describes.
         return """
             @id(\(CedarText.stringLiteral(policyID)))
             permit (principal, action in [\(actionList)], resource)
             when {
-                principal in context.grants[\(CedarText.stringLiteral(grantsUsersField(id)))] ||
-                principal in context.grants[\(CedarText.stringLiteral(grantsGroupsField(id)))]
+                (principal is User &&
+                 (principal in context.grants[\(CedarText.stringLiteral(grantsUsersField(id)))] ||
+                  principal in context.grants[\(CedarText.stringLiteral(grantsGroupsField(id)))])) ||
+                (principal is ServiceAccount &&
+                 principal in context.grants[\(CedarText.stringLiteral(grantsServiceAccountsField(id)))]) ||
+                (principal is Workload &&
+                 principal in context.grants[\(CedarText.stringLiteral(grantsWorkloadsField(id)))])
             };
             """
     }

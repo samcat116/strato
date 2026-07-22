@@ -59,7 +59,7 @@ enum CedarRoleTextError: Error, AbortError, Equatable {
                 "The role's text reads another role's grants (\(fields.joined(separator: ", "))). A role may only be conditioned on its own bindings."
         case .grantsShapeMismatch:
             return
-                "A role's permit must be gated by its own grants: one `when` clause has to be exactly `principal in context.grants[\"<id>Users\"] || principal in context.grants[\"<id>Groups\"]`, written that way. Naming those fields inside a larger condition is not enough — a disjunction can widen the gate back to everyone. Add further `when`/`unless` clauses for extra conditions; they narrow, so they are always safe."
+                "A role's permit must be gated by its own grants: one `when` clause has to be exactly `(principal is User && (principal in context.grants[\"<id>Users\"] || principal in context.grants[\"<id>Groups\"])) || (principal is ServiceAccount && principal in context.grants[\"<id>ServiceAccounts\"]) || (principal is Workload && principal in context.grants[\"<id>Workloads\"])`, written that way. Naming those fields inside a larger condition is not enough — a disjunction can widen the gate back to everyone. Add further `when`/`unless` clauses for extra conditions; they narrow, so they are always safe."
         case .rejectedByCedar(let detail):
             return "Cedar rejected the role's policy: \(detail)"
         }
@@ -228,6 +228,8 @@ enum CedarPolicyInspector {
         let own: Set<String> = [
             RoleDescriptor.grantsUsersField(roleID),
             RoleDescriptor.grantsGroupsField(roleID),
+            RoleDescriptor.grantsServiceAccountsField(roleID),
+            RoleDescriptor.grantsWorkloadsField(roleID),
         ]
         let foreign = attributes.filter(isGrantsFieldName).subtracting(own)
         guard foreign.isEmpty else {
@@ -290,10 +292,10 @@ enum CedarPolicyInspector {
         }
     }
 
-    /// Whether a name is a grants field — `<role uuid>Users` / `<role
-    /// uuid>Groups`, the naming `RoleDescriptor` generates.
+    /// Whether a name is a grants field — `<role uuid>Users` / `Groups` /
+    /// `ServiceAccounts` / `Workloads`, the naming `RoleDescriptor` generates.
     private static func isGrantsFieldName(_ name: String) -> Bool {
-        for suffix in ["Users", "Groups"] where name.hasSuffix(suffix) {
+        for suffix in ["Users", "Groups", "ServiceAccounts", "Workloads"] where name.hasSuffix(suffix) {
             return UUID(uuidString: String(name.dropLast(suffix.count))) != nil
         }
         return false

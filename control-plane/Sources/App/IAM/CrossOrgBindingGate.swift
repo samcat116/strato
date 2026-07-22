@@ -43,6 +43,22 @@ enum CrossOrgBindingGate {
         case .group:
             guard let group = try await Group.find(principalID, on: db) else { return true }
             return group.$organization.id != organizationID
+        case .serviceAccount:
+            // A service account lives where its project lives (issue #491) —
+            // unlike users, it has a home org derived from the tree rather
+            // than memberships.
+            guard let account = try await ServiceAccount.find(principalID, on: db) else { return true }
+            let root = try await rootOrganizationID(
+                of: IAMNode(type: .project, id: account.$project.id), on: db)
+            return root != organizationID
+        case .workload:
+            // A registered workload is scoped to the org named on its
+            // registration row; anything unresolvable is external.
+            guard let registration = try await WorkloadRegistration.find(principalID, on: db),
+                registration.kind == .workload,
+                let registrationOrgID = registration.$organization.id
+            else { return true }
+            return registrationOrgID != organizationID
         }
     }
 

@@ -60,6 +60,7 @@ enum IAMActionTranslator {
         case .volume, .volumeSnapshot: return "volume"
         case .site: return "site"
         case .agent: return "agent"
+        case .serviceAccount: return "serviceaccount"
         }
     }
 

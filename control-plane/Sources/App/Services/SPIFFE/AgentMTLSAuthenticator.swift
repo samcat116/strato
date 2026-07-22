@@ -1,3 +1,4 @@
+import Fluent
 import Foundation
 import Vapor
 
@@ -150,6 +151,10 @@ enum AgentMTLSAuthenticator {
         guard let identity = verified.identity.agentIdentity else {
             throw Abort(.forbidden, reason: "SPIFFE identity validation failed")
         }
+        // The workload registry is authoritative for the *mapping* (issue
+        // #491): a URI registered to a different principal is rejected even
+        // with a valid agent path, and a first-seen identity is registered.
+        try await WorkloadRegistry.requireAgentRegistration(identity: identity, on: req.db)
         return AuthenticatedAgent(identity: identity, organizationID: verified.organizationID)
     }
 }

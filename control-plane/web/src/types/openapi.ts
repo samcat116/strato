@@ -3081,6 +3081,219 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's service accounts
+         * @description Requires `serviceaccount:list` on the project.
+         */
+        get: operations["listServiceAccounts"];
+        put?: never;
+        /**
+         * Create a service account
+         * @description Requires `serviceaccount:create` on the project. The creator receives an explicit, revocable `admin` binding on the account.
+         */
+        post: operations["createServiceAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-accounts/{serviceAccountID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a service account
+         * @description Requires `serviceaccount:read` on the account.
+         */
+        get: operations["getServiceAccount"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a service account
+         * @description Requires `serviceaccount:delete` on the account. Deletes its workload registrations and every role binding it holds or that is attached to it.
+         */
+        delete: operations["deleteServiceAccount"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a service account
+         * @description Requires `serviceaccount:update` on the account.
+         */
+        patch: operations["updateServiceAccount"];
+        trace?: never;
+    };
+    "/api/service-accounts/{serviceAccountID}/project-role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Grant the service account a role on its project
+         * @description Requires `iam:setPolicy` on the project. Replaces any existing project role. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        put: operations["setServiceAccountProjectRole"];
+        post?: never;
+        /**
+         * Revoke the service account's role on its project
+         * @description Requires `iam:setPolicy` on the project.
+         */
+        delete: operations["clearServiceAccountProjectRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-accounts/{serviceAccountID}/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the SPIFFE identities registered to a service account
+         * @description Requires `serviceaccount:read` on the account.
+         */
+        get: operations["listServiceAccountRegistrations"];
+        put?: never;
+        /**
+         * Register a SPIFFE identity to a service account
+         * @description Requires `iam:setPolicy` on the account's project — attaching an identity lets a workload act as the account, so it is gated like a grant. The SPIFFE ID is a lookup key into the workload registry — workloads presenting it over mTLS authenticate as this account. One identity registers to exactly one principal, and the reserved `/agent/` namespace cannot be registered through the API.
+         */
+        post: operations["createServiceAccountRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-accounts/{serviceAccountID}/registrations/{registrationID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a SPIFFE identity registration from a service account
+         * @description Requires `iam:setPolicy` on the account's project.
+         */
+        delete: operations["deleteServiceAccountRegistration"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workload-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the workload registry
+         * @description Every registered SPIFFE identity — agents, service-account workloads, and directly registered workloads. System administrators only.
+         */
+        get: operations["listWorkloadRegistrations"];
+        put?: never;
+        /**
+         * Register a customer workload's SPIFFE identity as a principal
+         * @description System administrators only. The registration itself is the principal (`principal_type: workload`); grant it project roles via `/api/projects/{projectID}/workload-grants/{registrationID}`.
+         */
+        post: operations["createWorkloadRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workload-registrations/{registrationID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workload registration
+         * @description System administrators only — the revocation lever for any registered identity. Deleting a directly registered workload deletes the principal, and its role bindings with it.
+         */
+        delete: operations["deleteWorkloadRegistration"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectID}/workload-grants/{registrationID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Grant a registered workload a role on a project
+         * @description Requires `iam:setPolicy` on the project. The registration must be a directly registered workload in the project's organization. Replaces any existing role. Checked against the tier-2 guardrails in force on the node before it is accepted.
+         */
+        put: operations["setProjectWorkloadGrant"];
+        post?: never;
+        /**
+         * Revoke a registered workload's role on a project
+         * @description Requires `iam:setPolicy` on the project.
+         */
+        delete: operations["revokeProjectWorkloadGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workload-identity": {
         parameters: {
             query?: never;
@@ -5615,6 +5828,72 @@ export interface components {
             groupID: string;
             role: components["schemas"]["ProjectRole"];
         };
+        /**
+         * @description A seeded IAM role. Each role implies the ones below it.
+         * @enum {string}
+         */
+        SeededRoleName: "viewer" | "operator" | "editor" | "admin";
+        /** @description A project-scoped machine principal (issue #491). Workloads authenticate as it via registered SPIFFE identities; its access is exactly its role bindings. */
+        ServiceAccount: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string;
+            /** Format: uuid */
+            projectId: string;
+            /** @description The seeded roles the account holds on its project (normally zero or one). Custom-role bindings are omitted here; the who-can API reports them. */
+            projectRoles: components["schemas"]["SeededRoleName"][];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateServiceAccountRequest: {
+            /** @description Unique within the project. 1-128 characters. */
+            name: string;
+            description?: string;
+        };
+        UpdateServiceAccountRequest: {
+            description?: string;
+        };
+        SetSeededRoleRequest: {
+            role: components["schemas"]["SeededRoleName"];
+        };
+        /** @description One workload-registry row: a SPIFFE identity and the principal it names. The SPIFFE ID is a lookup key only — nothing is ever parsed out of an SVID. */
+        WorkloadRegistration: {
+            /** Format: uuid */
+            id: string;
+            /** @description The full SPIFFE URI, unique across the registry. */
+            spiffeId: string;
+            /** @enum {string} */
+            kind: "agent" | "service_account" | "workload";
+            /** @description For `agent` registrations, the agent's name. */
+            agentName?: string;
+            /**
+             * Format: uuid
+             * @description For `service_account` registrations, the account.
+             */
+            serviceAccountId?: string;
+            /**
+             * Format: uuid
+             * @description For `workload` registrations, the organization the registration is scoped to (administrative scoping only — it grants nothing).
+             */
+            organizationId?: string;
+            displayName?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        CreateServiceAccountRegistrationRequest: {
+            /** @description A SPIFFE URI (`spiffe://<trust-domain>/<path>`). */
+            spiffeId: string;
+        };
+        CreateWorkloadRegistrationRequest: {
+            /** @description A SPIFFE URI (`spiffe://<trust-domain>/<path>`). */
+            spiffeId: string;
+            /** Format: uuid */
+            organizationId: string;
+            displayName?: string;
+        };
         /** @description A project's credential for a private OCI registry. The secret value is write-only and never appears in a response. */
         RegistryPullSecret: {
             /** Format: uuid */
@@ -7009,6 +7288,10 @@ export interface components {
         OperationID: string;
         /** @description The project's id. */
         ProjectID: string;
+        /** @description The service account's id. */
+        ServiceAccountID: string;
+        /** @description The workload registration's id. */
+        WorkloadRegistrationID: string;
         /** @description The image's id. */
         ImageID: string;
         /** @description The volume's id. */
@@ -12467,6 +12750,394 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listServiceAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's service accounts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccount"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The created service account. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The service account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateServiceAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated service account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setServiceAccountProjectRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetSeededRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    clearServiceAccountProjectRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listServiceAccountRegistrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's workload registrations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadRegistration"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createServiceAccountRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceAccountRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description The created registration. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadRegistration"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteServiceAccountRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                serviceAccountID: components["parameters"]["ServiceAccountID"];
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listWorkloadRegistrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The registry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadRegistration"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createWorkloadRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkloadRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description The created registration. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadRegistration"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteWorkloadRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setProjectWorkloadGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetSeededRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    revokeProjectWorkloadGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+                /** @description The workload registration's id. */
+                registrationID: components["parameters"]["WorkloadRegistrationID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getWorkloadIdentityOverview: {

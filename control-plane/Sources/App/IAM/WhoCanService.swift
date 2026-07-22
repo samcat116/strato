@@ -176,11 +176,24 @@ enum WhoCanService {
             )
         }
 
+        // Machine principals (issue #491): a service account is internal when
+        // its project's chain reaches this org; a registered workload when
+        // its registration row is scoped to it. Same rules as the write-time
+        // gate (`CrossOrgBindingGate.isExternal`).
+        var internalMachines: Set<UUID> = []
+        for entry in entries where entry.principal.type == .serviceAccount || entry.principal.type == .workload {
+            let external = try await CrossOrgBindingGate.isExternal(
+                principalType: entry.principal.type, principalID: entry.principal.id,
+                organizationID: orgID, on: db)
+            if !external { internalMachines.insert(entry.principal.id) }
+        }
+
         return entries.map { entry in
             let isInternal =
                 switch entry.principal.type {
                 case .user: internalUsers.contains(entry.principal.id)
                 case .group: internalGroups.contains(entry.principal.id)
+                case .serviceAccount, .workload: internalMachines.contains(entry.principal.id)
                 }
             return isInternal ? entry : entry.markingPrincipalExternal()
         }

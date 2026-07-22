@@ -298,6 +298,11 @@ enum GuardrailStore {
             case .group:
                 guard let group = try await Group.find(principalID, on: db) else { return false }
                 return group.$organization.id != organizationID
+            case .serviceAccount, .workload:
+                // Machine principals are members of nothing (issue #491), so
+                // an external-principal ceiling always covers them — matching
+                // the compiled forbid's `is User`-guarded membership test.
+                return true
             }
         }
     }
@@ -322,7 +327,7 @@ enum GuardrailStore {
         case .sandboxSnapshot:
             return try await SandboxSnapshot.find(node.id, on: db)?.environment
         case .organization, .organizationalUnit, .project, .image, .network,
-            .floatingIP, .volume, .volumeSnapshot, .site, .agent:
+            .floatingIP, .volume, .volumeSnapshot, .site, .agent, .serviceAccount:
             // Listed exhaustively rather than defaulted: a new resource type
             // carrying an environment should fail to compile here, not quietly
             // fall out of every environment ceiling.

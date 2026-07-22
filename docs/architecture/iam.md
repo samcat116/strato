@@ -255,7 +255,10 @@ free-form Cedar text.
  condition, expires_at, created_by, created_at)
 ```
 
-- Principals: users, groups, and later workloads/service accounts.
+- Principals: users, groups, service accounts, and registered workloads
+  (issue #491). The machine principal types hold nothing by membership — no
+  groups, no orgs — so every grant they have is an explicit, listable binding,
+  and an external-principal guardrail always covers them.
 - Nodes: any tree node — Org, Folder, Project, or an **individual resource**.
   Resource-level bindings exist from day one.
 - Many-to-many. The one-parent rule constrains *resources*, never principals.
@@ -414,10 +417,38 @@ of the current system are unchanged by the migration:
 - API keys are unchanged for now (deferred; revisit toward short-lived
   credentials later).
 
-Future work (post-migration): a workload registry making customer workloads
-first-class principals — the SPIFFE ID is a **lookup key** into the registry,
-never parsed for claims — and service accounts as resources with an
-impersonation permission.
+### The workload registry (issue #491)
+
+SPIFFE identities become principals by **registration**, never by parsing.
+The `workload_registrations` table maps each SPIFFE URI — a **lookup key**,
+never parsed for claims — to what it names:
+
+- **`agent`** — a hypervisor-node agent, by name. The agent mTLS surfaces
+  (`AgentMTLSAuthenticator.resolveAgent`) resolve the verified URI through
+  the registry: a first-seen agent identity is validated against the
+  trust-domain/path rules and then registered; a URI registered to a
+  different principal is rejected even with a valid agent path.
+- **`service_account`** — a workload authenticating as a `ServiceAccount`, a
+  project-scoped resource (`serviceaccount:*` actions, including
+  `serviceaccount:impersonate` in the admin role) that is also a Cedar
+  principal. Its project role is an ordinary guardrail-checked binding
+  (`PUT /api/service-accounts/{id}/project-role`).
+- **`workload`** — a directly registered customer workload; the registration
+  row itself is the principal (`principal_type = workload`). Registered by
+  system administrators (`/api/workload-registrations`), granted per-project
+  via `/api/projects/{id}/workload-grants/{registrationID}`.
+
+In the Cedar schema, `Workload` and `ServiceAccount` are principal types
+alongside `User`: every role carries four `Grants` sets (users, groups,
+service accounts, workloads) and role permits are `is`-guarded per principal
+type. The membership-shaped platform policies (`platform-system-admin`,
+`org-membership`) are `principal is User`-scoped — machine principals hold
+only what bindings give them.
+
+Still future: request-path authentication of service accounts and workloads
+on the HTTP API (SVID mTLS beyond the agent surfaces), and the impersonation
+*flow* (minting short-lived credentials) behind the already-modeled
+`serviceaccount:impersonate` permission.
 
 ## Architecture: the evaluator is in-process
 

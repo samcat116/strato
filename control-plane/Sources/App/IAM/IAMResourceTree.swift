@@ -119,6 +119,10 @@ enum IAMResourceTree {
         case .agent:
             guard let agent = try await Agent.find(node.id, on: db) else { return nil }
             return scopeNode(ouID: agent.$organizationalUnit.id, orgID: agent.$organization.id)
+
+        case .serviceAccount:
+            guard let account = try await ServiceAccount.find(node.id, on: db) else { return nil }
+            return IAMNode(type: .project, id: account.$project.id)
         }
     }
 

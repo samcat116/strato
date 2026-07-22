@@ -176,6 +176,10 @@ struct AgentWebSocketController: RouteCollection {
                     throw SPIREServiceError.certificateValidationFailed(
                         "SPIFFE ID is not an agent identity: \(verified.identity.uri)")
                 }
+                // The workload registry is authoritative for the mapping
+                // (issue #491): a URI registered to a different principal is
+                // rejected, and a first-seen agent identity is registered.
+                try await WorkloadRegistry.requireAgentRegistration(identity: identity, on: req.db)
 
                 req.logger.info(
                     "Agent authenticated via XFCC header (Envoy mTLS)",

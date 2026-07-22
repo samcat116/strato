@@ -132,8 +132,13 @@ final class RoleEndpointTests {
                     resource
                 )
                 when {
-                    principal in context.grants["\(RoleDescriptor.grantsUsersField(id))"] ||
-                    principal in context.grants["\(RoleDescriptor.grantsGroupsField(id))"]
+                    (principal is User &&
+                     (principal in context.grants["\(RoleDescriptor.grantsUsersField(id))"] ||
+                      principal in context.grants["\(RoleDescriptor.grantsGroupsField(id))"])) ||
+                    (principal is ServiceAccount &&
+                     principal in context.grants["\(RoleDescriptor.grantsServiceAccountsField(id))"]) ||
+                    (principal is Workload &&
+                     principal in context.grants["\(RoleDescriptor.grantsWorkloadsField(id))"])
                 }
                 when { resource has environment && resource.environment == "staging" };
                 """

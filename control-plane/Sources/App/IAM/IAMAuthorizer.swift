@@ -65,13 +65,37 @@ enum IAMAuthorizer {
 
     /// Evaluate "may `userID` perform `action` on `node`?" against the
     /// compiled policy set, record the decision, and return it.
+    static func authorize(
+        userID: UUID,
+        action: String,
+        node: IAMNode,
+        legacyEquivalent: LegacyCheckEquivalent?,
+        context: IAMCheckContext,
+        state: IAMRequestAuthState?,
+        app: Application,
+        db: any Database
+    ) async throws -> CedarCheckDecision {
+        try await authorize(
+            principal: .user(userID),
+            action: action,
+            node: node,
+            legacyEquivalent: legacyEquivalent,
+            context: context,
+            state: state,
+            app: app,
+            db: db
+        )
+    }
+
+    /// Evaluate "may `principal` perform `action` on `node`?" — the typed
+    /// form covering machine principals (issue #491) as well as users.
     ///
     /// Fails closed at every seam: no compiled policy set is a 503 (the
     /// replica cannot answer authorization questions, which is different from
     /// "no"), and an engine evaluation failure is a 500 — never a silent
     /// allow, never a silent deny that would look like policy.
     static func authorize(
-        userID: UUID,
+        principal: IAMPrincipal,
         action: String,
         node: IAMNode,
         legacyEquivalent: LegacyCheckEquivalent?,
@@ -88,7 +112,7 @@ enum IAMAuthorizer {
             throw Abort(.serviceUnavailable, reason: "Authorization system is not ready")
         }
 
-        let slice = try await EntitySliceLoader.load(userID: userID, node: node, on: db)
+        let slice = try await EntitySliceLoader.load(principal: principal, node: node, on: db)
 
         // A truncated ancestor chain is fail-open for tier-2 guardrails: a
         // forbid anchored above the break silently stops matching while an
@@ -117,7 +141,7 @@ enum IAMAuthorizer {
             state?.decisionEvaluated.withLockedValue { $0 = true }
             app.iamDecisionRecorder.recordInBackground(
                 IAMDecisionRecord(
-                    subject: userID.uuidString,
+                    subject: principal.subject,
                     action: action,
                     node: node,
                     organizationID: nil,
@@ -170,7 +194,7 @@ enum IAMAuthorizer {
 
         app.iamDecisionRecorder.recordInBackground(
             IAMDecisionRecord(
-                subject: userID.uuidString,
+                subject: principal.subject,
                 action: action,
                 node: node,
                 organizationID: slice.chain.first(where: { $0.type == .organization })?.id,

@@ -227,7 +227,8 @@ enum GuardrailWriteCheck {
             return false
         }
 
-        if binding.principalType == .user {
+        switch binding.principalType {
+        case .user:
             return try await GuardrailStore.principalMatches(
                 match,
                 principalType: .user,
@@ -235,26 +236,40 @@ enum GuardrailWriteCheck {
                 organizationID: organizationID,
                 on: db
             )
-        }
 
-        // A group binding reaches the group's members, so the ceiling reaches
-        // this grant if it covers the group itself or anyone in it.
-        switch match {
-        case .any:
-            return true
-        case .group(let ceilingGroupID):
-            if ceilingGroupID == binding.principalID { return true }
-            return try await sharesMember(binding.principalID, ceilingGroupID, on: db)
-        case .user(let userID):
-            let memberships = try await UserGroup.query(on: db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$group.$id == binding.principalID)
-                .count()
-            return memberships > 0
-        case .externalToOrganization:
-            guard let organizationID else { return false }
-            return try await hasMemberOutside(
-                organizationID, of: binding.principalID, on: db)
+        case .group:
+            // A group binding reaches the group's members, so the ceiling
+            // reaches this grant if it covers the group itself or anyone in
+            // it.
+            switch match {
+            case .any:
+                return true
+            case .group(let ceilingGroupID):
+                if ceilingGroupID == binding.principalID { return true }
+                return try await sharesMember(binding.principalID, ceilingGroupID, on: db)
+            case .user(let userID):
+                let memberships = try await UserGroup.query(on: db)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$group.$id == binding.principalID)
+                    .count()
+                return memberships > 0
+            case .externalToOrganization:
+                guard let organizationID else { return false }
+                return try await hasMemberOutside(
+                    organizationID, of: binding.principalID, on: db)
+            }
+
+        case .serviceAccount, .workload:
+            // A machine principal is in no group and a member of no org — so
+            // a user- or group-scoped ceiling never reaches it, and an
+            // external-principal ceiling always does (matching the compiled
+            // forbid, whose membership test is `is User`-guarded).
+            switch match {
+            case .any, .externalToOrganization:
+                return true
+            case .user, .group:
+                return false
+            }
         }
     }
 
@@ -336,9 +351,18 @@ enum GuardrailWriteCheck {
         let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
         let ceiling = ceilingPolicy(guardrail, node: node, resourceMatch: resourceMatch)
 
+        // The environment's principal type mirrors the binding's: a group
+        // grant is exercised by its member users, and machine principals form
+        // their own request environments.
+        let principalType: CedarEntityType
+        switch binding.principalType {
+        case .user, .group: principalType = .user
+        case .serviceAccount: principalType = .serviceAccount
+        case .workload: principalType = .workload
+        }
         for (resourceType, action) in representatives.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             let environment = CedarRequestEnvironment(
-                principalType: .user, action: action, resourceType: resourceType)
+                principalType: principalType, action: action, resourceType: resourceType)
             let grant = grantPolicy(binding, action: action)
             let analysis: GuardrailAnalysis
             do {

@@ -126,6 +126,10 @@ tags:
     description: Physical or logical groupings of agents.
   - name: Workload Identity
     description: SPIFFE/SPIRE registration entries, trust bundles, and federation.
+  - name: Service Accounts
+    description: >-
+      Machine principals (issue #491): project-scoped service accounts and the
+      workload registry mapping SPIFFE identities to registered principals.
   - name: IAM
     description: >-
       Permission checks, guardrails, and decision logs. Some field names
@@ -4278,6 +4282,309 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/projects/{projectID}/service-accounts:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: listServiceAccounts
+      summary: List a project's service accounts
+      description: Requires `serviceaccount:list` on the project.
+      tags: [Service Accounts]
+      responses:
+        "200":
+          description: The project's service accounts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServiceAccount"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createServiceAccount
+      summary: Create a service account
+      description: >-
+        Requires `serviceaccount:create` on the project. The creator receives
+        an explicit, revocable `admin` binding on the account.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceAccountRequest"
+      responses:
+        "201":
+          description: The created service account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceAccount"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/service-accounts/{serviceAccountID}:
+    parameters:
+      - $ref: "#/components/parameters/ServiceAccountID"
+    get:
+      operationId: getServiceAccount
+      summary: Get a service account
+      description: Requires `serviceaccount:read` on the account.
+      tags: [Service Accounts]
+      responses:
+        "200":
+          description: The service account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceAccount"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateServiceAccount
+      summary: Update a service account
+      description: Requires `serviceaccount:update` on the account.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceAccountRequest"
+      responses:
+        "200":
+          description: The updated service account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceAccount"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteServiceAccount
+      summary: Delete a service account
+      description: >-
+        Requires `serviceaccount:delete` on the account. Deletes its workload
+        registrations and every role binding it holds or that is attached to
+        it.
+      tags: [Service Accounts]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/service-accounts/{serviceAccountID}/project-role:
+    parameters:
+      - $ref: "#/components/parameters/ServiceAccountID"
+    put:
+      operationId: setServiceAccountProjectRole
+      summary: Grant the service account a role on its project
+      description: >-
+        Requires `iam:setPolicy` on the project. Replaces any existing project
+        role. Checked against the tier-2 guardrails in force on the node
+        before it is accepted: a grant that would reach past a ceiling is
+        refused with `403`, naming the guardrail, who set it, and why.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSeededRoleRequest"
+      responses:
+        "200":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: clearServiceAccountProjectRole
+      summary: Revoke the service account's role on its project
+      description: Requires `iam:setPolicy` on the project.
+      tags: [Service Accounts]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/service-accounts/{serviceAccountID}/registrations:
+    parameters:
+      - $ref: "#/components/parameters/ServiceAccountID"
+    get:
+      operationId: listServiceAccountRegistrations
+      summary: List the SPIFFE identities registered to a service account
+      description: Requires `serviceaccount:read` on the account.
+      tags: [Service Accounts]
+      responses:
+        "200":
+          description: The account's workload registrations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkloadRegistration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createServiceAccountRegistration
+      summary: Register a SPIFFE identity to a service account
+      description: >-
+        Requires `iam:setPolicy` on the account's project — attaching an
+        identity lets a workload act as the account, so it is gated like a
+        grant. The SPIFFE ID is a lookup key into the workload registry —
+        workloads presenting it over mTLS authenticate as this account. One
+        identity registers to exactly one principal, and the reserved
+        `/agent/` namespace cannot be registered through the API.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceAccountRegistrationRequest"
+      responses:
+        "201":
+          description: The created registration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadRegistration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/service-accounts/{serviceAccountID}/registrations/{registrationID}:
+    parameters:
+      - $ref: "#/components/parameters/ServiceAccountID"
+      - $ref: "#/components/parameters/WorkloadRegistrationID"
+    delete:
+      operationId: deleteServiceAccountRegistration
+      summary: Remove a SPIFFE identity registration from a service account
+      description: Requires `iam:setPolicy` on the account's project.
+      tags: [Service Accounts]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/workload-registrations:
+    get:
+      operationId: listWorkloadRegistrations
+      summary: List the workload registry
+      description: >-
+        Every registered SPIFFE identity — agents, service-account workloads,
+        and directly registered workloads. System administrators only.
+      tags: [Service Accounts]
+      responses:
+        "200":
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkloadRegistration"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createWorkloadRegistration
+      summary: Register a customer workload's SPIFFE identity as a principal
+      description: >-
+        System administrators only. The registration itself is the principal
+        (`principal_type: workload`); grant it project roles via
+        `/api/projects/{projectID}/workload-grants/{registrationID}`.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkloadRegistrationRequest"
+      responses:
+        "201":
+          description: The created registration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadRegistration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/workload-registrations/{registrationID}:
+    parameters:
+      - $ref: "#/components/parameters/WorkloadRegistrationID"
+    delete:
+      operationId: deleteWorkloadRegistration
+      summary: Delete a workload registration
+      description: >-
+        System administrators only — the revocation lever for any registered
+        identity. Deleting a directly registered workload deletes the
+        principal, and its role bindings with it.
+      tags: [Service Accounts]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/projects/{projectID}/workload-grants/{registrationID}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+      - $ref: "#/components/parameters/WorkloadRegistrationID"
+    put:
+      operationId: setProjectWorkloadGrant
+      summary: Grant a registered workload a role on a project
+      description: >-
+        Requires `iam:setPolicy` on the project. The registration must be a
+        directly registered workload in the project's organization. Replaces
+        any existing role. Checked against the tier-2 guardrails in force on
+        the node before it is accepted.
+      tags: [Service Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSeededRoleRequest"
+      responses:
+        "200":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: revokeProjectWorkloadGrant
+      summary: Revoke a registered workload's role on a project
+      description: Requires `iam:setPolicy` on the project.
+      tags: [Service Accounts]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/workload-identity:
     get:
       operationId: getWorkloadIdentityOverview
@@ -6144,6 +6451,22 @@ components:
       in: path
       required: true
       description: The project's id.
+      schema:
+        type: string
+        format: uuid
+    ServiceAccountID:
+      name: serviceAccountID
+      in: path
+      required: true
+      description: The service account's id.
+      schema:
+        type: string
+        format: uuid
+    WorkloadRegistrationID:
+      name: registrationID
+      in: path
+      required: true
+      description: The workload registration's id.
       schema:
         type: string
         format: uuid
@@ -9643,6 +9966,124 @@ components:
           format: uuid
         role:
           $ref: "#/components/schemas/ProjectRole"
+
+    SeededRoleName:
+      type: string
+      description: A seeded IAM role. Each role implies the ones below it.
+      enum: [viewer, operator, editor, admin]
+
+    ServiceAccount:
+      type: object
+      description: >-
+        A project-scoped machine principal (issue #491). Workloads
+        authenticate as it via registered SPIFFE identities; its access is
+        exactly its role bindings.
+      required: [id, name, description, projectId, projectRoles]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        projectRoles:
+          type: array
+          description: >-
+            The seeded roles the account holds on its project (normally zero
+            or one). Custom-role bindings are omitted here; the who-can API
+            reports them.
+          items:
+            $ref: "#/components/schemas/SeededRoleName"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateServiceAccountRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Unique within the project. 1-128 characters.
+        description:
+          type: string
+
+    UpdateServiceAccountRequest:
+      type: object
+      properties:
+        description:
+          type: string
+
+    SetSeededRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/SeededRoleName"
+
+    WorkloadRegistration:
+      type: object
+      description: >-
+        One workload-registry row: a SPIFFE identity and the principal it
+        names. The SPIFFE ID is a lookup key only — nothing is ever parsed
+        out of an SVID.
+      required: [id, spiffeId, kind]
+      properties:
+        id:
+          type: string
+          format: uuid
+        spiffeId:
+          type: string
+          description: The full SPIFFE URI, unique across the registry.
+        kind:
+          type: string
+          enum: [agent, service_account, workload]
+        agentName:
+          type: string
+          description: For `agent` registrations, the agent's name.
+        serviceAccountId:
+          type: string
+          format: uuid
+          description: For `service_account` registrations, the account.
+        organizationId:
+          type: string
+          format: uuid
+          description: >-
+            For `workload` registrations, the organization the registration
+            is scoped to (administrative scoping only — it grants nothing).
+        displayName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateServiceAccountRegistrationRequest:
+      type: object
+      required: [spiffeId]
+      properties:
+        spiffeId:
+          type: string
+          description: A SPIFFE URI (`spiffe://<trust-domain>/<path>`).
+
+    CreateWorkloadRegistrationRequest:
+      type: object
+      required: [spiffeId, organizationId]
+      properties:
+        spiffeId:
+          type: string
+          description: A SPIFFE URI (`spiffe://<trust-domain>/<path>`).
+        organizationId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
 
     RegistryPullSecret:
       type: object
