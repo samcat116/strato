@@ -3,13 +3,58 @@ import Foundation
 import SQLKit
 
 struct MigrateExistingDataToProjects: AsyncMigration {
+    /// Column snapshot of `projects` as it exists at this point in the migration
+    /// chain: `environments` is still the JSON-encoded text column it was created
+    /// as, and only becomes a native `text[]` in `ConvertProjectEnvironmentsToArray`.
+    /// Querying the live `Project` model here would bind a Swift array against a
+    /// text column.
+    private final class ProjectSnapshot: Model, @unchecked Sendable {
+        static let schema = "projects"
+
+        @ID(key: .id)
+        var id: UUID?
+
+        @Field(key: "name")
+        var name: String
+
+        @Field(key: "description")
+        var description: String
+
+        @OptionalParent(key: "organization_id")
+        var organization: Organization?
+
+        @OptionalField(key: "organizational_unit_id")
+        var organizationalUnitID: UUID?
+
+        @Field(key: "path")
+        var path: String
+
+        @Field(key: "default_environment")
+        var defaultEnvironment: String
+
+        @Field(key: "environments")
+        var environmentsJSON: String
+
+        init() {}
+
+        init(name: String, description: String, organizationID: UUID?, path: String) {
+            self.name = name
+            self.description = description
+            self.$organization.id = organizationID
+            self.organizationalUnitID = nil
+            self.path = path
+            self.defaultEnvironment = "development"
+            self.environmentsJSON = #"["development","staging","production"]"#
+        }
+    }
+
     func prepare(on database: Database) async throws {
         // Get all existing organizations
         let organizations = try await Organization.query(on: database).all()
 
         for organization in organizations {
             // Create a default project for each organization
-            let defaultProject = Project(
+            let defaultProject = ProjectSnapshot(
                 name: "Default Project",
                 description: "Default project for \(organization.name)",
                 organizationID: organization.id,
@@ -34,8 +79,8 @@ struct MigrateExistingDataToProjects: AsyncMigration {
         // they'll need to be handled manually or via a separate script
         if let firstOrg = organizations.first,
             let firstOrgId = firstOrg.id,
-            let defaultProject = try await Project.query(on: database)
-                .filter(\Project.$organization.$id, .equal, firstOrgId)
+            let defaultProject = try await ProjectSnapshot.query(on: database)
+                .filter(\ProjectSnapshot.$organization.$id, .equal, firstOrgId)
                 .first(),
             let defaultProjectId = defaultProject.id
         {
@@ -58,7 +103,7 @@ struct MigrateExistingDataToProjects: AsyncMigration {
 
     func revert(on database: Database) async throws {
         // Remove all default projects
-        try await Project.query(on: database)
+        try await ProjectSnapshot.query(on: database)
             .filter(\.$name == "Default Project")
             .delete()
 

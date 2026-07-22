@@ -539,6 +539,10 @@ public func configure(_ app: Application) async throws {
     // the agent-side swtpm capability the scheduler gates it on.
     app.migrations.add(AddMachineProfileToVM())
 
+    // Issue #641: `projects.environments` was a JSON-encoded text column purely
+    // for SQLite; with Postgres the model uses a native `[String]` field.
+    app.migrations.add(ConvertProjectEnvironmentsToArray())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
