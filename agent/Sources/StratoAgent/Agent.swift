@@ -220,7 +220,12 @@ actor Agent {
     // the host preflight's writability probe.
     private let volumeStoragePath: String
     private let qemuBinaryPath: String
-    private let firmwarePath: String?
+    // Operator-configured EDK2 firmware paths (issue #565): the split
+    // CODE/VARS pairs and the legacy monolithic image.
+    private let firmware: FirmwareOverrides
+    // `swtpm`, when this host has it. Nil keeps the TPM capability dark at
+    // registration, so the scheduler never places a vTPM VM here.
+    private let swtpmBinaryPath: String?
     private let firecrackerBinaryPath: String
     private let firecrackerSocketDir: String
     // Where the sandbox guest base image (issue #419) is installed; its
@@ -294,7 +299,8 @@ actor Agent {
         vmStoragePath: String,
         volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
         qemuBinaryPath: String,
-        firmwarePath: String? = nil,
+        firmware: FirmwareOverrides = FirmwareOverrides(),
+        swtpmBinaryPath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
         sandboxGuestImagePath: String? = nil,
@@ -326,7 +332,8 @@ actor Agent {
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
         self.qemuBinaryPath = qemuBinaryPath
-        self.firmwarePath = firmwarePath
+        self.firmware = firmware
+        self.swtpmBinaryPath = swtpmBinaryPath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.sandboxGuestImagePath = sandboxGuestImagePath
@@ -515,7 +522,8 @@ actor Agent {
             #if canImport(SwiftQEMU)
             hypervisorServices[.qemu] = QEMUService(
                 logger: logger, storage: storageBackend,
-                vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
+                vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmware: firmware,
+                swtpmBinaryPath: swtpmBinaryPath,
                 hardwareAccelerationEnabled: hardwareAccelerationEnabled)
             #else
             hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
@@ -971,6 +979,10 @@ actor Agent {
         }
     }
 
+    /// Display-only capability string for a host that can back guest vTPMs.
+    /// The scheduler keys placement on `AgentRegisterMessage.tpmCapable`.
+    static let vtpmCapabilityName = "vtpm"
+
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
 
@@ -994,10 +1006,17 @@ actor Agent {
         // no real hypervisor to detect, so it advertises the mock backends as
         // available+accelerated to make the agent placement-eligible.
         let hypervisors: [HypervisorSupport]
+        // Whether this host can back a guest TPM 2.0 (issue #565). Simulation
+        // mode asserts it for the same reason it asserts the sandbox runtime:
+        // the host artifact it checks for is meaningless to a mock backend, and
+        // withholding it would make simulated fleets unusable for scale-testing
+        // Windows-shaped placement.
+        var swtpmAvailable = isSimulationMode
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
         } else {
             let preflight = runHostPreflight()
+            swtpmAvailable = preflight.swtpmAvailable
             logHostPreflight(preflight)
             let probed = preflight.gate(
                 HypervisorProbe.probeAll(
@@ -1052,6 +1071,12 @@ actor Agent {
             #endif
         }
 
+        // vTPM capability: the typed flag is what the scheduler gates on; the
+        // capability string is display-only, matching the sandbox pattern.
+        if swtpmAvailable {
+            capabilities.append(Self.vtpmCapabilityName)
+        }
+
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
@@ -1063,6 +1088,7 @@ actor Agent {
             hypervisors: hypervisors,
             networkCapability: networkCapability,
             sandboxCapable: sandboxCapable,
+            tpmCapable: swtpmAvailable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather()
         )
@@ -1347,13 +1373,18 @@ actor Agent {
         let firecrackerSocketDirectory: String? = nil
         #endif
 
-        // Mirror QEMUService's firmware resolution: explicit config first,
-        // then the platform's default candidates for this architecture.
-        #if arch(arm64)
-        let resolvedFirmwarePath = firmwarePath ?? AgentConfig.defaultFirmwarePathARM64
-        #else
-        let resolvedFirmwarePath = firmwarePath ?? AgentConfig.defaultFirmwarePathX86_64
-        #endif
+        // Mirror QEMUService's firmware resolution so the preflight reports
+        // what a VM would actually boot with: the split pair's CODE image when
+        // one resolves, else the monolithic `-bios` fallback (issue #565).
+        let resolvedFirmwarePath: String?
+        switch try? FirmwareResolver.resolve(secureBoot: false, overrides: firmware) {
+        case .pflash(let code, _):
+            resolvedFirmwarePath = code
+        case .monolithic(let path):
+            resolvedFirmwarePath = path
+        case nil:
+            resolvedFirmwarePath = nil
+        }
 
         return HostPreflight.run(
             HostPreflight.Inputs(
@@ -1363,6 +1394,7 @@ actor Agent {
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
+                swtpmBinaryPath: swtpmBinaryPath,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []

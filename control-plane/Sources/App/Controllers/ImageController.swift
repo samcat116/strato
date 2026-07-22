@@ -888,23 +888,21 @@ struct ImageController: RouteCollection {
         // Agent path: a forwarded client certificate means the request came
         // through the Envoy mTLS listener. Authenticate the SVID (issue #493).
         //
-        // Authorization is deliberately coarse: *any* enrolled agent identity
-        // may fetch *any* ready image, in any project. This is broader than
-        // what it replaced — the retired HMAC signature bound a URL to one
-        // image, project, artifact kind, and agent name — and it is not the
-        // same trust the agent socket extends, which only ever hands an agent
-        // the desired state for its own placements. The accepted model is that
-        // an enrolled agent is a trusted hypervisor node: it already runs
-        // tenant workloads and holds their disks on local storage, so image
-        // bytes are not a meaningful escalation. Deployments that place
-        // mutually untrusting tenants on separate agents do not get isolation
-        // here. Narrowing this to images the requesting agent has actually
-        // been assigned is tracked in issue #562.
+        // Authorization is scoped to what the agent was actually handed
+        // (issue #562): the control plane records a grant whenever it emits
+        // download URLs to an agent — in a desired-state sync for a VM placed
+        // on it, or in a volume create it was asked to service — and only
+        // those images are fetchable. An enrolled agent is still a trusted
+        // hypervisor node, but a node that runs no workload from an image has
+        // no reason to read its bytes, which is what a deployment separating
+        // mutually untrusting tenants across agents needs.
         //
         // Never fall through to session auth on failure: a request carrying
         // XFCC that doesn't verify is a spoofing attempt, not a browser.
         if AgentMTLSAuthenticator.hasClientCertificate(req) {
             let agentName = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+
+            try await authorizeAgentImageFetch(req: req, agentName: agentName, imageID: imageID)
 
             req.logger.info(
                 "Agent downloading image via SVID mTLS",
@@ -938,6 +936,63 @@ struct ImageController: RouteCollection {
         }
 
         return try await serveImageFile(req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
+    }
+
+    // MARK: - Agent fetch authorization (issue #562)
+
+    /// Allow an authenticated agent to fetch an image only when the control
+    /// plane has handed it that image's download URLs — a VM placed on it that
+    /// boots from the image, or a volume create it was asked to service. The
+    /// grant is written at the moment the URLs are emitted, so this can never
+    /// be tighter than what a sync legitimately gave the agent, and it carries
+    /// a grace window (`imageDownloadGrantTTLSeconds`) so a placement revoked
+    /// mid-pull doesn't break a download already in flight.
+    ///
+    /// Fails **open** when the coordination store can't answer: grants live in
+    /// Valkey, and a Valkey outage must degrade image pulls to the pre-#562
+    /// trust model rather than stall every VM create in the fleet. A store
+    /// that answers but has lost the grant (flush, restart) denies once; the
+    /// next periodic sync rewrites it and the agent's retry succeeds.
+    private func authorizeAgentImageFetch(req: Request, agentName: String, imageID: UUID) async throws {
+        // Grants are keyed by the agent's row id — the same identifier VM
+        // placement and volume replicas use — so a rename cannot orphan them.
+        guard
+            let agent = try await Agent.query(on: req.db)
+                .filter(\.$name == agentName)
+                .first(),
+            let agentId = agent.id?.uuidString
+        else {
+            req.logger.warning(
+                "Image download from an agent identity with no registered agent",
+                metadata: [
+                    "agent": .string(agentName),
+                    "imageId": .string(imageID.uuidString),
+                ])
+            throw Abort(.forbidden, reason: "Image is not assigned to this agent")
+        }
+
+        let granted = await req.application.coordination.hasImageDownloadGrant(
+            agentId: agentId, imageId: imageID)
+
+        guard let granted else {
+            req.logger.warning(
+                "Coordination store could not answer an image download grant; allowing the fetch",
+                metadata: [
+                    "agent": .string(agentName),
+                    "imageId": .string(imageID.uuidString),
+                ])
+            return
+        }
+
+        guard granted else {
+            req.logger.warning(
+                "Agent requested an image it has not been assigned",
+                metadata: [
+                    "agent": .string(agentName),
+                    "imageId": .string(imageID.uuidString),
+                ])
+            throw Abort(.forbidden, reason: "Image is not assigned to this agent")
+        }
     }
 
     // MARK: - Serve Image File (shared helper)

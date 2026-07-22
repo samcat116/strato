@@ -22,6 +22,7 @@ struct HostPreflightTests {
             imageCachePath: "\(root)/images",
             qemuImgPath: "/bin/ls",
             firmwarePath: "/bin/ls",
+            swtpmBinaryPath: "/bin/ls",
             minimumFreeDiskBytes: 0
         )
     }
@@ -230,6 +231,36 @@ struct HostPreflightTests {
     }
 
     // MARK: - Advisory checks
+
+    @Test("Missing swtpm is advisory and only withholds the TPM capability")
+    func missingSwtpmIsAdvisory() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.swtpmBinaryPath = nil
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.swtpmBinary))
+        #expect(!check.passed)
+        #expect(check.severity == .advisory)
+        // A host without swtpm runs every VM that doesn't ask for a TPM
+        // exactly as before, so nothing about it may gate the hypervisor.
+        #expect(!report.swtpmAvailable)
+        #expect(report.storageReady)
+
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        #expect(report.gate([qemu]) == [qemu])
+    }
+
+    @Test("A present swtpm binary lights up the TPM capability")
+    func presentSwtpmIsReported() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let report = HostPreflight.run(passingInputs(root: root))
+        #expect(report.swtpmAvailable)
+    }
 
     @Test("Missing firmware is advisory: logged, not gating")
     func missingFirmwareIsAdvisory() throws {

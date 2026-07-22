@@ -99,6 +99,14 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "sandbox_capable")
     var sandboxCapable: Bool
 
+    /// Whether the agent advertised a usable `swtpm` at its last registration
+    /// (issue #565), which is what lets it give a guest a TPM 2.0. The
+    /// scheduler gates vTPM placement on this signal combined with a v17+ wire
+    /// protocol — a v17 build on a host without swtpm understands the field but
+    /// cannot realize it.
+    @Field(key: "tpm_capable")
+    var tpmCapable: Bool
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -157,6 +165,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
         sandboxCapable: Bool = false,
+        tpmCapable: Bool = false,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -175,6 +184,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability?.rawValue
         self.sandboxCapable = sandboxCapable
+        self.tpmCapable = tpmCapable
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
@@ -221,6 +231,7 @@ extension Agent {
             hypervisors: registration.effectiveHypervisors,
             networkCapability: registration.networkCapability,
             sandboxCapable: registration.sandboxCapable ?? false,
+            tpmCapable: registration.tpmCapable ?? false,
             lastHeartbeat: Date()
         )
         agent.operatingSystem = registration.operatingSystem?.rawValue
@@ -310,6 +321,9 @@ struct AgentResponse: Content {
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let sandboxCapable: Bool
+    /// Whether this host can back a guest TPM 2.0 (issue #565) — it advertised
+    /// a usable swtpm at its last registration.
+    let tpmCapable: Bool
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
@@ -351,6 +365,7 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.sandboxCapable = agent.sandboxCapable
+        self.tpmCapable = agent.tpmCapable
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id

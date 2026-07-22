@@ -275,6 +275,17 @@ export default function VMDetailPage() {
                   )}
                 </div>
                 <div>
+                  <p className="text-muted-foreground">Firmware</p>
+                  <p className="text-foreground">
+                    {[
+                      vm.secureBoot ? "Secure Boot" : null,
+                      vm.tpmEnabled ? "TPM 2.0" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" + ") || "Standard UEFI"}
+                  </p>
+                </div>
+                <div>
                   <p className="text-muted-foreground">Last Updated</p>
                   <p className="text-foreground">
                     {new Date(vm.updatedAt).toLocaleString()}

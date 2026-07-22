@@ -531,6 +531,10 @@ public func configure(_ app: Application) async throws {
     // row uuid in role_bindings.
     app.migrations.add(ReplaceIAMRoleRegistry())
 
+    // Windows guest support (issue #565): per-VM Secure Boot / vTPM intent and
+    // the agent-side swtpm capability the scheduler gates it on.
+    app.migrations.add(AddMachineProfileToVM())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

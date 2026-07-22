@@ -125,6 +125,8 @@ struct VMPlacementRequirements {
     let architecture: CPUArchitecture?    // Guest CPU architecture, when known
     let requiresInterVMNetworking: Bool   // Needs VM-to-VM networking (OVN)
     let requiresSandboxRuntime: Bool      // Sandbox workload (issue #415)
+    let requiresSecureBoot: Bool          // UEFI Secure Boot (issue #565)
+    let requiresVTPM: Bool                // Emulated TPM 2.0 (issue #565)
 }
 ```
 
@@ -154,6 +156,17 @@ differently than requested:
   on disk) **and** registered with a wire protocol that carries sandbox
   desired state (v5+). Firecracker support alone never qualifies an agent,
   and neither does the protocol version alone.
+- **Machine profile**: A VM asking for Secure Boot or a TPM only places on an
+  agent that registered with a wire protocol carrying `VMSpec.machine` (v17+),
+  and a TPM additionally requires that the agent advertised
+  `AgentRegisterMessage.tpmCapable` — swtpm present and usable on that host.
+  The two-signal shape mirrors the sandbox runtime for the same reason: a
+  version number proves the agent *understands* the field, not that the host
+  can *realize* it. This constraint exists because both features fail
+  silently on an agent that cannot serve them — the guest simply boots without
+  Secure Boot or without a TPM, and Windows setup refuses to install with
+  nothing in the API to explain why. Refusing placement surfaces the missing
+  prerequisite at create time instead.
 
 ## Agent Selection Process
 
@@ -163,6 +176,8 @@ differently than requested:
    - Agent status must be `online`
    - Agent must support the VM's hypervisor type
    - Agent must advertise the sandbox runtime (sandbox placements only)
+   - Agent must speak v17+ (Secure Boot or TPM placements) and advertise
+     `tpmCapable` (TPM placements)
    - Agent host architecture must match the guest architecture (when specified)
    - Agent must satisfy the VM's network capability requirements
    - Available CPU ≥ VM CPU requirement
@@ -208,6 +223,8 @@ The scheduler throws specific errors for different failure scenarios:
 - **`unsupportedHypervisor`**: No online agent supports the VM's hypervisor backend
 - **`architectureMismatch`**: No eligible agent has the required host architecture
 - **`networkCapabilityUnsatisfied`**: No eligible agent supports the required VM-to-VM networking
+- **`machineProfileUnsatisfied`**: No eligible agent is new enough (wire v17+) to realize Secure Boot or a TPM
+- **`vtpmUnsatisfied`**: No eligible agent has swtpm installed to back the requested TPM 2.0
 - **`insufficientResources`**: Agents exist but none have enough resources
 - **`invalidStrategy`**: Specified strategy name is not recognized
 - **`agentServiceUnavailable`**: AgentService not properly initialized

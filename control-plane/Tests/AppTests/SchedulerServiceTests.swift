@@ -41,7 +41,9 @@ struct SchedulerServiceTests {
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
-        supportsSandboxWorkloads: Bool = false
+        supportsSandboxWorkloads: Bool = false,
+        supportsVTPM: Bool = false,
+        supportsMachineProfile: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -57,7 +59,9 @@ struct SchedulerServiceTests {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
-            supportsSandboxWorkloads: supportsSandboxWorkloads
+            supportsSandboxWorkloads: supportsSandboxWorkloads,
+            supportsVTPM: supportsVTPM,
+            supportsMachineProfile: supportsMachineProfile
         )
     }
 
@@ -710,6 +714,137 @@ struct SchedulerServiceTests {
         #expect(info!.contains("online"))
         #expect(info!.contains("6/8"))
         #expect(info!.contains("Running VMs: 3"))
+    }
+
+    // MARK: - Machine profile: Secure Boot and vTPM (issue #565)
+
+    /// Requirements for a Windows-shaped VM: firmware boot with Secure Boot
+    /// and a TPM 2.0.
+    private func windowsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu,
+            memory: memory,
+            disk: 0,
+            hypervisorType: .qemu,
+            requiresVTPM: true,
+            requiresSecureBoot: true
+        )
+    }
+
+    @Test("A vTPM VM only places on an agent that advertised swtpm")
+    func testVTPMPlacementPrefersCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            // New enough to understand the machine profile and far more
+            // attractive by utilization — but it never advertised swtpm, so it
+            // would boot the guest with no TPM and Windows setup would refuse.
+            createTestAgent(
+                id: "no-swtpm", name: "no-swtpm", availableCPU: 8, supportsMachineProfile: true),
+            createTestAgent(
+                id: "tpm-ready", name: "tpm-ready", availableCPU: 2,
+                supportsVTPM: true, supportsMachineProfile: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+
+        #expect(selectedId == "tpm-ready")
+    }
+
+    @Test("A vTPM VM with no swtpm-capable agent fails at placement, not silently")
+    func testVTPMConstraintFails() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "a1", name: "a1", supportsMachineProfile: true),
+            createTestAgent(id: "a2", name: "a2", supportsMachineProfile: true),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+            Issue.record("Expected vtpmUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .vtpmUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected vtpmUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("swtpm"))
+        }
+    }
+
+    /// An agent that predates wire v17 decodes the sync fine and simply
+    /// ignores `VMSpec.machine` — the guest boots without Secure Boot or a TPM
+    /// while the API says it has both. That silent divergence is exactly what
+    /// the gate exists to prevent, so such agents are excluded even when they
+    /// have swtpm installed.
+    @Test("An agent too old to realize the machine profile is not eligible")
+    func testMachineProfileRequiresNewEnoughAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+            Issue.record("Expected machineProfileUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .machineProfileUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected machineProfileUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
+    }
+
+    /// Secure Boot needs no host binary — any agent that acts on the machine
+    /// profile can resolve a signed firmware set — so it must not inherit the
+    /// vTPM constraint.
+    @Test("Secure Boot alone does not require swtpm")
+    func testSecureBootDoesNotRequireVTPM() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let requirements = VMPlacementRequirements(
+            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu,
+            requiresVTPM: false, requiresSecureBoot: true)
+
+        let agents = [
+            createTestAgent(id: "sb-only", name: "sb-only", supportsVTPM: false, supportsMachineProfile: true)
+        ]
+
+        #expect(try scheduler.selectAgent(requirements: requirements, from: agents) == "sb-only")
+    }
+
+    /// The default profile must not narrow placement at all: an agent that
+    /// predates #565 entirely still takes ordinary VMs.
+    @Test("A VM with no machine profile places on a pre-v17 agent")
+    func testPlainVMIgnoresMachineProfileGates() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
+        ]
+        let vm = createTestVM(cpu: 2)
+
+        #expect(try scheduler.selectAgent(for: vm, from: agents) == "old")
+    }
+
+    /// The requirements a VM implies must carry its machine profile, or the
+    /// gates above would never engage on the real create path.
+    @Test("Placement requirements carry the VM's Secure Boot and TPM intent")
+    func testPlacementRequirementsCarryMachineProfile() throws {
+        let plain = createTestVM(cpu: 2)
+        let plainRequirements = SchedulerService.placementRequirements(for: plain)
+        #expect(!plainRequirements.requiresVTPM)
+        #expect(!plainRequirements.requiresSecureBoot)
+
+        let windows = createTestVM(cpu: 2)
+        windows.secureBoot = true
+        windows.tpmEnabled = true
+        let windowsRequirements = SchedulerService.placementRequirements(for: windows)
+        #expect(windowsRequirements.requiresVTPM)
+        #expect(windowsRequirements.requiresSecureBoot)
     }
 
     @Test("getSchedulingInfo returns nil for unknown agent")

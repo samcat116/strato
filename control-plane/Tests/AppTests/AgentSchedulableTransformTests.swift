@@ -105,4 +105,42 @@ struct AgentSchedulableTransformTests {
         #expect(byName["capable"]?.supportsSandboxWorkloads == true)
         #expect(byName["unknown-version"]?.supportsSandboxWorkloads == false)
     }
+
+    /// vTPM follows the same two-signal rule as the sandbox runtime (issue
+    /// #565): swtpm on the host proves the feature can be realized, and a v17+
+    /// protocol proves `VMSpec.machine` reaches the agent at all. Either alone
+    /// leaves a Windows guest booting without the TPM it was promised.
+    @Test("vTPM support requires both the advertised swtpm and a v17+ protocol")
+    func testVTPMSupport() throws {
+        let capableOldProtocol = makeAgent(id: UUID(), name: "capable-old")
+        capableOldProtocol.tpmCapable = true
+        capableOldProtocol.wireProtocolVersion = WireProtocol.machineProfileMinimumVersion - 1
+
+        let versionOnly = makeAgent(id: UUID(), name: "version-only")
+        versionOnly.tpmCapable = false
+        versionOnly.wireProtocolVersion = WireProtocol.currentVersion
+
+        let capable = makeAgent(id: UUID(), name: "capable")
+        capable.tpmCapable = true
+        capable.wireProtocolVersion = WireProtocol.currentVersion
+
+        let unknownVersion = makeAgent(id: UUID(), name: "unknown-version")
+        unknownVersion.tpmCapable = true
+        unknownVersion.wireProtocolVersion = nil
+
+        let result = AgentService.schedulableAgents(
+            from: [capableOldProtocol, versionOnly, capable, unknownVersion],
+            runningVMCounts: [:]
+        )
+        let byName = Dictionary(uniqueKeysWithValues: result.map { ($0.name, $0) })
+
+        #expect(byName["capable-old"]?.supportsVTPM == false)
+        #expect(byName["version-only"]?.supportsVTPM == false)
+        #expect(byName["capable"]?.supportsVTPM == true)
+        #expect(byName["unknown-version"]?.supportsVTPM == false)
+
+        // Secure Boot needs only the protocol, so it tracks the version alone.
+        #expect(byName["version-only"]?.supportsMachineProfile == true)
+        #expect(byName["capable-old"]?.supportsMachineProfile == false)
+    }
 }

@@ -398,6 +398,10 @@ struct VMController: RouteCollection {
             // image's artifact set if that set is compatible with exactly one
             // hypervisor, else falls back to the platform default (QEMU).
             let hypervisorType: HypervisorType?
+            // Machine profile (issue #565). Both default false — today's
+            // behavior — and both are what Windows 11 / Server 2025 require.
+            let secureBoot: Bool?
+            let tpm: Bool?
         }
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
@@ -599,7 +603,9 @@ struct VMController: RouteCollection {
             disk: diskValue,
             hypervisorType: chosenHypervisor,
             maxCpu: maxCpuValue,
-            maxMemory: maxMemoryValue
+            maxMemory: maxMemoryValue,
+            secureBoot: createRequest.secureBoot ?? false,
+            tpmEnabled: createRequest.tpm ?? false
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -634,6 +640,17 @@ struct VMController: RouteCollection {
         // User data is only delivered on the QEMU disk-boot path (the NoCloud
         // seed ISO); Firecracker VMs have no injection path yet. Reject rather
         // than return 202 and silently ignore the payload.
+        // Secure Boot and a vTPM are firmware-boot features, and Firecracker
+        // boots a kernel directly with no UEFI and no TPM device at all.
+        // Rejecting is the only honest answer: accepting would return 202 for a
+        // Windows VM that can never boot (issue #565).
+        if vm.hypervisorType == .firecracker, vm.secureBoot || vm.tpmEnabled {
+            throw Abort(
+                .badRequest,
+                reason: "'secureBoot' and 'tpm' are not supported for firecracker VMs "
+                    + "(no UEFI firmware or TPM device); use the qemu hypervisor")
+        }
+
         if vm.userData != nil, vm.hypervisorType == .firecracker {
             throw Abort(
                 .badRequest,

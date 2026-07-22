@@ -35,6 +35,18 @@ object through. Presigned bucket URLs would be one round trip cheaper, but:
   agents authenticate with their SPIFFE SVID over the Envoy mTLS listener
   (issue #493 retired the HMAC-signed URLs). You cannot put SVID RBAC on a
   presigned S3 URL.
+- authorization is scoped to what each agent was handed (issue #562). Every
+  point that emits download URLs to an agent — desired-state sync assembly for
+  a VM placed on it, and a volume create it is asked to service — records a
+  coordination grant (`imggrant:agent:{agentId}:image:{imageId}`, 30-minute
+  TTL) as the URLs are produced, and the route serves an agent only images it
+  holds a grant for. The TTL is the grace window: a placement revoked mid-pull
+  does not fail a download already in flight, and every periodic sync refreshes
+  the grant while the placement stands. Sandbox images are unaffected — those
+  pull from a registry with credentials minted into the sync, never through
+  this route. Grant reads fail *open* when the coordination store cannot
+  answer, so a Valkey outage degrades to the previous trust model instead of
+  stalling every image pull in the fleet.
 - bucket credentials never leave the control plane, and agents need no network
   route to the object store.
 

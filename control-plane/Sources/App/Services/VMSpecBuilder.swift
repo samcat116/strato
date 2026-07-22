@@ -124,6 +124,7 @@ struct VMSpecBuilder {
                 cmdline: vm.cmdline ?? image.defaultCmdline,
                 firmware: vm.firmwarePath
             ),
+            machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: legacyVolumeSpecs(from: vm),
             networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
@@ -164,6 +165,7 @@ struct VMSpecBuilder {
                 cmdline: vm.cmdline ?? image?.defaultCmdline,
                 firmware: vm.firmwarePath
             ),
+            machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: volumes,
             networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),

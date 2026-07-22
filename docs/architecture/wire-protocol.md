@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 15), stamped on
+`WireProtocol.swift` holds the protocol version (currently 17), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -65,6 +65,7 @@ ad-hoc checks scattered through the code:
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
 | `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
+| `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -91,6 +92,19 @@ would silently succeed having changed nothing. Hence `supportsVMResize`: the
 control plane refuses an online resize below it and tells the caller to
 restart the VM. Resizing a stopped VM needs no gate, since the next boot
 uses the whole spec.
+
+Version 18 adds `VMSpec.machine` (a `MachineProfile` of `secureBoot` and
+`tpm`, issue #565) plus `AgentRegisterMessage.tpmCapable`. The field itself is
+additive and tolerant — a pre-v18 agent decodes the sync fine — but that is
+precisely the problem: it would then boot the guest *without* Secure Boot or a
+TPM and report success, and Windows setup would refuse to install with nothing
+in the API explaining why. So this feature is gated on two signals rather than
+one, exactly as `sandboxCapable` is at v5: `supportsMachineProfile` proves the
+agent understands the field, and `tpmCapable` proves the host can actually
+realize a TPM (swtpm installed). A v18 build on a host without swtpm answers
+yes to the first and no to the second, which is why the version number alone
+cannot stand in for the capability flag. The scheduler treats both as hard
+constraints.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
@@ -194,7 +208,8 @@ The rest of the package is vocabulary used on both sides:
 
 - **`VMSpec`** (`VMSpec.swift`) — the hypervisor-neutral machine description:
   CPU/memory/disk sizing, `BootSource` (`.disk(firmware:)` vs
-  `.directKernel(kernel:initramfs:cmdline:)`), `VolumeSpec`, dual-stack
+  `.directKernel(kernel:initramfs:cmdline:)`), the `MachineProfile`
+  (`secureBoot`/`tpm`; nil decodes to `.default`, both off), `VolumeSpec`, dual-stack
   `NetworkSpec`, `ConsoleSpec`, SSH keys, and verbatim caller-supplied
   cloud-init `userData` (tolerantly decoded to nil from older control
   planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
