@@ -97,6 +97,27 @@ public struct SPIRETrustBundle: Sendable {
     }
 }
 
+// MARK: - Validated identity
+
+/// A SPIFFE identity that has been chain-verified against the roots of its own
+/// trust domain, together with the organization that domain belongs to.
+///
+/// `organizationID` is nil for the platform trust domain — the domain the
+/// control plane's own identities and every pre-per-org-TD agent live in. It is
+/// a **registry lookup that scopes a Cedar principal, never an authorization
+/// claim**: the trust domain says which org's CA vouched for the identity, and
+/// the authorization decision is still Cedar's (`docs/architecture/iam.md`,
+/// issue #491).
+public struct ValidatedSPIFFEIdentity: Sendable, Equatable {
+    public let identity: SPIFFEIdentity
+    public let organizationID: UUID?
+
+    public init(identity: SPIFFEIdentity, organizationID: UUID? = nil) {
+        self.identity = identity
+        self.organizationID = organizationID
+    }
+}
+
 // MARK: - SPIRE Service Errors
 
 public enum SPIREServiceError: Error, LocalizedError {
@@ -183,13 +204,41 @@ public actor SPIREService {
     private let logger: Logger
     private let httpClient: Client
 
-    private var trustBundle: SPIRETrustBundle?
+    /// Trust bundles keyed by trust domain. The platform domain's entry comes
+    /// from the configured file/endpoint; every other entry is an organization's
+    /// domain, sourced from `org_trust_domains` (issue #613).
+    ///
+    /// Keyed rather than unioned on purpose: verifying a leaf against the union
+    /// of every domain's roots would let any organization's CA mint an identity
+    /// in any other organization's domain, which is precisely the isolation
+    /// per-org trust domains exist to provide.
+    private var trustBundles: [String: SPIRETrustBundle] = [:]
+
+    /// Organization each non-platform trust domain resolves to.
+    private var organizationsByTrustDomain: [String: UUID] = [:]
+
     private var refreshTask: Task<Void, Never>?
 
-    public init(config: SPIREServiceConfig, logger: Logger, httpClient: Client) {
+    /// Where org trust domains come from; nil in unit tests and whenever the
+    /// feature is off, in which case only the platform domain exists.
+    private let orgTrustDomainSource: OrgTrustDomainSource?
+
+    /// When the org domains were last read, so a certificate naming an unknown
+    /// domain can trigger at most one re-read per `orgRefreshCooldown` instead
+    /// of a database query per request.
+    private var orgTrustDomainsRefreshedAt: Date?
+    private let orgRefreshCooldown: TimeInterval = 10
+
+    public init(
+        config: SPIREServiceConfig,
+        logger: Logger,
+        httpClient: Client,
+        orgTrustDomainSource: OrgTrustDomainSource? = nil
+    ) {
         self.config = config
         self.logger = logger
         self.httpClient = httpClient
+        self.orgTrustDomainSource = orgTrustDomainSource
     }
 
     /// Start the SPIRE service
@@ -244,34 +293,49 @@ public actor SPIREService {
         config.trustDomain
     }
 
-    /// Get the current trust bundle
+    /// The platform trust domain's bundle — the control plane's own domain.
     public func getTrustBundle() throws -> SPIRETrustBundle {
-        guard let bundle = trustBundle else {
+        guard let bundle = trustBundles[config.trustDomain] else {
             throw SPIREServiceError.trustBundleUnavailable
         }
         return bundle
     }
 
-    /// Whether a trust bundle has been loaded and chain verification is possible.
+    /// Whether any trust bundle has been loaded and chain verification is
+    /// possible. Callers use this to decide whether to re-verify a forwarded
+    /// certificate at all; the per-domain root selection happens inside
+    /// `validateCertificate`.
     public var hasTrustBundle: Bool {
-        trustBundle != nil
+        !trustBundles.isEmpty
+    }
+
+    /// The organization a trust domain belongs to, or nil for the platform
+    /// domain (and for any domain not registered).
+    public func organization(forTrustDomain trustDomain: String) -> UUID? {
+        organizationsByTrustDomain[trustDomain]
     }
 
     /// Validate a client certificate (chain) and extract the SPIFFE ID.
     ///
     /// The PEM may contain the leaf alone or the leaf followed by intermediates
-    /// (leaf first, as Envoy forwards them in the XFCC `Chain=` field). The leaf
-    /// is chain-verified against the current SPIRE trust bundle, then its SPIFFE
-    /// ID is read from the SAN URI extension and checked against the configured
-    /// trust domain.
+    /// (leaf first, as Envoy forwards them in the XFCC `Chain=` field).
+    ///
+    /// The leaf's SPIFFE ID is read from its SAN URI **before** verification,
+    /// because the trust domain in that ID selects which roots the chain must
+    /// verify against — and only those. A leaf claiming
+    /// `spiffe://org-a…/agent/x` is verified against org A's roots alone, so
+    /// org B's CA cannot mint an identity in org A's domain. Reading the SAN
+    /// before verification is safe: it decides *which* roots to demand, and an
+    /// attacker who lies about the domain only makes the chain check fail.
     /// - Parameter certificatePEM: The client certificate (chain) in PEM format
-    /// - Returns: The validated SPIFFE identity
-    public func validateCertificate(_ certificatePEM: String) async throws -> SPIFFEIdentity {
+    /// - Returns: The validated identity and the organization its trust domain
+    ///   scopes to (nil for the platform trust domain).
+    public func validateCertificate(_ certificatePEM: String) async throws -> ValidatedSPIFFEIdentity {
         guard config.enabled else {
             throw SPIREServiceError.notConfigured
         }
 
-        guard let bundle = trustBundle else {
+        guard hasTrustBundle else {
             throw SPIREServiceError.trustBundleUnavailable
         }
 
@@ -282,13 +346,26 @@ public actor SPIREService {
 
         let leaf: Certificate
         let intermediates: [Certificate]
-        let roots: [Certificate]
         do {
             leaf = try Certificate(pemEncoded: leafPEM)
             intermediates = try pemBlocks.dropFirst().map { try Certificate(pemEncoded: $0) }
-            roots = try bundle.x509Authorities.map { try Certificate(pemEncoded: $0) }
         } catch {
             throw SPIREServiceError.invalidCertificate("Failed to parse certificate: \(error)")
+        }
+
+        let claimedID = try extractSPIFFEID(from: leaf)
+
+        guard let bundle = await bundle(forTrustDomain: claimedID.trustDomain) else {
+            throw SPIREServiceError.certificateValidationFailed(
+                "No trust bundle for trust domain \(claimedID.trustDomain)"
+            )
+        }
+
+        let roots: [Certificate]
+        do {
+            roots = try bundle.x509Authorities.map { try Certificate(pemEncoded: $0) }
+        } catch {
+            throw SPIREServiceError.invalidCertificate("Failed to parse trust bundle: \(error)")
         }
 
         var verifier = Verifier(rootCertificates: CertificateStore(roots)) {
@@ -299,36 +376,33 @@ public actor SPIREService {
 
         guard case .validCertificate = result else {
             throw SPIREServiceError.certificateValidationFailed(
-                "Certificate does not chain to the SPIRE trust bundle: \(result)"
+                "Certificate does not chain to the \(claimedID.trustDomain) trust bundle: \(result)"
             )
         }
 
-        // Extract SPIFFE ID from the verified leaf's SAN URI
-        let spiffeID = try extractSPIFFEID(from: leaf)
-
-        // Verify the trust domain matches
-        guard spiffeID.trustDomain == config.trustDomain else {
-            throw SPIREServiceError.certificateValidationFailed(
-                "Trust domain mismatch: expected \(config.trustDomain), got \(spiffeID.trustDomain)"
-            )
-        }
+        let organizationID = organizationsByTrustDomain[claimedID.trustDomain]
 
         logger.debug(
             "Certificate validated successfully",
             metadata: [
-                "spiffeID": .string(spiffeID.uri)
+                "spiffeID": .string(claimedID.uri),
+                "trustDomain": .string(claimedID.trustDomain),
+                "organizationId": .string(organizationID?.uuidString ?? "platform"),
             ])
 
-        return spiffeID
+        return ValidatedSPIFFEIdentity(identity: claimedID, organizationID: organizationID)
     }
 
     /// Validate that a SPIFFE ID represents a valid agent
     /// - Parameter spiffeID: The SPIFFE identity to validate
     /// - Returns: The agent ID if valid
-    public func validateAgentIdentity(_ spiffeID: SPIFFEIdentity) throws -> String {
-        guard spiffeID.trustDomain == config.trustDomain else {
+    public func validateAgentIdentity(_ spiffeID: SPIFFEIdentity) async throws -> String {
+        // An agent may live in the platform trust domain (every agent, until
+        // per-org domains are switched on) or in its organization's. Anything
+        // else is a domain this control plane has no relationship with.
+        guard await isKnownTrustDomain(spiffeID.trustDomain) else {
             throw SPIREServiceError.certificateValidationFailed(
-                "Trust domain mismatch: expected \(config.trustDomain), got \(spiffeID.trustDomain)"
+                "Unknown trust domain: \(spiffeID.trustDomain)"
             )
         }
 
@@ -349,7 +423,41 @@ public actor SPIREService {
 
     // MARK: - Private Methods
 
+    /// Whether this control plane accepts identities from a trust domain at
+    /// all: its own platform domain, or a registered organization's.
+    private func isKnownTrustDomain(_ trustDomain: String) async -> Bool {
+        if trustDomain == config.trustDomain { return true }
+        if organizationsByTrustDomain[trustDomain] != nil { return true }
+        await refreshOrgTrustDomainsIfStale()
+        return organizationsByTrustDomain[trustDomain] != nil
+    }
+
+    /// Roots for a trust domain, re-reading the org registry once (subject to
+    /// the cooldown) if the domain isn't cached — a freshly provisioned org's
+    /// first agent must not have to wait out the bundle refresh interval.
+    private func bundle(forTrustDomain trustDomain: String) async -> SPIRETrustBundle? {
+        if let bundle = trustBundles[trustDomain] { return bundle }
+        guard trustDomain != config.trustDomain else { return nil }
+        await refreshOrgTrustDomainsIfStale()
+        return trustBundles[trustDomain]
+    }
+
+    private func refreshOrgTrustDomainsIfStale() async {
+        guard orgTrustDomainSource != nil else { return }
+        if let refreshedAt = orgTrustDomainsRefreshedAt,
+            Date().timeIntervalSince(refreshedAt) < orgRefreshCooldown
+        {
+            return
+        }
+        await refreshOrgTrustDomains()
+    }
+
     private func refreshTrustBundle() async throws {
+        // The org registry is refreshed first and independently: a failure to
+        // load the platform bundle (its ConfigMap may not be published yet)
+        // must not also strand every organization's roots, and vice versa.
+        await refreshOrgTrustDomains()
+
         if let bundlePath = config.trustBundlePath {
             try await loadTrustBundleFromFile(bundlePath)
         } else if let bundleURL = config.bundleEndpointURL {
@@ -357,6 +465,49 @@ public actor SPIREService {
         } else {
             logger.warning("No trust bundle source configured")
         }
+    }
+
+    /// Replace the cached org trust domains with what the registry currently
+    /// holds. Domains that have gone away (org deleted, instance torn down)
+    /// disappear from the map here, which is how identity acceptance is
+    /// revoked. The platform domain's entry is never touched.
+    private func refreshOrgTrustDomains() async {
+        guard let source = orgTrustDomainSource else { return }
+
+        let snapshots: [OrgTrustDomainSnapshot]
+        do {
+            snapshots = try await source.loadOrgTrustDomains()
+        } catch {
+            // Keep serving the domains we already know: a registry read failure
+            // must not disconnect an organization's whole fleet.
+            logger.error("Failed to refresh organization trust domains: \(error)")
+            return
+        }
+
+        orgTrustDomainsRefreshedAt = Date()
+
+        var organizations: [String: UUID] = [:]
+        var refreshed: [String: SPIRETrustBundle] = [:]
+        for snapshot in snapshots where snapshot.trustDomain != config.trustDomain {
+            let authorities = parsePEMCertificates(snapshot.bundlePEM)
+            guard !authorities.isEmpty else {
+                logger.warning(
+                    "Organization trust domain has an unparseable bundle; ignoring it",
+                    metadata: ["trustDomain": .string(snapshot.trustDomain)])
+                continue
+            }
+            organizations[snapshot.trustDomain] = snapshot.organizationID
+            refreshed[snapshot.trustDomain] = SPIRETrustBundle(
+                trustDomain: snapshot.trustDomain,
+                x509Authorities: authorities,
+                sequenceNumber: (trustBundles[snapshot.trustDomain]?.sequenceNumber ?? 0) + 1
+            )
+        }
+
+        let platformBundle = trustBundles[config.trustDomain]
+        trustBundles = refreshed
+        trustBundles[config.trustDomain] = platformBundle
+        organizationsByTrustDomain = organizations
     }
 
     private func loadTrustBundleFromFile(_ path: String) async throws {
@@ -373,8 +524,8 @@ public actor SPIREService {
             throw SPIREServiceError.trustBundleUnavailable
         }
 
-        let newSequence = (trustBundle?.sequenceNumber ?? 0) + 1
-        trustBundle = SPIRETrustBundle(
+        let newSequence = (trustBundles[config.trustDomain]?.sequenceNumber ?? 0) + 1
+        trustBundles[config.trustDomain] = SPIRETrustBundle(
             trustDomain: config.trustDomain,
             x509Authorities: certificates,
             sequenceNumber: newSequence
@@ -435,8 +586,8 @@ public actor SPIREService {
                 throw SPIREServiceError.trustBundleUnavailable
             }
 
-            let newSequence = (trustBundle?.sequenceNumber ?? 0) + 1
-            trustBundle = SPIRETrustBundle(
+            let newSequence = (trustBundles[config.trustDomain]?.sequenceNumber ?? 0) + 1
+            trustBundles[config.trustDomain] = SPIRETrustBundle(
                 trustDomain: config.trustDomain,
                 x509Authorities: certificates,
                 sequenceNumber: newSequence
@@ -539,7 +690,11 @@ extension Application {
         let service = SPIREService(
             config: config,
             logger: logger,
-            httpClient: client
+            httpClient: client,
+            // Reads `org_trust_domains`, and returns nothing while the per-org
+            // trust domain feature is off — so with the flag down the service
+            // knows exactly one trust domain, as it always has.
+            orgTrustDomainSource: DatabaseOrgTrustDomainSource(app: self)
         )
 
         try await service.start()

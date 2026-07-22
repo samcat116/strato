@@ -543,6 +543,12 @@ public func configure(_ app: Application) async throws {
     // for SQLite; with Postgres the model uses a native `[String]` field.
     app.migrations.add(ConvertProjectEnvironmentsToArray())
 
+    // Per-org SPIRE trust domains phase 2 (issue #613). Both ship dark: with
+    // SPIRE_ORG_TRUST_DOMAINS_ENABLED off nothing writes org_trust_domains
+    // rows, and every agent stays in the single platform trust domain.
+    app.migrations.add(CreateOrgTrustDomain())
+    app.migrations.add(AddTrustDomainToAgentIdentities())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

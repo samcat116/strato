@@ -78,7 +78,7 @@ struct SandboxExecAttachIntegrationTests {
             let sandboxId = try sandboxRow.requireID().uuidString
             let session = app.sandboxExecSessionManager.createPendingSession(
                 sandboxId: sandboxId,
-                agentName: agentName,
+                agentKey: agentKey(agentName),
                 userId: try user.requireID().uuidString,
                 command: ["/bin/echo", "hello"],
                 env: nil,

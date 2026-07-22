@@ -219,7 +219,7 @@ final class SandboxExecTests {
     ) -> SandboxExecSessionManager.PendingExecSession {
         manager.createPendingSession(
             sandboxId: sandboxId,
-            agentName: "exec-agent",
+            agentKey: agentKey("exec-agent"),
             userId: userId,
             command: ["/bin/sh", "-c", "echo hi"],
             env: ["FOO": "bar"],
@@ -350,7 +350,7 @@ final class SandboxExecTests {
             #expect(pendingAfterAttach == false)
             let info = manager.getSession(sessionId: session.sessionId)
             #expect(info?.sandboxId == session.sandboxId)
-            #expect(info?.agentName == "exec-agent")
+            #expect(info?.agentKey == agentKey("exec-agent"))
 
             do {
                 _ = try manager.attachSession(
@@ -388,11 +388,11 @@ final class SandboxExecTests {
             )
 
             // A spoofed exit from a different agent must not remove the session.
-            manager.handleExit(sessionId: session.sessionId, fromAgentNamed: "impostor", exitCode: 0)
+            manager.handleExit(sessionId: session.sessionId, fromAgentKey: agentKey("impostor"), exitCode: 0)
             #expect(manager.getSession(sessionId: session.sessionId) != nil)
 
             // The owning agent's exit does.
-            manager.handleExit(sessionId: session.sessionId, fromAgentNamed: "exec-agent", exitCode: 0)
+            manager.handleExit(sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"), exitCode: 0)
             #expect(manager.getSession(sessionId: session.sessionId) == nil)
         }
     }
@@ -419,7 +419,7 @@ final class SandboxExecTests {
             let otherUserId = UUID().uuidString
             let other = manager.createPendingSession(
                 sandboxId: otherSandboxId,
-                agentName: "other-agent",
+                agentKey: agentKey("other-agent"),
                 userId: otherUserId,
                 command: ["/bin/sh"],
                 env: nil,
@@ -435,7 +435,7 @@ final class SandboxExecTests {
                 websocket: nil
             )
 
-            manager.closeAllSessions(forAgent: "exec-agent", reason: "agent disconnected")
+            manager.closeAllSessions(forAgent: agentKey("exec-agent"), reason: "agent disconnected")
 
             #expect(manager.getSession(sessionId: attached.sessionId) == nil)
             let attachedIndex = manager.getSessionsForSandbox(sandboxId: attached.sandboxId)
@@ -473,15 +473,15 @@ final class SandboxExecTests {
 
             let sandboxId = sandbox.id!.uuidString
             let owned = await app.agentService.sandboxIsOwnedByAgent(
-                sandboxId: sandboxId, agentName: "owner-agent")
+                sandboxId: sandboxId, agentKey: agentKey("owner-agent"))
             #expect(owned == true)
 
             let foreign = await app.agentService.sandboxIsOwnedByAgent(
-                sandboxId: sandboxId, agentName: "other-agent")
+                sandboxId: sandboxId, agentKey: agentKey("other-agent"))
             #expect(foreign == false)
 
             let unknown = await app.agentService.sandboxIsOwnedByAgent(
-                sandboxId: UUID().uuidString, agentName: "owner-agent")
+                sandboxId: UUID().uuidString, agentKey: agentKey("owner-agent"))
             #expect(unknown == false)
         }
     }
