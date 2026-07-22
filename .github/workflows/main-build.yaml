@@ -58,12 +58,21 @@ jobs:
 
       # Build-cache strategy differs by arch:
       #
-      # x64 runs on the swift-runners-strato ARC scale set, whose
-      # RUNNER_TOOL_CACHE is a persistent volume — so the release build tree
-      # lives there via --scratch-path and stays warm across runs, off GitHub's
-      # storage entirely. This mirrors build.yaml's Swift test jobs, which
-      # abandoned actions/cache because "every run paid a ~5 minute 1.4GB upload
-      # for a restore that always missed".
+      # x64 runs on the swift-runners-strato ARC scale set and keeps its build
+      # tree in a scratch dir under RUNNER_TOOL_CACHE via --scratch-path rather
+      # than actions/cache, which never helped here: "every run paid a ~5
+      # minute 1.4GB upload for a restore that always missed" (see build.yaml).
+      #
+      # NOTE that tree is NOT warm, despite what this comment asserted until
+      # now. /home/runner/_work is an emptyDir in the runner pod spec and every
+      # job gets a fresh pod, so RUNNER_TOOL_CACHE starts empty and the release
+      # build runs fully cold every time. That is why the x64 leg takes ~16
+      # minutes to build the control plane where arm64 — same commit, also 4
+      # cores, but restoring a warm .build from actions/cache — takes ~4.
+      # build.yaml's jobs now claim a slot from a persistent hostPath pool
+      # instead (.github/scripts/claim-build-scratch.sh); adopting that here is
+      # a straightforward follow-up, and easier than it is there because this
+      # workflow's concurrency group makes it single-writer by construction.
       #
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
       # volume, so it stays on actions/cache + the default .build path. That
@@ -84,9 +93,9 @@ jobs:
             echo "AGENT_SCRATCH_ARG=" >> "$GITHUB_ENV"
           fi
 
-      # The persistent x64 scratch tree never shrinks on its own; wipe it if it
-      # balloons so a runaway build dir can't fill the shared volume. No-op on
-      # arm64 (the dirs don't exist there).
+      # Dead code today — the emptyDir means nothing survives to be oversized —
+      # but kept as-is so it starts working the moment this workflow adopts the
+      # persistent pool, which is when a tree can actually grow across runs.
       - name: Prune release build scratch if oversized
         if: matrix.arch == 'x64'
         run: |
@@ -117,6 +126,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
 
+      # Identical to the step in build.yaml: probe the shared SwiftPM cache
+      # hostPath and fall back to a pod-local (cold) dir when it is absent.
+      # SwiftPM will not create a missing cache root itself — an unwritable
+      # /cache/swiftpm fails every build with "invalid access" — so the mount
+      # being absent has to degrade rather than break the run. On arm64 the
+      # mount never exists (GitHub-hosted); the fallback covers it, and moving
+      # that leg's SwiftPM cache off ~/.cache is neutral because actions/cache
+      # only ever saved the .build trees.
+      - name: Resolve SwiftPM shared cache path
+        run: |
+          shared=/cache/swiftpm
+          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+            echo "using shared SwiftPM cache at $shared"
+            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+          else
+            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+            mkdir -p "$fallback"
+            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -132,15 +162,15 @@ jobs:
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane
-        # On x64 the release build tree lives on the persistent scratch volume;
+        # On x64 the release build tree lives in a pod-local scratch dir;
         # on arm64 CP_SCRATCH_ARG is empty (default .build). POSIX positional
         # params ("set --" / "$@") keep the empty case a no-op and stay valid in
         # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
           set --
           [ -n "$CP_SCRATCH_ARG" ] && set -- --scratch-path "$CP_SCRATCH_ARG"
-          swift build -c release --product App -Xlinker -ljemalloc "$@"
-          BIN="$(swift build -c release --show-bin-path "$@")"
+          swift build -c release --product App -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@"
+          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@")"
           # Create artifact directory structure
           mkdir -p ../artifacts/control-plane/bin
           mkdir -p ../artifacts/control-plane/resources
@@ -161,15 +191,15 @@ jobs:
 
       - name: Build Agent Release Binary
         working-directory: agent
-        # On x64 the release build tree lives on the persistent scratch volume;
+        # On x64 the release build tree lives in a pod-local scratch dir;
         # on arm64 AGENT_SCRATCH_ARG is empty (default .build). POSIX positional
         # params ("set --" / "$@") keep the empty case a no-op and stay valid in
         # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
           set --
           [ -n "$AGENT_SCRATCH_ARG" ] && set -- --scratch-path "$AGENT_SCRATCH_ARG"
-          swift build -c release --product StratoAgent -Xlinker -ljemalloc "$@"
-          BIN="$(swift build -c release --show-bin-path "$@")"
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@"
+          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@")"
           mkdir -p ../artifacts/agent/bin
           mkdir -p ../artifacts/agent/resources
           cp "$BIN/StratoAgent" ../artifacts/agent/bin/
