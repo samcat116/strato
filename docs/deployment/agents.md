@@ -315,6 +315,12 @@ Most settings have platform defaults; see
 for the full list (QEMU paths, storage directories, network mode, SPIFFE/mTLS,
 `state_file` location). Command-line flags override the config file.
 
+Two host packages change what a node can be asked to run rather than how it
+runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
+backs guest TPM 2.0 devices). Without them the node stays registered and
+useful, it simply never receives a placement that requires those features —
+see [Windows Guests](/guide/windows-guests).
+
 ## mTLS (SPIFFE/SPIRE)
 
 Agents authenticate with X.509 SVIDs issued by SPIRE, presented as the mTLS

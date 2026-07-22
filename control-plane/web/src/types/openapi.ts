@@ -142,7 +142,7 @@ export interface paths {
         get: operations["getVM"];
         /**
          * Update a virtual machine
-         * @description Only `name` and `description` are mutable.
+         * @description Updates `name`/`description`, and `cpu`/`memory` (issue #568). A sizing change to a *running* VM is applied online within the `maxCpu`/`maxMemory` ceilings it was started with and answers `202` with a `resize` operation; a sizing change to a stopped VM (which may also raise those ceilings, since the next boot re-spawns the VM) and a metadata-only update answer `200`.
          */
         put: operations["updateVM"];
         post?: never;
@@ -4037,7 +4037,7 @@ export interface components {
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
          */
-        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export";
+        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export";
         /**
          * @description The state of an operation. `pending` is the only non-terminal value.
          * @enum {string}
@@ -4069,6 +4069,13 @@ export interface components {
              * @description Disk in bytes.
              */
             disk?: number;
+            /** @description Ceiling for online vCPU growth (issue #568). Defaults to `cpu` (no headroom); fixed for the life of a running hypervisor process. */
+            maxCpu?: number;
+            /**
+             * Format: int64
+             * @description Ceiling for online memory growth in bytes. Defaults to `memory`.
+             */
+            maxMemory?: number;
             cmdline?: string;
             /**
              * Format: uuid
@@ -4080,10 +4087,27 @@ export interface components {
             /** @description cloud-init user data. */
             userData?: string;
             hypervisorType?: components["schemas"]["HypervisorType"];
+            /**
+             * @description Boot the guest with UEFI Secure Boot. Requires a QEMU VM placed on an agent new enough to realize the machine profile; rejected for firecracker, which boots a kernel directly with no UEFI.
+             * @default false
+             */
+            secureBoot: boolean;
+            /**
+             * @description Give the guest an emulated TPM 2.0. Only agents advertising `tpmCapable` (swtpm installed) are eligible; rejected for firecracker. Windows 11 and Server 2025 require this together with `secureBoot`.
+             * @default false
+             */
+            tpm: boolean;
         };
         UpdateVMRequest: {
             name?: string;
             description?: string;
+            /** @description Target boot vCPU count. On a running VM it must not exceed `maxCpu`. */
+            cpu?: number;
+            /**
+             * Format: int64
+             * @description Target memory in bytes. On a running VM it must not exceed `maxMemory`.
+             */
+            memory?: number;
         };
         VMDetail: {
             /** Format: uuid */
@@ -4102,10 +4126,19 @@ export interface components {
             /** Format: int64 */
             memory: number;
             memoryFormatted: string;
+            /**
+             * Format: int64
+             * @description Ceiling for online memory growth; equals `memory` without headroom.
+             */
+            maxMemory: number;
             /** Format: int64 */
             disk: number;
             diskFormatted: string;
             networkInterfaces: components["schemas"]["NetworkInterface"][];
+            /** @description Whether the guest boots with UEFI Secure Boot. */
+            secureBoot?: boolean;
+            /** @description Whether the guest has an emulated TPM 2.0. */
+            tpmEnabled?: boolean;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5619,6 +5652,8 @@ export interface components {
             hypervisors: components["schemas"]["AgentHypervisorSupport"][];
             networkCapability?: components["schemas"]["AgentNetworkCapability"];
             sandboxCapable: boolean;
+            /** @description Whether this node can back a guest TPM 2.0 (it advertised a usable swtpm at its last registration). VMs requesting `tpm` only place on such nodes. */
+            tpmCapable: boolean;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid
@@ -7084,10 +7119,19 @@ export interface operations {
                     "application/json": components["schemas"]["VMDetail"];
                 };
             };
+            202: components["responses"]["AcceptedOperation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description The requested size exceeds the ceilings the running VM was started with, or its agent is too old to resize online; restart the VM to apply it. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     deleteVM: {

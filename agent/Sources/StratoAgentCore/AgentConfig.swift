@@ -270,8 +270,26 @@ public struct AgentConfig: Codable {
     /// (on top of the idle-TTL eviction that cache always applies).
     public let sandboxImageCacheMaxSizeGB: Int?
     public let qemuBinaryPath: String?
+    /// Legacy monolithic firmware images, attached with `-bios`. Still honored
+    /// as the fallback when no split CODE/VARS pair resolves, so hosts that
+    /// boot today keep booting — but such VMs have no persistent UEFI variable
+    /// store (issue #565).
     public let firmwarePathARM64: String?
     public let firmwarePathX86_64: String?
+    /// Split EDK2 firmware for this host's architecture: the read-only code
+    /// image and the variable-store template copied per VM. Both must be set
+    /// together to take effect; unset means the platform's default candidates.
+    public let firmwareCodePath: String?
+    public let firmwareVarsTemplate: String?
+    /// The signed EDK2 build and its pre-enrolled variable store, used for VMs
+    /// that ask for Secure Boot. Unset means the platform defaults; when
+    /// neither resolves, Secure Boot VMs are refused rather than booted without
+    /// it.
+    public let secureBootFirmwareCodePath: String?
+    public let secureBootFirmwareVarsTemplate: String?
+    /// The `swtpm` binary backing guest vTPMs. Its presence is what makes the
+    /// agent advertise the TPM capability at registration (issue #565).
+    public let swtpmBinaryPath: String?
     public let spiffe: SPIFFEConfig?
     public let firecrackerBinaryPath: String?
     public let firecrackerSocketDir: String?
@@ -332,6 +350,11 @@ public struct AgentConfig: Codable {
         case qemuBinaryPath = "qemu_binary_path"
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
+        case firmwareCodePath = "firmware_code_path"
+        case firmwareVarsTemplate = "firmware_vars_template"
+        case secureBootFirmwareCodePath = "secure_boot_firmware_code_path"
+        case secureBootFirmwareVarsTemplate = "secure_boot_firmware_vars_template"
+        case swtpmBinaryPath = "swtpm_binary_path"
         case spiffe
         case firecrackerBinaryPath = "firecracker_binary_path"
         case firecrackerSocketDir = "firecracker_socket_dir"
@@ -370,6 +393,11 @@ public struct AgentConfig: Codable {
         qemuBinaryPath: String? = nil,
         firmwarePathARM64: String? = nil,
         firmwarePathX86_64: String? = nil,
+        firmwareCodePath: String? = nil,
+        firmwareVarsTemplate: String? = nil,
+        secureBootFirmwareCodePath: String? = nil,
+        secureBootFirmwareVarsTemplate: String? = nil,
+        swtpmBinaryPath: String? = nil,
         spiffe: SPIFFEConfig? = nil,
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
@@ -406,6 +434,11 @@ public struct AgentConfig: Codable {
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
+        self.firmwareCodePath = firmwareCodePath
+        self.firmwareVarsTemplate = firmwareVarsTemplate
+        self.secureBootFirmwareCodePath = secureBootFirmwareCodePath
+        self.secureBootFirmwareVarsTemplate = secureBootFirmwareVarsTemplate
+        self.swtpmBinaryPath = swtpmBinaryPath
         self.spiffe = spiffe
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
@@ -521,6 +554,23 @@ public struct AgentConfig: Codable {
         let qemuBinaryPath = tomlData.string("qemu_binary_path")
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
+        // Split EDK2 firmware (issue #565). CODE and VARS only mean anything as
+        // a pair — a lone code path with no variable store is the `-bios` setup
+        // the pair exists to replace — so a half-configured pair is rejected
+        // rather than silently ignored.
+        let firmwareCodePath = tomlData.string("firmware_code_path")
+        let firmwareVarsTemplate = tomlData.string("firmware_vars_template")
+        guard (firmwareCodePath == nil) == (firmwareVarsTemplate == nil) else {
+            throw AgentConfigError.invalidConfiguration(
+                "firmware_code_path and firmware_vars_template must be set together")
+        }
+        let secureBootFirmwareCodePath = tomlData.string("secure_boot_firmware_code_path")
+        let secureBootFirmwareVarsTemplate = tomlData.string("secure_boot_firmware_vars_template")
+        guard (secureBootFirmwareCodePath == nil) == (secureBootFirmwareVarsTemplate == nil) else {
+            throw AgentConfigError.invalidConfiguration(
+                "secure_boot_firmware_code_path and secure_boot_firmware_vars_template must be set together")
+        }
+        let swtpmBinaryPath = tomlData.string("swtpm_binary_path")
         let firecrackerBinaryPath = tomlData.string("firecracker_binary_path")
         let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
         let sandboxGuestImagePath = tomlData.string("sandbox_guest_image_path")
@@ -755,6 +805,11 @@ public struct AgentConfig: Codable {
             qemuBinaryPath: qemuBinaryPath,
             firmwarePathARM64: firmwarePathARM64,
             firmwarePathX86_64: firmwarePathX86_64,
+            firmwareCodePath: firmwareCodePath,
+            firmwareVarsTemplate: firmwareVarsTemplate,
+            secureBootFirmwareCodePath: secureBootFirmwareCodePath,
+            secureBootFirmwareVarsTemplate: secureBootFirmwareVarsTemplate,
+            swtpmBinaryPath: swtpmBinaryPath,
             spiffe: spiffeConfig,
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
@@ -924,6 +979,18 @@ public struct AgentConfig: Codable {
         ]
         return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
+    }
+
+    /// Default `swtpm` binary path, or nil when none is installed. Nil is what
+    /// makes the agent withhold the TPM capability at registration, so the
+    /// scheduler never places a vTPM VM on this host (issue #565).
+    public static var defaultSwtpmBinaryPath: String? {
+        let paths = [
+            "/usr/bin/swtpm",
+            "/usr/local/bin/swtpm",
+            "/opt/homebrew/bin/swtpm",
+        ]
+        return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// Default Firecracker binary path (Linux only)

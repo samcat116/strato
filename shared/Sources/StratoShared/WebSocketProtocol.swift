@@ -129,6 +129,14 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// the version. Optional so registrations from older agents decode fine;
     /// absent means not capable.
     public let sandboxCapable: Bool?
+    /// Whether this host can give a guest an emulated TPM 2.0 — it has a
+    /// usable `swtpm` binary (issue #565). Like `sandboxCapable`, speaking the
+    /// wire version is deliberately not sufficient: the protocol carries
+    /// `MachineProfile.tpm`, but only a host with swtpm installed can realize
+    /// it, and a VM whose vTPM is silently dropped fails Windows setup with no
+    /// explanation. Optional so registrations from older agents decode fine;
+    /// absent means not capable.
+    public let tpmCapable: Bool?
     /// Host operating system, reported so the control plane can resolve the
     /// right release artifact for an agent self-update (assets are published
     /// per OS/arch pair). Optional so registrations from agents that predate
@@ -156,6 +164,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         networkCapability: NetworkCapability? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
         sandboxCapable: Bool? = nil,
+        tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil
     ) {
@@ -172,6 +181,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.networkCapability = networkCapability
         self.protocolVersion = protocolVersion
         self.sandboxCapable = sandboxCapable
+        self.tpmCapable = tpmCapable
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
     }

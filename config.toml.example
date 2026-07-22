@@ -104,6 +104,37 @@ log_level = "info"
 #   Linux (Fedora/RHEL): /usr/share/edk2/ovmf/OVMF_CODE.fd
 # firmware_path_x86_64 = "/usr/share/OVMF/OVMF_CODE.fd"
 
+# Split EDK2 firmware (CODE + VARS), preferred over the monolithic paths above.
+# The code image is read-only and shared; the VARS file is a template copied
+# per VM, which is what makes UEFI boot entries (and enrolled Secure Boot keys)
+# survive a restart. The two keys must be set together or the agent refuses to
+# start. Optional - the agent auto-detects the usual distro locations.
+#   Linux (Debian/Ubuntu, x86_64): /usr/share/OVMF/OVMF_CODE_4M.fd
+#                                  /usr/share/OVMF/OVMF_VARS_4M.fd
+#   Linux (Debian/Ubuntu, arm64):  /usr/share/AAVMF/AAVMF_CODE.fd
+#                                  /usr/share/AAVMF/AAVMF_VARS.fd
+# Pair only matching builds: a 4MB CODE image with a 2MB VARS store produces a
+# firmware that fails to boot in a way that looks like a corrupt guest image.
+# firmware_code_path = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+# firmware_vars_template = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+
+# Secure Boot firmware: the signed EDK2 build plus a variable store with
+# Microsoft's keys pre-enrolled. Required by Windows 11 / Server 2025 guests.
+# Also set together or not at all. On Debian/Ubuntu `apt install ovmf` provides
+# both. macOS ships no signed build, so Secure Boot is Linux-only.
+# secure_boot_firmware_code_path = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
+# secure_boot_firmware_vars_template = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
+
+# swtpm backs guest TPM 2.0 devices (one process per VM). Its presence is what
+# makes this node eligible for VMs that request a TPM; without it the node stays
+# registered and useful, it just never receives such a placement.
+# Debian/Ubuntu: apt install swtpm swtpm-tools
+# Optional - defaults are checked in this order:
+#   1. /usr/bin/swtpm
+#   2. /usr/local/bin/swtpm
+#   3. /opt/homebrew/bin/swtpm
+# swtpm_binary_path = "/usr/bin/swtpm"
+
 # Firecracker Configuration (Linux only)
 # Firecracker is a lightweight VMM for creating microVMs.
 # Unlike QEMU, Firecracker requires direct kernel boot (not disk boot).

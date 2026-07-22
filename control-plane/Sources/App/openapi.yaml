@@ -6673,6 +6673,21 @@ components:
           description: cloud-init user data.
         hypervisorType:
           $ref: "#/components/schemas/HypervisorType"
+        secureBoot:
+          type: boolean
+          default: false
+          description: >-
+            Boot the guest with UEFI Secure Boot. Requires a QEMU VM placed on
+            an agent new enough to realize the machine profile; rejected for
+            firecracker, which boots a kernel directly with no UEFI.
+        tpm:
+          type: boolean
+          default: false
+          description: >-
+            Give the guest an emulated TPM 2.0. Only agents advertising
+            `tpmCapable` (swtpm installed) are eligible; rejected for
+            firecracker. Windows 11 and Server 2025 require this together with
+            `secureBoot`.
     UpdateVMRequest:
       type: object
       properties:
@@ -6746,6 +6761,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NetworkInterface"
+        secureBoot:
+          type: boolean
+          description: Whether the guest boots with UEFI Secure Boot.
+        tpmEnabled:
+          type: boolean
+          description: Whether the guest has an emulated TPM 2.0.
         createdAt:
           type: string
           format: date-time
@@ -9633,6 +9654,7 @@ components:
         - resources
         - hypervisors
         - sandboxCapable
+        - tpmCapable
         - isOnline
         - updateAvailable
         - autoUpdate
@@ -9668,6 +9690,12 @@ components:
           $ref: "#/components/schemas/AgentNetworkCapability"
         sandboxCapable:
           type: boolean
+        tpmCapable:
+          type: boolean
+          description: >-
+            Whether this node can back a guest TPM 2.0 (it advertised a usable
+            swtpm at its last registration). VMs requesting `tpm` only place on
+            such nodes.
         hostInfo:
           $ref: "#/components/schemas/AgentHostInfo"
         siteId:

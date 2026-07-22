@@ -28,6 +28,12 @@ export default defineConfig({
         ]
       },
       {
+        text: 'Guides',
+        items: [
+          { text: 'Windows Guests', link: '/guide/windows-guests' }
+        ]
+      },
+      {
         text: 'Architecture',
         items: [
           { text: 'Overview', link: '/architecture/overview' },

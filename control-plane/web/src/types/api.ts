@@ -128,6 +128,15 @@ export interface VM {
   diskFormatted: string;
   networkInterfaces: VMNetworkInterface[];
   /**
+   * Machine profile (backend issue #565). `secureBoot` selects the signed EDK2
+   * firmware build with a pre-enrolled Microsoft key database; `tpmEnabled`
+   * attaches a per-VM swtpm-backed TPM 2.0. Both are false on VMs created
+   * before #565 and on every Firecracker VM. Optional here only because older
+   * control planes omit them.
+   */
+  secureBoot?: boolean;
+  tpmEnabled?: boolean;
+  /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
    * `observedHostname` is the guest OS's own hostname when it reported one.
@@ -339,6 +348,10 @@ export interface Agent {
   // with a build that reports it.
   operatingSystem?: string;
   hypervisors: HypervisorSupport[];
+  // Whether this node can back a VM's TPM 2.0 device, i.e. it has a usable
+  // `swtpm` binary. A VM requesting a TPM only places on a capable node.
+  // Absent for agents that haven't re-registered with a build that reports it.
+  tpmCapable?: boolean;
   networkCapability?: NetworkCapability;
   // Descriptive hardware/platform/OS details for display; absent for agents
   // that haven't re-registered with a build that reports it.
@@ -648,6 +661,18 @@ export interface CreateVMRequest {
    * (which replaces Strato's built-in provisioning entirely).
    */
   userData?: string;
+  /**
+   * UEFI Secure Boot: boots the signed EDK2 build against a VARS template with
+   * Microsoft's keys pre-enrolled. Defaults to false. Rejected with 400 for
+   * Firecracker, which has no UEFI firmware.
+   */
+  secureBoot?: boolean;
+  /**
+   * TPM 2.0, emulated by a per-VM swtpm process on the agent. Defaults to
+   * false. Rejected with 400 for Firecracker, and only schedulable onto an
+   * agent whose `tpmCapable` is true.
+   */
+  tpm?: boolean;
 }
 
 export interface UpdateVMRequest {
