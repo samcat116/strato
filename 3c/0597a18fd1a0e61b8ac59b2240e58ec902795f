@@ -1,0 +1,32 @@
+.github/scripts/swift-build.sh
+  s_55c4a19b04982a::t_ee5e116fde6526 1-60
+.github/workflows/build.yaml
+  s_55c4a19b04982a::t_0d8120ac792951 395-405,408-409
+  s_55c4a19b04982a::t_47d6cbbcf3f11f 255-262
+  s_55c4a19b04982a::t_4556da6be5f9bf 368-370,532-536
+  s_55c4a19b04982a::t_b88e25d6f0c80f 235-239
+  s_55c4a19b04982a::t_abf4a62f7c6105 272-278,281
+  s_55c4a19b04982a::t_fb77af9b37cb49 208-209,212-223
+  s_55c4a19b04982a::t_401c0c5a542936 365-367
+  s_55c4a19b04982a::t_8253fb21961000 537
+  s_55c4a19b04982a::t_8e71e0b25473b1 173-176,317,322,330,335,343,348,357,362-364,473,514
+.github/scripts/claim-build-scratch.sh
+  s_55c4a19b04982a::t_2e5dda9d01003f 1-61,66-94
+  s_55c4a19b04982a::t_f3642e5ce361fc 62-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3c0597a18fd1a0e61b8ac59b2240e58ec902795f",
+  "prompts": {},
+  "sessions": {
+    "s_55c4a19b04982a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a25c959e-4518-45eb-96ff-1cec7614b99f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
