@@ -859,6 +859,13 @@ jobs:
                       proxy_pass http://control-plane;
                   }
 
+                  # OAuth device grant for the CLI (/oauth/device_authorization,
+                  # /oauth/token, /oauth/revoke). Bare control-plane routes, so
+                  # they must bypass the frontend catch-all below.
+                  location /oauth/ {
+                      proxy_pass http://control-plane;
+                  }
+
                   location /agent/ {
                       proxy_pass http://control-plane;
                       proxy_read_timeout 3600s;
