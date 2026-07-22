@@ -234,6 +234,14 @@ actor VolumeService {
             sourceImageInfo = try VMSpecBuilder.buildImageInfo(from: image)
         }
 
+        // A volume create from an image is the one image fetch with no VM
+        // placement to authorize it: the volume has no replica yet, and the
+        // agent is chosen here. Grant the fetch to the agent we're about to
+        // ask, before the message goes out (issue #562).
+        if let imageId = sourceImageInfo?.imageId {
+            await app.coordination.grantImageDownload(agentId: selectedAgentId, imageId: imageId)
+        }
+
         let message = VolumeCreateMessage(
             volumeId: volume.id!.uuidString,
             size: volume.size,

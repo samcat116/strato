@@ -1675,7 +1675,9 @@ actor AgentService {
     /// The full authoritative VM set for an agent, straight from Postgres —
     /// no in-memory VM-to-agent map involved. Image download URLs are
     /// mTLS-authenticated relative paths (issue #493), so nothing in the
-    /// assembly expires or needs re-signing.
+    /// assembly expires or needs re-signing — but each one recorded as an
+    /// image-download grant for this agent (issue #562), which is the one
+    /// write this otherwise read-only assembly performs.
     /// Internal rather than private so tests can assert assembly contents.
     func assembleDesiredState(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
@@ -1722,6 +1724,15 @@ actor AgentService {
             if let image, image.status == .ready {
                 do {
                     imageInfo = try VMSpecBuilder.buildImageInfo(from: image)
+                    // Emitting the URLs is what authorizes the fetch: the
+                    // download route serves an agent only the images it has a
+                    // grant for (issue #562). Recorded here, at the single
+                    // point where a sync's download URLs are produced, so the
+                    // grant can never be tighter or later than what the agent
+                    // is handed.
+                    if let imageId = image.id {
+                        await app.coordination.grantImageDownload(agentId: agentId, imageId: imageId)
+                    }
                 } catch {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
