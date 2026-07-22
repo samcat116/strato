@@ -139,6 +139,12 @@ struct OrganizationController: RouteCollection {
                 createdBy: user.id,
                 on: db
             )
+            // Claim the organization's trust domain in the same transaction as
+            // its Cedar bindings, so an org can never exist without the row the
+            // reconciler (issue #614) provisions its SPIRE instance from. Off
+            // by default: with the feature flag down no row is written and only
+            // the platform trust domain exists.
+            try await OrgTrustDomainProvisioning.claim(organizationID: organization.id!, on: db)
         }
 
         // Set as current organization if user doesn't have one
@@ -268,6 +274,11 @@ struct OrganizationController: RouteCollection {
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
         try await req.db.transaction { db in
             try await organization.delete(on: db)
+            // The trust domain row deliberately outlives the organization: it
+            // is the instruction to destroy the org's CA, and the reconciler
+            // has to be able to read it after the org is gone. Mark it for
+            // teardown rather than deleting it.
+            try await OrgTrustDomainProvisioning.markForTeardown(organizationID: organizationID, on: db)
             try await RoleBindingService.revokeAll(
                 nodeType: .organization, nodeID: organizationID, on: db)
             for projectID in cascadedProjectIDs {

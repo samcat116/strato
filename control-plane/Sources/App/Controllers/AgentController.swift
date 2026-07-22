@@ -239,8 +239,16 @@ struct AgentController: RouteCollection {
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
+        // Names are unique per trust domain, not globally (issue #613): with a
+        // trust domain per organization, two organizations may each enroll an
+        // `agent-1` without either shadowing the other. Until per-org domains
+        // are switched on this is the single platform domain, so the checks are
+        // exactly as global as they were.
+        let trustDomain = spire.trustDomain
+
         // Check if agent name is already in use by an existing agent
         let existingAgent = try await Agent.query(on: req.db)
+            .filter(\.$trustDomain == trustDomain)
             .filter(\.$name == createRequest.agentName)
             .first()
 
@@ -248,10 +256,12 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "Agent name '\(createRequest.agentName)' is already registered")
         }
 
-        // One enrollment per name (the column is unique). Re-enrolling a node
-        // means revoking the old one first, so its SPIRE grant is withdrawn
-        // rather than orphaned alongside a second grant for the same identity.
+        // One enrollment per name per trust domain (the pair is unique).
+        // Re-enrolling a node means revoking the old one first, so its SPIRE
+        // grant is withdrawn rather than orphaned alongside a second grant for
+        // the same identity.
         let existingEnrollment = try await AgentEnrollment.query(on: req.db)
+            .filter(\.$trustDomain == trustDomain)
             .filter(\.$agentName == createRequest.agentName)
             .first()
 
@@ -321,6 +331,7 @@ struct AgentController: RouteCollection {
         let enrollment = AgentEnrollment(
             agentName: createRequest.agentName,
             spiffeID: provisioning.spiffeID,
+            trustDomain: provisioning.trustDomain,
             expirationHours: expirationHours,
             siteID: createRequest.siteId,
             organizationScope: scope
@@ -342,6 +353,7 @@ struct AgentController: RouteCollection {
             // which keeps the rollback behaviour for a genuine save failure.
             let claimed =
                 ((try? await AgentEnrollment.query(on: req.db)
+                    .filter(\.$trustDomain == trustDomain)
                     .filter(\.$agentName == createRequest.agentName)
                     .first()) ?? nil) != nil
 

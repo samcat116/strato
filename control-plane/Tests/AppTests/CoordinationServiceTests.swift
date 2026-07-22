@@ -20,35 +20,35 @@ struct CoordinationServiceTests {
     func presenceRoundTrip() async {
         let service = makeService()
 
-        #expect(await service.isAgentPresent(agentName: "agent-a") == false)
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == false)
 
-        await service.recordAgentPresence(agentName: "agent-a")
-        #expect(await service.isAgentPresent(agentName: "agent-a") == true)
-        #expect(await service.isAgentPresent(agentName: "agent-b") == false)
+        await service.recordAgentPresence(agentKey: agentKey("agent-a"))
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == true)
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-b")) == false)
     }
 
     @Test("Presence expires after its TTL")
     func presenceTTLExpiry() async throws {
         let service = makeService()
 
-        await service.recordAgentPresence(agentName: "agent-a", ttlSeconds: 1)
-        #expect(await service.isAgentPresent(agentName: "agent-a") == true)
+        await service.recordAgentPresence(agentKey: agentKey("agent-a"), ttlSeconds: 1)
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == true)
 
         try await Task.sleep(for: .milliseconds(1200))
-        #expect(await service.isAgentPresent(agentName: "agent-a") == false)
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == false)
     }
 
     @Test("Heartbeat refresh extends presence")
     func presenceRefresh() async throws {
         let service = makeService()
 
-        await service.recordAgentPresence(agentName: "agent-a", ttlSeconds: 1)
+        await service.recordAgentPresence(agentKey: agentKey("agent-a"), ttlSeconds: 1)
         try await Task.sleep(for: .milliseconds(600))
-        await service.recordAgentPresence(agentName: "agent-a", ttlSeconds: 1)
+        await service.recordAgentPresence(agentKey: agentKey("agent-a"), ttlSeconds: 1)
         try await Task.sleep(for: .milliseconds(600))
 
         // 1.2s after the first write, but only 0.6s after the refresh.
-        #expect(await service.isAgentPresent(agentName: "agent-a") == true)
+        #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == true)
     }
 
     // MARK: - Sweep locks

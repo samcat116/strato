@@ -85,18 +85,18 @@ struct ReplicaRoutingPrimitiveTests {
     func agentRouteLifecycle() async {
         let (service, _) = makeService()
 
-        #expect(await service.agentRoute(agentName: "agent-a") == nil)
+        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == nil)
 
-        await service.recordAgentRoute(agentName: "agent-a", replicaId: "replica-1")
-        #expect(await service.agentRoute(agentName: "agent-a") == "replica-1")
+        await service.recordAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-1")
+        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == "replica-1")
 
         // A stale owner (delayed close on another replica) cannot clear a
         // successor's claim.
-        await service.clearAgentRoute(agentName: "agent-a", replicaId: "replica-0")
-        #expect(await service.agentRoute(agentName: "agent-a") == "replica-1")
+        await service.clearAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-0")
+        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == "replica-1")
 
-        await service.clearAgentRoute(agentName: "agent-a", replicaId: "replica-1")
-        #expect(await service.agentRoute(agentName: "agent-a") == nil)
+        await service.clearAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-1")
+        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == nil)
     }
 
     @Test("Nudges land on the holder replica's channel")
@@ -108,8 +108,8 @@ struct ReplicaRoutingPrimitiveTests {
             Task { await collector.append(message) }
         }
 
-        await service.publishNudge(agentName: "agent-a", toReplica: "replica-9")
-        #expect(await collector.waitFor(count: 1) == ["agent-a"])
+        await service.publishNudge(agentKey: agentKey("agent-a"), toReplica: "replica-9")
+        #expect(await collector.waitFor(count: 1) == [agentKey("agent-a")])
     }
 }
 
@@ -181,8 +181,8 @@ final class ReplicaRoutingAgentServiceTests {
         try await withApp { app, coordination, _ in
             _ = try await self.registerAgent(app: app)
 
-            #expect(await coordination.agentRoute(agentName: "routed-agent") == app.replicaID)
-            #expect(await coordination.isAgentPresent(agentName: "routed-agent") == true)
+            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == app.replicaID)
+            #expect(await coordination.isAgentPresent(agentKey: agentKey("routed-agent")) == true)
         }
     }
 
@@ -193,7 +193,7 @@ final class ReplicaRoutingAgentServiceTests {
 
             // The agent's socket lives on another replica (no local socket
             // exists in this test, and the route names the other replica).
-            await coordination.recordAgentRoute(agentName: "routed-agent", replicaId: "replica-b")
+            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
 
             let collector = MessageCollector()
             await store.subscribe(
@@ -204,7 +204,7 @@ final class ReplicaRoutingAgentServiceTests {
 
             await app.agentService.syncDesiredState(agentId: agentId)
 
-            #expect(await collector.waitFor(count: 1) == ["routed-agent"])
+            #expect(await collector.waitFor(count: 1) == [agentKey("routed-agent")])
         }
     }
 
@@ -213,7 +213,7 @@ final class ReplicaRoutingAgentServiceTests {
         try await withApp { app, coordination, store in
             let agentId = try await self.registerAgent(app: app)
             // No socket anywhere: clear the route registration wrote.
-            await coordination.clearAgentRoute(agentName: "routed-agent", replicaId: app.replicaID)
+            await coordination.clearAgentRoute(agentKey: agentKey("routed-agent"), replicaId: app.replicaID)
 
             let collector = MessageCollector()
             await store.subscribe(
@@ -234,15 +234,15 @@ final class ReplicaRoutingAgentServiceTests {
             let agentId = try await self.registerAgent(app: app)
 
             // The agent reconnected to another replica before our close ran.
-            await coordination.recordAgentRoute(agentName: "routed-agent", replicaId: "replica-b")
-            await app.agentService.removeAgent("routed-agent")
+            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
+            await app.agentService.removeAgent(agentKey("routed-agent"))
 
             // Give the (would-be) async offline write a moment, then confirm
             // it never happened.
             try await Task.sleep(for: .milliseconds(200))
             let stillOnline = await app.agentService.getAgentInfo(agentId)
             #expect(stillOnline?.status == .online)
-            #expect(await coordination.agentRoute(agentName: "routed-agent") == "replica-b")
+            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == "replica-b")
         }
     }
 
@@ -251,7 +251,7 @@ final class ReplicaRoutingAgentServiceTests {
         try await withApp { app, coordination, _ in
             let agentId = try await self.registerAgent(app: app)
 
-            await app.agentService.removeAgent("routed-agent")
+            await app.agentService.removeAgent(agentKey("routed-agent"))
 
             // The offline write is async; poll for it.
             var status: AgentStatus?
@@ -261,7 +261,7 @@ final class ReplicaRoutingAgentServiceTests {
                 try await Task.sleep(for: .milliseconds(20))
             }
             #expect(status == .offline)
-            #expect(await coordination.agentRoute(agentName: "routed-agent") == nil)
+            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == nil)
         }
     }
 
@@ -269,7 +269,7 @@ final class ReplicaRoutingAgentServiceTests {
     func requestForOfflineAgentThrows() async throws {
         try await withApp { app, coordination, _ in
             let agentId = try await self.registerAgent(app: app)
-            await coordination.clearAgentRoute(agentName: "routed-agent", replicaId: app.replicaID)
+            await coordination.clearAgentRoute(agentKey: agentKey("routed-agent"), replicaId: app.replicaID)
 
             await #expect(throws: AgentServiceError.self) {
                 _ = try await app.agentService.sendMessageToAgentWithResponse(
@@ -298,7 +298,7 @@ final class ReplicaRoutingAgentServiceTests {
                 rpcId: "rpc-1",
                 replyChannel: replyChannel,
                 agentId: agentId,
-                agentName: "routed-agent",
+                agentKey: agentKey("routed-agent"),
                 envelope: envelope,
                 timeoutSeconds: 1
             )
@@ -321,7 +321,7 @@ final class ReplicaRoutingAgentServiceTests {
 
             // Route the agent to a fictitious second replica whose RPC channel
             // the test itself services, standing in for the holder process.
-            await coordination.recordAgentRoute(agentName: "routed-agent", replicaId: "replica-b")
+            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
 
             await store.subscribe(
                 channel: CoordinationService.rpcChannel(replicaId: "replica-b")

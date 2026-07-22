@@ -609,3 +609,14 @@ actor MockImageFetchService: ImageFetchServiceProtocol {
         // No-op: don't actually fetch anything
     }
 }
+
+// MARK: - Agent identity keys
+
+/// The key an agent registered under the bare name `name` is stored beneath in
+/// the connection map, the coordination presence/route keys, and console/exec
+/// session ownership: its full SPIFFE ID in the platform trust domain
+/// (issue #613). Tests that register an agent by name and then assert on one of
+/// those registries must go through this rather than the bare name.
+func agentKey(_ name: String) -> String {
+    AgentIdentity(trustDomain: PlatformTrustDomain.current, name: name).key
+}

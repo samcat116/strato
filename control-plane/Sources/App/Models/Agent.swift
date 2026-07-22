@@ -11,6 +11,13 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "name")
     var name: String
 
+    /// SPIFFE trust domain the agent's SVID is issued in. The platform domain
+    /// for every agent until per-org trust domains are switched on (issue
+    /// #613); `(trust_domain, name)` is the agent's unique identity, because
+    /// two organizations may each enroll an `agent-1`.
+    @Field(key: "trust_domain")
+    var trustDomain: String
+
     @Field(key: "hostname")
     var hostname: String
 
@@ -156,6 +163,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     init(
         id: UUID? = nil,
         name: String,
+        trustDomain: String = PlatformTrustDomain.current,
         hostname: String,
         version: String,
         capabilities: [String],
@@ -170,6 +178,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     ) {
         self.id = id
         self.name = name
+        self.trustDomain = trustDomain
         self.hostname = hostname
         self.version = version
         self.capabilities = capabilities
@@ -219,9 +228,14 @@ enum AgentStatus: String, Codable, CaseIterable, Sendable {
 
 extension Agent {
     /// Create an agent from registration message
-    static func from(registration: AgentRegisterMessage, name: String) -> Agent {
+    static func from(
+        registration: AgentRegisterMessage,
+        name: String,
+        trustDomain: String = PlatformTrustDomain.current
+    ) -> Agent {
         let agent = Agent(
             name: name,
+            trustDomain: trustDomain,
             hostname: registration.hostname,
             version: registration.version,
             capabilities: registration.capabilities,
@@ -237,6 +251,12 @@ extension Agent {
         agent.operatingSystem = registration.operatingSystem?.rawValue
         agent.hostInfo = registration.hostInfo
         return agent
+    }
+
+    /// The agent's identity — the key its socket, presence and route are stored
+    /// under. Never key agent state by `name` alone.
+    var identity: AgentIdentity {
+        AgentIdentity(trustDomain: trustDomain, name: name)
     }
 
     /// Check if agent is considered online based on heartbeat

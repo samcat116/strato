@@ -900,15 +900,16 @@ struct ImageController: RouteCollection {
         // Never fall through to session auth on failure: a request carrying
         // XFCC that doesn't verify is a spoofing attempt, not a browser.
         if AgentMTLSAuthenticator.hasClientCertificate(req) {
-            let agentName = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+            let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
 
-            try await authorizeAgentImageFetch(req: req, agentName: agentName, imageID: imageID)
+            try await authorizeAgentImageFetch(req: req, agent: agent, imageID: imageID)
 
             req.logger.info(
                 "Agent downloading image via SVID mTLS",
                 metadata: [
                     "imageId": .string(imageID.uuidString),
-                    "agent": .string(agentName),
+                    "agent": .string(agent.identity.key),
+                    "organizationId": .string(agent.organizationID?.uuidString ?? "platform"),
                     "artifact": .string(artifactKind?.rawValue ?? "disk"),
                 ])
 
@@ -953,14 +954,19 @@ struct ImageController: RouteCollection {
     /// trust model rather than stall every VM create in the fleet. A store
     /// that answers but has lost the grant (flush, restart) denies once; the
     /// next periodic sync rewrites it and the agent's retry succeeds.
-    private func authorizeAgentImageFetch(req: Request, agentName: String, imageID: UUID) async throws {
+    private func authorizeAgentImageFetch(req: Request, agent: AuthenticatedAgent, imageID: UUID) async throws {
+        let agentName = agent.identity.key
         // Grants are keyed by the agent's row id — the same identifier VM
         // placement and volume replicas use — so a rename cannot orphan them.
+        // The row is resolved by the SVID's full identity, not its bare name:
+        // two organizations may each run an `agent-1` (issue #613), and their
+        // download grants must never resolve to each other's row.
         guard
-            let agent = try await Agent.query(on: req.db)
-                .filter(\.$name == agentName)
+            let agentRow = try await Agent.query(on: req.db)
+                .filter(\.$trustDomain == agent.identity.trustDomain)
+                .filter(\.$name == agent.identity.name)
                 .first(),
-            let agentId = agent.id?.uuidString
+            let agentId = agentRow.id?.uuidString
         else {
             req.logger.warning(
                 "Image download from an agent identity with no registered agent",

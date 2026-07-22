@@ -18,7 +18,12 @@ final class WebSocketManager: @unchecked Sendable {
     }
 
     private let lock = NIOLock()
-    private var connections: [String: Connection] = [:]  // Agent name -> connection
+    /// Keyed by the agent's identity key — its full SPIFFE ID
+    /// (`spiffe://<trust-domain>/agent/<name>`), never the bare name. Two
+    /// organizations may each enroll an `agent-1` once per-org trust domains
+    /// are on (issue #613); a name-keyed map would give one org's socket the
+    /// other's desired state.
+    private var connections: [String: Connection] = [:]
 
     /// Store the connection for an agent, returning the socket it replaced (a
     /// different instance under the same name) or nil. A non-nil result means
@@ -28,48 +33,48 @@ final class WebSocketManager: @unchecked Sendable {
     /// tied to the superseded connection (e.g. console sessions) here instead.
     /// Must be called from the WebSocket's event loop.
     @discardableResult
-    func setConnection(agentName: String, websocket: WebSocket) -> WebSocket? {
+    func setConnection(agentKey: String, websocket: WebSocket) -> WebSocket? {
         lock.withLock {
-            let previous = connections[agentName]?.websocket
-            connections[agentName] = Connection(websocket: websocket, agentId: nil)
+            let previous = connections[agentKey]?.websocket
+            connections[agentKey] = Connection(websocket: websocket, agentId: nil)
             return previous === websocket ? nil : previous
         }
     }
 
     /// Attach the agent's database UUID to its live connection once
     /// registration resolves it. No-op if the socket is already gone.
-    func associate(agentName: String, agentId: String) {
+    func associate(agentKey: String, agentId: String) {
         lock.withLock {
-            connections[agentName]?.agentId = agentId
+            connections[agentKey]?.agentId = agentId
         }
     }
 
     /// Returns the WebSocket for an agent - must be used on WebSocket's event loop
-    func getConnection(agentName: String) -> WebSocket? {
+    func getConnection(agentKey: String) -> WebSocket? {
         lock.withLock {
-            connections[agentName]?.websocket
+            connections[agentKey]?.websocket
         }
     }
 
-    /// The locally connected agent's name for a database UUID, or nil when
-    /// this process doesn't hold the agent's socket (another replica may).
-    func agentName(agentId: String) -> String? {
+    /// The locally connected agent's identity key for a database UUID, or nil
+    /// when this process doesn't hold the agent's socket (another replica may).
+    func agentKey(agentId: String) -> String? {
         lock.withLock {
             connections.first(where: { $0.value.agentId == agentId })?.key
         }
     }
 
     /// The database UUID a locally connected agent registered with, if any.
-    func agentId(agentName: String) -> String? {
+    func agentId(agentKey: String) -> String? {
         lock.withLock {
-            connections[agentName]?.agentId
+            connections[agentKey]?.agentId
         }
     }
 
-    /// Remove connection by agent name
-    func removeConnection(agentName: String) {
+    /// Remove connection by agent identity key
+    func removeConnection(agentKey: String) {
         lock.withLock {
-            _ = connections.removeValue(forKey: agentName)
+            _ = connections.removeValue(forKey: agentKey)
         }
     }
 
@@ -77,21 +82,21 @@ final class WebSocketManager: @unchecked Sendable {
     /// instance. Used by close handlers so a delayed close from a replaced
     /// connection cannot tear down its successor (e.g. after an agent reconnects
     /// under the same name). Returns true when the connection was removed.
-    func removeConnection(agentName: String, ifCurrent websocket: WebSocket) -> Bool {
+    func removeConnection(agentKey: String, ifCurrent websocket: WebSocket) -> Bool {
         lock.withLock {
-            guard connections[agentName]?.websocket === websocket else { return false }
-            connections.removeValue(forKey: agentName)
+            guard connections[agentKey]?.websocket === websocket else { return false }
+            connections.removeValue(forKey: agentKey)
             return true
         }
     }
 
     /// Every locally connected agent that has completed registration, as
-    /// (name, database UUID) pairs. This is the periodic sync's work list:
-    /// each replica syncs exactly the agents whose sockets it holds.
-    func registeredAgents() -> [(name: String, agentId: String)] {
+    /// (identity key, database UUID) pairs. This is the periodic sync's work
+    /// list: each replica syncs exactly the agents whose sockets it holds.
+    func registeredAgents() -> [(key: String, agentId: String)] {
         lock.withLock {
-            connections.compactMap { name, connection in
-                connection.agentId.map { (name: name, agentId: $0) }
+            connections.compactMap { key, connection in
+                connection.agentId.map { (key: key, agentId: $0) }
             }
         }
     }
@@ -275,9 +280,40 @@ actor AgentService {
     func registerAgent(
         _ message: AgentRegisterMessage,
         agentName: String,
+        trustDomain: String = PlatformTrustDomain.current,
+        identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil
     ) async throws -> UUID {
+        try await registerAgent(
+            message,
+            identity: AgentIdentity(trustDomain: trustDomain, name: agentName),
+            identityOrganizationID: identityOrganizationID,
+            siteID: siteID,
+            organizationScope: organizationScope
+        )
+    }
+
+    /// Registers an agent by its full identity (trust domain + name).
+    ///
+    /// `identityOrganizationID` is the organization the agent's *trust domain*
+    /// resolves to — nil for the platform domain, which is every agent until
+    /// per-org trust domains are switched on (issue #613). It is not an
+    /// authorization claim: it only supplies the owning scope when the
+    /// enrollment carries none, and refuses a registration whose enrollment
+    /// scope belongs to a different organization than the CA that vouched for
+    /// the node.
+    func registerAgent(
+        _ message: AgentRegisterMessage,
+        identity: AgentIdentity,
+        identityOrganizationID: UUID? = nil,
+        siteID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil
+    ) async throws -> UUID {
+        let agentName = identity.name
+        let agentKey = identity.key
+        let trustDomain = identity.trustDomain
+
         // The imperative message path is gone (issue #261): an agent that
         // cannot be driven by desired-state syncs would register successfully
         // and then never converge anything — every operation would time out
@@ -298,6 +334,7 @@ actor AgentService {
         // Find existing agent or create new one
         let agent: Agent
         if let existingAgent = try await Agent.query(on: db)
+            .filter(\.$trustDomain == trustDomain)
             .filter(\.$name == agentName)
             .first()
         {
@@ -335,18 +372,36 @@ actor AgentService {
             // and re-reading the enrollment on every reconnect would fight an
             // operator who has since moved the agent to another site.
             let enrollment = try await AgentEnrollment.query(on: db)
+                .filter(\.$trustDomain == trustDomain)
                 .filter(\.$agentName == agentName)
                 .sort(\.$createdAt, .descending)
                 .first()
             if organizationScope == nil { organizationScope = enrollment?.organizationScope }
             if siteID == nil { siteID = enrollment?.siteID }
 
+            // An org trust domain is a cryptographic statement about *whose*
+            // node this is, so it must agree with the enrollment's scope: a
+            // node attested by org A's CA may not join org B's capacity, and a
+            // node whose enrollment carries no scope at all inherits its
+            // domain's org rather than being refused.
+            if let identityOrganizationID {
+                if let scope = organizationScope {
+                    let owner = try await scope.rootOrganizationID(on: db)
+                    guard owner == identityOrganizationID else {
+                        Telemetry.agentRegistrationFailed(reason: "organization_scope_mismatch")
+                        throw AgentServiceError.missingOrganizationScope(agentName: agentName)
+                    }
+                } else {
+                    organizationScope = .organization(identityOrganizationID)
+                }
+            }
+
             guard organizationScope != nil else {
                 Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
                 throw AgentServiceError.missingOrganizationScope(agentName: agentName)
             }
             // Create new agent
-            agent = Agent.from(registration: message, name: agentName)
+            agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
             agent.status = .online
             newAgentEnrollment = enrollment
         }
@@ -381,7 +436,7 @@ actor AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment organization assignment: \(refusalReason)",
-                    metadata: ["agentName": .string(agentName)])
+                    metadata: ["agentKey": .string(agentKey)])
             } else {
                 agent.organizationScope = organizationScope
             }
@@ -444,7 +499,7 @@ actor AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment site assignment: \(refusalReason)",
-                    metadata: ["agentName": .string(agentName), "requestedSite": .string(siteID.uuidString)])
+                    metadata: ["agentKey": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
             } else {
                 agent.$site.id = siteID
             }
@@ -462,7 +517,7 @@ actor AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to mark agent enrollment as used",
-                    metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+                    metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
             }
         }
 
@@ -473,21 +528,21 @@ actor AgentService {
         // Attach the UUID to the live socket so local routing (sync pushes,
         // RPC forwarding, the periodic sync's work list) can resolve it
         // without a database read. No-op when no socket exists (tests).
-        app.websocketManager.associate(agentName: agentName, agentId: agentUUID.uuidString)
+        app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
         // Publish liveness and socket location to the coordination store so
         // every control-plane process — not just the one holding this socket —
         // can see the agent and route mutations to it.
-        await app.coordination.recordAgentPresence(agentName: agentName)
-        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        await app.coordination.recordAgentPresence(agentKey: agentKey)
+        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         Telemetry.agentConnected()
-        Telemetry.recordAgentUp(agentName: agentName, up: true)
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
         app.logger.info(
             "Agent registered",
             metadata: [
                 "agentId": .string(agentUUID.uuidString),
-                "agentName": .string(agentName),
+                "agentKey": .string(agentKey),
                 "hostname": .string(message.hostname),
                 "version": .string(message.version),
             ])
@@ -495,25 +550,33 @@ actor AgentService {
         return agentUUID
     }
 
-    /// Resolve an agent's database UUID from its name: the local socket's
-    /// registration first (no I/O), the database otherwise.
-    private func agentId(forName agentName: String) async -> String? {
-        if let local = app.websocketManager.agentId(agentName: agentName) {
+    /// The bare agent name inside an identity key, for logs and metric labels
+    /// (a full SPIFFE ID would change every existing dashboard's series).
+    nonisolated static func displayName(forKey agentKey: String) -> String {
+        AgentIdentity(key: agentKey)?.name ?? agentKey
+    }
+
+    /// Resolve an agent's database UUID from its identity key: the local
+    /// socket's registration first (no I/O), the database otherwise.
+    private func agentId(forKey agentKey: String) async -> String? {
+        if let local = app.websocketManager.agentId(agentKey: agentKey) {
             return local
         }
+        guard let identity = AgentIdentity(key: agentKey) else { return nil }
         let agent = try? await Agent.query(on: app.db)
-            .filter(\.$name == agentName)
+            .filter(\.$trustDomain == identity.trustDomain)
+            .filter(\.$name == identity.name)
             .first()
         return agent?.id?.uuidString
     }
 
     /// Whether `vmId` is currently assigned to the agent authenticated as
-    /// `agentName`. Used to reject agent-reported data (VM logs, console)
+    /// `agentKey`. Used to reject agent-reported data (VM logs, console)
     /// tagged with a VM the reporting agent doesn't own — otherwise a compromised
     /// agent could forge log entries for another tenant's VM.
-    func vmIsOwnedByAgent(vmId: String, agentName: String) async -> Bool {
+    func vmIsOwnedByAgent(vmId: String, agentKey: String) async -> Bool {
         guard let vmUUID = UUID(uuidString: vmId),
-            let senderAgentId = await agentId(forName: agentName),
+            let senderAgentId = await agentId(forKey: agentKey),
             let vm = try? await VM.find(vmUUID, on: app.db)
         else {
             return false
@@ -522,12 +585,12 @@ actor AgentService {
     }
 
     /// Whether `sandboxId` is currently assigned to the agent authenticated as
-    /// `agentName` — the sandbox counterpart of `vmIsOwnedByAgent`, guarding
+    /// `agentKey` — the sandbox counterpart of `vmIsOwnedByAgent`, guarding
     /// agent-reported sandbox data (workload logs, exec frames) against a
     /// compromised agent forging entries for another tenant's sandbox.
-    func sandboxIsOwnedByAgent(sandboxId: String, agentName: String) async -> Bool {
+    func sandboxIsOwnedByAgent(sandboxId: String, agentKey: String) async -> Bool {
         guard let sandboxUUID = UUID(uuidString: sandboxId),
-            let senderAgentId = await agentId(forName: agentName),
+            let senderAgentId = await agentId(forKey: agentKey),
             let sandbox = try? await Sandbox.find(sandboxUUID, on: app.db)
         else {
             return false
@@ -535,18 +598,18 @@ actor AgentService {
         return sandbox.hypervisorId == senderAgentId
     }
 
-    /// Resolve an agent's name from its database UUID: the local socket's
-    /// registration first (no I/O), the database otherwise.
-    private func agentName(forId agentId: String) async -> String? {
-        if let local = app.websocketManager.agentName(agentId: agentId) {
+    /// Resolve an agent's identity key from its database UUID: the local
+    /// socket's registration first (no I/O), the database otherwise.
+    private func agentKey(forId agentId: String) async -> String? {
+        if let local = app.websocketManager.agentKey(agentId: agentId) {
             return local
         }
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
         let agent = try? await Agent.find(agentUUID, on: app.db)
-        return agent?.name
+        return agent?.identity.key
     }
 
-    func unregisterAgent(_ agentId: String, fromAgentNamed connectionAgentName: String) async throws {
+    func unregisterAgent(_ agentId: String, fromAgentKey connectionAgentKey: String) async throws {
         let db = app.db
 
         // Resolve the target and confirm it belongs to the authenticated
@@ -561,91 +624,93 @@ actor AgentService {
             return
         }
 
-        guard agent.name == connectionAgentName else {
+        guard agent.identity.key == connectionAgentKey else {
             app.logger.warning(
                 "Unregister claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
                     "claimedAgentId": .string(agentId),
-                    "claimedAgentName": .string(agent.name),
-                    "connectionAgentName": .string(connectionAgentName),
+                    "claimedAgentKey": .string(agent.identity.key),
+                    "connectionAgentKey": .string(connectionAgentKey),
                 ])
             return
         }
 
         agent.status = .offline
         try await agent.save(on: db)
-        let agentName = agent.name
+        let agentKey = agent.identity.key
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
 
-        app.websocketManager.removeConnection(agentName: agentName)
+        app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
         // gone (`removeConnection(ifCurrent:)` no longer matches), so console
         // and exec sessions must be torn down here for the graceful-unregister
         // path.
-        app.consoleSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
-        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
-        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "unregister")
-        Telemetry.recordAgentUp(agentName: agentName, up: false)
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 
-    func forceUnregisterAgent(_ agentName: String) async {
-        guard let agentId = await agentId(forName: agentName) else {
+    func forceUnregisterAgent(_ agentKey: String) async {
+        guard let agentId = await agentId(forKey: agentKey) else {
             app.logger.warning(
-                "Cannot force unregister: agent not found by name", metadata: ["agentName": .string(agentName)])
+                "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
             return
         }
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
 
-        app.websocketManager.removeConnection(agentName: agentName)
+        app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
         // not run its cleanup once the connection entry is gone.
-        app.consoleSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
-        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
-        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         app.logger.info(
             "Agent force unregistered",
-            metadata: ["agentId": .string(agentId), "agentName": .string(agentName)])
+            metadata: ["agentId": .string(agentId), "agentKey": .string(agentKey)])
     }
 
     /// Socket-close cleanup. The agent may have already reconnected to another
     /// replica: its route key then names that replica, and this (delayed)
     /// close must not mark the agent offline underneath a live connection.
-    func removeAgent(_ agentName: String) async {
+    func removeAgent(_ agentKey: String) async {
         // Local pending requests die with the local socket regardless of
         // where the agent lives now.
-        if let agentId = await agentId(forName: agentName) {
+        if let agentId = await agentId(forKey: agentKey) {
             failPendingRequests(for: agentId)
         }
 
-        if let route = await app.coordination.agentRoute(agentName: agentName),
+        if let route = await app.coordination.agentRoute(agentKey: agentKey),
             route != app.replicaID
         {
             app.logger.debug(
                 "Agent socket closed here but agent is routed to another replica; skipping offline mark",
-                metadata: ["agentName": .string(agentName)])
+                metadata: ["agentKey": .string(agentKey)])
             return
         }
 
-        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
-        Telemetry.recordAgentUp(agentName: agentName, up: false)
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
 
         // Update database status asynchronously
         Task {
             do {
                 let db = self.app.db
-                if let agent = try await Agent.query(on: db)
-                    .filter(\.$name == agentName)
-                    .first()
+                if let identity = AgentIdentity(key: agentKey),
+                    let agent = try await Agent.query(on: db)
+                        .filter(\.$trustDomain == identity.trustDomain)
+                        .filter(\.$name == identity.name)
+                        .first()
                 {
                     agent.status = .offline
                     try await agent.save(on: db)
@@ -656,10 +721,10 @@ actor AgentService {
         }
     }
 
-    /// `agentName` identifies the authenticated connection the heartbeat arrived on;
+    /// `agentKey` identifies the authenticated connection the heartbeat arrived on;
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
-    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentNamed agentName: String) async throws {
+    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
         let db = app.db
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
@@ -668,13 +733,13 @@ actor AgentService {
             return
         }
 
-        guard agent.name == agentName else {
+        guard agent.identity.key == agentKey else {
             app.logger.warning(
                 "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
                     "claimedAgentId": .string(message.agentId),
-                    "claimedAgentName": .string(agent.name),
-                    "connectionAgentName": .string(agentName),
+                    "claimedAgentKey": .string(agent.identity.key),
+                    "connectionAgentKey": .string(agentKey),
                 ])
             return
         }
@@ -689,8 +754,8 @@ actor AgentService {
         // Refresh the agent's presence and socket-route keys so liveness and
         // routing stay visible cluster-wide. The heartbeat arrived over this
         // process's socket, so the route is ours to claim.
-        await app.coordination.recordAgentPresence(agentName: agentName)
-        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        await app.coordination.recordAgentPresence(agentKey: agentKey)
+        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         // This heartbeat's resource report accounts for every VM the agent
         // lists, so any placement reservation still held for one of them
@@ -899,7 +964,7 @@ actor AgentService {
                 // the agent even though the row hasn't been touched — e.g. a
                 // write raced this read. When the store can't answer, fall
                 // back to the heartbeat-age verdict alone.
-                if await app.coordination.isAgentPresent(agentName: agent.name) == true {
+                if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == true {
                     app.logger.debug(
                         "Agent heartbeat is stale in the database but presence key is live; skipping",
                         metadata: ["agentName": .string(agent.name)])
@@ -1460,7 +1525,7 @@ actor AgentService {
     func syncDesiredStateToAllAgents() async {
         guard !isShutDown, !app.didShutdown else { return }
         for (name, agentId) in app.websocketManager.registeredAgents() {
-            await syncDesiredStateLocally(agentId: agentId, agentName: name)
+            await syncDesiredStateLocally(agentId: agentId, agentKey: name)
         }
     }
 
@@ -1504,23 +1569,23 @@ actor AgentService {
     }
 
     private func routeDesiredStateSync(agentId: String) async {
-        if let localName = app.websocketManager.agentName(agentId: agentId) {
-            await syncDesiredStateLocally(agentId: agentId, agentName: localName)
+        if let localName = app.websocketManager.agentKey(agentId: agentId) {
+            await syncDesiredStateLocally(agentId: agentId, agentKey: localName)
             return
         }
 
-        guard let name = await agentName(forId: agentId) else {
+        guard let name = await agentKey(forId: agentId) else {
             app.logger.warning(
                 "Cannot route sync for unknown agent", metadata: ["agentId": .string(agentId)])
             return
         }
 
-        guard let route = await app.coordination.agentRoute(agentName: name) else {
+        guard let route = await app.coordination.agentRoute(agentKey: name) else {
             // No route: the agent is offline everywhere. The sync it missed
             // is delivered by the registration-triggered sync on reconnect.
             app.logger.debug(
                 "No socket route for agent; sync deferred to reconnect",
-                metadata: ["agentName": .string(name)])
+                metadata: ["agentKey": .string(name)])
             return
         }
 
@@ -1532,16 +1597,16 @@ actor AgentService {
             return
         }
 
-        await app.coordination.publishNudge(agentName: name, toReplica: route)
+        await app.coordination.publishNudge(agentKey: name, toReplica: route)
     }
 
     /// Assemble and send the full desired-state sync over a locally held
     /// socket. Safe to call redundantly: identical syncs diff to nothing on
     /// the agent.
-    private func syncDesiredStateLocally(agentId: String, agentName: String) async {
+    private func syncDesiredStateLocally(agentId: String, agentKey: String) async {
         do {
             let message = try await assembleDesiredState(agentId: agentId)
-            try await sendMessageToLocalAgent(message, agentName: agentName)
+            try await sendMessageToLocalAgent(message, agentKey: agentKey)
             app.logger.debug(
                 "Desired-state sync sent",
                 metadata: [
@@ -1583,8 +1648,8 @@ actor AgentService {
         do {
             try await app.coordination.subscribe(
                 channel: CoordinationService.nudgeChannel(replicaId: replicaId)
-            ) { [weak self] agentName in
-                Task { await self?.handleNudge(agentName: agentName) }
+            ) { [weak self] agentKey in
+                Task { await self?.handleNudge(agentKey: agentKey) }
             }
             try await app.coordination.subscribe(
                 channel: CoordinationService.rpcChannel(replicaId: replicaId)
@@ -1659,18 +1724,18 @@ actor AgentService {
     /// If we (still) hold its socket, push a fresh sync; if not, the nudge
     /// raced a disconnect and the periodic timer wherever the agent lands is
     /// the backstop.
-    func handleNudge(agentName: String) async {
-        if agentName == Self.subscriptionProbeMessage {
+    func handleNudge(agentKey: String) async {
+        if agentKey == Self.subscriptionProbeMessage {
             lastProbeReceived = Date()
             return
         }
-        guard let agentId = app.websocketManager.agentId(agentName: agentName) else {
+        guard let agentId = app.websocketManager.agentId(agentKey: agentKey) else {
             app.logger.debug(
                 "Nudge for agent without a local socket; ignoring",
-                metadata: ["agentName": .string(agentName)])
+                metadata: ["agentKey": .string(agentKey)])
             return
         }
-        await syncDesiredStateLocally(agentId: agentId, agentName: agentName)
+        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
     }
 
     /// The full authoritative VM set for an agent, straight from Postgres —
@@ -2236,23 +2301,23 @@ actor AgentService {
     /// report finishing last could flip `vm.status` backwards and fire
     /// spurious drift telemetry. Chaining on the previous report preserves the
     /// agent's own send order.
-    func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
+    func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) {
         nextReportTailId &+= 1
         let id = nextReportTailId
-        let predecessor = reportTails[agentName]?.task
+        let predecessor = reportTails[agentKey]?.task
         let task = Task { [weak self] in
             await predecessor?.value
-            await self?.applyObservedStateReport(envelope, fromAgentNamed: agentName)
-            await self?.retireReportTail(agentName: agentName, id: id)
+            await self?.applyObservedStateReport(envelope, fromAgentKey: agentKey)
+            await self?.retireReportTail(agentKey: agentKey, id: id)
         }
-        reportTails[agentName] = (id, task)
+        reportTails[agentKey] = (id, task)
     }
 
     /// Drop the chain bookkeeping once the finishing link is still the tail,
     /// so idle agents don't pin their last report task forever.
-    private func retireReportTail(agentName: String, id: UInt64) {
-        if reportTails[agentName]?.id == id {
-            reportTails.removeValue(forKey: agentName)
+    private func retireReportTail(agentKey: String, id: UInt64) {
+        if reportTails[agentKey]?.id == id {
+            reportTails.removeValue(forKey: agentKey)
         }
     }
 
@@ -2260,10 +2325,10 @@ actor AgentService {
     /// generation, complete pending operations whose target state is now
     /// observed, confirm deletions by absence, and surface drift.
     ///
-    /// `agentName` identifies the authenticated connection, mirroring the
+    /// `agentKey` identifies the authenticated connection, mirroring the
     /// heartbeat's ownership check. Callers outside tests should go through
     /// `enqueueObservedStateReport` so same-agent reports apply in order.
-    func applyObservedStateReport(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) async {
+    func applyObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) async {
         let report: ObservedStateReport
         do {
             report = try envelope.decode(as: ObservedStateReport.self)
@@ -2279,12 +2344,12 @@ actor AgentService {
                 "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
             return
         }
-        guard agent.name == agentName else {
+        guard agent.identity.key == agentKey else {
             app.logger.warning(
                 "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
                     "claimedAgentId": .string(report.agentId),
-                    "connectionAgentName": .string(agentName),
+                    "connectionAgentKey": .string(agentKey),
                 ])
             return
         }
@@ -2304,8 +2369,8 @@ actor AgentService {
 
         // The report arrived over this process's socket: refresh liveness and
         // routing alongside, mirroring the heartbeat path.
-        await app.coordination.recordAgentPresence(agentName: agentName)
-        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
+        await app.coordination.recordAgentPresence(agentKey: agentKey)
+        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
 
         // Every reported VM or sandbox is accounted for in the agent's
         // resource figures, so any placement reservation still held for one
@@ -3148,7 +3213,7 @@ actor AgentService {
                 // Fail open on nil (store unavailable): the row said online,
                 // and refusing all placement would couple VM creation to
                 // Valkey harder than issue #258's degradation policy allows.
-                if await app.coordination.isAgentPresent(agentName: agent.name) == false {
+                if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == false {
                     continue
                 }
                 present.append(agent)
@@ -3203,16 +3268,16 @@ actor AgentService {
     // MARK: - Message Sending
 
     /// Encode and push an envelope over a locally held socket.
-    private func sendEnvelope(_ envelope: MessageEnvelope, toLocalAgent agentName: String) throws {
-        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else {
-            throw AgentServiceError.agentNotFound(agentName)
+    private func sendEnvelope(_ envelope: MessageEnvelope, toLocalAgent agentKey: String) throws {
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
+            throw AgentServiceError.agentNotFound(agentKey)
         }
         let data = try WireProtocol.makeEncoder().encode(envelope)
         websocket.send(data)
     }
 
-    private func sendMessageToLocalAgent<T: WebSocketMessage>(_ message: T, agentName: String) async throws {
-        try sendEnvelope(MessageEnvelope(message: message), toLocalAgent: agentName)
+    private func sendMessageToLocalAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
+        try sendEnvelope(MessageEnvelope(message: message), toLocalAgent: agentKey)
     }
 
     /// Send a message to an agent and await the correlated success/error
@@ -3231,16 +3296,16 @@ actor AgentService {
     ) async throws -> AgentServiceResponse {
         let envelope = try MessageEnvelope(message: message)
 
-        if let localName = app.websocketManager.agentName(agentId: agentId) {
+        if let localName = app.websocketManager.agentKey(agentId: agentId) {
             return try await sendEnvelopeAwaitingLocalResponse(
                 envelope, requestId: message.requestId, agentId: agentId,
-                agentName: localName, timeout: timeout)
+                agentKey: localName, timeout: timeout)
         }
 
-        guard let name = await agentName(forId: agentId) else {
+        guard let name = await agentKey(forId: agentId) else {
             throw AgentServiceError.agentNotFound(agentId)
         }
-        guard let route = await app.coordination.agentRoute(agentName: name),
+        guard let route = await app.coordination.agentRoute(agentKey: name),
             route != app.replicaID
         else {
             // No route: the agent is offline everywhere. A route naming this
@@ -3251,7 +3316,7 @@ actor AgentService {
 
         return try await sendRPC(
             envelope, requestId: message.requestId, agentId: agentId,
-            agentName: name, toReplica: route, timeout: timeout)
+            agentKey: name, toReplica: route, timeout: timeout)
     }
 
     /// Arm a pending-request continuation, push the envelope over the local
@@ -3265,7 +3330,7 @@ actor AgentService {
         _ envelope: MessageEnvelope,
         requestId: String,
         agentId: String,
-        agentName: String,
+        agentKey: String,
         timeout: Duration
     ) async throws -> AgentServiceResponse {
         return try await withTaskCancellationHandler {
@@ -3280,7 +3345,7 @@ actor AgentService {
                         self.storePendingRequest(requestId, agentId: agentId, continuation: continuation)
 
                         // Send message
-                        try self.sendEnvelope(envelope, toLocalAgent: agentName)
+                        try self.sendEnvelope(envelope, toLocalAgent: agentKey)
 
                         // Arm a timeout, tracking its handle so a normal response can
                         // cancel it instead of leaving a task dangling per request.
@@ -3328,7 +3393,7 @@ actor AgentService {
         let rpcId: String
         let replyChannel: String
         let agentId: String
-        let agentName: String
+        let agentKey: String
         let envelope: MessageEnvelope
         let timeoutSeconds: Double
     }
@@ -3357,7 +3422,7 @@ actor AgentService {
         _ envelope: MessageEnvelope,
         requestId: String,
         agentId: String,
-        agentName: String,
+        agentKey: String,
         toReplica replicaId: String,
         timeout: Duration
     ) async throws -> AgentServiceResponse {
@@ -3365,7 +3430,7 @@ actor AgentService {
             rpcId: requestId,
             replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
             agentId: agentId,
-            agentName: agentName,
+            agentKey: agentKey,
             envelope: envelope,
             timeoutSeconds: Self.seconds(of: timeout)
         )
@@ -3416,11 +3481,11 @@ actor AgentService {
         }
 
         let reply: AgentRPCReply
-        if app.websocketManager.getConnection(agentName: request.agentName) != nil {
+        if app.websocketManager.getConnection(agentKey: request.agentKey) != nil {
             do {
                 let response = try await sendEnvelopeAwaitingLocalResponse(
                     request.envelope, requestId: request.rpcId, agentId: request.agentId,
-                    agentName: request.agentName, timeout: .seconds(request.timeoutSeconds))
+                    agentKey: request.agentKey, timeout: .seconds(request.timeoutSeconds))
                 switch response {
                 case .success(let data):
                     reply = AgentRPCReply(
@@ -3575,7 +3640,7 @@ actor AgentService {
 
     // MARK: - Response Handling
 
-    func handleAgentResponse(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
+    func handleAgentResponse(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) {
         Task {
             // Extract the original request's ID from the typed payload so we can
             // correlate the response with the continuation that is waiting for it.
@@ -3597,10 +3662,10 @@ actor AgentService {
 
             // Resolve the reporting connection's agent id so the response can
             // only resolve a request that was dispatched to *this* agent.
-            guard let senderAgentId = await self.agentId(forName: agentName) else {
+            guard let senderAgentId = await self.agentId(forKey: agentKey) else {
                 app.logger.warning(
                     "Dropping agent response from a connection with no resolvable agent id",
-                    metadata: ["agentName": .string(agentName), "requestId": .string(requestId)])
+                    metadata: ["agentKey": .string(agentKey), "requestId": .string(requestId)])
                 return
             }
 

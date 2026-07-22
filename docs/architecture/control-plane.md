@@ -181,6 +181,15 @@ the one imperative exception: it awaits a correlated agent response.
   query parameter must match it. Site and organization scope come from the
   node's enrollment row rather than from any bearer credential — there is no
   token join, so an unattested agent simply cannot connect.
+- **Agents are keyed by full SPIFFE ID, never by bare name.** The connection
+  map, the Valkey presence/route keys and console/exec session ownership all
+  use `spiffe://<trust-domain>/agent/<name>` (`AgentIdentity.key`), and
+  `agents`/`agent_enrollments` are unique on `(trust_domain, name)`. With one
+  trust domain this is invisible; with a trust domain per organization
+  ([per-org trust domains](#per-organization-trust-domains)) two tenants may
+  each enroll an `agent-1`, and a name-keyed map would hand one org's socket
+  the other's desired state. Bare names remain what logs and metric labels
+  show.
 - Message dispatch switches on the envelope type: registration, heartbeats,
   correlated success/error responses, status updates, observed-state
   reports, console/exec/log frames (see [wire-protocol](./wire-protocol.md)
@@ -194,6 +203,47 @@ the one imperative exception: it awaits a correlated agent response.
 - **Observed-state ingestion** chains per-agent tasks so reports apply in
   send order, updates observed status/generation, completes satisfied
   operations, and confirms deletions by absence from the report.
+
+## Per-organization trust domains
+
+Each organization is getting its own SPIFFE trust domain — and therefore its own
+SPIRE server — federated with the platform trust domain that holds the control
+plane's identities (umbrella issue #600). The trust boundary follows the org,
+not the site, so a compromised CA blast-radiuses to one tenant and org deletion
+becomes CA destruction.
+
+**Currently shipped, and dormant behind `SPIRE_ORG_TRUST_DOMAINS_ENABLED`
+(default off):**
+
+- **`org_trust_domains`** (`Models/OrgTrustDomain.swift`) — one row per org:
+  the immutable domain string (`org-<shortid>.<platform-td>`, derived once from
+  the org UUID), a lifecycle `phase`, `generation`/`observed_generation`, the
+  server/bundle/node addresses, the cached `org_bundle_pem`, federation
+  checkpoints, and a `deleted_at` tombstone. The row deliberately carries **no
+  foreign key** to `organizations` and is not Fluent-soft-deletable: a
+  `deleting` row is the instruction to destroy the org's CA and must outlive —
+  and stay findable after — the organization it names.
+- **`SPIREService` holds a trust-domain-keyed bundle map, never a union.**
+  `validateCertificate` reads the leaf's SPIFFE ID *first*, uses its trust
+  domain to select that domain's roots, and verifies against those alone.
+  Verifying against a union would let any org's CA mint an identity in any
+  other org's domain, which is exactly what per-org domains exist to prevent.
+  It returns a `ValidatedSPIFFEIdentity { identity, organizationID? }`, threaded
+  through `AgentMTLSAuthenticator` to the agent WebSocket and the image /
+  snapshot download routes.
+- **Org resolution is a registry lookup that scopes a Cedar principal, never an
+  authorization claim** (see [iam](./iam.md), issue #491). The trust domain says
+  whose CA vouched for the identity; the decision is still Cedar's. At
+  registration it only supplies the owning scope when the enrollment carries
+  none, and refuses a node whose enrollment scope belongs to a different org
+  than its CA.
+- **Organization lifecycle hooks** (`Services/SPIFFE/OrgTrustDomainProvisioning.swift`)
+  claim the domain inside the org-create transaction and mark it `deleting` inside
+  the org-delete transaction. Both are no-ops while the flag is off.
+
+Provisioning the SPIRE instances, establishing federation and caching bundles is
+the reconciler's job and has not shipped yet (issue #614); phase 2 only records
+the intent for it to converge on.
 
 ## Background work
 

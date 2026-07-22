@@ -26,7 +26,7 @@ struct ConsoleWebSocketController: RouteCollection {
 
         Task {
             // Validate session and VM access
-            guard let (agentName, userId) = await validateConsoleAccess(req: req, ws: ws, vmId: vmId) else {
+            guard let (agentKey, userId) = await validateConsoleAccess(req: req, ws: ws, vmId: vmId) else {
                 return
             }
 
@@ -35,14 +35,14 @@ struct ConsoleWebSocketController: RouteCollection {
                 metadata: [
                     "vmId": .string(vmIdString),
                     "sessionId": .string(sessionId),
-                    "agentName": .string(agentName),
+                    "agentKey": .string(agentKey),
                 ])
 
             // Create session in ConsoleSessionManager
             req.consoleSessionManager.createSession(
                 sessionId: sessionId,
                 vmId: vmIdString,
-                agentName: agentName,
+                agentKey: agentKey,
                 userId: userId,
                 websocket: ws
             )
@@ -114,7 +114,7 @@ struct ConsoleWebSocketController: RouteCollection {
                 try await req.consoleSessionManager.sendConsoleConnect(
                     sessionId: sessionId,
                     vmId: vmIdString,
-                    agentName: agentName
+                    agentKey: agentKey
                 )
             } catch {
                 req.logger.error("Failed to connect to agent console: \(error)")
@@ -125,14 +125,14 @@ struct ConsoleWebSocketController: RouteCollection {
     }
 
     /// Authenticates and authorizes the console request, then resolves the
-    /// VM's agent. Returns the agent name and user ID on success; on any
+    /// VM's agent. Returns the agent's identity key and user ID on success; on any
     /// failure it reports the error over the socket, closes it, and returns
     /// nil.
     private func validateConsoleAccess(
         req: Request,
         ws: WebSocket,
         vmId: UUID
-    ) async -> (agentName: String, userId: String?)? {
+    ) async -> (agentKey: String, userId: String?)? {
         do {
             guard let user = req.auth.get(User.self) else {
                 req.logger.warning("Console WebSocket authentication failed - no user found")
@@ -203,14 +203,15 @@ struct ConsoleWebSocketController: RouteCollection {
                 return nil
             }
 
-            // Look up agent to get the agent name (WebSocket connections are keyed by name)
+            // Look up the agent for its identity key: agent sockets are keyed
+            // by full SPIFFE ID, not by bare name (issue #613).
             guard let agent = try await Agent.find(agentId, on: req.db) else {
                 try? await ws.send("error: Agent not found for VM")
                 try? await ws.close(code: .unexpectedServerError)
                 return nil
             }
 
-            return (agent.name, userId)
+            return (agent.identity.key, userId)
         } catch {
             req.logger.error("Console WebSocket handler error: \(error)")
             try? await ws.close(code: .unexpectedServerError)

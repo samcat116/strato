@@ -47,7 +47,7 @@ struct SandboxLogIngestorTests {
 
         let lines = (0..<200).map { "line-\($0)" }
         for line in lines {
-            ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: line), fromAgentNamed: "agent-a")
+            ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: line), fromAgentKey: agentKey("agent-a"))
         }
 
         let drained = await poll { pushed.withLockedValue { $0.count } == lines.count }
@@ -76,8 +76,8 @@ struct SandboxLogIngestorTests {
         // owned line so the push count tells us the spoofed entries before it
         // were processed too.
         for _ in 0..<5 {
-            ingestor.enqueue(makeMessage(sandboxId: "spoofed", line: "x"), fromAgentNamed: "agent-a")
-            ingestor.enqueue(makeMessage(sandboxId: "owned", line: "x"), fromAgentNamed: "agent-a")
+            ingestor.enqueue(makeMessage(sandboxId: "spoofed", line: "x"), fromAgentKey: agentKey("agent-a"))
+            ingestor.enqueue(makeMessage(sandboxId: "owned", line: "x"), fromAgentKey: agentKey("agent-a"))
         }
 
         let drained = await poll { pushedCount.withLockedValue { $0 } == 5 }
@@ -109,8 +109,8 @@ struct SandboxLogIngestorTests {
             }
         )
 
-        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "a"), fromAgentNamed: "agent-a")
-        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "b"), fromAgentNamed: "agent-a")
+        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "a"), fromAgentKey: agentKey("agent-a"))
+        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "b"), fromAgentKey: agentKey("agent-a"))
         let firstDrain = await poll { pushedCount.withLockedValue { $0 } == 2 }
         #expect(firstDrain == true)
         let checksWithinTTL = checkCount.withLockedValue { $0 }
@@ -119,7 +119,7 @@ struct SandboxLogIngestorTests {
         // Advance the injected clock past the TTL: the next line must consult
         // the ownership check again.
         currentNow.withLockedValue { $0 = $0.addingTimeInterval(SandboxLogIngestor.ownershipTTL + 1) }
-        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "c"), fromAgentNamed: "agent-a")
+        ingestor.enqueue(makeMessage(sandboxId: "sandbox-1", line: "c"), fromAgentKey: agentKey("agent-a"))
         let secondDrain = await poll { pushedCount.withLockedValue { $0 } == 3 }
         #expect(secondDrain == true)
         let checksAfterTTL = checkCount.withLockedValue { $0 }

@@ -30,7 +30,7 @@ struct AgentWebSocketController: RouteCollection {
         /// buffer without bound while validation is in flight.
         var bufferedBytes = 0
         /// Set exactly once, when authentication succeeds; nil means "buffer".
-        var agentName: String?
+        var agent: AuthenticatedAgent?
     }
 
     /// Ceiling on bytes buffered for a connection whose authentication is
@@ -64,8 +64,8 @@ struct AgentWebSocketController: RouteCollection {
         let state = MessageState()
 
         ws.onText { ws, text in
-            if let agentName = state.agentName {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+            if let agent = state.agent {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -76,8 +76,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.error("Failed to convert binary buffer to string")
                 return
             }
-            if let agentName = state.agentName {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+            if let agent = state.agent {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -118,16 +118,17 @@ struct AgentWebSocketController: RouteCollection {
     /// Switch a connection from buffering to routing: record the authenticated
     /// agent name and replay any frames that arrived during authentication.
     /// Hops to the WebSocket's event loop, where all `state` access lives.
-    private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agentName: String) {
+    private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agent: AuthenticatedAgent) {
         ws.eventLoop.execute {
-            state.agentName = agentName
+            state.agent = agent
             if !state.buffer.isEmpty {
                 req.logger.info(
-                    "Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)]
+                    "Processing \(state.buffer.count) buffered messages",
+                    metadata: ["agentName": .string(agent.name)]
                 )
             }
             for text in state.buffer {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
             }
             state.buffer.removeAll()
         }
@@ -159,7 +160,7 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             guard
-                let spiffeID = await AgentMTLSAuthenticator.extractVerifiedSPIFFEID(
+                let verified = await AgentMTLSAuthenticator.extractVerifiedSPIFFEID(
                     req: req, spireService: spireService)
             else {
                 // extractVerifiedSPIFFEID already logged the specific failure
@@ -170,17 +171,28 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             do {
-                let agentID = try await spireService.validateAgentIdentity(spiffeID)
+                _ = try await spireService.validateAgentIdentity(verified.identity)
+                guard let identity = verified.identity.agentIdentity else {
+                    throw SPIREServiceError.certificateValidationFailed(
+                        "SPIFFE ID is not an agent identity: \(verified.identity.uri)")
+                }
 
                 req.logger.info(
                     "Agent authenticated via XFCC header (Envoy mTLS)",
                     metadata: [
-                        "spiffeID": .string(spiffeID.uri),
-                        "agentID": .string(agentID),
+                        "spiffeID": .string(verified.identity.uri),
+                        "agentName": .string(identity.name),
+                        "organizationId": .string(verified.organizationID?.uuidString ?? "platform"),
                     ])
 
-                // Continue with WebSocket setup using the validated agent ID
-                setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC", state: state)
+                // Continue with WebSocket setup using the validated identity.
+                // The socket is keyed by the full SPIFFE ID, not the bare name:
+                // two organizations may each enroll an `agent-1` once per-org
+                // trust domains are on (issue #613).
+                setupWebSocketConnection(
+                    req: req, ws: ws,
+                    agent: AuthenticatedAgent(identity: identity, organizationID: verified.organizationID),
+                    authMethod: "mTLS-XFCC", state: state)
             } catch {
                 req.logger.error("SPIFFE ID validation failed: \(error)")
                 sendErrorResponse(
@@ -207,8 +219,13 @@ struct AgentWebSocketController: RouteCollection {
     // download route (issue #493).
 
     private func handleWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState
+        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent, state: MessageState
     ) {
+        // The key every agent-scoped registry is stored under (sockets,
+        // presence, routes, session ownership) — the full SPIFFE ID, never the
+        // bare name. `identity.name` is for display and the register response.
+        let agentKey = agent.identity.key
+        let agentName = agent.name
         req.logger.info(
             "Processing WebSocket message",
             metadata: [
@@ -247,7 +264,8 @@ struct AgentWebSocketController: RouteCollection {
                         // enrollment row, resolved inside registerAgent: an SVID
                         // authenticates the node's identity but carries neither.
                         let agentUUID = try await req.agentService.registerAgent(
-                            message, agentName: agentName)
+                            message, identity: agent.identity,
+                            identityOrganizationID: agent.organizationID)
 
                         // Send registration response with the assigned UUID
                         let response = AgentRegisterResponseMessage(
@@ -296,7 +314,7 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
                 Task {
                     do {
-                        try await req.agentService.updateAgentHeartbeat(message, fromAgentNamed: agentName)
+                        try await req.agentService.updateAgentHeartbeat(message, fromAgentKey: agentKey)
                         self.sendSuccessResponse(
                             ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
                     } catch {
@@ -311,7 +329,7 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentUnregisterMessage.self)
                 Task {
                     do {
-                        try await req.agentService.unregisterAgent(message.agentId, fromAgentNamed: agentName)
+                        try await req.agentService.unregisterAgent(message.agentId, fromAgentKey: agentKey)
                         self.sendSuccessResponse(
                             ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
                             logger: req.logger)
@@ -328,7 +346,7 @@ struct AgentWebSocketController: RouteCollection {
                 // Pass the authenticated connection's agent name so the service
                 // only resolves a request it actually dispatched to this agent.
                 Task {
-                    await req.agentService.handleAgentResponse(envelope, fromAgentNamed: agentName)
+                    await req.agentService.handleAgentResponse(envelope, fromAgentKey: agentKey)
                 }
 
             case .observedState:
@@ -337,7 +355,7 @@ struct AgentWebSocketController: RouteCollection {
                 // deletions by absence (issue #260). Enqueued rather than
                 // applied directly so same-agent reports apply in send order.
                 Task {
-                    await req.agentService.enqueueObservedStateReport(envelope, fromAgentNamed: agentName)
+                    await req.agentService.enqueueObservedStateReport(envelope, fromAgentKey: agentKey)
                 }
 
             case .consoleData:
@@ -348,7 +366,7 @@ struct AgentWebSocketController: RouteCollection {
                         vmId: message.vmId,
                         sessionId: message.sessionId,
                         data: data,
-                        fromAgentNamed: agentName
+                        fromAgentKey: agentKey
                     )
                 }
 
@@ -362,7 +380,7 @@ struct AgentWebSocketController: RouteCollection {
                     ])
                 // Notify the frontend that the console is ready for input
                 req.consoleSessionManager.notifyFrontendReady(
-                    sessionId: message.sessionId, fromAgentNamed: agentName)
+                    sessionId: message.sessionId, fromAgentKey: agentKey)
 
             case .consoleDisconnected:
                 let message = try envelope.decode(as: ConsoleDisconnectedMessage.self)
@@ -375,29 +393,29 @@ struct AgentWebSocketController: RouteCollection {
                     ])
                 // Clean up the session
                 req.consoleSessionManager.removeSession(
-                    sessionId: message.sessionId, fromAgentNamed: agentName)
+                    sessionId: message.sessionId, fromAgentKey: agentKey)
 
             case .sandboxExecStarted:
                 let message = try envelope.decode(as: SandboxExecStartedMessage.self)
                 req.sandboxExecSessionManager.handleStarted(
-                    sessionId: message.sessionId, fromAgentNamed: agentName)
+                    sessionId: message.sessionId, fromAgentKey: agentKey)
 
             case .sandboxExecOutput:
                 let message = try envelope.decode(as: SandboxExecOutputMessage.self)
                 if let data = message.rawData {
                     req.sandboxExecSessionManager.handleOutput(
-                        sessionId: message.sessionId, fromAgentNamed: agentName, data: data)
+                        sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
                 }
 
             case .sandboxExecExit:
                 let message = try envelope.decode(as: SandboxExecExitMessage.self)
                 req.sandboxExecSessionManager.handleExit(
-                    sessionId: message.sessionId, fromAgentNamed: agentName, exitCode: message.exitCode)
+                    sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
 
             case .sandboxExecClosed:
                 let message = try envelope.decode(as: SandboxExecClosedMessage.self)
                 req.sandboxExecSessionManager.handleClosed(
-                    sessionId: message.sessionId, fromAgentNamed: agentName, reason: message.reason)
+                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
             case .sandboxLog:
                 // Sandbox workload stdout/stderr line from the agent — push to
@@ -411,7 +429,7 @@ struct AgentWebSocketController: RouteCollection {
                 // the agent's line order (Loki rejects out-of-order entries
                 // per stream) and caches the per-line ownership check instead
                 // of issuing a DB point query per line.
-                req.application.sandboxLogIngestor.enqueue(message, fromAgentNamed: agentName)
+                req.application.sandboxLogIngestor.enqueue(message, fromAgentKey: agentKey)
 
             case .vmLog:
                 // Handle VM log messages from agent - push to Loki.
@@ -425,7 +443,7 @@ struct AgentWebSocketController: RouteCollection {
                     // agent. Without this a compromised agent could push fabricated
                     // log lines tagged with another tenant's VM id, which would then
                     // surface in that tenant's console/log view.
-                    guard await req.agentService.vmIsOwnedByAgent(vmId: message.vmId, agentName: agentName) else {
+                    guard await req.agentService.vmIsOwnedByAgent(vmId: message.vmId, agentKey: agentKey) else {
                         req.logger.warning(
                             "Dropping VM log for a VM not owned by the reporting agent",
                             metadata: [
@@ -516,8 +534,15 @@ struct AgentWebSocketController: RouteCollection {
     /// registers close handling, records the connection, and switches the
     /// connection from buffering to routing.
     private func setupWebSocketConnection(
-        req: Request, ws: WebSocket, agentName: String, authMethod: String, state: MessageState
+        req: Request, ws: WebSocket, agent: AuthenticatedAgent, authMethod: String, state: MessageState
     ) {
+        // Every registry below is keyed by the agent's full SPIFFE ID: with a
+        // trust domain per organization two orgs may each run an `agent-1`, and
+        // a name-keyed socket map would cross their wires (issue #613). The
+        // bare name stays in log metadata, where it is what an operator reads.
+        let agentKey = agent.identity.key
+        let agentName = agent.name
+
         // Execute on the WebSocket's event loop to avoid NIOLoopBound precondition failures
         ws.eventLoop.execute {
             req.logger.info(
@@ -548,7 +573,7 @@ struct AgentWebSocketController: RouteCollection {
                 // Only tear down agent state if this socket is still the agent's current
                 // connection — a delayed close from a connection the agent has already
                 // replaced (reconnect under the same name) must not remove its successor.
-                guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
+                guard req.application.websocketManager.removeConnection(agentKey: agentKey, ifCurrent: ws) else {
                     req.logger.debug(
                         "Closed WebSocket was already superseded; skipping agent cleanup",
                         metadata: [
@@ -561,13 +586,13 @@ struct AgentWebSocketController: RouteCollection {
                 // socket: close their browser sockets with an error frame
                 // instead of leaving frozen terminals behind.
                 req.application.consoleSessionManager.closeAllSessions(
-                    forAgent: agentName, reason: "agent disconnected")
+                    forAgent: agentKey, reason: "agent disconnected")
                 req.application.sandboxExecSessionManager.closeAllSessions(
-                    forAgent: agentName, reason: "agent disconnected")
+                    forAgent: agentKey, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously
                 Task {
-                    await req.agentService.removeAgent(agentName)
+                    await req.agentService.removeAgent(agentKey)
                 }
             }
 
@@ -576,9 +601,9 @@ struct AgentWebSocketController: RouteCollection {
             // fresh agent process holds no console pty) and the delayed close
             // will skip them — tear them down here so their browsers don't sit
             // on a frozen terminal.
-            if req.application.websocketManager.setConnection(agentName: agentName, websocket: ws) != nil {
+            if req.application.websocketManager.setConnection(agentKey: agentKey, websocket: ws) != nil {
                 req.application.consoleSessionManager.closeAllSessions(
-                    forAgent: agentName, reason: "agent reconnected")
+                    forAgent: agentKey, reason: "agent reconnected")
             }
 
             // Advertise which replica holds this agent's socket so other
@@ -586,12 +611,12 @@ struct AgentWebSocketController: RouteCollection {
             // by every heartbeat; a crashed replica's claim expires by TTL.
             Task {
                 await req.application.coordination.recordAgentRoute(
-                    agentName: agentName, replicaId: req.application.replicaID)
+                    agentKey: agentKey, replicaId: req.application.replicaID)
             }
 
             // Switch from buffering to routing, replaying any frames that
             // arrived while authentication was in flight.
-            self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
+            self.activateMessageRouting(req: req, ws: ws, state: state, agent: agent)
 
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",

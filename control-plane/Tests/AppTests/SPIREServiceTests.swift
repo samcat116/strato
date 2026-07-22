@@ -114,8 +114,11 @@ struct SPIREServiceTests {
         let service = try await makeServiceWithBundle(caPEM: pki.caPEM)
         let leafPEM = try pki.issueLeafPEM(spiffeURI: "spiffe://strato.local/agent/agent-1")
 
-        let id = try await service.validateCertificate(leafPEM)
-        #expect(id.uri == "spiffe://strato.local/agent/agent-1")
+        let validated = try await service.validateCertificate(leafPEM)
+        #expect(validated.identity.uri == "spiffe://strato.local/agent/agent-1")
+        // No org trust domains registered, so the platform domain resolves to
+        // no organization — the dormant, flag-off shape.
+        #expect(validated.organizationID == nil)
 
         await service.stop()
     }
@@ -127,8 +130,8 @@ struct SPIREServiceTests {
         let leafPEM = try pki.issueLeafPEM(spiffeURI: "spiffe://strato.local/agent/agent-1")
         let chainPEM = leafPEM + "\n" + pki.caPEM
 
-        let id = try await service.validateCertificate(chainPEM)
-        #expect(id.agentID == "agent-1")
+        let validated = try await service.validateCertificate(chainPEM)
+        #expect(validated.identity.agentID == "agent-1")
 
         await service.stop()
     }
@@ -223,8 +226,8 @@ struct SPIREServiceTests {
         #expect(await service.hasTrustBundle)
 
         let leafPEM = try pki.issueLeafPEM(spiffeURI: "spiffe://strato.local/agent/agent-1")
-        let id = try await service.validateCertificate(leafPEM)
-        #expect(id.agentID == "agent-1")
+        let validated = try await service.validateCertificate(leafPEM)
+        #expect(validated.identity.agentID == "agent-1")
 
         await service.stop()
     }

@@ -18,7 +18,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
             manager.createSession(
                 sessionId: sessionId,
                 vmId: vmId,
-                agentName: "console-agent",
+                agentKey: agentKey("console-agent"),
                 userId: nil,
                 websocket: nil
             )
@@ -26,7 +26,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
             #expect(manager.hasSession(sessionId: sessionId))
             let info = manager.getSession(sessionId: sessionId)
             #expect(info?.vmId == vmId)
-            #expect(info?.agentName == "console-agent")
+            #expect(info?.agentKey == agentKey("console-agent"))
 
             let forVM = manager.getSessionsForVM(vmId: vmId)
             #expect(forVM.count == 1)
@@ -51,14 +51,14 @@ final class ConsoleSessionManagerTests: BaseTestCase {
             manager.createSession(
                 sessionId: firstSession,
                 vmId: vmId,
-                agentName: "console-agent",
+                agentKey: agentKey("console-agent"),
                 userId: nil,
                 websocket: nil
             )
             manager.createSession(
                 sessionId: secondSession,
                 vmId: vmId,
-                agentName: "console-agent",
+                agentKey: agentKey("console-agent"),
                 userId: nil,
                 websocket: nil
             )
@@ -70,12 +70,12 @@ final class ConsoleSessionManagerTests: BaseTestCase {
             manager.createSession(
                 sessionId: otherSession,
                 vmId: otherVmId,
-                agentName: "other-agent",
+                agentKey: agentKey("other-agent"),
                 userId: nil,
                 websocket: nil
             )
 
-            manager.closeAllSessions(forAgent: "console-agent", reason: "agent disconnected")
+            manager.closeAllSessions(forAgent: agentKey("console-agent"), reason: "agent disconnected")
 
             #expect(manager.getSession(sessionId: firstSession) == nil)
             #expect(manager.getSession(sessionId: secondSession) == nil)
