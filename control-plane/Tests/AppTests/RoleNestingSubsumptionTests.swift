@@ -19,15 +19,20 @@ struct RoleNestingSubsumptionTests {
 
     private var analyzer: SymCCGuardrailAnalyzer { SymCCGuardrailAnalyzer(solverPath: solverPath()!) }
 
-    /// The reach of one role, as a policy: everything in its action group.
+    /// The reach of one role, as a policy: its expanded action list, written
+    /// the way a role row's own permit is (roles are flat, so there is no
+    /// schema action group to name — issue #604).
     private func rolePolicy(_ role: IAMRole) -> CedarPolicySource {
-        CedarPolicySource(
+        let actionList = IAMRoleRegistry.actions(for: role).sorted()
+            .map { "Action::\(CedarText.stringLiteral($0))" }
+            .joined(separator: ", ")
+        return CedarPolicySource(
             id: "role-\(role.rawValue)",
             text: """
                 @id("role-\(role.rawValue)")
                 permit (
                     principal,
-                    action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(role))),
+                    action in [\(actionList)],
                     resource
                 );
                 """
@@ -47,7 +52,7 @@ struct RoleNestingSubsumptionTests {
 
     @Test("Each role's reach is contained in the role above it")
     func lowerRolesAreSubsumed() async throws {
-        let schemaText = CedarSchemaBuilder.schemaText()
+        let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
         for higher in IAMRole.allCases {
             guard let lower = higher.implies else { continue }
             for action in IAMRoleRegistry.actions(for: lower).sorted() {
@@ -65,7 +70,7 @@ struct RoleNestingSubsumptionTests {
 
     @Test("The nesting is strict: the higher role reaches more")
     func higherRolesAreNotSubsumed() async throws {
-        let schemaText = CedarSchemaBuilder.schemaText()
+        let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
         for higher in IAMRole.allCases {
             guard let lower = higher.implies else { continue }
             // An action the higher role has and the lower one does not; the
