@@ -3,3 +3,24 @@ generate:
   - server
 accessModifier: public
 namingStrategy: idiomatic
+# Incremental adoption (issue #583): only the surfaces already migrated onto
+# generated handlers are emitted, so `APIProtocol` stays implementable without
+# having to port all ~70 operations at once. Add a surface's operationIds here
+# in the same change that ports its controller — the generator pulls in every
+# schema/parameter/response those operations reference.
+filter:
+  operations:
+    # Projects (ProjectsAPIService)
+    - listProjects
+    - getProject
+    - updateProject
+    - deleteProject
+    - getProjectStats
+    - getProjectPath
+    - transferProject
+    - addProjectEnvironment
+    - removeProjectEnvironment
+    - listOrganizationProjects
+    - createOrganizationProject
+    - listFolderProjects
+    - createFolderProject

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated from ../Sources/App/openapi.yaml by `bun run generate:api-types`.
+    "src/types/openapi.ts",
   ]),
 ]);
 

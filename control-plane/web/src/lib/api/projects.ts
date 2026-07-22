@@ -1,38 +1,23 @@
 // Projects API endpoints
 
 import { api } from "./client";
+import type { components } from "@/types/openapi";
 
-export interface Project {
-  id: string;
-  name: string;
-  description: string;
-  organizationId?: string;
-  organizationalUnitId?: string;
-  path: string;
-  defaultEnvironment: string;
-  environments: string[];
-  createdAt: string;
-  vmCount?: number;
-}
+// Projects are the first surface whose types come from the OpenAPI document
+// instead of being hand-maintained (issue #583) — the same document the
+// control plane generates its handlers from, so these cannot drift from the
+// server. Regenerate `src/types/openapi.ts` with `bun run generate:api-types`.
+type Schemas = components["schemas"];
 
-export interface CreateProjectData {
-  name: string;
+export type Project = Schemas["ProjectSummary"];
+/** A single-project read, which additionally carries the project's quotas. */
+export type ProjectDetail = Schemas["ProjectDetail"];
+/** `description` is required by the API; the create helper defaults it. */
+export type CreateProjectData = Omit<Schemas["CreateProjectRequest"], "description"> & {
   description?: string;
-  environments?: string[];
-  defaultEnvironment?: string;
-}
-
-export interface UpdateProjectData {
-  name?: string;
-  description?: string;
-  defaultEnvironment?: string;
-  environments?: string[];
-}
-
-export interface TransferProjectData {
-  organizationId?: string;
-  organizationalUnitId?: string;
-}
+};
+export type UpdateProjectData = Schemas["UpdateProjectRequest"];
+export type TransferProjectData = Schemas["TransferProjectRequest"];
 
 export const projectsApi = {
   // Get all projects for the current user
@@ -46,8 +31,8 @@ export const projectsApi = {
   },
 
   // Get a specific project
-  get(projectId: string): Promise<Project> {
-    return api.get<Project>(`/api/projects/${projectId}`);
+  get(projectId: string): Promise<ProjectDetail> {
+    return api.get<ProjectDetail>(`/api/projects/${projectId}`);
   },
 
   // Create a project in an organization

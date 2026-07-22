@@ -91,10 +91,16 @@ struct OpenAPISpecDriftTests {
     /// a different indent would break parsing, but fail-loud: a misparse yields a
     /// drift-test failure, never a silently missed route.
     private static func specOperationKeys(from yaml: String) -> Set<String> {
+        Set(specOperations(from: yaml).map { $0.key })
+    }
+
+    /// Every operation in the spec as its route key plus, when declared, its
+    /// `operationId` — the name the generator turns into a handler.
+    private static func specOperations(from yaml: String) -> [(key: String, operationID: String?)] {
         let httpMethods: Set<String> = [
             "get", "put", "post", "delete", "patch", "options", "head", "trace",
         ]
-        var keys: Set<String> = []
+        var operations: [(key: String, operationID: String?)] = []
         var inPaths = false
         var currentPath: String?
 
@@ -124,17 +130,117 @@ struct OpenAPISpecDriftTests {
                 var token = line.trimmingCharacters(in: .whitespaces)
                 if token.hasSuffix(":") { token.removeLast() }
                 if httpMethods.contains(token), let path = currentPath {
-                    keys.insert("\(token.uppercased()) \(path)")
+                    operations.append((key: "\(token.uppercased()) \(path)", operationID: nil))
                 }
+                continue
+            }
+
+            // `operationId:` belongs to the operation entry above it.
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("operationId:"), !operations.isEmpty {
+                let id = trimmed.dropFirst("operationId:".count).trimmingCharacters(in: .whitespaces)
+                operations[operations.count - 1].operationID = id
             }
         }
-        return keys
+        return operations
+    }
+
+    /// The `filter.operations` list from `openapi-generator-config.yaml` — the
+    /// operations the generator emits into `APIProtocol`, i.e. exactly the
+    /// surfaces migrated onto generated handlers.
+    private static func migratedOperationIDs() throws -> [String] {
+        let configURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // AppTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // control-plane
+            .appendingPathComponent("Sources/App/openapi-generator-config.yaml")
+        let yaml = try String(contentsOf: configURL, encoding: .utf8)
+
+        var ids: [String] = []
+        var inOperations = false
+        for rawLine in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed == "operations:" {
+                inOperations = true
+                continue
+            }
+            guard inOperations else { continue }
+            guard trimmed.hasPrefix("- ") else { break }
+            ids.append(String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+        }
+        return ids
     }
 
     @Test("openapi.yaml is bundled and served from the App resources")
     func specResourceIsBundled() async throws {
         let yaml = try #require(OpenAPISpec.yaml, "openapi.yaml was not bundled into the App target")
         #expect(yaml.contains("openapi: 3.0.3"))
+    }
+
+    /// Phase 3 (#583) migrated the projects surface onto handlers generated from
+    /// the spec. For a migrated surface the guarantee is stronger than "the route
+    /// exists": the generator emits `APIProtocol` from the operations listed in
+    /// `openapi-generator-config.yaml`, the compiler forces `ProjectsAPIService`
+    /// to implement all of them, and this test closes the loop by checking that
+    /// each one is actually served — on the path and method the spec gives it,
+    /// by the generated transport, and by nothing else.
+    @Test("Migrated operations are served by generated handlers on their spec routes")
+    func migratedOperationsAreGeneratorServed() async throws {
+        let yaml = try #require(OpenAPISpec.yaml)
+        let specOperations = Self.specOperations(from: yaml)
+        var keysByOperationID: [String: String] = [:]
+        for operation in specOperations {
+            guard let id = operation.operationID else { continue }
+            #expect(keysByOperationID[id] == nil, "Duplicate operationId in openapi.yaml: \(id)")
+            keysByOperationID[id] = operation.key
+        }
+
+        let migratedIDs = try Self.migratedOperationIDs()
+        #expect(!migratedIDs.isEmpty, "Failed to parse filter.operations out of openapi-generator-config.yaml")
+
+        // Forward: every generator-filtered operation is a real spec operation.
+        var expectedKeys: Set<String> = []
+        for id in migratedIDs {
+            let key = keysByOperationID[id]
+            #expect(
+                key != nil,
+                "openapi-generator-config.yaml filters on '\(id)', which openapi.yaml does not define"
+            )
+            if let key { expectedKeys.insert(key) }
+        }
+
+        try await withApp { app in
+            // Reverse: the routes the generated transport registered are exactly
+            // those operations — no more (a stale handler) and no fewer (an
+            // operation whose route never got registered).
+            #expect(
+                app.generatedAPIRouteKeys == expectedKeys,
+                """
+                Generated handler routes and the spec's migrated operations disagree.
+                Only in the transport: \(app.generatedAPIRouteKeys.subtracting(expectedKeys).sorted())
+                Only in the spec:      \(expectedKeys.subtracting(app.generatedAPIRouteKeys).sorted())
+                """
+            )
+
+            // And no hand-written controller still answers on those routes: a
+            // leftover registration would shadow the generated handler for every
+            // request, silently un-migrating the surface.
+            var registrations: [String: Int] = [:]
+            for route in app.routes.all {
+                registrations[Self.registeredRoute(route).key, default: 0] += 1
+            }
+            let shadowed = expectedKeys.filter { (registrations[$0] ?? 0) != 1 }.sorted()
+            #expect(
+                shadowed.isEmpty,
+                """
+                These migrated routes are registered more than once — a hand-written \
+                controller is shadowing the generated handler:
+                \(shadowed.joined(separator: "\n"))
+                """
+            )
+        }
     }
 
     @Test("Every registered route is documented in openapi.yaml")
