@@ -239,7 +239,9 @@ becomes CA destruction.
   than its CA.
 - **Organization lifecycle hooks** (`Services/SPIFFE/OrgTrustDomainProvisioning.swift`)
   claim the domain inside the org-create transaction and mark it `deleting` inside
-  the org-delete transaction. Both are no-ops while the flag is off.
+  the org-delete transaction. Only the claim is flag-gated; teardown is not, so
+  an organization created with the flag on and deleted with it off still records
+  the intent to destroy its CA rather than orphaning the row.
 
 Provisioning the SPIRE instances, establishing federation and caching bundles is
 the reconciler's job and has not shipped yet (issue #614); phase 2 only records

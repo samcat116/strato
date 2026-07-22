@@ -459,8 +459,12 @@ struct AgentController: RouteCollection {
         //
         // Fail closed: if SPIRE is unreachable the enrollment stays revocable
         // later.
+        // Scoped to the enrollment's own trust domain: a same-named agent in
+        // another organization's domain is a different node entirely, and
+        // matching it here would leave this enrollment's SPIRE grant standing.
         let agentIsRegistered =
             try await Agent.query(on: req.db)
+            .filter(\.$trustDomain == enrollment.trustDomain)
             .filter(\.$name == enrollment.agentName)
             .first() != nil
 
@@ -620,7 +624,7 @@ struct AgentController: RouteCollection {
         }
 
         // Remove from in-memory registry if present
-        await req.agentService.forceUnregisterAgent(agent.name)
+        await req.agentService.forceUnregisterAgent(agent.identity)
 
         // Delete from database
         try await agent.delete(on: req.db)
@@ -631,6 +635,7 @@ struct AgentController: RouteCollection {
         // entries for the name were already deprovisioned above, so the row
         // carries no external grant.
         try await AgentEnrollment.query(on: req.db)
+            .filter(\.$trustDomain == agent.trustDomain)
             .filter(\.$agentName == agent.name)
             .delete()
 
@@ -657,7 +662,7 @@ struct AgentController: RouteCollection {
         try await requireNoForeignWorkloads(req, agent: agent)
 
         // Force agent offline in in-memory registry
-        await req.agentService.forceUnregisterAgent(agent.name)
+        await req.agentService.forceUnregisterAgent(agent.identity)
 
         // Update database status
         agent.status = .offline

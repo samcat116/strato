@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 
 /// Per-organization SPIFFE trust domains, phase 2 (issue #613).
 ///
@@ -23,9 +24,13 @@ struct CreateOrgTrustDomain: AsyncMigration {
             .id()
             .field("organization_id", .uuid, .required)
             .field("trust_domain", .string, .required)
-            .field("phase", phase, .required)
-            .field("generation", .int, .required)
-            .field("observed_generation", .int, .required)
+            // Defaults so the schema stands on its own: the model's `init`
+            // always sets these, but a raw insert or a future backfill that
+            // omits them should land on the same starting state rather than
+            // fail.
+            .field("phase", phase, .required, .sql(.default("pending")))
+            .field("generation", .int, .required, .sql(.default(1)))
+            .field("observed_generation", .int, .required, .sql(.default(0)))
             .field("server_address", .string)
             .field("bundle_endpoint_url", .string)
             .field("node_address", .string)

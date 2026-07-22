@@ -46,7 +46,7 @@ final class OrgTrustDomain: Model, @unchecked Sendable {
     @Field(key: "organization_id")
     var organizationID: UUID
 
-    /// e.g. `org-3f2a91c04b7d.strato.local`. Unique and immutable.
+    /// e.g. `org-3f2a91c04b7d4e5f.strato.local`. Unique and immutable.
     @Field(key: "trust_domain")
     var trustDomain: String
 
@@ -134,13 +134,23 @@ final class OrgTrustDomain: Model, @unchecked Sendable {
     /// domain, and short enough to stay inside SPIFFE's 255-byte name limit
     /// alongside the platform suffix.
     ///
-    /// The 12 hex characters of the UUID are the *label*, not the authority:
+    /// The hex characters of the UUID are the *label*, not the authority:
     /// nothing resolves an organization by parsing this string.
+    ///
+    /// 16 hex characters is 64 bits of the UUID. A collision would trip the
+    /// `trust_domain` unique index inside the organization-create transaction
+    /// and fail the creation, so the width is chosen to put that beyond
+    /// practical reach (~1e-10 at 6k organizations) rather than merely
+    /// unlikely; `OrgTrustDomainProvisioning.claim` still detects it explicitly
+    /// instead of surfacing a raw constraint violation.
+    ///
+    /// The whole domain is lowercased: SPIFFE requires lowercase trust domain
+    /// names, and an operator's uppercase `SPIRE_TRUST_DOMAIN` must not produce
+    /// a domain that fails to match a normalized SAN.
     static func trustDomain(forOrganization organizationID: UUID, platformTrustDomain: String) -> String {
         let shortID = organizationID.uuidString
             .replacingOccurrences(of: "-", with: "")
-            .prefix(12)
-            .lowercased()
-        return "org-\(shortID).\(platformTrustDomain)"
+            .prefix(16)
+        return "org-\(shortID).\(platformTrustDomain)".lowercased()
     }
 }

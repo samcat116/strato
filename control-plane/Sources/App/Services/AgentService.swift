@@ -656,7 +656,16 @@ actor AgentService {
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 
-    func forceUnregisterAgent(_ agentKey: String) async {
+    /// Tear down an agent's in-memory state from an operator action
+    /// (deregister, force-offline).
+    ///
+    /// Takes an `AgentIdentity` rather than a `String` **on purpose**. This
+    /// used to be an unlabeled `String`, so a bare `agent.name` could be passed
+    /// silently — and since nothing is keyed by name any more, the lookup below
+    /// missed and every teardown step was skipped. A dedicated type makes that
+    /// mistake a compile error rather than a silent no-op.
+    func forceUnregisterAgent(_ identity: AgentIdentity) async {
+        let agentKey = identity.key
         guard let agentId = await agentId(forKey: agentKey) else {
             app.logger.warning(
                 "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])

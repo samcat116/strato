@@ -40,8 +40,98 @@ final class OrgTrustDomainTests {
         // The domain is baked into every SVID the org's CA ever issues, so
         // re-deriving it must never produce a different answer.
         #expect(a == OrgTrustDomain.trustDomain(forOrganization: orgA, platformTrustDomain: "strato.local"))
-        #expect(a == "org-3f2a91c04b7d.strato.local")
+        #expect(a == "org-3f2a91c04b7d4e5f.strato.local")
         #expect(a != OrgTrustDomain.trustDomain(forOrganization: orgB, platformTrustDomain: "strato.local"))
+
+        // SPIFFE requires lowercase trust domain names, so an operator's
+        // uppercase SPIRE_TRUST_DOMAIN must not leak through and produce a
+        // domain that fails to match a normalized SAN.
+        let upper = OrgTrustDomain.trustDomain(forOrganization: orgA, platformTrustDomain: "Strato.LOCAL")
+        #expect(upper == upper.lowercased())
+        #expect(upper == "org-3f2a91c04b7d4e5f.strato.local")
+    }
+
+    /// Runs `body` with the per-org trust domain feature flag on. The flag is
+    /// read from the environment on each access, and the suite is `.serialized`,
+    /// so this is safe to toggle in-process.
+    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async rethrows -> T {
+        let previous = ProcessInfo.processInfo.environment["SPIRE_ORG_TRUST_DOMAINS_ENABLED"]
+        setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", 1)
+        defer {
+            if let previous {
+                setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", previous, 1)
+            } else {
+                unsetenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED")
+            }
+        }
+        return try await body()
+    }
+
+    @Test("With the flag on, claim writes a pending row and teardown tombstones it")
+    func provisioningLifecycleWithFlagOn() async throws {
+        try await withApp { app in
+            let orgID = UUID()
+
+            try await self.withFeatureFlagOn {
+                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
+            }
+
+            let claimed = try #require(
+                try await OrgTrustDomain.query(on: app.db)
+                    .filter(\.$organizationID == orgID)
+                    .first())
+            #expect(claimed.phase == .pending)
+            #expect(claimed.generation == 1)
+            #expect(claimed.deletedAt == nil)
+            #expect(
+                claimed.trustDomain
+                    == OrgTrustDomain.trustDomain(
+                        forOrganization: orgID, platformTrustDomain: PlatformTrustDomain.current))
+
+            // Idempotent: the domain is immutable once any SVID exists under it.
+            try await self.withFeatureFlagOn {
+                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
+            }
+            let count = try await OrgTrustDomain.query(on: app.db)
+                .filter(\.$organizationID == orgID)
+                .count()
+            #expect(count == 1)
+
+            // Teardown is deliberately NOT flag-gated: the flag may flip between
+            // an org's creation and its deletion, and a missed tombstone would
+            // orphan a row whose CA is resurrected when the flag comes back on.
+            try await OrgTrustDomainProvisioning.markForTeardown(organizationID: orgID, on: app.db)
+
+            let tombstoned = try #require(
+                try await OrgTrustDomain.query(on: app.db)
+                    .filter(\.$organizationID == orgID)
+                    .first())
+            #expect(tombstoned.phase == .deleting)
+            #expect(tombstoned.generation == 2)
+            #expect(tombstoned.deletedAt != nil)
+        }
+    }
+
+    @Test("A colliding trust domain is reported as itself, not a constraint violation")
+    func trustDomainCollisionIsExplicit() async throws {
+        try await withApp { app in
+            // Squat the domain a second organization would derive, then let
+            // that organization try to claim it.
+            let squatter = UUID()
+            let contendedDomain = OrgTrustDomain.trustDomain(
+                forOrganization: squatter, platformTrustDomain: PlatformTrustDomain.current)
+            try await OrgTrustDomain(organizationID: UUID(), trustDomain: contendedDomain)
+                .save(on: app.db)
+
+            // Must surface as itself rather than tripping the unique index
+            // inside the org-create transaction, where it would become an
+            // opaque 500 with no hint that a fresh org UUID is the remedy.
+            await #expect(throws: OrgTrustDomainError.self) {
+                try await self.withFeatureFlagOn {
+                    try await OrgTrustDomainProvisioning.claim(organizationID: squatter, on: app.db)
+                }
+            }
+        }
     }
 
     // MARK: - Model / migration round-trip
@@ -354,6 +444,36 @@ final class OrgTrustDomainTests {
 
             let row = try #require(try await Agent.find(agentID, on: app.db))
             #expect(row.$organization.id == orgID)
+        }
+    }
+
+    // MARK: - Operator teardown actually tears down
+
+    @Test("forceUnregisterAgent removes the agent's socket registration")
+    func forceUnregisterRemovesSocketRegistration() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Teardown Org")
+
+            let agentID = try await app.agentService.registerAgent(
+                Self.registration(name: "teardown-agent"),
+                identity: AgentIdentity(
+                    trustDomain: PlatformTrustDomain.current, name: "teardown-agent"),
+                organizationScope: .organization(try org.requireID()))
+
+            let row = try #require(try await Agent.find(agentID, on: app.db))
+
+            // Registration publishes the agent's presence/route under its
+            // identity key; the operator teardown path must clear the same key.
+            // Passing the bare name here silently did nothing, because nothing
+            // is keyed by name any more — which is exactly the regression this
+            // guards. `forceUnregisterAgent` now takes an `AgentIdentity`, so
+            // repeating the mistake is a compile error.
+            #expect(await app.coordination.agentRoute(agentKey: row.identity.key) != nil)
+
+            await app.agentService.forceUnregisterAgent(row.identity)
+
+            #expect(await app.coordination.agentRoute(agentKey: row.identity.key) == nil)
         }
     }
 
