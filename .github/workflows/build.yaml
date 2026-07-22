@@ -170,10 +170,10 @@ jobs:
       - name: Lint OpenAPI document
         run: bunx @redocly/cli@1 lint control-plane/Sources/App/openapi.yaml
 
-  # The three Swift test jobs below run concurrently on the ARC scale set —
-  # the wall-clock win that used to be impossible when everything shared one
-  # job. Each keeps its own scratch dir under RUNNER_TOOL_CACHE (see the
-  # comment on the prune step) so two jobs never write the same build tree.
+  # The Swift test jobs below run concurrently on the ARC scale set — the
+  # wall-clock win that used to be impossible when everything shared one job.
+  # Each claims its own slot from a persistent pool of warm build trees (see
+  # the comment on the claim step) so two jobs never write the same tree.
   #
   # ARC (actions-runner-controller) runner scale set. Scale-set runners
   # match on exactly one label — the installation name — so do not add
@@ -205,15 +205,22 @@ jobs:
       # every run paid a ~5 minute 1.4GB upload for a restore that always
       # missed.
       #
-      # BUT this scratch dir is never actually warm: /home/runner/_work is an
-      # emptyDir in the runner pod spec and every job gets a fresh pod, so
+      # That scratch dir was never actually warm, though: /home/runner/_work is
+      # an emptyDir in the runner pod spec and every job gets a fresh pod, so
       # RUNNER_TOOL_CACHE starts empty. Measured over the runs on 2026-07-21,
       # every single one created all 61 dependency working copies and compiled
-      # ~3,500 files — fully cold, always. Keep the scratch dir (it costs
-      # nothing and pays off on a reused pod), but do not read run-to-run time
-      # differences as cache hits, and do not point SwiftPM cache flags at this
-      # volume — they are inert here. Genuinely shared state goes on the
-      # hostPath below instead.
+      # ~3,500 files — fully cold, always.
+      #
+      # The build tree now lives on a persistent hostPath instead, claimed by
+      # the "Claim build scratch slot" step below and exported as
+      # BUILD_SCRATCH_ROOT. A single shared tree would not work — SwiftPM locks
+      # a scratch directory exclusively, so concurrent jobs would serialize —
+      # so the homelab role provisions a POOL of interchangeable slots and each
+      # job flocks one for its duration. The pool is sized above the number of
+      # runner pods the scheduler admits, so a job never waits; if every slot
+      # is somehow busy the claim degrades to the old pod-local cold path
+      # rather than queueing. Never assume BUILD_SCRATCH_ROOT is warm or even
+      # shared: it is whichever of those two the claim step resolved to.
       #
       # The SwiftPM shared cache (git mirrors, compiled manifests, binary
       # artifacts) lives on a hostPath — /cache/swiftpm — mounted into every
@@ -225,10 +232,11 @@ jobs:
       # guard matters because SwiftPM does NOT create a missing cache root on its
       # own — pointing --cache-path at an unwritable /cache/swiftpm fails the
       # build outright ("error: invalid access to /cache/swiftpm"), so the mount
-      # being absent must degrade to cold rather than break the run. Only the
-      # shared cache lives there: --scratch-path must stay pod-local, because
-      # SwiftPM takes an exclusive lock on the build directory and concurrent
-      # jobs would serialize.
+      # being absent must degrade to cold rather than break the run. The two
+      # mounts are separate on purpose: the SwiftPM cache is built for
+      # concurrent multi-process access and is shared by every pod at once,
+      # while a scratch tree takes an exclusive lock and so has to be claimed
+      # one job at a time.
       #
       # The dominant cost was never the cache, though. Two runs the same evening
       # did identical cold work: 29870517360 took 5.2 minutes total, 29873252059
@@ -244,10 +252,14 @@ jobs:
       # executor from activeProcessorCount — but the test phase is DB-bound
       # rather than CPU-bound, so it matters much less.)
       #
-      # Each job prunes only the scratch dirs it owns — the Swift test jobs
-      # run concurrently, possibly against a shared tool-cache volume, so
-      # wiping the strato-swift-build root could delete a sibling job's
-      # in-flight build tree.
+      # Each job prunes only the scratch dirs inside the slot it claimed —
+      # sibling jobs hold other slots on the same volume, so wiping anything
+      # above the claimed slot would delete an in-flight build tree.
+      #
+      # This prune is load-bearing now that the trees persist: it is what keeps
+      # a slot from growing without bound across the many branches that pass
+      # through it, and it doubles as the periodic cold rebuild that catches a
+      # tree only incremental builds can still link.
       #
       # --force-resolved-versions builds exactly what Package.resolved pins and
       # skips re-resolution. With a cold cache the win is small (it avoids the
@@ -257,9 +269,16 @@ jobs:
       # rather than silently re-resolving. NOTE that makes a Package.swift change
       # with an uncommitted Package.resolved a build failure instead of a silent
       # re-resolve — intended, but a behavior change for anyone who forgets.
+      # Claims one slot from the "packages" pool and exports BUILD_SCRATCH_ROOT.
+      # Separate pool from the control-plane job: the two build disjoint
+      # component sets, so sharing a pool would have each of them repeatedly
+      # landing on a slot warmed for the other.
+      - name: Claim build scratch slot
+        run: bash .github/scripts/claim-build-scratch.sh packages
+
       - name: Prune build scratch dirs if oversized
         run: |
-          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent" "$RUNNER_TOOL_CACHE/strato-swift-build/cli" "$RUNNER_TOOL_CACHE/strato-swift-build/api-client"; do
+          for scratch in "$BUILD_SCRATCH_ROOT/shared" "$BUILD_SCRATCH_ROOT/agent" "$BUILD_SCRATCH_ROOT/cli" "$BUILD_SCRATCH_ROOT/api-client"; do
             if [ -d "$scratch" ]; then
               size_kb=$(du -sk "$scratch" | cut -f1)
               if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -295,12 +314,12 @@ jobs:
         id: build-shared
         if: ${{ needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' }}
         working-directory: shared
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/shared" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Shared Package
         if: ${{ !cancelled() && steps.build-shared.outcome == 'success' }}
         working-directory: shared
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build Agent
         # Run even if the shared tests failed — agent coverage should
@@ -308,12 +327,12 @@ jobs:
         id: build-agent
         if: ${{ !cancelled() && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: agent
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/agent" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Agent
         if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
         working-directory: agent
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build CLI
         # Same always-report policy as the agent: CLI coverage runs even when
@@ -321,12 +340,12 @@ jobs:
         id: build-cli
         if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/cli" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test CLI
         if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
         working-directory: cli
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # The generated API client (issue #583). Its openapi.yaml is a symlink to
       # the control plane's, so a spec change that breaks generation fails here
@@ -335,12 +354,20 @@ jobs:
         id: build-api-client
         if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: clients/swift
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/api-client" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Test Swift API Client
         if: ${{ !cancelled() && steps.build-api-client.outcome == 'success' }}
         working-directory: clients/swift
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+
+      # The flock holder is a detached process, so the lock would also be
+      # released when the ephemeral pod exits. Release it explicitly anyway:
+      # that invariant belongs to how the runners are deployed, not to this
+      # workflow, and a slot leaked to a 24h sleep would cost a pool slot.
+      - name: Release build scratch slot
+        if: always()
+        run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
 
   # Control-plane build + test against Postgres — the engine production uses,
   # validating migrations and Postgres-specific SQL (issue #195). The suite
@@ -365,16 +392,21 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Prune only this job's scratch dir — concurrent sibling jobs may share
-      # the tool-cache volume (see the comment on the shared+agent job).
-      # The strato-swift-build/control-plane-postgres dir is orphaned (its job
-      # merged into this one); remove it if a previous workflow left one.
-      # This can race a still-running old-workflow job during the transition —
-      # worst case that job fails its build and needs a rerun.
+      # Own pool, not just an own directory: this job and the packages job build
+      # disjoint component sets, so sharing one pool would have each of them
+      # repeatedly claiming a slot warmed for the other. See the claim step in
+      # the packages job for how slots work.
+      - name: Claim build scratch slot
+        run: bash .github/scripts/claim-build-scratch.sh control-plane
+
+      # Prune only inside the claimed slot — sibling jobs hold other slots on
+      # the same volume, so reaching above it would delete an in-flight tree.
+      # The control-plane-postgres dir is orphaned (its job merged into this
+      # one); remove it if an older run left one behind in this slot.
       - name: Prune build scratch dir if oversized
         run: |
-          rm -rf "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+          rm -rf "$BUILD_SCRATCH_ROOT/control-plane-postgres"
+          scratch="$BUILD_SCRATCH_ROOT/control-plane"
           if [ -d "$scratch" ]; then
             size_kb=$(du -sk "$scratch" | cut -f1)
             if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -438,7 +470,7 @@ jobs:
       - name: Build Control Plane
         id: build-cp
         working-directory: control-plane
-        run: swift build --build-tests -j 4 --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/control-plane" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Normally a no-op: the background start above had the whole build to
       # finish. The generous budget only matters when the registry is slow —
@@ -479,7 +511,7 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
       # since the raw job log is dominated by per-request debug output.
@@ -496,6 +528,12 @@ jobs:
       - name: Stop Postgres
         if: always()
         run: docker rm -f strato-ci-postgres || true
+
+      # Same reasoning as Stop Postgres: the detached flock holder dies with
+      # the pod, but a leaked one would park a pool slot on a 24h sleep.
+      - name: Release build scratch slot
+        if: always()
+        run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
 
   test-agent-macos:
     name: Build & Test Agent (macOS)
