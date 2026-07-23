@@ -18,15 +18,23 @@ what happens during deploys and failures.
 | Placement reservations, sweep locks | Valkey (`resv:*`, `lock:sweep:*`) | Phase 0 (issue #258) |
 | Image download grants | Valkey `imggrant:agent:{agentId}:image:{imageId}` (TTL 30m) | Written by the replica that emits the download URLs; read by whichever replica serves the fetch (issue #562) |
 
-`AgentService` holds no cross-request in-memory state beyond per-connection
-socket bookkeeping (the socket map, request correlation for in-flight
-exchanges on those sockets, and per-agent report ordering). Any replica can
-serve any HTTP request.
+The cross-replica seam is `ReplicaMessageBridge` (`app.replicaBridge`): it owns
+socket-route recording, the routing decision (local vs. which replica), the
+sync-nudge fan-out, the correlated RPC forwarding, and the subscription
+lifecycle — composing `CoordinationService` (the Valkey / in-memory
+`CoordinationStore` adapters) and delegating the two operations that need the
+local socket (running a forwarded exchange, turning a nudge into a local sync)
+back to `AgentService` through a narrow `ReplicaBridgeDelegate`. `AgentService`
+keeps only per-connection socket bookkeeping (the socket map, request
+correlation for in-flight exchanges on those sockets, and per-agent report
+ordering); it holds no cross-request in-memory state. Any replica can serve any
+HTTP request.
 
 ## Socket routing and nudges
 
-Each control-plane process generates a fresh `replicaID` (UUID) at startup and
-subscribes to its own nudge and RPC channels.
+Each control-plane process generates a fresh `replicaID` (UUID) at startup, and
+its `ReplicaMessageBridge` subscribes to that replica's own nudge and RPC
+channels.
 
 - **On WebSocket accept** the accepting replica writes
   `agent:{name}:replica = {replicaID}`. The key is refreshed alongside the
