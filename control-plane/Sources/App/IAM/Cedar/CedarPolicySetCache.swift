@@ -106,7 +106,7 @@ actor CedarPolicySetCache {
         /// the whole request — so the authorizer filters through this set.
         let roleIDs: Set<UUID>
         let guardrailCount: Int
-        let skippedGuardrails: [CedarPolicyAssembler.SkippedGuardrail]
+        let skippedGuardrails: [GuardrailRendering.SkippedGuardrail]
         /// Role rows whose stored Cedar text failed to parse or validate and
         /// were left out (their grants fields stay declared; the role just
         /// permits nothing). Loud in logs — a role granting nothing is the
@@ -326,40 +326,29 @@ actor CedarPolicySetCache {
     /// replica to its previous build.
     private func buildGuardrailPolicies(
         _ guardrails: [Guardrail], schemaText: String, on db: any Database
-    ) async throws -> CedarPolicyAssembler.GuardrailPolicySet {
+    ) async throws -> GuardrailRendering.RenderedForbids {
         var sources: [CedarPolicySource] = []
         var namesByID: [UUID: String] = [:]
-        var skipped: [CedarPolicyAssembler.SkippedGuardrail] = []
+        var skipped: [GuardrailRendering.SkippedGuardrail] = []
 
         var needGeneration: [Guardrail] = []
         for guardrail in guardrails {
             guard let id = guardrail.id else {
                 skipped.append(
-                    CedarPolicyAssembler.SkippedGuardrail(id: nil, name: guardrail.name, reason: "row has no id"))
+                    GuardrailRendering.SkippedGuardrail(id: nil, name: guardrail.name, reason: "row has no id"))
                 continue
             }
             namesByID[id] = guardrail.name
             if let text = guardrail.cedarText, !text.isEmpty {
-                sources.append(CedarPolicySource(id: GuardrailText.policyID(id), text: text))
+                sources.append(CedarPolicySource(id: GuardrailRendering.policyID(id), text: text))
             } else {
                 needGeneration.append(guardrail)
             }
         }
 
-        // Fallback generation for null-text rows: resolve the attach-node org
-        // only for the external-principal ceilings that need it.
+        // Fallback generation for null-text rows.
         if !needGeneration.isEmpty {
-            var organizationIDsByGuardrail: [UUID: UUID] = [:]
-            for guardrail in needGeneration
-            where guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
-                guard let id = guardrail.id, let node = guardrail.node else { continue }
-                let chain = try await IAMResourceTree.ancestors(of: node, on: db)
-                if let organization = chain.first(where: { $0.type == .organization }) {
-                    organizationIDsByGuardrail[id] = organization.id
-                }
-            }
-            let generated = CedarPolicyAssembler.guardrailPolicyText(
-                needGeneration, organizationIDsByGuardrail: organizationIDsByGuardrail)
+            let generated = try await GuardrailRendering.forbids(for: needGeneration, on: db)
             sources += generated.policies
             skipped += generated.skipped
         }
@@ -373,7 +362,7 @@ actor CedarPolicySetCache {
                 ? UUID(uuidString: String(source.id.dropFirst("guardrail-".count))) : nil
             if let issue = engine.policyIssue(schemaText: schemaText, policy: source) {
                 skipped.append(
-                    CedarPolicyAssembler.SkippedGuardrail(
+                    GuardrailRendering.SkippedGuardrail(
                         id: id, name: id.flatMap { namesByID[$0] } ?? source.id, reason: issue))
                 continue
             }
@@ -381,7 +370,7 @@ actor CedarPolicySetCache {
             if let id { compiledIDs.append(id) }
         }
 
-        return CedarPolicyAssembler.GuardrailPolicySet(
+        return GuardrailRendering.RenderedForbids(
             policies: screened, compiledGuardrailIDs: compiledIDs, skipped: skipped)
     }
 

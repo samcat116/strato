@@ -293,7 +293,7 @@ enum WhoCanService {
             // A matcher row is filtered by its action patterns; an authored row
             // carries free-form Cedar whose action scope is not structurally
             // enumerable here, so it is always listed as in force.
-            if !guardrail.authored, !GuardrailActions.matches(guardrail.actions, action: action) {
+            if !guardrail.authored, !GuardrailRendering.patternsCover(guardrail.actions, action: action) {
                 continue
             }
             ceilings.append(WhoCanCeiling(kind: .guardrail, id: id, name: guardrail.name, node: node))
