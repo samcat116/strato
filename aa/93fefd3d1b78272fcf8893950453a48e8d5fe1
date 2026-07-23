@@ -1,0 +1,48 @@
+docs/architecture/webhooks.md
+  s_cf53942f9f2993::t_d502b0d168a5fa 112-123
+  s_cf53942f9f2993::t_e382a09bb71a40 49-51
+control-plane/Sources/App/Migrations/CreateWebhookSubscription.swift
+  s_cf53942f9f2993::t_7e3047aa4218dc 32-40,44-46
+  s_cf53942f9f2993::t_f16f5a0ad250d9 2
+control-plane/Tests/AppTests/WebhookTests.swift
+  s_cf53942f9f2993::t_b44485cf050ac5 401-429
+  s_cf53942f9f2993::t_c2624f78dd4ed6 182-192
+control-plane/Sources/App/configure.swift
+  s_cf53942f9f2993::t_ca7050333a50bf 597-599
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_cf53942f9f2993::t_ff2f6e3e7c583c 246-255
+  s_cf53942f9f2993::t_e48208027ae3a5 138-151
+control-plane/web/src/components/webhooks/webhooks-table.tsx
+  s_cf53942f9f2993::t_de3b639b6d371c 220-233
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_cf53942f9f2993::t_4b7b7ef9c4db22 173-179,183-187,189-190
+  s_cf53942f9f2993::t_b236896d7ad24e 214-216
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_cf53942f9f2993::t_4ebc12137f8bad 44-54
+  s_cf53942f9f2993::t_eb7c0a5d725eba 119-125,140-155,164-199
+  s_cf53942f9f2993::t_6a2c31af2beaa4 6-7
+  s_cf53942f9f2993::t_8cd92624562624 251,270-300
+  s_cf53942f9f2993::t_06bcbdce4ea415 200-201
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_cf53942f9f2993::t_eb5368ec77a7d2 178-181,184
+control-plane/Sources/App/openapi.yaml
+  s_cf53942f9f2993::t_23a8750b8d9b01 6644-6646
+control-plane/Sources/App/Migrations/AddDeliveryContextToResourceOperation.swift
+  s_cf53942f9f2993::t_ef0905f3f9acda 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "aa93fefd3d1b78272fcf8893950453a48e8d5fe1",
+  "prompts": {},
+  "sessions": {
+    "s_cf53942f9f2993": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77b18d76-962c-4c62-8810-d6bb6a3e69c5",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
