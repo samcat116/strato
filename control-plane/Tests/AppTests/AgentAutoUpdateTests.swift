@@ -36,7 +36,7 @@ final class AgentAutoUpdateTests {
             // the compiled-in target is nil; inject one, plus an artifact
             // resolver that never leaves the process.
             await app.agentService.setAutoUpdateTargetForTesting(Self.target)
-            await app.agentService.setAgentArtifactResolverForTesting { _, _, _ in Self.stubArtifact }
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in Self.stubArtifact }
 
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -254,7 +254,7 @@ final class AgentAutoUpdateTests {
     @Test("an unresolvable artifact defers assignment instead of burning the agent's budget")
     func unresolvableArtifactDefersAssignment() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
-            await app.agentService.setAgentArtifactResolverForTesting { _, _, _ in
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in
                 throw Abort(.badGateway, reason: "release host down")
             }
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
@@ -277,7 +277,7 @@ final class AgentAutoUpdateTests {
             agent.updateAttemptedAt = Date()
             try await agent.save(on: app.db)
 
-            let sync = try await app.agentService.assembleDesiredState(
+            let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
 
             let update = try #require(sync.desiredAgentUpdate)
@@ -305,7 +305,7 @@ final class AgentAutoUpdateTests {
             try await oldWire.save(on: app.db)
 
             for agent in [unassigned, converged, oldWire] {
-                let sync = try await app.agentService.assembleDesiredState(
+                let sync = try await app.desiredStateAssembler.assemble(
                     agentId: agent.requireID().uuidString)
                 #expect(sync.desiredAgentUpdate == nil, "\(agent.name) must not be sent an update")
             }
@@ -315,14 +315,14 @@ final class AgentAutoUpdateTests {
     @Test("an artifact-resolution outage omits the update but not the sync")
     func assemblySurvivesResolutionOutage() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
-            await app.agentService.setAgentArtifactResolverForTesting { _, _, _ in
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in
                 throw Abort(.badGateway, reason: "release host down")
             }
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
             agent.updateDesiredVersion = Self.target
             try await agent.save(on: app.db)
 
-            let sync = try await app.agentService.assembleDesiredState(
+            let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
             #expect(sync.desiredAgentUpdate == nil)
         }

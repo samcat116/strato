@@ -63,7 +63,7 @@ final class RegistryPullSecretTests {
     }
 
     /// Registers an in-memory Firecracker-capable agent and places the
-    /// sandbox on it, so `assembleDesiredState` carries it.
+    /// sandbox on it, so the desired-state assembly carries it.
     private func registerAgent(app: Application, sandbox: Sandbox) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "pull-secret-agent",
@@ -453,7 +453,7 @@ final class RegistryPullSecretTests {
             app.registryClient = scripted
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
             let entry = try #require(message.sandboxes.first)
             #expect(entry.spec.imageDigest == sampleDigest)
@@ -471,7 +471,7 @@ final class RegistryPullSecretTests {
             // The pin is persisted, so the next assembly never re-resolves.
             let stored = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(stored.imageDigest == sampleDigest)
-            _ = try await app.agentService.assembleDesiredState(agentId: agentId)
+            _ = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(scripted.resolveCallCount == 1)
         }
     }
@@ -488,7 +488,7 @@ final class RegistryPullSecretTests {
             app.registryClient = ScriptedRegistryClient(digest: sampleDigest, token: nil)
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
             let credential = try #require(message.sandboxes.first?.registryCredential)
             #expect(credential.password == "ghp_supersecret")
@@ -505,7 +505,7 @@ final class RegistryPullSecretTests {
             app.registryClient = ScriptedRegistryClient(digest: nil, token: nil, throwOnResolve: true)
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
             let entry = try #require(message.sandboxes.first)
             #expect(entry.registryCredential == nil)
@@ -532,7 +532,7 @@ final class RegistryPullSecretTests {
             try await sandbox.save(on: app.db)
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
             let entry = try #require(message.sandboxes.first)
             #expect(entry.spec.imageDigest == nil)
@@ -559,7 +559,7 @@ final class RegistryPullSecretTests {
                     registry: "ghcr.io", realm: "http://auth.example.com/token"))
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
             let entry = try #require(message.sandboxes.first)
             #expect(entry.registryCredential == nil)

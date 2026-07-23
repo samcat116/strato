@@ -747,7 +747,7 @@ final class SecurityGroupControllerTests {
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: vm.hypervisorId!)
+            let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let groups = try #require(message.securityGroups)
             #expect(Set(groups.map(\.id)) == [web.id, db_.id])
             let webDesired = groups.first { $0.id == web.id }
@@ -764,7 +764,7 @@ final class SecurityGroupControllerTests {
             try await VMInterfaceSecurityGroup(
                 interfaceID: oldNIC.id!, securityGroupID: web.id
             ).save(on: app.db)
-            let oldMessage = try await app.agentService.assembleDesiredState(
+            let oldMessage = try await app.desiredStateAssembler.assemble(
                 agentId: oldVM.hypervisorId!)
             #expect(oldMessage.securityGroups == nil)
             #expect(oldMessage.vms.first?.spec.networks.first?.securityGroupIds == nil)

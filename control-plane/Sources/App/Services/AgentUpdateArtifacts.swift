@@ -33,6 +33,56 @@ struct ResolvedAgentArtifact: Equatable {
     let tarballMember: String
 }
 
+/// The seam through which release artifacts are resolved for an agent update,
+/// at rollout-assignment time (the auto-update sweep) and sync-assembly time
+/// (`DesiredStateAssembler`). A value wrapping one closure so tests can
+/// substitute a stub without a release host; production resolves via
+/// `AgentUpdateArtifacts.resolveArtifact`.
+struct AgentArtifactResolver: Sendable {
+    private let resolveArtifact:
+        @Sendable (String, OperatingSystem, CPUArchitecture) async throws -> ResolvedAgentArtifact
+
+    init(
+        _ resolveArtifact:
+            @escaping @Sendable (String, OperatingSystem, CPUArchitecture) async throws -> ResolvedAgentArtifact
+    ) {
+        self.resolveArtifact = resolveArtifact
+    }
+
+    func resolve(
+        version: String, operatingSystem: OperatingSystem, architecture: CPUArchitecture
+    ) async throws -> ResolvedAgentArtifact {
+        try await resolveArtifact(version, operatingSystem, architecture)
+    }
+}
+
+extension Application {
+    private struct AgentArtifactResolverKey: StorageKey {
+        typealias Value = AgentArtifactResolver
+    }
+
+    /// The release-artifact resolver shared by the auto-update sweep and the
+    /// desired-state assembler — one seam, so an assignment can never resolve
+    /// differently from the sync that carries it. Defaults to the real release
+    /// host; tests assign a stub.
+    var agentArtifactResolver: AgentArtifactResolver {
+        get {
+            storage[AgentArtifactResolverKey.self]
+                ?? AgentArtifactResolver { version, operatingSystem, architecture in
+                    try await AgentUpdateArtifacts.resolveArtifact(
+                        targetVersion: version,
+                        operatingSystem: operatingSystem,
+                        architecture: architecture,
+                        client: self.client,
+                        logger: self.logger)
+                }
+        }
+        set {
+            storage[AgentArtifactResolverKey.self] = newValue
+        }
+    }
+}
+
 /// Resolves the release artifact an agent should self-update to (issue #432).
 ///
 /// Primary source: the release's `agent-manifest.json` (issue #431), fetched

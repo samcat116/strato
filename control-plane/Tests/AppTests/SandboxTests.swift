@@ -343,7 +343,7 @@ final class SandboxTests {
             }
             #expect(fork.hypervisorId == agentId)
 
-            let desired = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let desired = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let forkState = try #require(desired.sandboxes.first { $0.sandboxId == forkID })
             let expectedRef = SandboxSnapshotRef(
                 snapshotId: snapshot.id!, sourceSandboxId: source.id!)
@@ -849,7 +849,7 @@ final class SandboxTests {
 
     // MARK: - Desired-state sync assembly
 
-    @Test("assembleDesiredState carries the agent's sandboxes")
+    @Test("the desired-state assembly carries the agent's sandboxes")
     func assemblyIncludesSandboxes() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
@@ -857,7 +857,7 @@ final class SandboxTests {
             sandbox.setDesiredStatus(.running)
             try await sandbox.save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.sandboxes.count == 1)
             let entry = try #require(message.sandboxes.first)
             #expect(entry.sandboxId == sandbox.id)
@@ -979,7 +979,7 @@ final class SandboxTests {
         }
     }
 
-    @Test("assembleDesiredState omits the NIC from the wire spec until guest networking lands")
+    @Test("the desired-state assembly omits the NIC from the wire spec until guest networking lands")
     func assemblyOmitsNICSpec() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let network = try await self.defaultNetwork(on: app.db)
@@ -998,7 +998,7 @@ final class SandboxTests {
             // The v1 guest image has no in-guest networking and agents reject
             // networked sandbox specs, so the NIC row must stay off the wire
             // even when it holds an address.
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
             #expect(entry.spec.network == nil)
 
@@ -1036,7 +1036,7 @@ final class SandboxTests {
             // `networkingUnsupported` for any spec with a non-nil network, so a
             // freshly created sandbox converges only if its wire spec carries
             // none.
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
             #expect(entry.spec.network == nil)
 

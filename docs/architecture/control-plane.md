@@ -70,10 +70,20 @@ Services are exposed via lazy accessors
 
 The important ones to know when navigating `Services/`:
 
-- **`AgentService`** (actor) — the largest service: agent registration,
-  heartbeats, desired-state sync assembly, observed-state ingestion, and all
+- **`AgentService`** (actor) — the socket owner: agent registration,
+  heartbeats, message correlation, the sync/report entry points, and all
   periodic sweeps. `WebSocketManager` (same file) tracks which sockets this
   replica holds.
+- **`DesiredStateAssembler`** (`app.desiredStateAssembler`) — assembles the
+  full authoritative `DesiredStateMessage` for one agent straight from
+  Postgres (VM/sandbox specs, network scope, security groups, floating IPs,
+  registry material, agent-update payload). Pure assembly; when to sync and
+  which socket carries it stay with `AgentService`.
+- **`ObservedStateApplier`** (`app.observedStateApplier`) — folds an agent's
+  `ObservedStateReport` into the database: observed status/generation,
+  operation completion, deletion-by-absence, guest info, reservation release.
+  The connection half (decode, ownership check, agent-row refresh, per-agent
+  ordering) stays with `AgentService`.
 - **`CoordinationService`** (actor) — the Valkey layer: agent presence keys,
   socket routing, singleton sweep locks, placement reservations, and
   replica pub/sub (nudges + RPC). See [multi-replica](./multi-replica.md).
@@ -199,15 +209,16 @@ the one imperative exception: it awaits a correlated agent response.
   correlated success/error responses, status updates, observed-state
   reports, console/exec/log frames (see [wire-protocol](./wire-protocol.md)
   for the catalog).
-- **Sync assembly** (`assembleDesiredState`) reads the authoritative set
-  straight from Postgres — VMs with volumes/NICs/image artifacts (download
-  URLs are mTLS-authenticated relative paths, so nothing expires or gets
-  re-signed), sandboxes with pull credentials, and the
+- **Sync assembly** (`DesiredStateAssembler.assemble`) reads the
+  authoritative set straight from Postgres — VMs with volumes/NICs/image
+  artifacts (download URLs are mTLS-authenticated relative paths, so nothing
+  expires or gets re-signed), sandboxes with pull credentials, and the
   logical networks in the agent's assembly scope — into one
   `DesiredStateMessage`.
 - **Observed-state ingestion** chains per-agent tasks so reports apply in
-  send order, updates observed status/generation, completes satisfied
-  operations, and confirms deletions by absence from the report.
+  send order; `ObservedStateApplier.apply` updates observed
+  status/generation, completes satisfied operations, and confirms deletions
+  by absence from the report.
 
 ## Per-organization trust domains
 
