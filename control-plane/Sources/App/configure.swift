@@ -500,6 +500,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateDeviceAuthorization())
     app.migrations.add(CreateCLISession())
 
+    // Give every pre-existing org a default site so it can enroll agents now
+    // that enrollment requires one. Ordered after CreateSite and the org
+    // tables it reads.
+    app.migrations.add(BackfillDefaultSites())
+
     // FluentKit force-unwraps persisted @Enum raw values on first property
     // access. Normalize casing drift and put a database validation boundary in
     // front of every persisted enum so malformed rows cannot trap the process

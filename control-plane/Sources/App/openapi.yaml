@@ -3872,7 +3872,7 @@ paths:
 
 
         Requires `manage_agents` on the target organization scope (system
-        admins always pass), plus `manage` on `siteId` when one is given. One
+        admins always pass), plus `manage` on the required `siteId`. One
         enrollment per agent name: revoke the existing one before re-enrolling.
       tags: [Agents]
       requestBody:
@@ -10848,8 +10848,9 @@ components:
       description: >-
         A node enrollment. Exactly one of `organizationId` or
         `organizationalUnitId` is required — that scope is the capacity the
-        registering agent becomes dedicated to.
-      required: [agentName]
+        registering agent becomes dedicated to. A `siteId` is also required:
+        every enrolled agent joins an availability zone.
+      required: [agentName, siteId]
       properties:
         agentName:
           type: string
@@ -10867,10 +10868,10 @@ components:
         siteId:
           type: string
           format: uuid
-          nullable: true
           description: >-
-            Site the agent joins on registration. Must belong to a scope
-            containing the enrollment's, and the caller needs `manage` on it.
+            Site (availability zone) the agent joins on registration. Required.
+            Must belong to a scope containing the enrollment's, and the caller
+            needs `manage` on it.
         organizationId:
           type: string
           format: uuid

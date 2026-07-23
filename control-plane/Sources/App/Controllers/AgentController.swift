@@ -275,30 +275,31 @@ struct AgentController: RouteCollection {
 
         let expirationHours = createRequest.expirationHours ?? 1
 
-        // Resolve the target site up front so a typo'd id fails the request
-        // instead of silently creating a site-less enrollment — and require it
-        // to belong to the enrollment's organization: a site is one OVN
-        // deployment owned by one org, so a foreign agent joining it would mix
-        // tenants on a shared SDN. The caller also needs manage on the site
-        // itself (not just manage_agents on the enrollment's scope): with
-        // agents and sites delegated to different OUs of one org, an
-        // enrollment-carried site pin must not admit an agent into a sibling
-        // OU's fabric that the site membership endpoint would refuse.
-        if let siteId = createRequest.siteId {
-            guard let site = try await Site.find(siteId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
-            }
-            guard let siteScope = site.organizationScope,
-                try await siteScope.contains(scope, on: req.db)
-            else {
-                throw Abort(
-                    .badRequest,
-                    reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
-            }
-            let allowed = try await req.can("manage", on: "site", id: siteId.uuidString)
-            guard allowed else {
-                throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
-            }
+        // Every enrollment joins a site (validated as present above). Resolve
+        // it here so a typo'd id fails the request — and require it to belong to
+        // the enrollment's organization: a site is one OVN deployment owned by
+        // one org, so a foreign agent joining it would mix tenants on a shared
+        // SDN. The caller also needs manage on the site itself (not just
+        // manage_agents on the enrollment's scope): with agents and sites
+        // delegated to different OUs of one org, an enrollment-carried site pin
+        // must not admit an agent into a sibling OU's fabric that the site
+        // membership endpoint would refuse.
+        guard let siteId = createRequest.siteId else {
+            throw Abort(.badRequest, reason: "A site is required to enroll an agent")
+        }
+        guard let site = try await Site.find(siteId, on: req.db) else {
+            throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+        }
+        guard let siteScope = site.organizationScope,
+            try await siteScope.contains(scope, on: req.db)
+        else {
+            throw Abort(
+                .badRequest,
+                reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
+        }
+        let siteAllowed = try await req.can("manage", on: "site", id: siteId.uuidString)
+        guard siteAllowed else {
+            throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
         }
 
         // Provision the node in SPIRE first (join token + workload entry).

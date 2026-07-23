@@ -278,18 +278,24 @@ final class AgentOrganizationScopeTests {
             struct Body: Content {
                 let agentName: String
                 var organizationId: UUID? = nil
+                var siteId: UUID? = nil
             }
+
+            // A site the org owns, so the otherwise-valid case below can join
+            // it (enrollment now requires a site).
+            let site = Site(name: "scope-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(Body(agentName: "node-x"))
+                try req.content.encode(Body(agentName: "node-x", siteId: site.id))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(Body(agentName: "node-x", organizationId: org.id))
+                try req.content.encode(Body(agentName: "node-x", organizationId: org.id, siteId: site.id))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let created = try res.content.decode(AgentEnrollmentResponse.self)
@@ -316,13 +322,18 @@ final class AgentOrganizationScopeTests {
             struct Body: Content {
                 let agentName: String
                 let organizationId: UUID?
+                let siteId: UUID?
             }
 
+            let site = Site(name: "pleb-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+
             // The user holds no binding or membership anywhere, so agent
-            // management on the org is denied.
+            // management on the org is denied — the manage_agents check fires
+            // before the site is ever resolved.
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(Body(agentName: "node-y", organizationId: org.id))
+                try req.content.encode(Body(agentName: "node-y", organizationId: org.id, siteId: site.id))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -581,10 +592,14 @@ final class AgentOrganizationScopeTests {
             struct Body: Content {
                 let agentName: String
                 let organizationId: UUID?
+                let siteId: UUID?
             }
+            let site = Site(name: "dereg-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(Body(agentName: "retiring-agent", organizationId: org.id))
+                try req.content.encode(
+                    Body(agentName: "retiring-agent", organizationId: org.id, siteId: site.id))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }

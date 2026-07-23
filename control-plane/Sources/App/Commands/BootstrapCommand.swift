@@ -115,6 +115,10 @@ struct BootstrapCommand: AsyncCommand {
                 on: db
             )
 
+            // A default site (availability zone) so the seeded org can enroll
+            // agents immediately — enrollment requires a site.
+            try await Site.createDefault(forOrganization: orgID, named: orgName, on: db)
+
             let apiKey = APIKey(
                 userID: userID,
                 name: keyName,
@@ -140,6 +144,7 @@ struct BootstrapCommand: AsyncCommand {
         console.print("  User:         \(username) <\(email)> (system admin, id \(userID.uuidString))")
         console.print("  Organization: \(orgName) (id \(orgID.uuidString))")
         console.print("  Project:      \(projectName) (id \(projectID.uuidString))")
+        console.print("  Site:         \(Site.defaultName(forOrganizationNamed: orgName))")
         console.print()
         console.print("  API key (admin scope — shown once, store it now):")
         console.print()

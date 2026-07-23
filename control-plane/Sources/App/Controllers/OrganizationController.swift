@@ -178,6 +178,12 @@ struct OrganizationController: RouteCollection {
             on: req.db
         )
 
+        // Give the org a default site (availability zone) so its first compute
+        // agent can be enrolled without the operator hand-creating one first —
+        // enrollment requires a site.
+        try await Site.createDefault(
+            forOrganization: organization.id!, named: organization.name, on: req.db)
+
         return OrganizationResponse(from: organization, userRole: "admin")
     }
 
