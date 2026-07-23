@@ -1,25 +1,34 @@
-# Observability: Metrics & Alerts
+# Observability: Metrics & Traces
 
-The control plane emits OpenTelemetry metrics for the failure modes that the
-2026-06-12 end-to-end test made painful to diagnose: agents silently going away,
-heartbeats drying up, and VMs landing in `.error` without anyone noticing.
+The control plane emits OpenTelemetry **metrics** and **traces** (and logs) over
+OTLP. Metrics started with the failure modes the 2026-06-12 end-to-end test made
+painful to diagnose — agents silently going away, heartbeats drying up, VMs
+landing in `.error` — and have since grown to cover the request path and the
+core control-loop subsystems. Traces give a per-request span tree so a slow or
+failing API call can be followed through authorization, scheduling, and the
+agent sync it triggers.
 
-This page is the catalog of those metrics and the alert runbook built on them.
+This page is the catalog of those signals and the alert runbook built on them.
 
-## Enabling metrics
+## Enabling metrics & traces
 
-Metrics flow through the swift-metrics facade, backed by the OTLP exporter when
+Metrics flow through the swift-metrics facade and traces through the
+swift-distributed-tracing facade, both backed by the OTLP exporter when
 OpenTelemetry is bootstrapped. Controlled by environment variables (see
 `configure.swift`):
 
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `OTEL_METRICS_ENABLED` | `true` (the compose deployment sets it to `false`) | Master switch for metric export |
+| `OTEL_TRACES_ENABLED` | `true` | Master switch for trace/span export |
+| `OTEL_LOGS_ENABLED` | `true` | Master switch for log export |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; merged over the built-in `service.version` / `service.instance.id` / `deployment.environment.name` |
 
-When metrics are disabled, swift-metrics uses a no-op backend — emission call
-sites stay in the code but cost nothing.
+When a pillar is disabled, its facade uses a no-op backend — emission call sites
+(`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but cost nothing. The
+bootstrap is also skipped entirely under the `.testing` environment.
 
 Production should run with `OTEL_METRICS_ENABLED=true` pointed at a collector.
 The Helm chart wires this via the `opentelemetry.*` values.
@@ -80,16 +89,70 @@ only scope the built-in rule to its own Prometheus pods.
 
 ## Metric catalog
 
-All metrics are defined in one place: `control-plane/Sources/App/Telemetry/Telemetry.swift`.
+All metrics are defined and documented in one place:
+`control-plane/Sources/App/Telemetry/Telemetry.swift`. Emission goes through the
+swift-metrics facade, so every call site is a no-op unless `OTEL_METRICS_ENABLED`
+is on.
+
+### Request layer (RED)
+
+Emitted once per HTTP request by `MetricsMiddleware`, so the whole API surface is
+covered without per-route instrumentation. `route` is the matched **route
+pattern** (`/api/vms/:vmID`), never the concrete path, so cardinality stays
+bounded; unmatched requests fall back to `unmatched`.
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_http_server_requests_total` | counter | `method`, `route`, `status` = `2xx`…`5xx` | Request count by route and status class |
+| `strato_http_server_request_duration_seconds` | timer | `method`, `route` | Request latency distribution |
+
+### Agent lifecycle & VM health
 
 | Metric | Type | Labels | Meaning |
 |--------|------|--------|---------|
 | `strato_agent_connections_total` | counter | — | Agent successfully (re)registered |
 | `strato_agent_disconnections_total` | counter | `reason` = `connection_closed` \| `unregister` \| `stale` | Agent connection ended |
-| `strato_agent_registration_failures_total` | counter | `reason` = `invalid_token` \| `expired_token` \| `register_error` | A registration attempt was rejected |
+| `strato_agent_registration_failures_total` | counter | `reason` = `invalid_token` \| `expired_token` \| `register_error` \| `token_save_failed` \| `unsupported_protocol` \| `organization_scope_mismatch` \| `missing_organization_scope` | A registration attempt was rejected |
+| `strato_agent_send_failures_total` | counter | `kind` = `message` \| `success` \| `error` | Failed to encode/send a message to an agent over its WebSocket |
 | `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
-| `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `stuck_transition` \| `agent_reported` | A VM transitioned into `.error` |
+| `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `stuck_transition` \| `agent_reported` \| `operation_failed` \| `stuck_operation` \| `convergence_failed` | A VM transitioned into `.error` |
+| `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no operation in flight (issue #260) |
+
+### Agent auto-update rollout (issue #434)
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_agent_auto_update_assignments_total` | counter | — | The rollout sweep assigned an agent its target version |
+| `strato_agent_auto_update_converged_total` | counter | — | An assigned agent re-registered at its target version |
+| `strato_agent_auto_update_failures_total` | counter | `reason` = `agent_reported` \| `health_budget` | An assigned update failed terminally, halting the rollout |
+| `strato_agent_auto_update_parked_total` | counter | — | An assigned agent stayed blocked past the health budget and was parked |
+
+### Control loop (scheduler, reconciliation)
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_scheduler_placements_total` | counter | `strategy`, `outcome` = `success` \| `no_candidate` \| `error` | A placement decision resolved |
+| `strato_scheduler_placement_duration_seconds` | timer | `strategy` | Placement selection latency |
+| `strato_agent_sync_total` | counter | `outcome` = `sent` \| `failed` | A desired-state sync to a locally-socketed agent resolved |
+| `strato_agent_sync_duration_seconds` | timer | — | Assemble + send latency for a desired-state sync |
+
+### Authorization (Cedar)
+
+Every `IAMAuthorizer.authorize` funnels through the same instrumented entry, so
+this is the allow/deny rate and evaluation latency for the entire API.
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_authz_decisions_total` | counter | `decision` = `allow` \| `deny` | A Cedar decision was evaluated (503/500 faults are not counted) |
+| `strato_authz_evaluation_duration_seconds` | timer | — | Entity-slice load + policy-set evaluation latency |
+
+### IPAM
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_ipam_allocations_total` | counter | `family` = `ipv4` \| `ipv6` | A NIC address was allocated from a network's subnet |
+| `strato_ipam_allocation_failures_total` | counter | `family`, `reason` = `pool_exhausted` \| `invalid_subnet` \| `invalid_gateway` | An allocation failed; `pool_exhausted` is the capacity signal |
 
 ### Notes on the labels
 
@@ -103,6 +166,43 @@ All metrics are defined in one place: `control-plane/Sources/App/Telemetry/Telem
   create or boot). A failed VM create surfaces as `agent_reported` if the agent
   reports it, otherwise as `reconciliation` once the VM goes missing from a
   heartbeat — check the control-plane logs (`http_request` / warnings) alongside.
+
+## Distributed tracing
+
+Traces are enabled with `OTEL_TRACES_ENABLED` (default `true`) and export over
+the same OTLP endpoint as metrics. Every signal is stamped with the
+`service.version`, `service.instance.id` (the coordination replica ID),
+`deployment.environment.name`, and (when built with one) `vcs.revision` resource
+attributes, so a trace can be tied back to the exact build and replica that
+produced it.
+
+### Coverage
+
+- **Per-request server span** — `TracingMiddleware` opens one span per HTTP
+  request with HTTP semantic-convention attributes (`http.request.method`,
+  `http.route`, `http.response.status_code`, …), named by the matched route. It
+  also extracts inbound W3C `traceparent`, so a client or gateway trace continues
+  through the control plane, and publishes the span on `request.serviceContext`
+  so everything below nests under it.
+- **`iam.authorize`** — one child span per Cedar decision, with `iam.action`,
+  `iam.resource_type`, `iam.principal`, and `iam.decision`.
+- **`scheduler.select_agent`** — one span per placement, with `scheduler.strategy`,
+  `scheduler.candidate_count`, `scheduler.selected_agent`, and (on failure)
+  `scheduler.outcome`.
+- **`agent.desired_state_sync`** — a producer span per desired-state sync pushed
+  to a locally-socketed agent, with `agent.id`, `sync.id`, and `sync.vm_count`.
+
+Spans go through the swift-distributed-tracing facade, which installs a no-op
+tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sites
+cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
+is never bootstrapped).
+
+### Not yet traced
+
+Per-query database spans (Fluent has no built-in instrumentation) and outbound
+Valkey/HTTP client edges are not span-instrumented yet; a request's DB and
+coordination time currently shows up only as unattributed gaps under the request
+span.
 
 ## Alert runbook
 

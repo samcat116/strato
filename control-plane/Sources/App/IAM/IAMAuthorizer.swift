@@ -1,5 +1,6 @@
 import Fluent
 import NIOConcurrencyHelpers
+import Tracing
 import Vapor
 
 // IAM phase 5 (issue #482): the authoritative evaluator. SpiceDB itself is
@@ -94,7 +95,47 @@ enum IAMAuthorizer {
     /// replica cannot answer authorization questions, which is different from
     /// "no"), and an engine evaluation failure is a 500 — never a silent
     /// allow, never a silent deny that would look like policy.
+    ///
+    /// Every check funnels here, so this is where authorization is observed: a
+    /// span per evaluation (nesting under the request span) plus the allow/deny
+    /// rate and evaluation latency as metrics. A thrown 503/500 records the
+    /// error on the span but is not counted as an allow/deny decision.
     static func authorize(
+        principal: IAMPrincipal,
+        action: String,
+        node: IAMNode,
+        legacyEquivalent: LegacyCheckEquivalent?,
+        context: IAMCheckContext,
+        state: IAMRequestAuthState?,
+        app: Application,
+        db: any Database
+    ) async throws -> CedarCheckDecision {
+        let clock = ContinuousClock()
+        let start = clock.now
+        return try await withSpan("iam.authorize", ofKind: .internal) { span in
+            span.attributes["iam.action"] = action
+            span.attributes["iam.resource_type"] = node.type.rawValue
+            span.attributes["iam.principal"] = principal.subject
+            let decision = try await evaluate(
+                principal: principal,
+                action: action,
+                node: node,
+                legacyEquivalent: legacyEquivalent,
+                context: context,
+                state: state,
+                app: app,
+                db: db
+            )
+            span.attributes["iam.decision"] = decision.allowed ? "allow" : "deny"
+            Telemetry.recordAuthzDecision(
+                allowed: decision.allowed, durationSeconds: (clock.now - start).asSeconds)
+            return decision
+        }
+    }
+
+    /// The uninstrumented Cedar evaluation. `authorize(principal:…)` wraps this
+    /// with the span and decision metrics.
+    private static func evaluate(
         principal: IAMPrincipal,
         action: String,
         node: IAMNode,

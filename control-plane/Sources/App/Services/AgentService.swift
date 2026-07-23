@@ -5,6 +5,7 @@ import NIOWebSocket
 import Fluent
 import NIOCore
 import NIOConcurrencyHelpers
+import Tracing
 
 /// Thread-safe WebSocket connection manager
 /// This is NOT an actor to avoid event loop conflicts with NIO
@@ -1709,25 +1710,37 @@ actor AgentService {
     /// socket. Safe to call redundantly: identical syncs diff to nothing on
     /// the agent.
     private func syncDesiredStateLocally(agentId: String, agentKey: String) async {
-        do {
-            let message = try await assembleDesiredState(agentId: agentId)
-            try await sendMessageToLocalAgent(message, agentKey: agentKey)
-            app.logger.debug(
-                "Desired-state sync sent",
-                metadata: [
-                    "agentId": .string(agentId),
-                    "syncId": .string(message.syncId),
-                    "vmCount": .stringConvertible(message.vms.count),
-                ])
-        } catch {
-            // Dropped syncs are safe: the periodic timer re-sends the full
-            // state, so this is logged rather than retried inline.
-            app.logger.warning(
-                "Failed to send desired-state sync (periodic timer will retry)",
-                metadata: [
-                    "agentId": .string(agentId),
-                    "error": .string(error.localizedDescription),
-                ])
+        let clock = ContinuousClock()
+        let start = clock.now
+        await withSpan("agent.desired_state_sync", ofKind: .producer) { span in
+            span.attributes["agent.id"] = agentId
+            do {
+                let message = try await assembleDesiredState(agentId: agentId)
+                try await sendMessageToLocalAgent(message, agentKey: agentKey)
+                span.attributes["sync.id"] = message.syncId
+                span.attributes["sync.vm_count"] = message.vms.count
+                Telemetry.recordDesiredStateSync(
+                    outcome: "sent", durationSeconds: (clock.now - start).asSeconds)
+                app.logger.debug(
+                    "Desired-state sync sent",
+                    metadata: [
+                        "agentId": .string(agentId),
+                        "syncId": .string(message.syncId),
+                        "vmCount": .stringConvertible(message.vms.count),
+                    ])
+            } catch {
+                // Dropped syncs are safe: the periodic timer re-sends the full
+                // state, so this is logged rather than retried inline.
+                span.recordError(error)
+                Telemetry.recordDesiredStateSync(
+                    outcome: "failed", durationSeconds: (clock.now - start).asSeconds)
+                app.logger.warning(
+                    "Failed to send desired-state sync (periodic timer will retry)",
+                    metadata: [
+                        "agentId": .string(agentId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
         }
     }
 

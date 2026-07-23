@@ -42,6 +42,15 @@ enum IPAMService {
                 return "No free IP addresses left in network \(network) (\(subnet))"
             }
         }
+
+        /// Low-cardinality label for the allocation-failure metric.
+        var metricReason: String {
+            switch self {
+            case .invalidSubnet: return "invalid_subnet"
+            case .invalidGateway: return "invalid_gateway"
+            case .poolExhausted: return "pool_exhausted"
+            }
+        }
     }
 
     /// Prefix lengths a network may allocate from. /31 and /32 have no host
@@ -88,12 +97,19 @@ enum IPAMService {
             .compactMap { parseIPv4($0.address) }
         let used = Set(usedVM).union(usedSandbox)
 
-        return try allocateIP(
-            networkName: network.name,
-            subnet: network.subnet,
-            gateway: network.gateway,
-            used: used
-        )
+        do {
+            let allocation = try allocateIP(
+                networkName: network.name,
+                subnet: network.subnet,
+                gateway: network.gateway,
+                used: used
+            )
+            Telemetry.ipamAllocated(family: "ipv4")
+            return allocation
+        } catch let error as IPAMError {
+            Telemetry.ipamAllocationFailed(family: "ipv4", reason: error.metricReason)
+            throw error
+        }
     }
 
     /// Pure allocation core, separated for testability.
@@ -148,12 +164,19 @@ enum IPAMService {
             .all()
             .compactMap { IPv6Address($0.address)?.lo }
 
-        return try allocateIPv6(
-            networkName: network.name,
-            subnet6: subnet6,
-            gateway6: network.gateway6,
-            usedInterfaceIDs: Set(usedVM).union(usedSandbox)
-        )
+        do {
+            let allocation = try allocateIPv6(
+                networkName: network.name,
+                subnet6: subnet6,
+                gateway6: network.gateway6,
+                usedInterfaceIDs: Set(usedVM).union(usedSandbox)
+            )
+            Telemetry.ipamAllocated(family: "ipv6")
+            return allocation
+        } catch let error as IPAMError {
+            Telemetry.ipamAllocationFailed(family: "ipv6", reason: error.metricReason)
+            throw error
+        }
     }
 
     /// Pure IPv6 allocation core. A /64 has 2^64 hosts, so the v4 lowest-free
