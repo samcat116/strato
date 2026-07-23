@@ -168,12 +168,21 @@ extension ResourceOperation {
     /// Marks the operation terminal if — and only if — it is still pending, so
     /// the two completion paths (agent response and stuck-operation sweep)
     /// cannot overwrite each other's verdict. Returns whether this call won.
+    ///
+    /// The winning flip also enqueues `operation.completed`/`operation.failed`
+    /// webhook deliveries (issue #559), in the same transaction as the status
+    /// write: because every completion path funnels through here, this is the
+    /// one place the outbox rows commit atomically with the verdict — and the
+    /// "only the winner" guard means the event is enqueued exactly once.
     func completeIfPending(as status: VMOperationStatus, error: String?, on db: Database) async throws -> Bool {
         guard self.status == .pending else { return false }
         self.status = status
         self.error = error
         self.completedAt = Date()
-        try await self.save(on: db)
+        try await db.transaction { db in
+            try await self.save(on: db)
+            try await WebhookEvents.enqueueOperationCompletion(for: self, on: db)
+        }
         return true
     }
 

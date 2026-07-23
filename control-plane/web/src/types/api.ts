@@ -788,6 +788,67 @@ export interface SSFPollResult {
   moreAvailable: boolean;
 }
 
+// Webhook subscriptions (org-scoped; managed by org admins, visible to members)
+export interface WebhookSubscription {
+  id: string;
+  organizationId: string;
+  /** Present when the subscription only receives events for one project. */
+  projectId?: string | null;
+  name: string;
+  url: string;
+  /** Empty array = subscribed to ALL event types. */
+  eventTypes: string[];
+  isActive: boolean;
+  /** Set when the platform auto-disabled it after continuous delivery failures. */
+  disabledReason?: string | null;
+  /** ISO date; start of the current failure streak. */
+  failingSince?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  subscriptionId: string;
+  eventId: string;
+  eventType: string;
+  status: "pending" | "succeeded" | "dead";
+  attempts: number;
+  /** Only while pending. */
+  nextAttemptAt?: string | null;
+  lastAttemptAt?: string | null;
+  /** Last HTTP status from the endpoint. */
+  responseStatus?: number | null;
+  lastError?: string | null;
+  deliveredAt?: string | null;
+  createdAt?: string;
+  /** Frozen JSON body that was POSTed. */
+  payload: string;
+}
+
+export interface CreateWebhookRequest {
+  name: string;
+  url: string;
+  projectId?: string;
+  eventTypes?: string[];
+}
+
+export interface UpdateWebhookRequest {
+  name?: string;
+  url?: string;
+  eventTypes?: string[];
+  isActive?: boolean;
+}
+
+/**
+ * Returned on create and rotate-secret. `signingSecret` is only ever shown
+ * here — it is stored hashed and never retrievable again.
+ */
+export interface WebhookWithSecret {
+  subscription: WebhookSubscription;
+  signingSecret: string;
+}
+
 // Request types
 export interface CreateVMRequest {
   name: string;

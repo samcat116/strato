@@ -572,6 +572,11 @@ public func configure(_ app: Application) async throws {
     // custom role on the org node, beyond the seeded admin/member vocabulary.
     app.migrations.add(AddRoleMappingsToOIDCProvider())
 
+    // Event notifications (issue #559): user-managed webhook subscriptions
+    // plus the transactional delivery outbox drained by the delivery sweep.
+    app.migrations.add(CreateWebhookSubscription())
+    app.migrations.add(CreateWebhookDelivery())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
@@ -717,6 +722,11 @@ public func configure(_ app: Application) async throws {
     // from their transmitters. The handler arms the sweep at boot and cancels
     // it at shutdown.
     app.lifecycle.use(SSFPollLifecycleHandler())
+
+    // Webhook notifications (issue #559): periodically drain the
+    // webhook_deliveries outbox. The handler arms the sweep at boot and
+    // cancels it at shutdown.
+    app.lifecycle.use(WebhookDeliveryLifecycleHandler())
 
     // Blue/green drain: flip `/health/ready` to 503 on SIGTERM so a load
     // balancer pulls this replica before Vapor stops accepting connections.
