@@ -1,3 +1,4 @@
+import Foundation
 import StratoShared
 
 extension NetworkSpec {
@@ -10,7 +11,12 @@ extension NetworkSpec {
     /// the source of NIC addressing (the legacy single-address columns are dead).
     /// `network` supplies the DHCP/DNS configuration agents program into OVN; nil
     /// (network row absent) leaves DHCP disabled.
-    static func build(interface: some NetworkAddressable, network: LogicalNetwork?) -> NetworkSpec {
+    /// `securityGroupIds` is the NIC's security-group membership (VM NICs
+    /// only; sandbox NICs pass nil = unmanaged), already gated on the
+    /// receiving agent's protocol version by the assembly.
+    static func build(
+        interface: some NetworkAddressable, network: LogicalNetwork?, securityGroupIds: [UUID]? = nil
+    ) -> NetworkSpec {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
         return NetworkSpec(
@@ -31,7 +37,8 @@ extension NetworkSpec {
             dhcpEnabled: network?.dhcpEnabled ?? false,
             dnsServers: network?.dnsServers ?? [],
             domainName: network?.domainName,
-            leaseTime: network?.leaseTime
+            leaseTime: network?.leaseTime,
+            securityGroupIds: securityGroupIds
         )
     }
 }

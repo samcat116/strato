@@ -86,6 +86,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         "/api/images",
         "/api/floating-ips",
         "/api/floating-ip-pools",
+        "/api/security-groups",
         "/api/agents",
         "/api/agent-enrollments",
         "/api/sites",

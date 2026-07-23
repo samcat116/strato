@@ -266,6 +266,16 @@ public struct NetworkSpec: Codable, Sendable {
     public let domainName: String?
     /// DHCP lease time in seconds (`lease_time` option), if set.
     public let leaseTime: Int?
+    /// Security groups this NIC belongs to. The agent adds the NIC's logical
+    /// switch port to each group's OVN port group (and to the global drop
+    /// group) — port-group *membership* is per-VM and owned by the hosting
+    /// agent, while the groups' ACLs are authored by the topology authority
+    /// from `DesiredStateMessage.securityGroups`. Nil means the NIC is
+    /// unmanaged (specs from control planes that predate security groups, and
+    /// sandbox NICs): the port joins no groups, including the drop group, so
+    /// legacy traffic keeps flowing. When present the list is never empty —
+    /// the control plane enforces the ≥1-group invariant.
+    public let securityGroupIds: [UUID]?
 
     public init(
         network: String,
@@ -281,7 +291,8 @@ public struct NetworkSpec: Codable, Sendable {
         dhcpEnabled: Bool = false,
         dnsServers: [String] = [],
         domainName: String? = nil,
-        leaseTime: Int? = nil
+        leaseTime: Int? = nil,
+        securityGroupIds: [UUID]? = nil
     ) {
         self.network = network
         self.networkId = networkId
@@ -297,12 +308,14 @@ public struct NetworkSpec: Codable, Sendable {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.securityGroupIds = securityGroupIds
     }
 
     private enum CodingKeys: String, CodingKey {
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
+        case securityGroupIds
     }
 
     /// Tolerates specs from an older control plane that predates the DHCP fields:
@@ -324,6 +337,7 @@ public struct NetworkSpec: Codable, Sendable {
         self.dnsServers = try container.decodeIfPresent([String].self, forKey: .dnsServers) ?? []
         self.domainName = try container.decodeIfPresent(String.self, forKey: .domainName)
         self.leaseTime = try container.decodeIfPresent(Int.self, forKey: .leaseTime)
+        self.securityGroupIds = try container.decodeIfPresent([UUID].self, forKey: .securityGroupIds)
     }
 }
 

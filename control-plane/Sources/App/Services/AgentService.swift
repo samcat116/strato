@@ -1886,6 +1886,20 @@ actor AgentService {
             uniquingKeysWith: { first, _ in first }
         )
 
+        // NIC → security-group membership for the specs (and, below, the
+        // group definitions the topology authority realizes). Omitted
+        // entirely for pre-v20 agents: they would decode and silently ignore
+        // the fields, so sending them only misstates what the sync achieved;
+        // the attach API refuses new attachments against such agents.
+        let sendSecurityGroups = try await agentSupportsSecurityGroups(agentId: agentId, on: db)
+        let securityGroupsByInterface: [UUID: [UUID]]
+        if sendSecurityGroups {
+            securityGroupsByInterface = try await nicSecurityGroupMemberships(
+                interfaceIDs: vms.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
+        } else {
+            securityGroupsByInterface = [:]
+        }
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
@@ -1895,7 +1909,8 @@ actor AgentService {
                 image: image,
                 volumes: vm.volumes,
                 networkInterfaces: vm.networkInterfaces,
-                networks: networksByName
+                networks: networksByName,
+                securityGroupsByInterface: securityGroupsByInterface
             )
 
             // Image download info lets the agent materialize a VM it doesn't
@@ -2087,10 +2102,25 @@ actor AgentService {
                 ))
         }
 
+        // The security groups the topology authority realizes as port groups
+        // + ACLs: groups attached to NICs of VMs on the hosts whose topology
+        // the receiving agent authors, plus the transitive closure of groups
+        // their rules reference (so `$pg_…` address-set references always
+        // resolve). Nil for non-authoritative agents — they only consume the
+        // per-NIC membership above — and for pre-v20 agents.
+        let securityGroups: [DesiredSecurityGroup]?
+        if sendSecurityGroups && scope.authoritative {
+            securityGroups = try await desiredSecurityGroups(
+                forAgentIDs: scope.floatingIPAgentIDs, on: db)
+        } else {
+            securityGroups = nil
+        }
+
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
-            desiredAgentUpdate: await desiredAgentUpdateForSync(agentId: agentId, on: db))
+            desiredAgentUpdate: await desiredAgentUpdateForSync(agentId: agentId, on: db),
+            securityGroups: securityGroups)
     }
 
     /// The agent self-update this sync should carry (issue #434): the rollout
@@ -2345,6 +2375,101 @@ actor AgentService {
             let agent = try await Agent.find(agentUUID, on: db)
         else { return true }
         return WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// Whether the receiving agent's reconciler realizes security groups
+    /// (wire protocol >= 20). An unknown agent id defaults to supporting —
+    /// there is nothing to protect on a peer that has no registration row.
+    private func agentSupportsSecurityGroups(agentId: String, on db: any Database) async throws -> Bool {
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else { return true }
+        return WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// NIC id → attached security-group ids (sorted for stable wire output)
+    /// for the given interfaces.
+    private func nicSecurityGroupMemberships(
+        interfaceIDs: [UUID], on db: any Database
+    ) async throws -> [UUID: [UUID]] {
+        guard !interfaceIDs.isEmpty else { return [:] }
+        let memberships = try await VMInterfaceSecurityGroup.query(on: db)
+            .filter(\.$interface.$id ~~ interfaceIDs)
+            .all()
+        var byInterface: [UUID: [UUID]] = [:]
+        for membership in memberships {
+            byInterface[membership.$interface.id, default: []].append(membership.$securityGroup.id)
+        }
+        return byInterface.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
+    }
+
+    /// The security groups the desired-state sync should carry for a topology
+    /// authority: every group attached to a NIC of a VM placed on `agentIDs`
+    /// (the hosts whose topology the receiving agent authors), expanded to
+    /// the transitive closure over rule references so every `$pg_…`
+    /// address-set match resolves against an existing port group.
+    private func desiredSecurityGroups(
+        forAgentIDs agentIDs: Set<String>, on db: any Database
+    ) async throws -> [DesiredSecurityGroup] {
+        guard !agentIDs.isEmpty else { return [] }
+        let vmIDs = try await VM.query(on: db)
+            .filter(\.$hypervisorId ~~ agentIDs)
+            .all()
+            .compactMap(\.id)
+        guard !vmIDs.isEmpty else { return [] }
+        let interfaceIDs = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id ~~ vmIDs)
+            .all()
+            .compactMap(\.id)
+        guard !interfaceIDs.isEmpty else { return [] }
+
+        var groupIDs = Set(
+            try await VMInterfaceSecurityGroup.query(on: db)
+                .filter(\.$interface.$id ~~ interfaceIDs)
+                .all()
+                .map { $0.$securityGroup.id })
+
+        // Reference closure: rules pointing at groups outside the attached
+        // set pull those groups in (definitions only — their ACLs matter for
+        // the address set, and membership comes from whatever NICs attach
+        // them). Bounded by the per-project group cap.
+        var frontier = groupIDs
+        while !frontier.isEmpty {
+            let referenced = Set(
+                try await SecurityGroupRule.query(on: db)
+                    .filter(\.$securityGroup.$id ~~ Array(frontier))
+                    .all()
+                    .compactMap { $0.$remoteGroup.id })
+            frontier = referenced.subtracting(groupIDs)
+            groupIDs.formUnion(frontier)
+        }
+        guard !groupIDs.isEmpty else { return [] }
+
+        let groups = try await SecurityGroup.query(on: db)
+            .filter(\.$id ~~ Array(groupIDs))
+            .with(\.$rules)
+            .all()
+        return
+            groups
+            .compactMap { group -> DesiredSecurityGroup? in
+                guard let groupId = group.id else { return nil }
+                let rules = group.rules.compactMap { rule -> DesiredSecurityGroupRule? in
+                    guard let ruleId = rule.id else { return nil }
+                    return DesiredSecurityGroupRule(
+                        id: ruleId,
+                        direction: rule.direction.rawValue,
+                        ethertype: rule.ethertype.rawValue,
+                        protocolName: rule.protocolName,
+                        portRangeMin: rule.portRangeMin,
+                        portRangeMax: rule.portRangeMax,
+                        remoteCIDR: rule.remoteCIDR,
+                        remoteGroupId: rule.$remoteGroup.id
+                    )
+                }
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+                return DesiredSecurityGroup(id: groupId, generation: group.generation, rules: rules)
+            }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
     /// Floating IPs (issue #344) the desired-state sync should carry, keyed by

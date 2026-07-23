@@ -57,6 +57,7 @@ enum IAMActionTranslator {
         case .image: return "image"
         case .network: return "network"
         case .floatingIP: return "floatingip"
+        case .securityGroup: return "securitygroup"
         case .volume, .volumeSnapshot: return "volume"
         case .site: return "site"
         case .agent: return "agent"
@@ -117,12 +118,14 @@ enum IAMActionTranslator {
             switch service {
             case "volume": return "volume:attach"
             case "floatingip": return "floatingip:attach"
+            case "securitygroup": return "securitygroup:attach"
             default: return nil
             }
         case "detach":
             switch service {
             case "volume": return "volume:detach"
             case "floatingip": return "floatingip:detach"
+            case "securitygroup": return "securitygroup:detach"
             default: return nil
             }
         case "clone":
@@ -167,6 +170,8 @@ enum IAMActionTranslator {
             return "network:create"
         case "create_floating_ip":
             return "floatingip:create"
+        case "create_security_group":
+            return "securitygroup:create"
 
         default:
             return nil

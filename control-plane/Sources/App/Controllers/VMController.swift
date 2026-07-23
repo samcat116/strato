@@ -402,6 +402,10 @@ struct VMController: RouteCollection {
             // behavior — and both are what Windows 11 / Server 2025 require.
             let secureBoot: Bool?
             let tpm: Bool?
+            // Security groups for the VM's NIC. Omitted (or empty) means the
+            // project's default group — every NIC must belong to at least one
+            // group.
+            let securityGroupIds: [UUID]?
         }
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
@@ -528,6 +532,30 @@ struct VMController: RouteCollection {
         } else {
             resolvedNetworkName = LogicalNetwork.defaultNetworkName
             networkExplicitlyRequested = false
+        }
+
+        // Resolve the NIC's security groups. Explicit ids must exist, belong
+        // to this project, and fit the per-NIC cap; omitted (or empty) means
+        // the project's default group, ensured inside the create transaction.
+        // No agent-version gate here: VM create must work on a pre-security-
+        // group fleet, where assembly simply omits the fields (documented
+        // mixed-fleet rollout semantics).
+        let requestedSecurityGroupIds: [UUID] = (createRequest.securityGroupIds ?? [])
+            .reduce(into: []) { unique, groupId in
+                if !unique.contains(groupId) { unique.append(groupId) }
+            }
+        if requestedSecurityGroupIds.count > SecurityGroup.maxGroupsPerNIC {
+            throw Abort(
+                .badRequest,
+                reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
+        }
+        for groupId in requestedSecurityGroupIds {
+            guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
+                throw Abort(.badRequest, reason: "Security group \(groupId) does not exist")
+            }
+            guard group.$project.id == projectId else {
+                throw Abort(.badRequest, reason: "Security group \(groupId) belongs to a different project")
+            }
         }
 
         // Create the VM instance from the image.
@@ -745,6 +773,24 @@ struct VMController: RouteCollection {
                         macAddress: VMNetworkInterface.generateMACAddress()
                     )
                     try await networkInterface.save(on: db)
+
+                    // The ≥1-group invariant: the NIC joins the requested
+                    // security groups, or the project's default group when the
+                    // caller picked none.
+                    let groupIds: [UUID]
+                    if requestedSecurityGroupIds.isEmpty {
+                        let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                            projectID: projectId, on: db)
+                        groupIds = [try defaultGroup.requireID()]
+                    } else {
+                        groupIds = requestedSecurityGroupIds
+                    }
+                    for groupId in groupIds {
+                        try await VMInterfaceSecurityGroup(
+                            interfaceID: try networkInterface.requireID(),
+                            securityGroupID: groupId
+                        ).save(on: db)
+                    }
 
                     if let allocation {
                         let address = VMInterfaceAddress(

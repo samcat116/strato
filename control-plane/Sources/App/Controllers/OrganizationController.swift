@@ -178,6 +178,10 @@ struct OrganizationController: RouteCollection {
             on: req.db
         )
 
+        // The mandatory default security group, like any project creation.
+        _ = try await SecurityGroupService.ensureDefaultGroup(
+            projectID: defaultProject.id!, on: req.db)
+
         // Give the org a default site (availability zone) so its first compute
         // agent can be enrolled without the operator hand-creating one first —
         // enrollment requires a site.

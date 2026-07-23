@@ -598,6 +598,11 @@ public func configure(_ app: Application) async throws {
     // can still be announced after the resource row is gone (PR #668 review).
     app.migrations.add(AddDeliveryContextToResourceOperation())
 
+    // Security groups: NIC-attached firewall rule sets realized as OVN ACLs
+    // on port groups, with a mandatory per-project default group.
+    app.migrations.add(CreateSecurityGroup())
+    app.migrations.add(SeedDefaultSecurityGroups())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
