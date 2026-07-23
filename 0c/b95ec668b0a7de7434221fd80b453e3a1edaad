@@ -1,0 +1,50 @@
+control-plane/web/src/components/iam/roles-table.tsx
+  s_0efe7446473d64::t_316597fa891b8e 1-175
+control-plane/web/src/components/iam/policy-form-dialog.tsx
+  s_0efe7446473d64::t_a46a3138c04595 1-307
+control-plane/web/src/lib/hooks/use-iam.ts
+  s_0efe7446473d64::t_805a62a0f09c6d 1-171
+control-plane/web/src/components/iam/index.ts
+  s_0efe7446473d64::t_1f408e80229eb9 1-6
+control-plane/web/src/types/api.ts
+  s_0efe7446473d64::t_9314b66c051651 254-415
+control-plane/web/src/components/iam/policies-table.tsx
+  s_0efe7446473d64::t_2b551d5238f5c4 1-197
+control-plane/web/src/components/iam/roles-section.tsx
+  s_0efe7446473d64::t_8b236d450f238d 1-91
+control-plane/web/src/lib/api/index.ts
+  s_0efe7446473d64::t_eba891d761099c 22
+control-plane/web/src/components/iam/policies-section.tsx
+  s_0efe7446473d64::t_da29f6e1b16199 1-89
+control-plane/web/src/components/iam/role-form-dialog.tsx
+  s_0efe7446473d64::t_8fd367564abaf0 1-542
+control-plane/web/src/lib/hooks/index.ts
+  s_0efe7446473d64::t_762f4592096bdd 114-127
+  s_0efe7446473d64::t_dc0755d9911ba9 113
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_0efe7446473d64::t_705858b0d658c7 64-79
+  s_0efe7446473d64::t_81b8bf38b62e94 9-10,21-29
+  s_0efe7446473d64::t_ef1669c0792ea5 30
+control-plane/web/src/lib/api/iam.ts
+  s_0efe7446473d64::t_cfc24add6a0136 1-111
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_0efe7446473d64::t_6fb4be47278815 18
+  s_0efe7446473d64::t_7461c93d31de2e 155-166
+  s_0efe7446473d64::t_8d9e910aff7677 296-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0cb95ec668b0a7de7434221fd80b453e3a1edaad",
+  "prompts": {},
+  "sessions": {
+    "s_0efe7446473d64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4fb56667-508b-4f0b-867b-bfbc05294f05",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
