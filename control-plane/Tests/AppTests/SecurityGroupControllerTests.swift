@@ -585,6 +585,142 @@ final class SecurityGroupControllerTests {
         }
     }
 
+    // MARK: - Authorization (deny direction)
+
+    @Test("A user from another organization is denied on every endpoint and sees no foreign groups")
+    func crossOrgDenial() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let group = try await self.createGroup(app: app, project: project, token: token, name: "private")
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+
+            // A real (non-system-admin) user in a different organization.
+            let builder = TestDataBuilder(db: app.db)
+            let outsider = try await builder.createUser(
+                username: "outsider", email: "outsider@example.com")
+            let otherOrg = try await builder.createOrganization(name: "Other Org")
+            try await builder.addUserToOrganization(user: outsider, organization: otherOrg, role: "member")
+            outsider.currentOrganizationId = otherOrg.id
+            try await outsider.save(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+
+            // Every per-resource endpoint denies.
+            try await app.test(.GET, "/api/security-groups/\(group.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.PUT, "/api/security-groups/\(group.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+                try req.content.encode(["name": "stolen"])
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.DELETE, "/api/security-groups/\(group.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.POST, "/api/security-groups/\(group.id)/rules") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+                try req.content.encode(
+                    CreateSecurityGroupRuleRequest(direction: .ingress, ethertype: .ipv4))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+                try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            // Creating into the foreign project denies too.
+            try await app.test(.POST, "/api/security-groups") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+                try req.content.encode(
+                    CreateSecurityGroupRequest(name: "intruder", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            // An explicit foreign project filter denies; the unfiltered list
+            // scopes to accessible projects and shows none of org A's groups.
+            try await app.test(.GET, "/api/security-groups?project_id=\(project.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.GET, "/api/security-groups") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let visible = try res.content.decode([SecurityGroupResponse].self)
+                #expect(!visible.contains { $0.id == group.id })
+            }
+        }
+    }
+
+    // MARK: - Resource caps
+
+    @Test("Per-NIC, per-group, and per-project caps refuse at the boundary")
+    func capBoundaries() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            // Per-NIC cap: fill the NIC to maxGroupsPerNIC, then one more.
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+            var groups: [SecurityGroupResponse] = []
+            for index in 0...SecurityGroup.maxGroupsPerNIC {
+                groups.append(
+                    try await self.createGroup(app: app, project: project, token: token, name: "cap-\(index)"))
+            }
+            for group in groups.prefix(SecurityGroup.maxGroupsPerNIC) {
+                try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!, interfaceId: nic.id!))
+                } afterResponse: { res in
+                    #expect(res.status == .noContent)
+                }
+            }
+            try await app.test(.POST, "/api/security-groups/\(groups.last!.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!, interfaceId: nic.id!))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // Per-group rule cap: fill via direct inserts (fast), then the API.
+            let target = groups[0]
+            for _ in 0..<(SecurityGroup.maxRulesPerGroup) {
+                try await SecurityGroupRule(
+                    securityGroupID: target.id, direction: .egress, ethertype: .ipv4
+                ).save(on: app.db)
+            }
+            try await app.test(.POST, "/api/security-groups/\(target.id)/rules") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSecurityGroupRuleRequest(direction: .ingress, ethertype: .ipv4))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // Per-project cap: fill via direct inserts, then the API.
+            let existing = try await SecurityGroup.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .count()
+            for index in 0..<(SecurityGroup.maxGroupsPerProject - existing) {
+                try await SecurityGroup(projectID: project.id!, name: "filler-\(index)").save(on: app.db)
+            }
+            try await app.test(.POST, "/api/security-groups") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSecurityGroupRequest(name: "one-too-many", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
     // MARK: - Desired-state assembly
 
     @Test("Assembly carries groups, the reference closure, and per-NIC ids for v20 agents only")

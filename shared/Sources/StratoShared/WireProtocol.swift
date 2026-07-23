@@ -252,11 +252,18 @@ public enum WireProtocol {
     /// report filtering that no ACL ever enforces. The gate is load-bearing
     /// on the control-plane side — attach/detach on VMs whose realizing agent
     /// registered pre-v20 is refused, and sync assembly omits both fields for
-    /// such agents (see `supportsSecurityGroups(_:)`). In the other
-    /// direction, nil `securityGroups` (an older control plane) is "no
-    /// opinion" — never "tear down all port groups" — and a nil per-NIC list
-    /// marks the port unmanaged: it joins no groups, drop group included, so
-    /// legacy traffic keeps flowing during a mixed-version rollout.
+    /// such agents (see `supportsSecurityGroups(_:)`). VM *create* is
+    /// deliberately NOT gated: every NIC must join at least the project
+    /// default group, so gating creates would make a pre-v20 fleet unable to
+    /// create VMs at all. On such a fleet the NIC's port simply joins no
+    /// groups — pre-security-group behavior — which the migration posture is
+    /// designed around (migrated default groups carry an allow-all-ingress
+    /// rule, so enforcement arriving with the agent upgrade changes nothing
+    /// until an operator tightens rules). In the other direction, nil
+    /// `securityGroups` (an older control plane) is "no opinion" — never
+    /// "tear down all port groups" — and a nil per-NIC list marks the port
+    /// unmanaged: it joins no groups, drop group included, so legacy traffic
+    /// keeps flowing during a mixed-version rollout.
     public static let currentVersion = 20
 
     /// The lowest protocol version that speaks reconciliation state sync
@@ -449,11 +456,12 @@ public enum WireProtocol {
     public static let securityGroupsMinimumVersion = 20
 
     /// Whether an agent registered with `version` enforces security groups. A
-    /// pre-v20 agent decodes the sync and silently ignores both fields, so the
-    /// control plane must refuse attach/detach and SG-carrying creates whose
-    /// realizing agent is too old — otherwise the API reports filtering that
-    /// no ACL ever enforces — and sync assembly omits the fields for such
-    /// agents.
+    /// pre-v20 agent decodes the sync and silently ignores both fields, so
+    /// the control plane must refuse attach/detach on VMs whose realizing
+    /// agent is too old — otherwise the API reports filtering that no ACL
+    /// ever enforces — and sync assembly omits the fields for such agents.
+    /// VM create is deliberately ungated; see the version 20 notes on
+    /// `currentVersion`.
     public static func supportsSecurityGroups(_ version: Int) -> Bool {
         version >= securityGroupsMinimumVersion
     }

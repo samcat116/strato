@@ -67,13 +67,27 @@ struct CreateSecurityGroup: AsyncMigration {
         // ensure-default path reads then writes, so two concurrent creators
         // could both see "no default" and commit — the partial unique index
         // makes the second insert fail instead. Raw SQL: Fluent's schema
-        // builder has no partial-index support.
+        // builder has no partial-index support (nor plain indexes, below).
         if let sql = database as? SQLDatabase {
             try await sql.raw(
                 """
                 CREATE UNIQUE INDEX uq_security_groups_default
                 ON security_groups (project_id) WHERE is_default
                 """
+            ).run()
+            // Hot lookup paths that would otherwise seq-scan: attachment
+            // counts and delete guards key on the join's group id (the
+            // composite unique above is leftmost on interface_id, so it
+            // doesn't serve them), rule fetches key on the owning group, and
+            // the sync-time reference closure walks remote_group_id.
+            try await sql.raw(
+                "CREATE INDEX ix_vm_interface_security_groups_group ON vm_interface_security_groups (security_group_id)"
+            ).run()
+            try await sql.raw(
+                "CREATE INDEX ix_security_group_rules_group ON security_group_rules (security_group_id)"
+            ).run()
+            try await sql.raw(
+                "CREATE INDEX ix_security_group_rules_remote_group ON security_group_rules (remote_group_id)"
             ).run()
         }
     }

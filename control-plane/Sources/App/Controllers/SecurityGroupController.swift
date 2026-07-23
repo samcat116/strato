@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -54,14 +55,20 @@ struct SecurityGroupController: RouteCollection {
         }
 
         let groups = try await query.all()
-        var responses: [SecurityGroupResponse] = []
-        for group in groups {
-            let count = try await VMInterfaceSecurityGroup.query(on: req.db)
-                .filter(\.$securityGroup.$id == group.requireID())
-                .count()
-            responses.append(try SecurityGroupResponse(from: group, attachmentCount: count))
+        // One membership query for the whole page instead of a COUNT per group.
+        let groupIds = try groups.map { try $0.requireID() }
+        var counts: [UUID: Int] = [:]
+        if !groupIds.isEmpty {
+            let memberships = try await VMInterfaceSecurityGroup.query(on: req.db)
+                .filter(\.$securityGroup.$id ~~ groupIds)
+                .all()
+            for membership in memberships {
+                counts[membership.$securityGroup.id, default: 0] += 1
+            }
         }
-        return responses
+        return try groups.map { group in
+            try SecurityGroupResponse(from: group, attachmentCount: counts[group.requireID()] ?? 0)
+        }
     }
 
     /// POST /api/security-groups
@@ -227,9 +234,18 @@ struct SecurityGroupController: RouteCollection {
                 reason: "Security group is referenced by \(references) rule(s) in other groups; delete those first")
         }
 
-        try await req.db.transaction { db in
-            try await group.delete(on: db)
-            try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
+        do {
+            try await req.db.transaction { db in
+                try await group.delete(on: db)
+                try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
+            }
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            // The pre-checks above race concurrent attach/rule-create: the FK
+            // NO ACTION constraints are the authority, so a lost race surfaces
+            // as the same 409 the friendly path gives.
+            throw Abort(
+                .conflict,
+                reason: "Security group became attached or referenced while deleting; detach or delete those first")
         }
 
         // The group's port group drops out of the next sync's desired state
@@ -270,10 +286,9 @@ struct SecurityGroupController: RouteCollection {
             remoteGroupID: request.remoteGroupId,
             description: request.description
         )
-        group.generation += 1
         try await req.db.transaction { db in
             try await rule.save(on: db)
-            try await group.save(on: db)
+            try await Self.bumpGeneration(of: groupId, on: db)
         }
 
         await req.application.agentService.syncDesiredStateToAllAgents()
@@ -297,14 +312,28 @@ struct SecurityGroupController: RouteCollection {
             throw Abort(.notFound, reason: "Rule not found in this security group")
         }
 
-        group.generation += 1
         try await req.db.transaction { db in
             try await rule.delete(on: db)
-            try await group.save(on: db)
+            try await Self.bumpGeneration(of: groupId, on: db)
         }
 
         await req.application.agentService.syncDesiredStateToAllAgents()
         return .noContent
+    }
+
+    /// Atomically increments a group's generation in SQL. A read-modify-write
+    /// through the model would let two concurrent rule mutations both read N
+    /// and both write N+1 — and once an agent has observed N+1 from the first
+    /// sync, the second mutation's ACLs would never be written (the agent's
+    /// generation guard sees "already applied"). `generation = generation + 1`
+    /// makes the row's lock serialize the increments instead.
+    private static func bumpGeneration(of groupId: UUID, on db: Database) async throws {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Generation bump requires an SQL database")
+        }
+        try await sql.raw(
+            "UPDATE security_groups SET generation = generation + 1 WHERE id = \(bind: groupId)"
+        ).run()
     }
 
     // MARK: - Attach / detach
