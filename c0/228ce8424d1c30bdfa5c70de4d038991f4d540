@@ -1,0 +1,75 @@
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_b1a3cdaaad9719::t_4f5263ea62b13c 103-121
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_b1a3cdaaad9719::t_2226f95fd7a2c7 71-76,82,95
+  s_b1a3cdaaad9719::t_c0c42d1fb191b5 183,189,197
+  s_b1a3cdaaad9719::t_6596e2d5b661e0 278
+  s_b1a3cdaaad9719::t_afa7f24bbe285f 386-419
+  s_b1a3cdaaad9719::t_ddb3ca0a574a69 235
+control-plane/Sources/App/Controllers/PolicyController.swift
+  s_b1a3cdaaad9719::t_4a687524bfb572 1-352
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_b1a3cdaaad9719::t_a9b05791321d06 213
+  s_b1a3cdaaad9719::t_92faca7a5c0d33 203-205,207-209,211
+  s_b1a3cdaaad9719::t_a2960e01e0a72e 184
+docs/architecture/iam.md
+  s_b1a3cdaaad9719::t_8ceb8fc2f98e43 353-389
+control-plane/Sources/App/configure.swift
+  s_b1a3cdaaad9719::t_a2eea26c59c99b 557-560
+control-plane/Sources/App/Models/IAMPolicy.swift
+  s_b1a3cdaaad9719::t_6c3a283386e3bd 1-119
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_b1a3cdaaad9719::t_1b953d61fb9c60 280,291-292,297,299-300,302-304,306,308
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_b1a3cdaaad9719::t_b3fb052e482aa6 42-51
+control-plane/Sources/App/routes.swift
+  s_b1a3cdaaad9719::t_00e994ff6cfaf5 20-21
+control-plane/Sources/App/Migrations/CreateIAMPolicy.swift
+  s_b1a3cdaaad9719::t_d5e727335a0fe7 1-53
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_b1a3cdaaad9719::t_dfa364ce4f53f0 158-163
+  s_b1a3cdaaad9719::t_e81f25803becf1 191-193
+control-plane/Sources/App/IAM/Cedar/PolicyDescriptor.swift
+  s_b1a3cdaaad9719::t_2e88c812b68254 1-40
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_b1a3cdaaad9719::t_3a9433f199698f 92-116,120-122,132-138
+  s_b1a3cdaaad9719::t_926db932417c29 172-173,177-181,185-229
+  s_b1a3cdaaad9719::t_ee980d6f786a61 230-231
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_b1a3cdaaad9719::t_2841974e132b4e 115-120,132-133
+  s_b1a3cdaaad9719::t_659b2694d0c19c 279-285,288-289,299-300,309
+  s_b1a3cdaaad9719::t_d1ff00f1ccff76 56-61,68,72
+  s_b1a3cdaaad9719::t_93f21b6ecbcded 222-258,260-261
+  s_b1a3cdaaad9719::t_410f4b764c4f28 134-138
+control-plane/Sources/App/IAM/Cedar/CedarAuthoredPolicyInspector.swift
+  s_b1a3cdaaad9719::t_b1753738edfbc7 1-229
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_b1a3cdaaad9719::t_25dd32516f269b 85-87
+control-plane/Sources/App/IAM/PolicyStore.swift
+  s_b1a3cdaaad9719::t_5e68bf17f38533 1-59,61-267
+  s_b1a3cdaaad9719::t_b8d813345a8b82 60
+control-plane/Tests/AppTests/PolicyEndpointTests.swift
+  s_b1a3cdaaad9719::t_e6148e301b29e5 1-219,224-311,314-347,350-372,375-377,380-406,411-434,437-566
+  s_b1a3cdaaad9719::t_d1b0d8c6c31488 435-436
+  s_b1a3cdaaad9719::t_a6d1b5f42fffac 348-349
+  s_b1a3cdaaad9719::t_3d4da0168ec939 220-223
+  s_b1a3cdaaad9719::t_8622c95c40b8c3 373-374,378-379
+  s_b1a3cdaaad9719::t_e60a7e5ce583f6 407-410
+  s_b1a3cdaaad9719::t_473e999578f0aa 312-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c0228ce8424d1c30bdfa5c70de4d038991f4d540",
+  "prompts": {},
+  "sessions": {
+    "s_b1a3cdaaad9719": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea271fad-807b-4afa-a3a6-b5ac6c64880d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
