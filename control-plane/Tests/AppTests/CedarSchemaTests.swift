@@ -56,7 +56,15 @@ struct CedarSchemaTests {
         #expect(viewer != op)
         #expect(op != editor)
         #expect(editor != admin)
-        #expect(admin == IAMRoleRegistry.allActions.subtracting(["project:create"]))
+        // `admin` carries the whole vocabulary except the actions no role
+        // carries by design: `project:create` (bare org membership grants it),
+        // the identity-plane `user:*` set, and the system-admin-only actions —
+        // the last two reach principals through the tier-1 policies, never
+        // through a binding.
+        let roleless = IAMRoleRegistry.identityActions
+            .union(IAMRoleRegistry.systemAdminOnlyActions)
+            .union(["project:create"])
+        #expect(admin == IAMRoleRegistry.allActions.subtracting(roleless))
     }
 
     @Test("Canonical permit text enumerates exactly the role's expanded actions")

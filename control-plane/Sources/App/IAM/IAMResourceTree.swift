@@ -68,6 +68,14 @@ enum IAMResourceTree {
         case .organization:
             return nil
 
+        case .user:
+            // A user record is parentless by construction: users belong to
+            // organizations as a *set* (`memberOfOrgs` on the principal
+            // entity), and the tree's one-parent invariant cannot express
+            // that. Access to a user record comes from the two tier-1
+            // policies instead of from anything inherited.
+            return nil
+
         case .organizationalUnit:
             guard let ou = try await OrganizationalUnit.find(node.id, on: db) else { return nil }
             if let parentOUID = ou.$parentOU.id {

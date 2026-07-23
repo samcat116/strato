@@ -39,11 +39,11 @@ struct SecurityGroupController: RouteCollection {
             .with(\.$rules)
             .sort(\.$name)
 
-        if user.isSystemAdmin {
-            if let requestedProjectId {
-                query = query.filter(\.$project.$id == requestedProjectId)
-            }
-        } else if let requestedProjectId {
+        // Project scoping runs for every caller, admins included: their
+        // fleet-wide view comes from the tier-1 `platform-system-admin` policy
+        // answering each `view_project` check, so it lands in the decision log
+        // and a tier-2 guardrail can narrow it.
+        if let requestedProjectId {
             let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")

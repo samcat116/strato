@@ -34,22 +34,30 @@ struct UserController: RouteCollection {
 
     // MARK: - User CRUD
 
+    /// The user directory, filtered per row on `user:read` — the same shape as
+    /// every other list endpoint. An admin sees everyone through the tier-1
+    /// `platform-system-admin` policy; anyone else sees exactly themselves,
+    /// through `platform-user-self`. Neither branch reads `isSystemAdmin`
+    /// here: both are evaluator decisions, so they land in the decision log
+    /// and a tier-2 guardrail binds them.
     func index(req: Request) async throws -> [User.Public] {
-        guard let currentUser = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
-        // Only system admins may enumerate all users
-        guard currentUser.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
-
         let users = try await User.query(on: req.db).all()
-        return users.map { $0.asPublic() }
+        var visible: [User.Public] = []
+        for user in users {
+            guard let userID = user.id else { continue }
+            if try await req.can("user:read", on: IAMNode(type: .user, id: userID)) {
+                visible.append(user.asPublic())
+            }
+        }
+        return visible
     }
 
     func show(req: Request) async throws -> User.Public {
-        guard let currentUser = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -57,10 +65,7 @@ struct UserController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Users may only view themselves unless they are a system admin
-        guard currentUser.isSystemAdmin || currentUser.id == userID else {
-            throw Abort(.forbidden, reason: "You may only access your own account")
-        }
+        try await req.authorize("user:read", on: IAMNode(type: .user, id: userID))
 
         guard let user = try await User.find(userID, on: req.db) else {
             throw Abort(.notFound)
@@ -109,13 +114,13 @@ struct UserController: RouteCollection {
     /// Admin-only: create a `.local` user with no credential and mint a one-time
     /// passkey-claim token. Passkeys are device-bound, so the invitee finishes
     /// enrollment themselves via the returned claim link (`/auth/claim/*`).
+    ///
+    /// Unlike the rest of `user:*`, this has no record to name as its
+    /// resource — the user does not exist yet, and a user has no container to
+    /// check instead — so it stays on the decision-marking admin gate with the
+    /// other node-less platform surfaces, rather than on the evaluator.
     func create(req: Request) async throws -> AdminCreateUserResponse {
-        guard let currentUser = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        guard currentUser.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
+        let currentUser = try req.requireSystemAdmin("System admin access required")
 
         let body = try req.content.decode(AdminCreateUserRequest.self)
         let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -219,7 +224,7 @@ struct UserController: RouteCollection {
     }
 
     func update(req: Request) async throws -> User.Public {
-        guard let currentUser = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -227,10 +232,7 @@ struct UserController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Users may only update themselves unless they are a system admin
-        guard currentUser.isSystemAdmin || currentUser.id == userID else {
-            throw Abort(.forbidden, reason: "You may only modify your own account")
-        }
+        try await req.authorize("user:update", on: IAMNode(type: .user, id: userID))
 
         guard let user = try await User.find(userID, on: req.db) else {
             throw Abort(.notFound)
@@ -296,7 +298,7 @@ struct UserController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let currentUser = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -304,10 +306,7 @@ struct UserController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
 
-        // Users may only delete themselves unless they are a system admin
-        guard currentUser.isSystemAdmin || currentUser.id == userID else {
-            throw Abort(.forbidden, reason: "You may only delete your own account")
-        }
+        try await req.authorize("user:delete", on: IAMNode(type: .user, id: userID))
 
         guard let user = try await User.find(userID, on: req.db) else {
             throw Abort(.notFound)

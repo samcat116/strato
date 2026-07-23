@@ -376,6 +376,22 @@ extension Request {
         return user
     }
 
+    /// The list-side companion to `requireSystemAdmin()`, for a row that has
+    /// no IAM node to check: a pre-scoping agent, agent enrollment, or
+    /// floating-IP pool with no owning organization. The item endpoints gate
+    /// these with `requireSystemAdmin()`; a list must decide per row rather
+    /// than throw, so this returns the same verdict as a Bool and marks the
+    /// same audit state.
+    ///
+    /// Like the throwing form this can only *deny*: a scoped row never reaches
+    /// it, because a scoped row has a node and goes through `can`.
+    func allowsScopelessPlatformRow() -> Bool {
+        iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
+        guard let user = auth.get(User.self), user.isSystemAdmin else { return false }
+        iamAuthState.adminPolicyUsed.withLockedValue { $0 = true }
+        return true
+    }
+
     /// Declare that this handler's authorization is row scoping or an
     /// open-by-design mutation (organization create: any authenticated user
     /// may start an org). Satisfies the default-deny middleware's handler

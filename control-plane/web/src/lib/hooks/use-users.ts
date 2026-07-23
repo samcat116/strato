@@ -3,8 +3,10 @@ import { usersApi } from "@/lib/api/users";
 import { ApiError } from "@/lib/api/client";
 import type { AdminCreateUserRequest, UpdateUserRequest } from "@/types/api";
 
-// System-admin only; gate callers on user.isSystemAdmin so the query
-// doesn't fire (and 403) for regular users.
+// The endpoint filters per row on `user:read`, so a non-admin gets a
+// one-element list of themselves rather than a 403. That is useless for the
+// admin users page, so callers still gate on user.isSystemAdmin to keep the
+// query from firing at all.
 export function useUsers(enabled: boolean = true) {
   return useQuery({
     queryKey: ["users"],

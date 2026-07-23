@@ -324,6 +324,39 @@ extension Agent {
     func rootOrganizationID(on db: Database) async throws -> UUID? {
         try await organizationScope?.rootOrganizationID(on: db)
     }
+
+    /// Whether this agent hosts a VM, sandbox, or volume whose project belongs
+    /// to a different organization than the agent itself.
+    ///
+    /// Until the scheduler and volume placement enforce org-scoped placement
+    /// (phase 2 of the hierarchy overhaul), an agent may host workloads from
+    /// another tenant: cross-org placements from before scoping, or new ones
+    /// the still-unscoped placement paths make. A delegated org admin must not
+    /// be able to take down another tenant's workloads or strand its detached
+    /// volumes, which is what the tier-1 `platform-agent-foreign-workloads`
+    /// forbid keys on.
+    ///
+    /// Projects are resolved once each rather than once per workload: a busy
+    /// agent hosts many VMs from few projects.
+    func hostsForeignWorkloads(on db: Database) async throws -> Bool {
+        let agentOrg = try await rootOrganizationID(on: db)
+        let agentIDString = try requireID().uuidString
+
+        var projectIDs: Set<UUID> = []
+        projectIDs.formUnion(
+            try await VM.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
+        projectIDs.formUnion(
+            try await Sandbox.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
+        projectIDs.formUnion(
+            try await Volume.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
+
+        for projectID in projectIDs {
+            guard let project = try await Project.find(projectID, on: db) else { continue }
+            let projectOrg = try await project.getRootOrganizationId(on: db)
+            if projectOrg != agentOrg { return true }
+        }
+        return false
+    }
 }
 
 // MARK: - DTO for API responses

@@ -20,12 +20,7 @@ struct WorkloadIdentityController: RouteCollection {
     }
 
     func overview(req: Request) async throws -> WorkloadIdentityResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System administrator access required")
-        }
+        _ = try req.requireSystemAdmin()
 
         let spireService = req.application.spireService
         let registration = req.application.spireRegistrationService

@@ -27,15 +27,22 @@ final class UserControllerTests: BaseTestCase {
 
     // MARK: - index
 
-    @Test("index is forbidden for non-admins")
-    func testIndexForbiddenForNonAdmin() async throws {
+    /// The directory filters per row on `user:read`, like every other list
+    /// endpoint, rather than gating the whole route on system admin: a
+    /// non-admin is not forbidden, they simply match only themselves through
+    /// the tier-1 `platform-user-self` policy.
+    @Test("index returns only your own record for non-admins")
+    func testIndexReturnsOnlySelfForNonAdmin() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
+            _ = try await makeUser(on: app.db, username: "other", email: "other@example.com")
 
             try await app.test(.GET, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
-                #expect(res.status == .forbidden)
+                #expect(res.status == .ok)
+                let users = try res.content.decode([User.Public].self)
+                #expect(users.map(\.id) == [testUser.id])
             }
         }
     }

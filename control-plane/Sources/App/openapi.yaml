@@ -1717,8 +1717,11 @@ paths:
   /api/users:
     get:
       operationId: listUsers
-      summary: List all users
-      description: System-admin only; enumerates every account in the deployment.
+      summary: List users
+      description: >-
+        Filtered per row on `user:read`: a system admin gets every account in
+        the deployment, anyone else gets only their own. Not an error for a
+        non-admin — a one-element list, not a 403.
       tags: [Users]
       responses:
         "200":

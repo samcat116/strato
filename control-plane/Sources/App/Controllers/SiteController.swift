@@ -161,7 +161,7 @@ struct SiteController: RouteCollection {
     /// GET /api/sites
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listSites(req: Request) async throws -> [SiteResponse] {
-        let user = try requireUser(req)
+        _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         var query = Site.query(on: req.db).sort(\.$name)
@@ -175,20 +175,17 @@ struct SiteController: RouteCollection {
         }
         let sites = try await query.all()
 
-        // The org filter is applied in the query above, so it narrows the system-admin
-        // fleet view too — an admin who asks for one org's sites must not get every
-        // org's back just because they can see them all.
-        let visible: [Site]
-        if user.isSystemAdmin {
-            visible = sites
-        } else {
-            var allowed: [Site] = []
-            for site in sites {
-                guard let siteId = site.id else { continue }
-                let ok = try await req.can("view", on: "site", id: siteId.uuidString)
-                if ok { allowed.append(site) }
-            }
-            visible = allowed
+        // Every caller is filtered the same way, admins included: the
+        // `platform-system-admin` tier-1 policy is what lets them see the whole
+        // fleet, so their view is a decision the evaluator made — logged, and
+        // narrowable by a tier-2 guardrail — rather than a check they skipped.
+        // The org filter above narrows the query first, so an admin who asks
+        // for one org's sites does not get every org's back.
+        var visible: [Site] = []
+        for site in sites {
+            guard let siteId = site.id else { continue }
+            let ok = try await req.can("view", on: "site", id: siteId.uuidString)
+            if ok { visible.append(site) }
         }
         return try visible.map { try SiteResponse(from: $0) }
     }

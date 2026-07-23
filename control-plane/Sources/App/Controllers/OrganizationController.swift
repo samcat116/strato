@@ -28,12 +28,7 @@ struct OrganizationController: RouteCollection {
     /// isn't necessarily a member of the target. `index` stays membership-scoped
     /// for the normal org switcher.
     func listAll(req: Request) async throws -> [OrganizationResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
-        }
+        _ = try req.requireSystemAdmin("System admin access required")
 
         let organizations = try await Organization.query(on: req.db)
             .sort(\.$name)
