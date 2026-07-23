@@ -73,9 +73,9 @@ Without the Prometheus Operator, set `prometheusExport.podAnnotations: true`
 instead for `prometheus.io/scrape` annotation discovery (plain Prometheus
 `kubernetes_sd`, Grafana Alloy, DataDog).
 
-Logs and traces stay on the OTLP path — point
-`opentelemetry.collector.endpoint` (or the collector's exporters) at your
-backend; only metrics need the scrape endpoint.
+Logs and traces stay on the OTLP path; only metrics need the scrape endpoint.
+For traces, see [Sending traces to a backend](#sending-traces-to-a-backend)
+below.
 
 Setting `opentelemetry.prometheusExport.enabled: false` **and**
 `opentelemetry.prometheus.enabled: false` removes the exporter, its Service and
@@ -85,6 +85,44 @@ container ports, and SPIRE's telemetry listener entirely.
 With `networkPolicy.enabled: true`, an external `opentelemetry.prometheus.url`
 on a non-443 port needs its own rule in `networkPolicy.egress` — the chart can
 only scope the built-in rule to its own Prometheus pods.
+:::
+
+## Sending traces to a backend
+
+Spans reach the chart's collector over OTLP, but by default the collector's
+traces pipeline ends in the `debug` exporter: it receives every span, logs a
+one-line summary per batch, and drops them. **Enabling `traces` alone does not
+store a trace anywhere.** Give the pipeline a real destination:
+
+```yaml
+opentelemetry:
+  traces:
+    enabled: true
+    exporter:
+      otlp:
+        # host:port, no scheme. gRPC, matching what the control plane speaks.
+        endpoint: tempo.monitoring.svc.cluster.local:4317
+        insecure: true      # plaintext; fine for a same-cluster backend
+```
+
+Anything that speaks OTLP works — Tempo, Jaeger (`:4317` with its OTLP receiver
+enabled), or an upstream collector that fans out further.
+
+| Value | Default | Notes |
+|-------|---------|-------|
+| `traces.exporter.otlp.endpoint` | `""` | `host:port`. Empty leaves the pipeline on `debug` |
+| `traces.exporter.otlp.insecure` | `true` | Plaintext gRPC. Set `false` for TLS |
+| `traces.exporter.otlp.caFile` | `""` | PEM CA bundle path, mounted separately. Only read when `insecure: false` |
+| `traces.exporter.otlp.headers` | `{}` | Per-export headers — a tenant ID (`X-Scope-OrgID`) or API token |
+
+Setting an endpoint also **removes** `debug` from the traces pipeline, so the
+collector stops narrating every batch into its own stdout — which your log
+shipper would otherwise pay to store.
+
+::: warning networkPolicy
+`networkPolicy.egress` allows port 4317 already, but that rule is for the
+control plane reaching the collector. A collector shipping to a backend on some
+other port (or off-cluster) needs its own rule.
 :::
 
 ## Metric catalog
@@ -176,6 +214,9 @@ the same OTLP endpoint as metrics. Every signal is stamped with the
 attributes, so a trace can be tied back to the exact build and replica that
 produced it.
 
+Note that enabling the pillar only gets spans as far as the collector — see
+[Sending traces to a backend](#sending-traces-to-a-backend) for storing them.
+
 ### Coverage
 
 - **Per-request server span** — `TracingMiddleware` opens one span per HTTP
@@ -196,6 +237,25 @@ Spans go through the swift-distributed-tracing facade, which installs a no-op
 tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sites
 cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
 is never bootstrapped).
+
+### Correlating traces with logs
+
+`entrypoint.swift` bootstraps SwiftLog with swift-otel's logging metadata
+provider, so any line logged inside a span carries `trace_id`, `span_id` and
+`trace_flags`. The default console handler renders metadata as a sorted,
+bracketed suffix:
+
+```
+[ INFO ] http_request [method: GET, path: /api/vms, span_id: 5f3a…, trace_flags: 1, trace_id: 9c1e…]
+```
+
+That is what makes a log line addressable from its trace. In Grafana, a Loki
+derived field extracting `trace_id: ([0-9a-f]+)` links each line to the trace in
+Tempo, and Tempo's `tracesToLogsV2` links the other way.
+
+The provider costs nothing when there is no active span: it reads
+`ServiceContext.current` and returns no metadata, which covers every line logged
+before OTel bootstraps and every deployment running with tracing off.
 
 ### Not yet traced
 
