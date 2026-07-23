@@ -31,11 +31,10 @@ struct CreateIAMPolicy: AsyncMigration {
             ).run()
 
             // Effect is derived from the Cedar text and can only be `permit` or
-            // `forbid`; the store enforces that, and this is the backstop for
-            // anything reaching the table another way (a repair script, a bulk
-            // import). Postgres only: SQLite cannot add a CHECK outside CREATE
-            // TABLE, and the SQLite path is local tests where the store is in
-            // force.
+            // `forbid`; the store enforces that, and this CHECK is the backstop
+            // for anything reaching the table another way (a repair script, a
+            // bulk import). Postgres is the only backend, but the guard keeps
+            // this a no-op rather than a crash on any other dialect.
             if sql.dialect.name == "postgresql" {
                 try await sql.raw(
                     """

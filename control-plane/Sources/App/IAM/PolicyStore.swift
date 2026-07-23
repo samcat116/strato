@@ -71,6 +71,18 @@ enum PolicyStore {
     /// must not be able to author. Walking the named resource's ancestry and
     /// requiring the owner node on the chain is the same containment the tree
     /// already expresses for bindings and ceilings.
+    ///
+    /// **This is checked at write time only.** The compiled set evaluates every
+    /// enabled policy globally — ownership scopes nothing at evaluation time, so
+    /// the resource scope *is* the whole containment guarantee. That rests on a
+    /// load-bearing invariant: a resource a policy names by `==`/`in` never
+    /// leaves its owner's subtree. It holds today because folder moves are
+    /// same-org (`OrganizationalUnitController.move` rejects a cross-org
+    /// parent), so the org boundary can never be crossed. If a resource a policy
+    /// pins by id becomes re-parentable across projects, a policy would keep
+    /// reaching a resource its owner no longer administers — re-validating or
+    /// disabling affected policies on such a move belongs with the #484
+    /// symcc follow-up.
     private static func requireContained(
         _ shape: AuthoredPolicyShape,
         ownerType: IAMRoleOwnerType,
@@ -203,16 +215,19 @@ enum PolicyStore {
     static func deleteOwned(
         by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
     ) async throws -> Int {
-        let owned = try await IAMPolicy.query(on: db)
+        // Count, then delete — the caller only needs the tally (to decide
+        // whether the cascade bumps the policy-set version), so there is no
+        // reason to materialize every row's `cedar_text` first.
+        let count = try await IAMPolicy.query(on: db)
             .filter(\.$ownerType == ownerType.rawValue)
             .filter(\.$ownerID == ownerID)
-            .all()
-        guard !owned.isEmpty else { return 0 }
+            .count()
+        guard count > 0 else { return 0 }
         try await IAMPolicy.query(on: db)
             .filter(\.$ownerType == ownerType.rawValue)
             .filter(\.$ownerID == ownerID)
             .delete()
-        return owned.count
+        return count
     }
 }
 
