@@ -4454,7 +4454,7 @@ export interface paths {
         };
         /**
          * List a webhook's recent deliveries
-         * @description Requires organization membership. Newest first. Terminal deliveries are pruned after the history retention window.
+         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Newest first. Terminal deliveries are pruned after the history retention window.
          */
         get: operations["listWebhookDeliveries"];
         put?: never;
