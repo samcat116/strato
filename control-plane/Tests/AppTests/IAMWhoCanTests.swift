@@ -5,9 +5,10 @@ import VaporTesting
 
 @testable import App
 
-/// IAM phase 1 (issue #478): the who-can reverse lookup and the
-/// arbitrary-principal form of `can-i`, both served from `role_bindings` plus
-/// the resource tree rather than from the policy engine.
+/// IAM phase 1 (issue #478): the who-can reverse lookup — candidates
+/// enumerated from `role_bindings` plus the resource tree — and the
+/// arbitrary-principal form of `can-i`, which since the evaluator unification
+/// answers through `IAMDecisionEngine` (the enforcement decision itself).
 @Suite("IAM Who-Can Tests", .serialized)
 final class IAMWhoCanTests {
 
@@ -88,7 +89,8 @@ final class IAMWhoCanTests {
                 principalType: .user, principalID: user.id!, role: .operator,
                 nodeType: .organizationalUnit, nodeID: tree.ou.id!, createdBy: nil, on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, app: app, on: app.db)
+                .principals
 
             let match = entries.first { $0.principal.id == user.id! }
             #expect(match?.source == .binding)
@@ -110,7 +112,8 @@ final class IAMWhoCanTests {
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
 
             // vm:read is a viewer action; admin ⊃ editor ⊃ operator ⊃ viewer.
-            let entries = try await WhoCanService.whoCan(action: "vm:read", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:read", node: tree.vmNode, app: app, on: app.db)
+                .principals
             #expect(entries.contains { $0.principal.id == user.id! && $0.role == IAMRole.admin.rawValue })
         }
     }
@@ -126,7 +129,7 @@ final class IAMWhoCanTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:teleport", node: tree.vmNode, on: app.db)
+            let entries = try await WhoCanService.whoCan(action: "vm:teleport", node: tree.vmNode, app: app, on: app.db)
                 .principals
             #expect(!entries.contains { $0.source == .binding })
         }
@@ -149,7 +152,8 @@ final class IAMWhoCanTests {
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil,
                 expiresAt: Date().addingTimeInterval(3600), on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
+                .principals
             #expect(!entries.contains { $0.principal.id == expired.id! })
             #expect(entries.contains { $0.principal.id == live.id! })
         }
@@ -168,7 +172,8 @@ final class IAMWhoCanTests {
                 principalType: .group, principalID: group.id!, role: .editor,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
+                .principals
 
             // The grant itself...
             let groupEntry = entries.first { $0.principal == WhoCanPrincipalRef(type: .group, id: group.id!) }
@@ -195,7 +200,8 @@ final class IAMWhoCanTests {
                 principalType: .user, principalID: outsider.id!, role: .editor,
                 nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
+                .principals
             // External access is exactly what this endpoint must surface.
             #expect(entries.contains { $0.principal.id == outsider.id! && $0.source == .binding })
         }
@@ -209,11 +215,13 @@ final class IAMWhoCanTests {
             let member = try await builder.createUser(username: "mem", email: "mem@example.com")
             try await builder.addUserToOrganization(user: member, organization: tree.org, role: "member")
 
-            let orgRead = try await WhoCanService.whoCan(action: "org:read", node: tree.vmNode, on: app.db).principals
+            let orgRead = try await WhoCanService.whoCan(action: "org:read", node: tree.vmNode, app: app, on: app.db)
+                .principals
             #expect(orgRead.contains { $0.principal.id == member.id! && $0.source == .orgMembership })
 
             // Bare membership grants nothing else — no binding, no access.
-            let vmStart = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, on: app.db).principals
+            let vmStart = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, app: app, on: app.db)
+                .principals
             #expect(!vmStart.contains { $0.principal.id == member.id! })
         }
     }
@@ -226,7 +234,8 @@ final class IAMWhoCanTests {
             let admin = try await builder.createUser(
                 username: "sysadm", email: "sysadm@example.com", isSystemAdmin: true)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:start", node: tree.vmNode, app: app, on: app.db)
+                .principals
             let match = entries.first { $0.principal.id == admin.id! }
             #expect(match?.source == .systemAdmin)
             #expect(match?.role == nil)
@@ -250,7 +259,8 @@ final class IAMWhoCanTests {
                     nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
             }
 
-            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
+                .principals
             let userEntries = entries.filter { $0.principal == WhoCanPrincipalRef(type: .user, id: user.id!) }
             // Revoking access means revoking both, so both must be visible.
             #expect(userEntries.count == 2)
@@ -272,22 +282,22 @@ final class IAMWhoCanTests {
             try await network.save(on: app.db)
             let node = IAMNode(type: .network, id: network.id!)
 
-            let result = try await WhoCanService.whoCan(action: "network:read", node: node, on: app.db)
+            let result = try await WhoCanService.whoCan(action: "network:read", node: node, app: app, on: app.db)
             #expect(result.openToAllAuthenticatedUsers)
 
             // The stranger holds no binding anywhere, but the API would still
             // serve them this network.
             let allowed = try await WhoCanService.can(
                 principalType: .user, principalID: stranger.id!, action: "network:read",
-                node: node, on: app.db)
+                node: node, app: app, on: app.db)
             #expect(allowed)
 
             // The exemption is read-only and network-specific.
-            let update = try await WhoCanService.whoCan(action: "network:update", node: node, on: app.db)
+            let update = try await WhoCanService.whoCan(action: "network:update", node: node, app: app, on: app.db)
             #expect(!update.openToAllAuthenticatedUsers)
             let canUpdate = try await WhoCanService.can(
                 principalType: .user, principalID: stranger.id!, action: "network:update",
-                node: node, on: app.db)
+                node: node, app: app, on: app.db)
             #expect(!canUpdate)
         }
     }
@@ -304,11 +314,11 @@ final class IAMWhoCanTests {
             try await network.save(on: app.db)
             let node = IAMNode(type: .network, id: network.id!)
 
-            let result = try await WhoCanService.whoCan(action: "network:read", node: node, on: app.db)
+            let result = try await WhoCanService.whoCan(action: "network:read", node: node, app: app, on: app.db)
             #expect(!result.openToAllAuthenticatedUsers)
             let allowed = try await WhoCanService.can(
                 principalType: .user, principalID: stranger.id!, action: "network:read",
-                node: node, on: app.db)
+                node: node, app: app, on: app.db)
             #expect(!allowed)
         }
     }
@@ -328,7 +338,7 @@ final class IAMWhoCanTests {
 
             func can(_ type: IAMPrincipalType, _ id: UUID) async throws -> Bool {
                 try await WhoCanService.can(
-                    principalType: type, principalID: id, action: "network:read", node: node, on: app.db)
+                    principalType: type, principalID: id, action: "network:read", node: node, app: app, on: app.db)
             }
 
             // A group never logs in; an unknown id is nobody; a disabled account
@@ -367,7 +377,7 @@ final class IAMWhoCanTests {
             for action in ["vm:create", "vm:read", "org:read"] {
                 let allowed = try await WhoCanService.can(
                     principalType: .user, principalID: disabled.id!, action: action,
-                    node: tree.vmNode, on: app.db)
+                    node: tree.vmNode, app: app, on: app.db)
                 #expect(!allowed, "disabled account should not hold \(action)")
             }
         }
@@ -388,7 +398,8 @@ final class IAMWhoCanTests {
             disabled.disabledAt = Date()
             try await disabled.save(on: app.db)
 
-            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, on: app.db).principals
+            let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
+                .principals
 
             // The un-revoked grant stays visible — that is the point of the
             // audit — but is marked so it isn't read as live access.
@@ -469,7 +480,7 @@ final class IAMWhoCanTests {
                 nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
 
             let entries = try await WhoCanService.whoCan(
-                action: "site:manage", node: IAMNode(type: .site, id: site.id!), on: app.db
+                action: "site:manage", node: IAMNode(type: .site, id: site.id!), app: app, on: app.db
             ).principals
             #expect(entries.contains { $0.principal.id == admin.id! && $0.source == .binding })
         }
@@ -503,7 +514,7 @@ final class IAMWhoCanTests {
             func can(_ user: User) async throws -> Bool {
                 try await WhoCanService.can(
                     principalType: .user, principalID: user.id!, action: "vm:create",
-                    node: tree.vmNode, on: app.db)
+                    node: tree.vmNode, app: app, on: app.db)
             }
 
             let directAllowed = try await can(direct)
@@ -527,7 +538,7 @@ final class IAMWhoCanTests {
 
             let allowed = try await WhoCanService.can(
                 principalType: .user, principalID: admin.id!, action: "vm:create",
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, app: app, on: app.db)
             #expect(allowed)
         }
     }

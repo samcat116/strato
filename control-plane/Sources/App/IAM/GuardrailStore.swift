@@ -325,8 +325,8 @@ enum GuardrailStore {
             // Authored rows (#610) carry placeholder matchers — their forbid is
             // the stored Cedar text, which the structured matchers here cannot
             // stand in for. They are reflected by evaluating the compiled set
-            // instead (`CeilingEvaluator`), so skip them rather than match on a
-            // meaningless `.any`.
+            // instead (`IAMDecisionEngine`), so skip them rather than match on
+            // a meaningless `.any`.
             guard !guardrail.authored else { continue }
             guard GuardrailActions.matches(guardrail.actions, action: action) else { continue }
             guard try matches(try guardrail.resourceMatch(), environment: environment) else { continue }

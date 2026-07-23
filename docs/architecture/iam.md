@@ -420,12 +420,12 @@ able to act.
 
 **Ceilings are reflected exactly (#610).** A `who-can` query fixes the action
 and the node, so a *forbid* — a guardrail or an authored forbid policy — is
-concrete and needs no solver: `who-can` evaluates the compiled set for each
-granted principal it enumerates (a non-recording pass, so the reverse lookup
-does not flood the decision log) and marks the ones a ceiling neutralises
-`ceilinged`, alongside a `ceilings` section naming what constrains the resource.
-`WhoCanService.can` subtracts ceilings the same way, so it agrees with the
-enforcer about a grant a ceiling takes back. This is why authored *forbids* left
+concrete and needs no solver: `who-can` decides through `IAMDecisionEngine`
+for each granted principal it enumerates (a non-recording pass, so the
+reverse lookup does not flood the decision log) and marks the ones a ceiling
+neutralises `ceilinged`, alongside a `ceilings` section naming what
+constrains the resource. `WhoCanService.can` returns the same engine's
+verdict outright, so it agrees with the enforcer by construction. This is why authored *forbids* left
 the best-effort caveat above — only permits, which widen access, remain
 un-invertible. Marking rather than filtering is deliberate: an admin auditing
 "who can reach this?" needs to see both a ceilinged grant and a live one. This
@@ -641,11 +641,14 @@ The schema, the static policies, the loader, and the compiled-set cache are in
    log; this is what makes guardrail denials debuggable. **Shipped** (#481) —
    see "Decision logs" below.
 
-`who-can` answers from `role_bindings` plus the resource tree — an ancestor
-walk (`IAMResourceTree`) and a group expansion — never from the policy engine.
-A reverse query against an evaluator means enumerating every principal and
-checking each; against tables we own it is a bounded set of indexed reads.
-This is what the one-parent invariant buys.
+`who-can` *enumerates* from `role_bindings` plus the resource tree — an
+ancestor walk (`IAMResourceTree`) and a group expansion — because a reverse
+query against an evaluator means enumerating every principal and checking
+each; against tables we own it is a bounded set of indexed reads. This is what
+the one-parent invariant buys. What each enumerated candidate can *actually
+do* is then decided by `IAMDecisionEngine` — the single evaluator shared with
+enforcement — so the tables explain grants while the engine has the last word
+(the `ceilinged` marks, and every `WhoCanService.can` verdict).
 
 Because not every grant is a binding, each answer carries the reason it was
 included — `binding` (with the role, the node it was granted on, and the group
@@ -658,20 +661,25 @@ visible.
 Reading who holds access is itself administrative — both endpoints require
 admin over the resource or a container above it.
 
-Since cutover the caller-scoped form of `can-i` answers from the evaluator —
-exactly what gates requests, guardrails included, with no admin fast path
-(a forbid can deny an admin, so short-circuiting to "true" could lie). It
-accepts IAM action names, plus legacy (SpiceDB-era) permission names
-translated the same way `req.can` translates, until clients finish migrating. The
-arbitrary-principal form still answers from the bindings table so it agrees
-with `who-can`.
+Both forms of `can-i` answer from the evaluator — exactly what gates
+requests, guardrails included, with no admin fast path (a forbid can deny an
+admin, so short-circuiting to "true" could lie). The caller-scoped form is
+the enforcement path itself (`req.can`, which records a decision-log row) and
+accepts IAM action names plus legacy (SpiceDB-era) permission names
+translated the same way `req.can` translates, until clients finish migrating.
+The arbitrary-principal form (`WhoCanService.can`) decides through
+`IAMDecisionEngine` without recording, plus the reachability gates a real
+request would have hit first: a disabled or nonexistent principal answers
+`false`, and a *group* — a binding subject that never makes a request —
+answers from its bindings minus the matcher guardrails that can name one.
 
 ### Decision logs (shipped with #481; the reverse shadow retired with #483)
 
 Before cutover, SpiceDB gated requests and Cedar shadowed it. Cutover (#482)
-reversed the direction: **Cedar gates requests inline** (`IAMAuthorizer`),
-and every decision lands in `iam_decision_logs` with the deciding policy
-ids, the policy-set version, and the tier. Through the rollback window —
+reversed the direction: **Cedar gates requests inline** — `IAMDecisionEngine`
+decides (the one evaluator, shared with `who-can`), `IAMAuthorizer` enforces
+and records — and every decision lands in `iam_decision_logs` with the
+deciding policy ids, the policy-set version, and the tier. Through the rollback window —
 while SpiceDB remained deployed — each check with a SpiceDB-vocabulary
 equivalent also asked SpiceDB in a background task and recorded both
 verdicts, so the mismatch surface kept watching for regressions. That

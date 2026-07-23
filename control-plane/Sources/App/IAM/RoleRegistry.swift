@@ -32,6 +32,15 @@ struct IAMPrincipal: Hashable, Sendable {
     static func serviceAccount(_ id: UUID) -> IAMPrincipal { IAMPrincipal(type: .serviceAccount, id: id) }
     static func workload(_ id: UUID) -> IAMPrincipal { IAMPrincipal(type: .workload, id: id) }
 
+    /// The request principal for a binding subject, or nil for a group — the
+    /// gate that keeps groups out of the evaluator. A group does not act (its
+    /// members do, through their group parent edges), and the compiled schema
+    /// declares no request environment for it.
+    static func requestPrincipal(type: IAMPrincipalType, id: UUID) -> IAMPrincipal? {
+        guard type != .group else { return nil }
+        return IAMPrincipal(type: type, id: id)
+    }
+
     /// The decision-log subject string. Users keep the bare UUID the log has
     /// always recorded; other principal types are disambiguated with their
     /// type (`service_account:<uuid>`), which cannot collide with a UUID.

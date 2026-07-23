@@ -9,11 +9,12 @@ import Vapor
 // actions.
 //
 // Cedar gates requests. Every check — middleware, `req.can` in either
-// vocabulary — funnels into `IAMAuthorizer.authorize`: load the entity slice,
-// evaluate the compiled policy set inline, record the decision. The
-// system-admin bypass is gone from code: admins are allowed by the
-// `platform-system-admin` tier-1 policy, which means their decisions appear in
-// the decision log and tier-2 guardrail forbids bind them like everyone else.
+// vocabulary — funnels into `IAMAuthorizer.authorize`: decide through
+// `IAMDecisionEngine` (the one evaluator, shared with `WhoCanService`), record
+// the decision. The system-admin bypass is gone from code: admins are allowed
+// by the `platform-system-admin` tier-1 policy, which means their decisions
+// appear in the decision log and tier-2 guardrail forbids bind them like
+// everyone else.
 
 /// The legacy-vocabulary question a check was phrased in, when it has one —
 /// carried into the decision log so rows record what was literally asked at
@@ -133,8 +134,10 @@ enum IAMAuthorizer {
         }
     }
 
-    /// The uninstrumented Cedar evaluation. `authorize(principal:…)` wraps this
-    /// with the span and decision metrics.
+    /// The uninstrumented check: `IAMDecisionEngine.decide` plus everything
+    /// enforcement owes on top of a decision — the fail-closed error surface,
+    /// the audit-state flags, and the decision-log row. `authorize(principal:…)`
+    /// wraps this with the span and decision metrics.
     private static func evaluate(
         principal: IAMPrincipal,
         action: String,
@@ -145,91 +148,51 @@ enum IAMAuthorizer {
         app: Application,
         db: any Database
     ) async throws -> CedarCheckDecision {
-        guard let built = await app.cedarPolicySet.current else {
-            // Boot builds the set before serving; reaching this means every
-            // rebuild since has failed and there was never a good one. Denying
-            // with 403 would look like policy — say what it is.
-            app.logger.error("IAM check with no compiled Cedar policy set; failing closed")
-            throw Abort(.serviceUnavailable, reason: "Authorization system is not ready")
+        let built = try await IAMDecisionEngine.compiledSet(app)
+
+        let outcome: IAMDecisionEngine.Decision
+        do {
+            outcome = try await IAMDecisionEngine.decide(
+                principal: principal, action: action, node: node, built: built, on: db)
+        } catch let failure as IAMDecisionEngine.EvaluationFailure {
+            app.logger.error(
+                "Cedar evaluation failed; failing closed",
+                metadata: [
+                    "action": .string(action),
+                    "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
+                    "error": .string("\(failure.underlying)"),
+                ])
+            throw Abort(.internalServerError, reason: "Authorization evaluation failed")
         }
 
-        let slice = try await EntitySliceLoader.load(principal: principal, node: node, on: db)
-
-        // A truncated ancestor chain is fail-open for tier-2 guardrails: a
-        // forbid anchored above the break silently stops matching while an
-        // in-chain binding still permits. Deny before evaluating — this takes
-        // an inconsistent tree (an orphaned intermediate node), so a loud
-        // denial is diagnosis, not disruption. It binds system admins too
-        // (letting them through would evade the very ceilings the guard
-        // protects); repair goes through the admin-only hierarchy
-        // validate/repair surface, which gates on requireSystemAdmin rather
-        // than a per-object check.
-        guard slice.chainComplete else {
+        if outcome.deniedForTruncatedChain {
             app.logger.error(
                 "IAM check denied: ancestor chain does not reach an organization; a guardrail anchored above the break could not apply",
                 metadata: [
                     "action": .string(action),
                     "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
                     "chain": .string(
-                        slice.chain.map { "\($0.type.rawValue):\($0.id.uuidString)" }
+                        outcome.slice.chain.map { "\($0.type.rawValue):\($0.id.uuidString)" }
                             .joined(separator: " -> ")),
                 ])
-            let denial = CedarCheckDecision(
-                allowed: false,
-                determiningPolicyIDs: [],
-                evaluationErrors: ["ancestor chain truncated; denied without evaluation (fail closed)"]
-            )
-            state?.decisionEvaluated.withLockedValue { $0 = true }
-            app.iamDecisionRecorder.recordInBackground(
-                IAMDecisionRecord(
-                    subject: principal.subject,
-                    action: action,
-                    node: node,
-                    organizationID: nil,
-                    skippedConditionedBindings: slice.skippedConditionedBindings,
-                    decision: denial,
-                    policyVersion: built.version,
-                    legacyEquivalent: legacyEquivalent,
-                    context: context
-                ))
-            return denial
-        }
-
-        // Grants for roles the compiled schema doesn't declare are dropped
-        // (under-grant) — a role created or deleted since this replica's last
-        // rebuild. Transient by design (the version nudge or 30s re-read
-        // converges it), but worth a trace when it happens.
-        let droppedRoleIDs = slice.grants.roleIDs.subtracting(built.roleIDs)
-        if !droppedRoleIDs.isEmpty {
-            app.logger.info(
-                "IAM check dropped grants for roles the compiled policy set does not know yet",
-                metadata: [
-                    "role_ids": .string(droppedRoleIDs.map(\.uuidString).sorted().joined(separator: ",")),
-                    "policy_version": .stringConvertible(built.version),
-                ])
-        }
-
-        let decision: CedarCheckDecision
-        do {
-            decision = try built.artifact.authorize(
-                principal: slice.principal,
-                action: action,
-                resource: slice.resource,
-                context: slice.baseContextValue(roleIDs: built.roleIDs),
-                entitiesJSON: slice.entitiesJSON())
-        } catch {
-            app.logger.error(
-                "Cedar evaluation failed; failing closed",
-                metadata: [
-                    "action": .string(action),
-                    "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
-                    "error": .string("\(error)"),
-                ])
-            throw Abort(.internalServerError, reason: "Authorization evaluation failed")
+        } else {
+            // Grants for roles the compiled schema doesn't declare are dropped
+            // (under-grant) — a role created or deleted since this replica's
+            // last rebuild. Transient by design (the version nudge or 30s
+            // re-read converges it), but worth a trace when it happens.
+            let droppedRoleIDs = outcome.slice.grants.roleIDs.subtracting(built.roleIDs)
+            if !droppedRoleIDs.isEmpty {
+                app.logger.info(
+                    "IAM check dropped grants for roles the compiled policy set does not know yet",
+                    metadata: [
+                        "role_ids": .string(droppedRoleIDs.map(\.uuidString).sorted().joined(separator: ",")),
+                        "policy_version": .stringConvertible(built.version),
+                    ])
+            }
         }
 
         state?.decisionEvaluated.withLockedValue { $0 = true }
-        if decision.allowed, decision.determiningPolicyIDs.contains("platform-system-admin") {
+        if outcome.verdict.allowed, outcome.verdict.determiningPolicyIDs.contains("platform-system-admin") {
             state?.adminPolicyUsed.withLockedValue { $0 = true }
         }
 
@@ -238,15 +201,15 @@ enum IAMAuthorizer {
                 subject: principal.subject,
                 action: action,
                 node: node,
-                organizationID: slice.chain.first(where: { $0.type == .organization })?.id,
-                skippedConditionedBindings: slice.skippedConditionedBindings,
-                decision: decision,
+                organizationID: outcome.slice.chain.first(where: { $0.type == .organization })?.id,
+                skippedConditionedBindings: outcome.slice.skippedConditionedBindings,
+                decision: outcome.verdict,
                 policyVersion: built.version,
                 legacyEquivalent: legacyEquivalent,
                 context: context
             ))
 
-        return decision
+        return outcome.verdict
     }
 
     /// Evaluate a check still phrased in the legacy (pre-Cedar) permission

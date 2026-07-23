@@ -186,7 +186,7 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:create", node: projectNode, on: app.db))
+                    action: "vm:create", node: projectNode, app: app, on: app.db))
 
             // Replacing narrows: editor → viewer leaves exactly one binding.
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
@@ -201,7 +201,7 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:create", node: projectNode, on: app.db) == false)
+                    action: "vm:create", node: projectNode, app: app, on: app.db) == false)
 
             // An unknown role is a 400, and a bare member may not grant.
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
@@ -423,7 +423,7 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .workload, principalID: registrationID,
-                    action: "project:read", node: projectNode, on: app.db))
+                    action: "project:read", node: projectNode, app: app, on: app.db))
 
             // Deleting the registration deletes the principal and its grants.
             try await app.test(.DELETE, "/api/workload-registrations/\(registrationID!)") { req in

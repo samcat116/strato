@@ -8,8 +8,8 @@ import Foundation
 // a false deny for permits, or worse, a false ALLOW where a guardrail's
 // evidence (a group parent edge, an org membership, an environment attribute)
 // failed to load. It gets the heaviest test investment in the system
-// (`EntitySliceLoaderTests`, including the cross-check against
-// `WhoCanService.can`).
+// (`EntitySliceLoaderTests`, including the cross-check of slice-derived
+// decisions against an independent hand-simulation of the static policies).
 
 /// The flattened role grants for one check: which users and groups hold each
 /// role (by role-definition row id) on the target resource or anything above

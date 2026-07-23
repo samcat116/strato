@@ -188,33 +188,34 @@ struct WhoCanResult: Content, Sendable {
 
 /// The reverse index: "who can do action A on resource R?" (issue #478).
 ///
-/// Answered from `role_bindings` plus the resource tree — an ancestor walk and
-/// a group expansion — and never from the policy engine. A reverse query
-/// against a policy evaluator means enumerating every principal and checking
-/// each; against tables we own it is a bounded set of indexed reads. This is
-/// the property the one-parent invariant buys (docs/architecture/iam.md).
+/// The *candidates* are enumerated from `role_bindings` plus the resource tree
+/// — an ancestor walk and a group expansion. A reverse query against a policy
+/// evaluator means enumerating every principal and checking each; against
+/// tables we own it is a bounded set of indexed reads. This is the property
+/// the one-parent invariant buys (docs/architecture/iam.md). What each
+/// candidate can *actually do* is then decided by `IAMDecisionEngine` — the
+/// same evaluator that gates requests — so the enumeration explains grants and
+/// the engine has the last word (the `ceilinged` marks, and every
+/// `WhoCanService.can` verdict).
 ///
 /// **Cross-org principals are in scope by design.** Bindings may name a
 /// principal from another org, so nothing here filters principals by the
 /// resource's organization — doing so would silently hide exactly the external
 /// access that most needs to be visible.
-///
-/// Since the cutover (#482) the bindings model these answers describe is also
-/// what enforces, so who-can answers and request verdicts share one source.
 enum WhoCanService {
 
     // MARK: - Reverse lookup
 
     /// Every principal that can perform `action` on `node`, with the reason.
     ///
-    /// `app` is threaded so the ceiling pass can evaluate the compiled policy
-    /// set (which reflects hand-authored guardrails and authored forbid policies
-    /// exactly, #610); without it the pass falls back to the matcher-built
-    /// guardrails it can read straight from the tree. The controller passes
-    /// `req.application`.
+    /// Requires the compiled policy set (it is what the ceiling marks are
+    /// decided against) and fails closed with the same 503 enforcement gives
+    /// when the replica has none — a who-can that silently degraded to a
+    /// weaker model would drift from what enforcement does.
     static func whoCan(
-        action: String, node: IAMNode, app: Application? = nil, on db: any Database
+        action: String, node: IAMNode, app: Application, on db: any Database
     ) async throws -> WhoCanResult {
+        let built = try await IAMDecisionEngine.compiledSet(app)
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         var entries: [WhoCanEntry] = []
 
@@ -225,7 +226,7 @@ enum WhoCanService {
         var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db)
         principals = try await markingExternalPrincipals(principals, chain: chain, on: db)
         principals = try await markingCeilingedPrincipals(
-            principals, action: action, node: node, app: app, on: db)
+            principals, action: action, node: node, built: built, on: db)
 
         // Only authored *permits* are a caveat now — they widen access to
         // principals a reverse lookup cannot enumerate. Authored forbids are
@@ -246,53 +247,34 @@ enum WhoCanService {
 
     /// Flag entries a ceiling denies, so the list agrees with the enforcer:
     /// a granted principal a guardrail or authored forbid neutralises is marked
-    /// rather than dropped (#610).
+    /// rather than dropped (#610). Decided by `IAMDecisionEngine` — exact for
+    /// every ceiling kind (matcher and authored guardrails, authored forbid
+    /// policies), because it *is* the enforcement decision.
     ///
     /// Group entries are left alone — a group is not a request principal, and
-    /// its members' own entries carry whether a ceiling reaches them. With the
-    /// compiled set in hand the check is exact for every ceiling kind; without
-    /// it (internal callers with no `app`) it reflects the matcher-built
-    /// guardrails readable from the tree.
+    /// its members' own entries carry whether a ceiling reaches them. A
+    /// truncated-chain denial marks the entry ceilinged with an empty id list
+    /// (the structural fail-closed names no policy).
     private static func markingCeilingedPrincipals(
-        _ entries: [WhoCanEntry], action: String, node: IAMNode, app: Application?, on db: any Database
+        _ entries: [WhoCanEntry], action: String, node: IAMNode,
+        built: CedarPolicySetCache.Built, on db: any Database
     ) async throws -> [WhoCanEntry] {
-        let built = await app?.cedarPolicySet.current
         var result: [WhoCanEntry] = []
         result.reserveCapacity(entries.count)
         for entry in entries {
             guard
-                let principal = CeilingEvaluator.requestPrincipal(
+                let principal = IAMPrincipal.requestPrincipal(
                     type: entry.principal.type, id: entry.principal.id)
             else {
                 result.append(entry)
                 continue
             }
-            if let built {
-                if let denying = try await CeilingEvaluator.denyingCeilings(
-                    principal: principal, action: action, node: node, built: built, on: db)
-                {
-                    // Surface only named ceiling ids (`guardrail-`/`policy-`) —
-                    // the `chain-truncated` sentinel is a structural fail-closed
-                    // that names no policy, so the entry is still `ceilinged`
-                    // but its id list is empty rather than carrying a value the
-                    // API contract does not admit.
-                    let ids = denying.filter { $0.hasPrefix("guardrail-") || $0.hasPrefix("policy-") }
-                    result.append(entry.markingCeilinged(ids))
-                } else {
-                    result.append(entry)
-                }
+            let decision = try await IAMDecisionEngine.decide(
+                principal: principal, action: action, node: node, built: built, on: db)
+            if let ceilingIDs = decision.denyingCeilingIDs {
+                result.append(entry.markingCeilinged(ceilingIDs))
             } else {
-                let forbidding = try await GuardrailStore.forbidding(
-                    action: action, principalType: entry.principal.type,
-                    principalID: entry.principal.id, node: node, on: db)
-                if forbidding.isEmpty {
-                    result.append(entry)
-                } else {
-                    let ids = forbidding.compactMap { guardrail in
-                        guardrail.id.map { "guardrail-\($0.uuidString.lowercased())" }
-                    }
-                    result.append(entry.markingCeilinged(ids))
-                }
+                result.append(entry)
             }
         }
         return result
@@ -457,17 +439,17 @@ enum WhoCanService {
     }
 
     /// Whether `action` on `node` is open to every authenticated user with no
-    /// grant of any kind behind it.
+    /// grant of any kind behind it — the reverse-lookup rendering of the
+    /// `platform-open-network-read` tier-1 permit, which the enumeration needs
+    /// because "everyone" cannot be a list (`WhoCanResult.openToAllAuthenticatedUsers`).
     ///
     /// Today this is exactly one rule: a global network — a `LogicalNetwork`
     /// with no project — is readable by anyone, because it is the fallback
     /// every VM create can land on (`NetworkController.fetchNetworkWithPermission`).
-    /// The rule keys on the *project* alone, matching that handler; a
-    /// site-scoped network still has no project and so is still openly
-    /// readable, even though the tree walk can climb it to an org.
-    ///
-    /// At cutover this becomes an ordinary tier-1 platform `permit` and stops
-    /// being a special case here.
+    /// The rule keys on the *project* alone, matching that handler and the
+    /// permit's `openToAllUsers` attribute; a site-scoped network still has no
+    /// project and so is still openly readable, even though the tree walk can
+    /// climb it to an org.
     static func isOpenToAllAuthenticatedUsers(
         action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {
@@ -647,129 +629,91 @@ enum WhoCanService {
 
     // MARK: - Forward check
 
-    /// Whether one principal can perform `action` on `node`, answered from the
-    /// same bindings + tree the reverse lookup uses.
+    /// Whether one principal can perform `action` on `node` — the
+    /// arbitrary-principal form of `can-i`, decided by `IAMDecisionEngine`:
+    /// the same evaluator, over the same compiled policy set, that gates
+    /// requests. Agreement with enforcement is by construction, not by keeping
+    /// a second model in sync — grants, membership, platform permits, authored
+    /// policies, and ceilings all land exactly as a real request would.
     ///
-    /// This is the arbitrary-principal form of `can-i`: it reports what the
-    /// bindings model says, the same model the evaluator enforces from since
-    /// cutover (#482) — and, since #610, subtracts ceilings so it agrees with
-    /// the enforcer about a grant a guardrail or authored forbid neutralises.
+    /// Two things sit outside the evaluator, here as in production traffic:
     ///
-    /// `app` threads the compiled set for exact ceiling reflection over every
-    /// ceiling kind; without it, the ceiling gate reflects the matcher-built
-    /// guardrails readable from the tree.
+    /// - A principal that could never *reach* the evaluator answers `false`:
+    ///   a disabled user (`UserSecurityMiddleware` rejects it before any
+    ///   protected operation) and a principal whose row does not exist (the
+    ///   authenticator admits nobody by that id).
+    /// - A group is a binding subject, not a request principal — no request
+    ///   the evaluator sees ever carries one. Its answer comes from the
+    ///   bindings model: a granting binding on the chain, minus the matcher
+    ///   guardrails that can name a group.
     static func can(
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
-        app: Application? = nil, on db: any Database
+        app: Application, on db: any Database
     ) async throws -> Bool {
-        let user = principalType == .user ? try await User.find(principalID, on: db) : nil
-
-        // A disabled account cannot act at all, whatever it still holds:
-        // `UserSecurityMiddleware` rejects it before any protected operation,
-        // so its bindings, group grants, membership, and even system-admin
-        // status are all unusable. This has to precede every grant lookup —
-        // guarding only one branch lets the others answer `true`.
-        if let user, user.disabledAt != nil { return false }
-
-        guard
-            try await isGranted(
-                principalType: principalType, principalID: principalID, action: action, node: node,
-                user: user, on: db)
-        else { return false }
-
-        // A ceiling subtracts even from a system admin — guardrails bind admins
-        // since cutover — so the gate applies to every granted path, not just
-        // bindings.
-        return try await !isCeilinged(
-            principalType: principalType, principalID: principalID, action: action, node: node,
-            app: app, on: db)
-    }
-
-    /// Whether a grant reaches `(principal, action, node)` — the bindings-model
-    /// view, before ceilings. Extracted so the ceiling gate wraps every
-    /// grant-bearing path at once.
-    private static func isGranted(
-        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
-        user: User?, on db: any Database
-    ) async throws -> Bool {
-        if let user, user.isSystemAdmin { return true }
-
-        // Actions open to every authenticated user need no grant — otherwise
-        // this reports `false` for a request the API would allow. "Authenticated
-        // user" is the whole rule, though: a group is not a principal that logs
-        // in, and an unknown id is nobody. (Disabled accounts are already out.)
-        if user != nil, try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db) {
-            return true
+        guard let principal = IAMPrincipal.requestPrincipal(type: principalType, id: principalID)
+        else {
+            guard try await groupIsGranted(groupID: principalID, action: action, node: node, on: db)
+            else { return false }
+            let forbidding = try await GuardrailStore.forbidding(
+                action: action, principalType: principalType, principalID: principalID,
+                node: node, on: db)
+            return forbidding.isEmpty
         }
 
+        guard try await principalMayAct(principal, on: db) else { return false }
+
+        let built = try await IAMDecisionEngine.compiledSet(app)
+        let decision = try await IAMDecisionEngine.decide(
+            principal: principal, action: action, node: node, built: built, on: db)
+        return decision.verdict.allowed
+    }
+
+    /// Whether the principal can reach the evaluator at all: its row exists,
+    /// and (for a user) the account is not disabled. This has to precede the
+    /// decision — the compiled set contains permits over *any* principal
+    /// (`platform-open-network-read`), so an id nobody can authenticate as
+    /// would otherwise be reported able to act.
+    private static func principalMayAct(_ principal: IAMPrincipal, on db: any Database) async throws -> Bool {
+        switch principal.type {
+        case .user:
+            guard let user = try await User.find(principal.id, on: db) else { return false }
+            return user.disabledAt == nil
+        case .serviceAccount:
+            return try await ServiceAccount.find(principal.id, on: db) != nil
+        case .workload:
+            return try await WorkloadRegistration.find(principal.id, on: db) != nil
+        case .group:
+            return false
+        }
+    }
+
+    /// Whether a granting binding names `groupID` on the node or anything
+    /// above it — the group half of the forward check, answered from the
+    /// bindings table because the evaluator has no group request principal.
+    /// Membership, admin, and open-to-all sources cannot apply to a group.
+    private static func groupIsGranted(
+        groupID: UUID, action: String, node: IAMNode, on db: any Database
+    ) async throws -> Bool {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         guard !chain.isEmpty else { return false }
-
-        // The principal itself, plus (for a user) every group it belongs to.
-        var principals: [(IAMPrincipalType, UUID)] = [(principalType, principalID)]
-        if principalType == .user {
-            let groupIDs = try await UserGroup.query(on: db)
-                .filter(\.$user.$id == principalID)
-                .all()
-                .map { $0.$group.id }
-            principals += groupIDs.map { (.group, $0) }
-        }
-
         let grantingRoles = try await grantingRoleBindingValues(action: action, chain: chain, on: db)
-        if !grantingRoles.isEmpty {
-            let matches = try await RoleBinding.query(on: db)
-                .filter(\.$role ~~ grantingRoles)
-                .group(.or) { anyPrincipal in
-                    for (type, id) in principals {
-                        anyPrincipal.group(.and) { thisPrincipal in
-                            thisPrincipal.filter(\.$principalType == type.rawValue)
-                            thisPrincipal.filter(\.$principalID == id)
-                        }
+        guard !grantingRoles.isEmpty else { return false }
+
+        let matches = try await RoleBinding.query(on: db)
+            .filter(\.$role ~~ grantingRoles)
+            .filter(\.$principalType == IAMPrincipalType.group.rawValue)
+            .filter(\.$principalID == groupID)
+            .group(.or) { anyNode in
+                for node in chain {
+                    anyNode.group(.and) { thisNode in
+                        thisNode.filter(\.$nodeType == node.type.rawValue)
+                        thisNode.filter(\.$nodeID == node.id)
                     }
                 }
-                .group(.or) { anyNode in
-                    for node in chain {
-                        anyNode.group(.and) { thisNode in
-                            thisNode.filter(\.$nodeType == node.type.rawValue)
-                            thisNode.filter(\.$nodeID == node.id)
-                        }
-                    }
-                }
-                .active()
-                .count()
-            if matches > 0 { return true }
-        }
-
-        if principalType == .user, IAMRoleRegistry.membershipDerivedActions.contains(action),
-            let orgNode = chain.first(where: { $0.type == .organization })
-        {
-            let memberships = try await UserOrganization.query(on: db)
-                .filter(\.$user.$id == principalID)
-                .filter(\.$organization.$id == orgNode.id)
-                .count()
-            if memberships > 0 { return true }
-        }
-
-        return false
-    }
-
-    /// Whether a ceiling denies `(principal, action, node)`. With the compiled
-    /// set in hand it is exact for every ceiling kind (matcher and authored
-    /// guardrails, authored forbid policies); without it, it reflects the
-    /// matcher-built guardrails read straight from the tree.
-    private static func isCeilinged(
-        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
-        app: Application?, on db: any Database
-    ) async throws -> Bool {
-        if let built = await app?.cedarPolicySet.current,
-            let principal = CeilingEvaluator.requestPrincipal(type: principalType, id: principalID)
-        {
-            return try await CeilingEvaluator.denyingCeilings(
-                principal: principal, action: action, node: node, built: built, on: db) != nil
-        }
-        let forbidding = try await GuardrailStore.forbidding(
-            action: action, principalType: principalType, principalID: principalID, node: node, on: db)
-        return !forbidding.isEmpty
+            }
+            .active()
+            .count()
+        return matches > 0
     }
 }
 
