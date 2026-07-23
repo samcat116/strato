@@ -12,6 +12,19 @@ struct IAMNode: Content, Hashable, Sendable {
         self.type = type
         self.id = id
     }
+
+    /// Parse a wire `(resourceType, resourceId)` pair into a tree node. An
+    /// unknown type is a `400`, not a `403` — naming a type that does not
+    /// exist is a malformed request, not a denied one.
+    init(resourceType: String, resourceId: String) throws {
+        guard let type = IAMNodeType(rawValue: resourceType) else {
+            throw Abort(.badRequest, reason: "Unknown resource type '\(resourceType)'")
+        }
+        guard let id = UUID(uuidString: resourceId) else {
+            throw Abort(.badRequest, reason: "Resource id must be a UUID")
+        }
+        self.init(type: type, id: id)
+    }
 }
 
 /// Walks the resource tree upward. Role bindings attach to any node — an

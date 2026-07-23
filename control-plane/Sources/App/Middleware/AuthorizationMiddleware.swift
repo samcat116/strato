@@ -76,8 +76,8 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     ]
 
     /// Route prefixes whose handlers authorize through the evaluator
-    /// (`req.can` / `req.authorize` / `IAMPolicyGate`, or `req.requireSystemAdmin()`
-    /// for the deliberately admin-only surfaces).
+    /// (`req.can` / `req.authorize` in either vocabulary, or
+    /// `req.requireSystemAdmin()` for the deliberately admin-only surfaces).
     private static let handlerCheckedPrefixes = [
         "/api/organizations",
         "/api/projects",

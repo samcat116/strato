@@ -634,7 +634,7 @@ public func configure(_ app: Application) async throws {
     // `.testing`, where the fallback covers any null row and suites that need a
     // dense column write it explicitly.
     if app.environment != .testing {
-        try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+        try await GuardrailStore.backfillCedarText(on: app.db, logger: app.logger)
     }
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
