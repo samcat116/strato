@@ -226,4 +226,5 @@ external backends, with retention pruning.
 | [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
 | [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |
 | [iam](./iam.md) | The Cedar migration decision record |
+| [webhooks](./webhooks.md) | User-managed event notifications: event catalog, signing, transactional outbox |
 | [agent-updates](./agent-updates.md) | Operator-triggered and declarative agent updates |

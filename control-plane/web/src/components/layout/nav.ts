@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Users,
   UsersRound,
+  Webhook,
 } from "lucide-react";
 
 export interface NavItem {
@@ -99,6 +100,7 @@ export const navTree: NavItem[] = [
       // frontend pages must not live under it.
       { label: "Profile", href: "/settings/profile", icon: CircleUser },
       { label: "Organization", href: "/settings/organization", icon: Building2 },
+      { label: "Webhooks", href: "/settings/webhooks", icon: Webhook },
       { label: "Audit Log", href: "/admin/audit", icon: ScrollText, adminOnly: true },
     ],
   },
