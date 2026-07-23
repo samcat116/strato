@@ -1,0 +1,84 @@
+control-plane/Tests/AppTests/AdminExceptionPathTests.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 1-294
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 391
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 30-35,38,43-45
+control-plane/web/src/lib/hooks/use-users.ts
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 6-9
+control-plane/web/src/types/openapi.ts
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 1256-1257
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 146-152,234-240,245-255,257-262,266,283-284,286-299,310-321,341-355
+  s_a5ecdc8886a4a2::t_db0d3a3dbb6d6a 356
+control-plane/Tests/AppTests/CedarSchemaTests.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 59-67
+control-plane/Tests/AppTests/SwiftCedarEngineTests.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 55-61
+control-plane/Sources/App/openapi.yaml
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 1720-1724
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 164,178-188
+control-plane/Tests/AppTests/CedarPolicyAssemblyTests.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 44-48
+control-plane/Sources/App/Models/Agent.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 327-359
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 88-96,143-149,153,169,182-188
+  s_a5ecdc8886a4a2::t_2e30c48277b89c 189
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 199-201
+docs/architecture/iam.md
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 759-770,772-846,853-858,896-898
+  s_a5ecdc8886a4a2::t_946db53131f83a 847-852
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 379-394
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 72-75,85-91
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 31
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 31
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 349
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 42-46
+control-plane/Sources/App/Controllers/WorkloadIdentityController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 23
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 65
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 61-108
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 44-51
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 333,349-359,361-363,458,472-484,486-487,681-684,733-740
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 17-18,76
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 103,106-110,112-115,117-118,276-281
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 124
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 71-78
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 78-87,181-211,217-221
+control-plane/Sources/App/Controllers/UserController.swift
+  s_a5ecdc8886a4a2::t_73fda4627de3d3 37-42,44,49-56,60,68,117-121,123,227,235,301,309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1983dde9de018ef9e146d26ad4f1285e9d1ae6e4",
+  "prompts": {},
+  "sessions": {
+    "s_a5ecdc8886a4a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "62bdf9d2-4570-42f1-9bcb-420c92a9c3e6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
