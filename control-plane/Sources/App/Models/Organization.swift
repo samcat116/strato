@@ -144,7 +144,12 @@ struct OrganizationMemberResponse: Content {
     let username: String
     let displayName: String
     let email: String
+    /// The stored membership role: a legacy literal (`admin`/`member`) or, for
+    /// a role granted by IAM name or id, the role's `iam_roles` id (issue #608).
     let role: String
+    /// The role's human-readable name — the literal for legacy values, the row
+    /// name for a UUID, "(deleted role)" for a dangling id (issue #608).
+    let roleDisplayName: String
     let joinedAt: Date?
 }
 

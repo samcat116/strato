@@ -33,7 +33,12 @@ struct ProjectMemberController: RouteCollection {
         let username: String
         let displayName: String
         let email: String
+        /// The role's `iam_roles` id as a string. Legacy rows that still store a
+        /// relational name are normalized to their seeded id here (issue #608).
         let role: String
+        /// The role's human-readable name, batch-loaded; a UUID naming no
+        /// surviving row renders as "(deleted role)".
+        let roleDisplayName: String
         let joinedAt: Date?
         /// The user is not a member of the project's organization — cross-org
         /// access, which is deliberately prominent wherever grants are listed
@@ -44,7 +49,10 @@ struct ProjectMemberController: RouteCollection {
     struct ProjectGroupGrantResponse: Content {
         let groupId: UUID?
         let name: String
+        /// The role's `iam_roles` id as a string (issue #608).
         let role: String
+        /// The role's human-readable name; "(deleted role)" for a dangling id.
+        let roleDisplayName: String
         let grantedAt: Date?
         /// The group belongs to another organization (issue #485).
         let external: Bool
@@ -106,6 +114,13 @@ struct ProjectMemberController: RouteCollection {
             }
         }
 
+        // Role display names, batch-loaded once across users and groups. The
+        // stored `role` may be a UUID (going forward) or a legacy relational
+        // name (older rows); both normalize to a canonical id for `role` and a
+        // name for `roleDisplayName` (issue #608).
+        let displayNames = try await RoleDisplayNames.forProjectRoles(
+            members.map(\.role) + groupGrants.map(\.role), on: req.db)
+
         return ProjectMembersResponse(
             users: members.map { member in
                 ProjectMemberResponse(
@@ -113,7 +128,8 @@ struct ProjectMemberController: RouteCollection {
                     username: member.user.username,
                     displayName: member.user.displayName,
                     email: member.user.email,
-                    role: member.role,
+                    role: canonicalRoleID(member.role),
+                    roleDisplayName: displayNames.projectDisplayName(forStored: member.role),
                     joinedAt: member.createdAt,
                     external: rootOrgID != nil && member.user.id.map { !internalUserIDs.contains($0) } ?? false
                 )
@@ -122,7 +138,8 @@ struct ProjectMemberController: RouteCollection {
                 ProjectGroupGrantResponse(
                     groupId: grant.group.id,
                     name: grant.group.name,
-                    role: grant.role,
+                    role: canonicalRoleID(grant.role),
+                    roleDisplayName: displayNames.projectDisplayName(forStored: grant.role),
                     grantedAt: grant.createdAt,
                     external: rootOrgID != nil && grant.group.$organization.id != rootOrgID
                 )
@@ -137,7 +154,9 @@ struct ProjectMemberController: RouteCollection {
         let projectID = try project.requireID()
 
         let body = try req.content.decode(GrantMemberRequest.self)
-        let role = try validatedRole(body.role)
+        let node = IAMNode(type: .project, id: projectID)
+        let role = try await MemberRoleResolver.resolve(
+            body.role, scopeNode: node, acceptsLegacyProjectRoles: true, on: req.db)
         let targetUser = try await resolveUser(body, on: req)
         let userID = try targetUser.requireID()
 
@@ -148,8 +167,6 @@ struct ProjectMemberController: RouteCollection {
         if existing != nil {
             throw Abort(.conflict, reason: "User already has a role on this project")
         }
-
-        let node = IAMNode(type: .project, id: projectID)
 
         // A principal outside the project's org needs the dedicated
         // resource-side permission — cross-org grants are explicit-only and
@@ -164,18 +181,20 @@ struct ProjectMemberController: RouteCollection {
             ProposedBinding(
                 principalType: .user,
                 principalID: userID,
-                role: .fromProjectRole(role),
+                roleActions: role.actions,
+                roleLabel: role.displayName,
                 node: node
             ), req: req)
 
         // The role binding lands in the same transaction as the mirror row.
+        // The mirror stores the resolved role id going forward (issue #608).
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
-            try await ProjectMember(projectID: projectID, userID: userID, role: role.rawValue).save(on: db)
+            try await ProjectMember(projectID: projectID, userID: userID, role: role.id.uuidString).save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: userID,
-                role: .fromProjectRole(role),
+                roleID: role.id,
                 nodeType: .project,
                 nodeID: projectID,
                 createdBy: actorID,
@@ -185,7 +204,7 @@ struct ProjectMemberController: RouteCollection {
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
-                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
+                role: role.displayName, node: node, req: req)
         }
         return .created
     }
@@ -200,7 +219,9 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
         let body = try req.content.decode(UpdateMemberRoleRequest.self)
-        let role = try validatedRole(body.role)
+        let node = IAMNode(type: .project, id: projectID)
+        let role = try await MemberRoleResolver.resolve(
+            body.role, scopeNode: node, acceptsLegacyProjectRoles: true, on: req.db)
 
         guard
             let membership = try await ProjectMember.query(on: req.db)
@@ -210,8 +231,6 @@ struct ProjectMemberController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "User has no role on this project")
         }
-
-        let node = IAMNode(type: .project, id: projectID)
 
         // A role change for an external principal is a new cross-org grant —
         // same gate as the initial one (issue #485).
@@ -225,22 +244,24 @@ struct ProjectMemberController: RouteCollection {
             ProposedBinding(
                 principalType: .user,
                 principalID: userID,
-                role: .fromProjectRole(role),
+                roleActions: role.actions,
+                roleLabel: role.displayName,
                 node: node
             ), req: req)
 
         let previousRole = membership.role
         let actorID = req.auth.get(User.self)?.id
-        membership.role = role.rawValue
+        membership.role = role.id.uuidString
         try await req.db.transaction { db in
             try await membership.save(on: db)
             // Replace the old role's binding with the new one atomically with
-            // the mirror-row update.
-            if let previous = ProjectRole(rawValue: previousRole) {
+            // the mirror-row update. The previously stored value may be a UUID
+            // (going forward) or a legacy relational name (issue #608).
+            if let previousRoleID = Self.storedRoleID(previousRole) {
                 try await RoleBindingService.revoke(
                     principalType: .user,
                     principalID: userID,
-                    role: .fromProjectRole(previous),
+                    roleID: previousRoleID,
                     nodeType: .project,
                     nodeID: projectID,
                     on: db
@@ -249,7 +270,7 @@ struct ProjectMemberController: RouteCollection {
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: userID,
-                role: .fromProjectRole(role),
+                roleID: role.id,
                 nodeType: .project,
                 nodeID: projectID,
                 createdBy: actorID,
@@ -259,7 +280,7 @@ struct ProjectMemberController: RouteCollection {
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
-                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
+                role: role.displayName, node: node, req: req)
         }
         return .ok
     }
@@ -303,7 +324,7 @@ struct ProjectMemberController: RouteCollection {
             // end in the trail (issue #485).
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgRevoke, principalType: .user, principalID: userID,
-                role: ProjectRole(rawValue: membership.role).map { IAMRole.fromProjectRole($0).rawValue },
+                role: Self.storedRoleAuditLabel(membership.role),
                 node: node, req: req)
         }
         return .noContent
@@ -316,7 +337,9 @@ struct ProjectMemberController: RouteCollection {
         let projectID = try project.requireID()
 
         let body = try req.content.decode(GrantGroupRequest.self)
-        let role = try validatedRole(body.role)
+        let node = IAMNode(type: .project, id: projectID)
+        let role = try await MemberRoleResolver.resolve(
+            body.role, scopeNode: node, acceptsLegacyProjectRoles: true, on: req.db)
 
         guard try await Group.find(body.groupID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Group not found")
@@ -330,8 +353,6 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "Group already has a role on this project")
         }
 
-        let node = IAMNode(type: .project, id: projectID)
-
         // A group from another organization is grantable — cross-org access is
         // explicit-bindings-only, so it passes the same write-time gate as an
         // external user rather than being flatly refused (issue #485).
@@ -344,18 +365,19 @@ struct ProjectMemberController: RouteCollection {
             ProposedBinding(
                 principalType: .group,
                 principalID: body.groupID,
-                role: .fromProjectRole(role),
+                roleActions: role.actions,
+                roleLabel: role.displayName,
                 node: node
             ), req: req)
 
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
-            try await ProjectGroupGrant(projectID: projectID, groupID: body.groupID, role: role.rawValue)
+            try await ProjectGroupGrant(projectID: projectID, groupID: body.groupID, role: role.id.uuidString)
                 .save(on: db)
             try await RoleBindingService.grant(
                 principalType: .group,
                 principalID: body.groupID,
-                role: .fromProjectRole(role),
+                roleID: role.id,
                 nodeType: .project,
                 nodeID: projectID,
                 createdBy: actorID,
@@ -365,7 +387,7 @@ struct ProjectMemberController: RouteCollection {
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
-                role: IAMRole.fromProjectRole(role).rawValue, node: node, req: req)
+                role: role.displayName, node: node, req: req)
         }
         return .created
     }
@@ -406,7 +428,7 @@ struct ProjectMemberController: RouteCollection {
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgRevoke, principalType: .group, principalID: groupID,
-                role: ProjectRole(rawValue: grant.role).map { IAMRole.fromProjectRole($0).rawValue },
+                role: Self.storedRoleAuditLabel(grant.role),
                 node: node, req: req)
         }
         return .noContent
@@ -424,11 +446,27 @@ struct ProjectMemberController: RouteCollection {
         return project
     }
 
-    private func validatedRole(_ raw: String) throws -> ProjectRole {
-        guard let role = ProjectRole(rawValue: raw) else {
-            throw Abort(.badRequest, reason: "Invalid role; must be one of: admin, member, viewer")
-        }
-        return role
+    /// The canonical role id string for a stored mirror value — a UUID as-is,
+    /// or a legacy relational name mapped to its seeded id — so the response's
+    /// `role` field is a UUID string regardless of when the row was written
+    /// (issue #608).
+    private func canonicalRoleID(_ stored: String) -> String {
+        RoleDisplayNames.projectRoleID(forStored: stored)?.uuidString ?? stored
+    }
+
+    /// The role id a previously stored mirror value names, for revoking its
+    /// binding: a UUID directly, or a legacy relational name via its seeded id.
+    private static func storedRoleID(_ stored: String) -> UUID? {
+        RoleDisplayNames.projectRoleID(forStored: stored)
+    }
+
+    /// A best-effort role label for the cross-org audit trail. The binding
+    /// revoke keys on the principal, not the role, so this is metadata only —
+    /// a UUID string, a legacy name mapped to its IAM role, or the raw value.
+    private static func storedRoleAuditLabel(_ stored: String) -> String {
+        if UUID(uuidString: stored) != nil { return stored }
+        if let projectRole = ProjectRole(rawValue: stored) { return IAMRole.fromProjectRole(projectRole).rawValue }
+        return stored
     }
 
     private func resolveUser(_ body: GrantMemberRequest, on req: Request) async throws -> User {

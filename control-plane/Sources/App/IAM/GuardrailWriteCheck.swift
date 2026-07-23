@@ -14,11 +14,47 @@ import Vapor
 // latency-tolerant in a way the request path is not.
 
 /// A binding about to be written, as the check sees it.
+///
+/// The check works over the role's action set, not the role's identity, so a
+/// custom role reaches it the same way a seeded one does (issue #608): the
+/// `IAMRole` initializer expands the registry, and the general initializer
+/// takes an action set and a label directly.
 struct ProposedBinding: Sendable {
     let principalType: IAMPrincipalType
     let principalID: UUID
-    let role: IAMRole
+    /// The full expanded action set the role grants — the overlap analysis's
+    /// input.
+    let roleActions: Set<String>
+    /// A human-readable name for the role, for logs and the refusal message.
+    let roleLabel: String
     let node: IAMNode
+
+    /// A seeded role: actions from the registry, label from the role name.
+    init(principalType: IAMPrincipalType, principalID: UUID, role: IAMRole, node: IAMNode) {
+        self.init(
+            principalType: principalType,
+            principalID: principalID,
+            roleActions: IAMRoleRegistry.actions(for: role),
+            roleLabel: role.rawValue,
+            node: node
+        )
+    }
+
+    /// Any role, seeded or custom: its action set and a display label supplied
+    /// directly.
+    init(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleActions: Set<String>,
+        roleLabel: String,
+        node: IAMNode
+    ) {
+        self.principalType = principalType
+        self.principalID = principalID
+        self.roleActions = roleActions
+        self.roleLabel = roleLabel
+        self.node = node
+    }
 }
 
 /// A ceiling the proposed grant would breach.
@@ -92,7 +128,7 @@ enum GuardrailWriteCheck {
             "Refused a role binding that breaches a guardrail",
             metadata: [
                 "guardrail": .string(first.guardrail),
-                "role": .string(binding.role.rawValue),
+                "role": .string(binding.roleLabel),
                 "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
             ])
         throw first
@@ -320,7 +356,7 @@ enum GuardrailWriteCheck {
         // The action side is decided here, over the finite registry: a role's
         // action set and a ceiling's patterns are both enumerable, so asking a
         // solver would be paying for an answer we already have.
-        let roleActions = IAMRoleRegistry.actions(for: binding.role)
+        let roleActions = binding.roleActions
         let overlapping = roleActions.filter { GuardrailActions.matches(guardrail.actions, action: $0) }
         guard !overlapping.isEmpty else { return nil }
 
@@ -482,7 +518,7 @@ enum GuardrailWriteCheck {
     /// authored in — the reader has to be able to match it against the
     /// guardrail they can see in the UI.
     private static func reasonText(_ guardrail: Guardrail, binding: ProposedBinding) -> String {
-        var reason = "grants \(binding.role.rawValue) on \(binding.node.type.rawValue) resources"
+        var reason = "grants \(binding.roleLabel) on \(binding.node.type.rawValue) resources"
         if let match = try? guardrail.resourceMatch(), case .environment(let environment) = match {
             reason += " tagged \"\(environment)\""
         }

@@ -179,11 +179,15 @@ export interface OrganizationMember {
   username: string;
   displayName: string;
   email: string;
+  /** Stored membership role: a legacy literal, or an `iam_roles` id. */
   role: string;
+  /** Human-readable role name for display (issue #608). */
+  roleDisplayName: string;
   joinedAt: string;
 }
 
-// Project-level roles
+// Legacy project-role names still accepted on writes; the unified vocabulary
+// also accepts IAM role names and role ids (issue #608).
 export type ProjectRole = "admin" | "member" | "viewer";
 
 export interface ProjectMember {
@@ -191,7 +195,10 @@ export interface ProjectMember {
   username: string;
   displayName: string;
   email: string;
-  role: ProjectRole;
+  /** The role's `iam_roles` id as a string (issue #608). */
+  role: string;
+  /** Human-readable role name for display; "(deleted role)" if dangling. */
+  roleDisplayName: string;
   joinedAt: string | null;
   /** Not a member of the project's organization — a cross-org grant. */
   external: boolean;
@@ -200,7 +207,10 @@ export interface ProjectMember {
 export interface ProjectGroupGrant {
   groupId: string;
   name: string;
-  role: ProjectRole;
+  /** The role's `iam_roles` id as a string (issue #608). */
+  role: string;
+  /** Human-readable role name for display; "(deleted role)" if dangling. */
+  roleDisplayName: string;
   grantedAt: string | null;
   /** Belongs to another organization — a cross-org grant. */
   external: boolean;

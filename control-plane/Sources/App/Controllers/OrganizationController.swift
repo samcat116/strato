@@ -354,6 +354,10 @@ struct OrganizationController: RouteCollection {
             .with(\.$user)
             .all()
 
+        // Legacy literals (`admin`/`member`) display verbatim; a role granted
+        // by id resolves to its row name, batch-loaded once (issue #608).
+        let displayNames = try await RoleDisplayNames.forOrganizationRoles(members.map(\.role), on: req.db)
+
         return members.map { userOrg in
             OrganizationMemberResponse(
                 id: userOrg.user.id,
@@ -361,6 +365,7 @@ struct OrganizationController: RouteCollection {
                 displayName: userOrg.user.displayName,
                 email: userOrg.user.email,
                 role: userOrg.role,
+                roleDisplayName: displayNames.organizationDisplayName(forStored: userOrg.role),
                 joinedAt: userOrg.createdAt
             )
         }
@@ -403,32 +408,40 @@ struct OrganizationController: RouteCollection {
             throw Abort(.conflict, reason: "User is already a member of this organization")
         }
 
+        // Legacy `admin`/`member` keep their literal membership semantics;
+        // IAM names and org-owned role ids are additionally accepted, scoped to
+        // the org (issue #608).
+        let resolved = try await Self.resolveOrgRole(
+            addRequest.role, organizationID: organizationID, on: req.db)
+        let node = IAMNode(type: .organization, id: organizationID)
+
         let membership = UserOrganization(
             userID: targetUser.id!,
             organizationID: organizationID,
-            role: addRequest.role
+            role: resolved.storedRole
         )
-        // Org admins get an admin binding on the org node; bare membership
-        // maps to no binding — and with no binding there is nothing for a
-        // ceiling to be checked against (#484).
-        if let bindingRole = IAMRole.fromOrganizationRole(addRequest.role) {
+        // Org admins (and any role granted by id/name) get a binding on the org
+        // node; bare membership maps to no binding — and with no binding there
+        // is nothing for a ceiling to be checked against (#484).
+        if resolved.bindingRoleID != nil {
             try await GuardrailWriteCheck.requireNoViolation(
                 ProposedBinding(
                     principalType: .user,
                     principalID: targetUser.id!,
-                    role: bindingRole,
-                    node: IAMNode(type: .organization, id: organizationID)
+                    roleActions: resolved.actions,
+                    roleLabel: resolved.label,
+                    node: node
                 ), req: req)
         }
 
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
-            if let bindingRole = IAMRole.fromOrganizationRole(addRequest.role) {
+            if let bindingRoleID = resolved.bindingRoleID {
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: targetUser.id!,
-                    role: bindingRole,
+                    roleID: bindingRoleID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     createdBy: actorID,
@@ -521,8 +534,17 @@ struct OrganizationController: RouteCollection {
             throw Abort(.notFound, reason: "User is not a member of this organization")
         }
 
-        // Prevent changing role if this would remove the last admin
-        if membership.role == "admin" && updateRequest.role != "admin" {
+        // Legacy `admin`/`member` keep their literal membership semantics; IAM
+        // names and org-owned role ids are additionally accepted (issue #608).
+        let resolved = try await Self.resolveOrgRole(
+            updateRequest.role, organizationID: organizationID, on: req.db)
+        let node = IAMNode(type: .organization, id: organizationID)
+
+        // Prevent changing role if this would remove the last admin. The guard
+        // stays keyed on the literal "admin" membership: moving the last admin
+        // to anything else — a bare member, or a role named by id — is what it
+        // stops (issue #608).
+        if membership.role == "admin" && resolved.storedRole != "admin" {
             let adminCount = try await UserOrganization.query(on: req.db)
                 .filter(\.$organization.$id == organizationID)
                 .filter(\.$role == "admin")
@@ -535,39 +557,39 @@ struct OrganizationController: RouteCollection {
 
         // Only the direction that *adds* a binding needs checking; dropping to
         // bare membership takes access away, which no ceiling objects to.
-        if let bindingRole = IAMRole.fromOrganizationRole(updateRequest.role) {
+        if resolved.bindingRoleID != nil {
             try await GuardrailWriteCheck.requireNoViolation(
                 ProposedBinding(
                     principalType: .user,
                     principalID: userID,
-                    role: bindingRole,
-                    node: IAMNode(type: .organization, id: organizationID)
+                    roleActions: resolved.actions,
+                    roleLabel: resolved.label,
+                    node: node
                 ), req: req)
         }
 
         let previousRole = membership.role
-        membership.role = updateRequest.role
+        membership.role = resolved.storedRole
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
-            // Swap the role's binding atomically with the mirror-row update
-            // (admin↔member changes add/remove the admin binding; bare
-            // membership has none).
-            if let oldBinding = IAMRole.fromOrganizationRole(previousRole) {
+            // Swap the role's binding atomically with the mirror-row update. The
+            // previously stored value may be a legacy literal or a role id.
+            if let oldBindingID = Self.orgStoredRoleID(previousRole) {
                 try await RoleBindingService.revoke(
                     principalType: .user,
                     principalID: userID,
-                    role: oldBinding,
+                    roleID: oldBindingID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     on: db
                 )
             }
-            if let newBinding = IAMRole.fromOrganizationRole(updateRequest.role) {
+            if let newBindingID = resolved.bindingRoleID {
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
-                    role: newBinding,
+                    roleID: newBindingID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     createdBy: actorID,
@@ -577,5 +599,66 @@ struct OrganizationController: RouteCollection {
         }
 
         return .ok
+    }
+
+    // MARK: - Org role resolution (issue #608)
+
+    /// A membership role resolved for storage and binding.
+    private struct ResolvedOrgRole {
+        /// What `UserOrganization.role` stores: a legacy literal, or a role id.
+        let storedRole: String
+        /// The role id to bind on the org node, or nil for bare membership.
+        let bindingRoleID: UUID?
+        /// The role's action set, for the guardrail write-check.
+        let actions: Set<String>
+        /// A human-readable label for logs and refusals.
+        let label: String
+    }
+
+    /// Resolve a requested org membership role across the unified vocabulary.
+    ///
+    /// Legacy `admin`/`member` keep their literal semantics: stored verbatim,
+    /// `admin` carrying the admin binding and `member` none, so the last-admin
+    /// guards continue to key on the literal. Everything else — an IAM role
+    /// name or an org-owned role id — resolves through `MemberRoleResolver`,
+    /// scoped to the org, and stores the role id (issue #608).
+    private static func resolveOrgRole(
+        _ raw: String, organizationID: UUID, on db: any Database
+    ) async throws -> ResolvedOrgRole {
+        if raw == "admin" || raw == "member" {
+            let iamRole = IAMRole.fromOrganizationRole(raw)
+            return ResolvedOrgRole(
+                storedRole: raw,
+                bindingRoleID: iamRole?.seededID,
+                actions: iamRole.map { IAMRoleRegistry.actions(for: $0) } ?? [],
+                label: raw
+            )
+        }
+        let resolved = try await MemberRoleResolver.resolve(
+            raw,
+            scopeNode: IAMNode(type: .organization, id: organizationID),
+            acceptsLegacyProjectRoles: false,
+            on: db
+        )
+        // The seeded admin role — reachable by IAM name (already caught above as
+        // the literal) or by its well-known id — *is* the org-admin membership
+        // under another name. Store it as the literal "admin" so the last-admin
+        // guards, which key on that literal, count it; otherwise an admin
+        // granted by id would be invisible to them (issue #608 review).
+        let storedRole = resolved.id == IAMRole.admin.seededID ? "admin" : resolved.id.uuidString
+        return ResolvedOrgRole(
+            storedRole: storedRole,
+            bindingRoleID: resolved.id,
+            actions: resolved.actions,
+            label: resolved.displayName
+        )
+    }
+
+    /// The role id a stored membership value names, for revoking its binding:
+    /// a UUID directly, or a legacy literal via `fromOrganizationRole`
+    /// (`member` names none).
+    private static func orgStoredRoleID(_ stored: String) -> UUID? {
+        if let uuid = UUID(uuidString: stored) { return uuid }
+        return IAMRole.fromOrganizationRole(stored)?.seededID
     }
 }

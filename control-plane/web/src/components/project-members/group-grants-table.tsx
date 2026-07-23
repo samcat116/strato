@@ -110,7 +110,7 @@ export function GroupGrantsTable({
                   variant="secondary"
                   className="bg-muted text-foreground capitalize"
                 >
-                  {grant.role}
+                  {grant.roleDisplayName}
                 </Badge>
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
