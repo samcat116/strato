@@ -243,22 +243,39 @@ tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sit
 cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
 is never bootstrapped).
 
-### Most `fluent.query` spans are roots, and that's expected
+### Why spans nest: the task-local context, and where it breaks
 
-In a trace backend you will see far more `fluent.query` spans standing alone as
-their own root than nested under a request — on the dev cluster, 95 of 100
-sampled traces containing a `fluent.query` were rooted at `fluent.query` itself,
-and the other 5 nested under `agent.desired_state_sync`.
+Every tracer involved — our own `withSpan` call sites, FluentKit, valkey-swift,
+async-http-client — finds its parent by reading the task-local
+`ServiceContext.current`. Vapor's `TracingMiddleware` binds it when it opens the
+server span, and it then flows down the responder chain by task inheritance.
 
-This is not broken context propagation. FluentKit captures whatever
-`ServiceContext` is current when the query is *built*, and most of the control
-plane's query volume comes from timer-driven background loops — the periodic
-desired-state sync, the agent heartbeat monitor, the audit-retention sweep,
-webhook delivery, SSF poll delivery — which run outside any request and so have
-no enclosing span to attach to. Queries issued while serving a request do nest:
-Vapor's `TracingMiddleware` opens the server span with `withSpan`, which sets
-the task-local `ServiceContext` for the rest of the responder chain. Orphan
-`fluent.query` roots are background work, not a lost `traceparent`.
+It does not survive a future-based middleware. Vapor 4 still ships several
+(`SessionsMiddleware`, `RequestAuthenticator`, `SessionAuthenticator`), and each
+chains downstream from inside an `EventLoopFuture` callback:
+
+```swift
+return future.flatMap { _ in next.respond(to: request) }
+```
+
+That callback runs on the event loop, outside any Swift task, so task-local
+storage is gone; the `AsyncMiddleware` bridge below it then starts a fresh
+`Task` with nothing to inherit from. Until this was fixed, `ServiceContext`
+read back `nil` for the entire remainder of every request — `iam.authorize`, the
+rate limiter's Valkey `EVAL`, and every controller's `fluent.query` each opened
+a root span in a trace of its own, which is why a dev-cluster sample found 95 of
+100 traces containing a `fluent.query` rooted at `fluent.query` itself.
+
+`ServiceContextRestoringMiddleware` closes it: `request.serviceContext` lives on
+the `Request` object and is untouched by the event-loop hop, so re-binding the
+task-local from it restores parenting for everything below. It is registered
+right after the session authenticator, and **any future-based middleware added
+after that point needs another one behind it**.
+
+Spans genuinely started outside a request still appear as roots, and should:
+the periodic desired-state sync, the agent heartbeat monitor, the audit-retention
+sweep, webhook delivery, and SSF poll delivery are all timer-driven, with no
+enclosing span to attach to.
 
 ### Correlating traces with logs
 
@@ -294,7 +311,9 @@ shared HTTP client configuration hundreds of lines before it calls
 `OTel.bootstrap`. Each therefore latches the no-op tracer for the lifetime of
 the process. Lighting these edges up is a matter of bootstrapping OpenTelemetry
 earlier in `configure(_:)`, ahead of the clients that capture the tracer — not
-of adding `withSpan` call sites.
+of adding `withSpan` call sites. Both libraries read `ServiceContext.current`
+per operation, so once they hold a real tracer their spans nest under the
+request like the rest.
 
 ## Alert runbook
 

@@ -161,6 +161,17 @@ public func configure(_ app: Application) async throws {
     // Configure API key authentication (for Bearer tokens)
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
 
+    // Put the task-local `ServiceContext` back after the last future-based
+    // middleware in the stack. Vapor's `SessionsMiddleware` and
+    // `User.sessionAuthenticator()` chain downstream from inside an
+    // `EventLoopFuture` callback, which severs the Swift task the middleware
+    // above was running on and with it the context `TracingMiddleware` bound —
+    // so without this every span opened below (`iam.authorize`, the rate
+    // limiter's Valkey command, every controller's `fluent.query`) would start
+    // its own trace. Anything future-based added after this point needs another
+    // one of these behind it; see the middleware's own doc comment.
+    app.middleware.use(ServiceContextRestoringMiddleware())
+
     // Rate limiting: throttle per-IP (unauthenticated) and per-user
     // (authenticated). Registered after the authenticators so it can bucket by
     // the resolved user, and before authorization/controllers so throttled
