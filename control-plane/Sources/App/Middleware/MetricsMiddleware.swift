@@ -24,12 +24,19 @@ struct MetricsMiddleware: AsyncMiddleware {
         let start = clock.now
 
         func record(statusCode: UInt) {
-            let statusClass = "\(statusCode / 100)xx"
+            // Each argument is hoisted into an explicitly-typed local: solving
+            // them independently sidesteps a type-checker diagnostic-engine
+            // failure ("failed to produce diagnostic for expression") on the
+            // combined call.
+            let method: String = request.method.rawValue
+            let route: String = Self.routeLabel(forPath: request.route?.path)
+            let statusClass: String = "\(statusCode / 100)xx"
+            let durationSeconds: Double = (clock.now - start).asSeconds
             Telemetry.recordHTTPRequest(
-                method: request.method.rawValue,
-                route: Self.routeLabel(forPath: request.route?.path),
+                method: method,
+                route: route,
                 statusClass: statusClass,
-                durationSeconds: (clock.now - start).asSeconds
+                durationSeconds: durationSeconds
             )
         }
 
