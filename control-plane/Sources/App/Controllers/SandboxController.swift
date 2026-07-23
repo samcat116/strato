@@ -71,47 +71,11 @@ struct SandboxController: RouteCollection {
         }
     }
 
-    /// Whether the sandbox's owning agent is online somewhere in the cluster.
-    /// False for unplaced sandboxes.
-    static func agentIsOnline(sandbox: Sandbox, app: Application) async -> Bool {
-        guard let agentId = sandbox.hypervisorId else { return false }
-        guard let agent = await app.agentService.getAgentInfo(agentId) else { return false }
-        return agent.status == .online
-    }
-
-    /// Push the freshly written desired state to the sandbox's agent, exactly
-    /// like the VM path: directly when this replica holds its socket, via a
-    /// pub/sub nudge otherwise, with the periodic sync timer as the backstop.
-    /// A sandbox with no agent — or an offline one — has nowhere to converge:
-    /// fail the operation immediately instead of waiting out the sweep budget.
-    private static func dispatchStateSync(_ operation: ResourceOperation, sandbox: Sandbox, app: Application) {
-        guard let operationId = operation.id else { return }
-        let sandboxID = operation.resourceID
-
-        guard let agentId = sandbox.hypervisorId else {
-            app.backgroundTasks.spawn {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: "Sandbox \(sandboxID.uuidString) is not placed on any agent",
-                    settingSandboxStatus: nil, app: app)
-            }
-            return
-        }
-        app.backgroundTasks.spawn {
-            guard let agent = await app.agentService.getAgentInfo(agentId), agent.status == .online else {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: "Agent \(agentId) is offline; the sandbox cannot converge to the requested state",
-                    settingSandboxStatus: nil, app: app)
-                return
-            }
-            await app.agentService.syncDesiredState(agentId: agentId)
-        }
-    }
-
-    /// Records a verdict on the operation row and resolves the sandbox status
-    /// it left in flight. Gated on the operation still being pending, so this
-    /// path and the stuck-operation sweep cannot overwrite each other.
+    /// Records an operation verdict through the shared
+    /// `ResourceOperationCoordinator` and, when this path won the verdict race,
+    /// stamps a caller-supplied terminal sandbox status (e.g. a restore's
+    /// `.running`). The snapshot and transfer controllers drive their own
+    /// bespoke agent dispatch and call this to close the operation.
     static func completeOperation(
         _ operationId: UUID,
         sandboxID: UUID,
@@ -120,49 +84,14 @@ struct SandboxController: RouteCollection {
         settingSandboxStatus sandboxStatus: SandboxStatus?,
         app: Application
     ) async {
-        // Shutdown's drain cancels surviving background tasks before Vapor
-        // tears down Fluent; bail before the first database access so a
-        // cancelled task cannot dereference a torn-down `app.db`.
-        guard let db = app.liveDB else { return }
-        do {
-            guard let operation = try await ResourceOperation.find(operationId, on: db),
-                try await operation.completeIfPending(as: status, error: error, on: db)
-            else { return }
-
-            if status == .failed {
-                app.logger.warning(
-                    "Sandbox operation failed",
-                    metadata: [
-                        "operationId": .string(operationId.uuidString),
-                        "sandboxId": .string(sandboxID.uuidString),
-                        "kind": .string(operation.kind.rawValue),
-                        "error": .string(error ?? "unknown"),
-                    ])
-            }
-
-            // The awaits above may have spanned the drain — re-check before the
-            // sandbox read/write.
-            guard !Task.isCancelled else { return }
-            if let sandbox = try await Sandbox.find(sandboxID, on: db) {
-                var changed = false
-                if let sandboxStatus {
-                    sandbox.setStatus(sandboxStatus)
-                    changed = true
-                }
-                // A failed operation's intent was not achieved and the user
-                // has been told — realign desired state with observed reality
-                // so the divergence doesn't replay later.
-                if status == .failed, sandbox.revertDesiredToObserved() {
-                    changed = true
-                }
-                if changed {
-                    try await sandbox.save(on: db)
-                }
-            }
-        } catch {
-            app.logger.error(
-                "Failed to record sandbox operation completion: \(error)",
-                metadata: ["operationId": .string(operationId.uuidString)])
+        let won = await app.resourceOperationCoordinator.recordVerdict(
+            operationID: operationId, as: status, error: error, on: app)
+        // A terminal status applies only when we won the race and Fluent is
+        // still up; a lost race means the sweep already resolved the sandbox.
+        guard won, let sandboxStatus, !Task.isCancelled, let db = app.liveDB else { return }
+        if let sandbox = try? await Sandbox.find(sandboxID, on: db) {
+            sandbox.setStatus(sandboxStatus)
+            try? await sandbox.save(on: db)
         }
     }
 
@@ -553,7 +482,11 @@ struct SandboxController: RouteCollection {
         // Firecracker-capable agent and persists hypervisorId, and the
         // desired-state sync carries the sandbox to its agent. Observed-state
         // reports — not this request — decide the operation's verdict.
-        Self.runSandboxCreation(operation, sandbox: sandbox, app: req.application)
+        req.resourceOperationCoordinator.dispatch(
+            operation, resourceKind: .sandbox, resourceID: sandboxID, hypervisorId: nil,
+            dispatch: .placement { @Sendable [app = req.application] db in
+                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
+            }, app: req.application)
 
         req.logger.info(
             "Sandbox creation accepted",
@@ -627,32 +560,6 @@ struct SandboxController: RouteCollection {
         }
     }
 
-    /// Background half of `create`: scheduling and the placement write happen
-    /// here, after the `202` went out. A failure — no schedulable agent,
-    /// placement write error — lands on the operation record and marks the
-    /// sandbox `.error` so it never poses as healthy with no backing.
-    private static func runSandboxCreation(
-        _ operation: ResourceOperation,
-        sandbox: Sandbox,
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let sandboxID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            // Bail if shutdown's drain already cancelled us — `createSandbox`
-            // dereferences `app.db` immediately (see `Application.liveDB`).
-            guard let db = app.liveDB else { return }
-            do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
-            } catch {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed, error: error.localizedDescription,
-                    settingSandboxStatus: .error, app: app)
-            }
-        }
-    }
-
     // MARK: - Update
 
     func update(req: Request) async throws -> SandboxDetailResponse {
@@ -693,12 +600,15 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be started in current state: \(sandbox.status.rawValue)")
         }
 
-        let operation = try await beginOperation(
-            .boot, sandbox: sandbox, user: user,
-            settingDesiredStatus: .running,
-            on: req.db)
-
-        Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
+        let sandboxID = try sandbox.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .boot, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
+            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            sandbox.setDesiredStatus(.running)
+            try await sandbox.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -712,12 +622,15 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.rawValue)")
         }
 
-        let operation = try await beginOperation(
-            .shutdown, sandbox: sandbox, user: user,
-            settingDesiredStatus: .stopped,
-            on: req.db)
-
-        Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
+        let sandboxID = try sandbox.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .shutdown, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
+            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            sandbox.setDesiredStatus(.stopped)
+            try await sandbox.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -738,12 +651,15 @@ struct SandboxController: RouteCollection {
         // interpretation lands with the sandbox runtime (issue #421); until
         // an agent acknowledges the new generation the operation stays
         // pending and the sweep budget backstops it.
-        let operation = try await beginOperation(
-            .reboot, sandbox: sandbox, user: user,
-            settingDesiredStatus: .running,
-            on: req.db)
-
-        Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
+        let sandboxID = try sandbox.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .reboot, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
+            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            sandbox.setDesiredStatus(.running)
+            try await sandbox.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -852,71 +768,66 @@ struct SandboxController: RouteCollection {
         // `.absent`, the agent tears the sandbox down on its next sync, and
         // the row is removed only once a report confirms absence. Unplaced
         // sandboxes and offline agents keep a direct database path.
-        let agentOnline = await Self.agentIsOnline(sandbox: sandbox, app: req.application)
-        let operation = try await beginOperation(
-            .delete, sandbox: sandbox, user: user, settingDesiredStatus: .absent, on: req.db
-        ) { db in
-            try await Self.requireSnapshotLineageDeletable(
-                for: sandbox.requireID(), on: db)
+        let sandboxID = try sandbox.requireID()
+        let userID = try user.requireID()
+        let app = req.application
+        let agentOnline: Bool
+        if let hypervisorId = sandbox.hypervisorId {
+            agentOnline = await app.agentService.agentIsOnline(agentId: hypervisorId)
+        } else {
+            agentOnline = false
         }
 
-        if agentOnline {
-            Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
-        } else {
-            Self.runDirectSandboxDeletion(operation, sandbox: sandbox, app: req.application)
+        let strategy: ResourceOperationCoordinator.Strategy =
+            agentOnline
+            ? .stateSync
+            : .directResolution { @Sendable db in
+                try await Self.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+            }
+
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .delete, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
+            hypervisorId: sandbox.hypervisorId, dispatch: strategy, on: req.db, app: app
+        ) { @Sendable db in
+            try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
+            sandbox.setDesiredStatus(.absent)
+            try await sandbox.save(on: db)
         }
         return try operation.acceptedResponse()
     }
 
-    /// Background half of `delete` for sandboxes whose agent is gone (never
-    /// placed, or offline cluster-wide): remove the record directly without
-    /// agent teardown. If the agent ever comes back still carrying the
-    /// sandbox, its observed-state report surfaces it for operator attention.
+    /// The direct-removal work for a sandbox whose agent is gone (never placed,
+    /// or offline cluster-wide) or that is being expired: clean up exported
+    /// snapshot objects, then remove the record and release its quota in one
+    /// transaction. Wrapped by the coordinator's `.directResolution` dispatch,
+    /// which supplies the still-pending guard and records the verdict. If the
+    /// agent ever comes back still carrying the sandbox, its observed-state
+    /// report surfaces it for operator attention.
     ///
     /// Internal rather than private because the expiry sweep (issue #424)
     /// deletes down this same path, so a TTL-driven deletion releases quota
     /// exactly like a user-initiated one.
-    static func runDirectSandboxDeletion(
-        _ operation: ResourceOperation, sandbox: Sandbox, app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let sandboxID = operation.resourceID
+    static func performDirectDeletion(sandbox: Sandbox, on db: any Database, app: Application) async throws {
+        let sandboxID = try sandbox.requireID()
+        if sandbox.hypervisorId != nil {
+            app.logger.warning(
+                "Deleting sandbox record without agent teardown; agent is offline",
+                metadata: ["sandbox_id": .string(sandboxID.uuidString)])
+        }
 
-        app.backgroundTasks.spawn {
-            if sandbox.hypervisorId != nil {
-                app.logger.warning(
-                    "Deleting sandbox record without agent teardown; agent is offline",
-                    metadata: ["sandbox_id": .string(sandboxID.uuidString)])
+        // Exported snapshot objects first: the snapshot rows cascade with the
+        // sandbox row below (issue #428).
+        await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
+
+        guard !Task.isCancelled else { return }
+        do {
+            try await db.transaction { db in
+                try await sandbox.delete(on: db)
+                try await QuotaEnforcementService.release(for: sandbox, on: db)
             }
-
-            // Bail if shutdown's drain already cancelled us (see
-            // `Application.liveDB`), and reuse the captured handle below.
-            guard let db = app.liveDB else { return }
-            do {
-                // If the sweep already failed this operation, stop here:
-                // removing the row under a failed operation would contradict it.
-                guard let current = try await ResourceOperation.find(operationId, on: db),
-                    current.status == .pending
-                else { return }
-
-                // Exported snapshot objects first: the snapshot rows cascade
-                // with the sandbox row below (issue #428).
-                await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
-
-                guard !Task.isCancelled else { return }
-                try await db.transaction { db in
-                    try await sandbox.delete(on: db)
-                    try await QuotaEnforcementService.release(for: sandbox, on: db)
-                }
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
-                    settingSandboxStatus: nil, app: app)
-            } catch {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: "Failed to delete sandbox record: \(error.localizedDescription)",
-                    settingSandboxStatus: nil, app: app)
-            }
+        } catch {
+            throw ResourceOperationCoordinator.WorkError(
+                "Failed to delete sandbox record: \(error.localizedDescription)")
         }
     }
 }

@@ -86,207 +86,6 @@ struct VMController: RouteCollection {
         }
     }
 
-    // MARK: - Async operation plumbing (issue #259)
-
-    /// VM-flavored front of `ResourceOperation.begin`: creates the pending
-    /// operation record and applies the VM's in-flight status change in one
-    /// transaction, rejecting with `409 Conflict` when any operation is
-    /// already pending for the VM — the double-submit guard from issue #259.
-    private func beginOperation(
-        _ kind: VMOperationKind,
-        vm: VM,
-        user: User,
-        settingVMStatus transitionalStatus: VMStatus? = nil,
-        settingDesiredStatus desiredStatus: DesiredVMStatus? = nil,
-        on db: Database,
-        mutation: (@Sendable (any Database) async throws -> Void)? = nil
-    ) async throws -> ResourceOperation {
-        try await ResourceOperation.begin(
-            kind,
-            resourceKind: .virtualMachine,
-            resourceID: vm.requireID(),
-            userID: user.requireID(),
-            on: db
-        ) { db in
-            // Desired state and its generation bump commit atomically with the
-            // operation record (issue #260); the sync to the agent is a
-            // fire-and-forget nudge, with the periodic timer as the backstop.
-            if let desiredStatus {
-                vm.setDesiredStatus(desiredStatus)
-            }
-            if let transitionalStatus {
-                vm.setStatus(transitionalStatus)
-            }
-            if desiredStatus != nil || transitionalStatus != nil {
-                try await vm.save(on: db)
-            }
-            // Spec changes that aren't power-state changes (issue #568's
-            // resize) bring their own mutation, which commits with the
-            // operation record on the same terms.
-            try await mutation?(db)
-        }
-    }
-
-    /// Whether the VM's owning agent is online somewhere in the cluster.
-    /// Heartbeats through any replica keep the shared registry row fresh, so
-    /// this view is replica-independent. False for unassigned VMs.
-    private static func agentIsOnline(vm: VM, app: Application) async -> Bool {
-        guard let agentId = vm.hypervisorId else { return false }
-        guard let agent = await app.agentService.getAgentInfo(agentId) else { return false }
-        return agent.status == .online
-    }
-
-    /// Push the freshly written desired state to the VM's agent — directly
-    /// when this replica holds its socket, via a pub/sub nudge to the holding
-    /// replica otherwise. Losing this nudge is safe — the periodic sync timer
-    /// re-sends the full state.
-    ///
-    /// A VM with no agent — or one whose agent is offline cluster-wide — has
-    /// nowhere to converge right now: fail the operation immediately (which
-    /// also realigns desired state) instead of letting it sit pending for the
-    /// stuck-operation sweep's multi-minute budget. This mirrors both the old
-    /// imperative path's dispatch failure and `delete`'s offline handling.
-    private static func dispatchStateSync(_ operation: ResourceOperation, vm: VM, app: Application) {
-        guard let operationId = operation.id else { return }
-        let vmID = operation.resourceID
-
-        guard let agentId = vm.hypervisorId else {
-            app.backgroundTasks.spawn {
-                await completeOperation(
-                    operationId, vmID: vmID, as: .failed,
-                    error: AgentServiceError.vmNotMapped(vmID.uuidString).localizedDescription,
-                    settingVMStatus: nil, app: app)
-            }
-            return
-        }
-        app.backgroundTasks.spawn {
-            guard let agent = await app.agentService.getAgentInfo(agentId), agent.status == .online else {
-                await completeOperation(
-                    operationId, vmID: vmID, as: .failed,
-                    error: "Agent \(agentId) is offline; the VM cannot converge to the requested state",
-                    settingVMStatus: nil, app: app)
-                return
-            }
-            await app.agentService.syncDesiredState(agentId: agentId)
-        }
-    }
-
-    /// Records the verdict of an agent call on the operation row and resolves the
-    /// VM status it left in flight. Every effect is gated on the operation still
-    /// being pending, so whichever completes first — this path or the
-    /// stuck-operation sweep — wins, and the loser is a no-op.
-    private static func completeOperation(
-        _ operationId: UUID,
-        vmID: UUID,
-        as status: VMOperationStatus,
-        error: String?,
-        settingVMStatus vmStatus: VMStatus?,
-        app: Application
-    ) async {
-        // Shutdown's drain cancels surviving background tasks before Vapor
-        // tears down Fluent; bail before the first database access so a
-        // cancelled task cannot dereference a torn-down `app.db`.
-        guard let db = app.liveDB else { return }
-        do {
-            guard let operation = try await ResourceOperation.find(operationId, on: db),
-                try await operation.completeIfPending(as: status, error: error, on: db)
-            else { return }
-
-            if status == .failed {
-                app.logger.warning(
-                    "VM operation failed",
-                    metadata: [
-                        "operationId": .string(operationId.uuidString),
-                        "vmId": .string(vmID.uuidString),
-                        "kind": .string(operation.kind.rawValue),
-                        "error": .string(error ?? "unknown"),
-                    ])
-            }
-
-            // The awaits above may have spanned the drain — re-check before the
-            // VM read/write. (This is the observed crash gap: the "VM operation
-            // failed" warning logged, then `VM.find` unwrapped a torn-down db.)
-            guard !Task.isCancelled else { return }
-            if let vm = try await VM.find(vmID, on: db) {
-                var changed = false
-                if let vmStatus {
-                    vm.setStatus(vmStatus)
-                    changed = true
-                    if vmStatus == .error {
-                        Telemetry.vmEnteredError(reason: "operation_failed")
-                    }
-                }
-                // A failed operation's intent was not achieved and the user has
-                // been told — realign desired state with observed reality so the
-                // divergence doesn't replay later (e.g. a failed delete's
-                // `.absent` executing after the agent upgrades to state sync).
-                if status == .failed, vm.revertDesiredToObserved() {
-                    changed = true
-                }
-                if changed {
-                    try await vm.save(on: db)
-                }
-            }
-        } catch {
-            app.logger.error(
-                "Failed to record operation completion: \(error)",
-                metadata: ["operationId": .string(operationId.uuidString)])
-        }
-    }
-
-    /// Runs one agent-backed lifecycle operation in the background and records its
-    /// outcome on the operation row. The HTTP response has already gone out with
-    /// `202`, so nothing here may assume the request is still alive.
-    ///
-    /// The three status parameters resolve the VM once the operation completes:
-    /// `statusOnDispatchFailure` applies when the request never reached an agent
-    /// (no mapping, agent gone) — the VM is restored rather than escalated,
-    /// mirroring the old synchronous handling.
-    private static func runVMOperation(
-        _ operation: ResourceOperation,
-        sending messageType: MessageType,
-        statusOnSuccess: VMStatus?,
-        statusOnFailure: VMStatus?,
-        statusOnDispatchFailure: VMStatus?,
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let vmID = operation.resourceID
-        let budget = operation.completionBudget
-
-        app.backgroundTasks.spawn {
-            do {
-                let response = try await app.agentService.performVMOperationAwaitingResponse(
-                    messageType, vmId: vmID.uuidString, timeout: budget)
-
-                switch response {
-                case .success:
-                    await completeOperation(
-                        operationId, vmID: vmID, as: .succeeded, error: nil,
-                        settingVMStatus: statusOnSuccess, app: app)
-                case .error(let message, let details):
-                    let reason = details.map { "\(message): \($0)" } ?? message
-                    await completeOperation(
-                        operationId, vmID: vmID, as: .failed, error: reason,
-                        settingVMStatus: statusOnFailure, app: app)
-                }
-            } catch {
-                switch error {
-                case AgentServiceError.vmNotMapped, AgentServiceError.agentNotFound:
-                    await completeOperation(
-                        operationId, vmID: vmID, as: .failed,
-                        error: error.localizedDescription,
-                        settingVMStatus: statusOnDispatchFailure, app: app)
-                default:
-                    await completeOperation(
-                        operationId, vmID: vmID, as: .failed,
-                        error: error.localizedDescription,
-                        settingVMStatus: statusOnFailure, app: app)
-                }
-            }
-        }
-    }
-
     func listOperations(req: Request) async throws -> [OperationResponse] {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
@@ -848,7 +647,11 @@ struct VMController: RouteCollection {
         // and persists hypervisorId, and the desired-state sync carries the
         // VM (spec assembled from the database) to its agent. Observed-state
         // reports — not this request — decide the operation's verdict.
-        Self.runVMCreation(operation, vm: vm, image: image, app: req.application)
+        req.resourceOperationCoordinator.dispatch(
+            operation, resourceKind: .virtualMachine, resourceID: vmID, hypervisorId: nil,
+            dispatch: .placement { @Sendable [app = req.application] db in
+                try await app.agentService.createVM(vm: vm, db: db, image: image)
+            }, app: req.application)
 
         req.logger.info(
             "VM creation accepted",
@@ -859,38 +662,6 @@ struct VMController: RouteCollection {
             ])
 
         return try operation.acceptedResponse()
-    }
-
-    /// Background half of `create`: scheduling, reservation, and the placement
-    /// write all happen here, after the `202` went out. On success the desired
-    /// state is persisted and synced; the agent's observed-state reports
-    /// complete the operation (the stuck-operation sweep backstops its
-    /// budget). A failure — no schedulable agent, placement write error —
-    /// lands on the operation record and marks the VM `.error` so it never
-    /// poses as a healthy `.created` VM that has no backing.
-    private static func runVMCreation(
-        _ operation: ResourceOperation,
-        vm: VM,
-        image: Image?,
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let vmID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            // Bail if shutdown's drain already cancelled us — `createVM`
-            // dereferences `app.db` immediately (see `Application.liveDB`).
-            guard let db = app.liveDB else { return }
-            do {
-                // The image constrains placement (architecture match); the
-                // sync itself re-reads everything it needs from the database.
-                try await app.agentService.createVM(vm: vm, db: db, image: image)
-            } catch {
-                await completeOperation(
-                    operationId, vmID: vmID, as: .failed, error: error.localizedDescription,
-                    settingVMStatus: .error, app: app)
-            }
-        }
     }
 
     /// Updates a VM's metadata and, since issue #568, its vCPU/memory sizing.
@@ -1055,7 +826,12 @@ struct VMController: RouteCollection {
             }
         }
 
-        let operation = try await beginOperation(.resize, vm: existingVM, user: user, on: req.db) { @Sendable db in
+        let existingVMID = try existingVM.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .resize, resourceKind: .virtualMachine, resourceID: existingVMID, userID: userID,
+            hypervisorId: existingVM.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
                 vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
@@ -1071,7 +847,6 @@ struct VMController: RouteCollection {
             existingVM.bumpGeneration()
             try await existingVM.save(on: db)
         }
-        Self.dispatchStateSync(operation, vm: existingVM, app: req.application)
         return try operation.acceptedResponse()
     }
 
@@ -1128,63 +903,50 @@ struct VMController: RouteCollection {
         // sides. Unassigned VMs and offline agents keep a direct database
         // path: dead agents must not make their VMs undeletable, and there is
         // no agent to confirm anything anyway.
-        let agentOnline = await Self.agentIsOnline(vm: vm, app: req.application)
-        let operation = try await beginOperation(
-            .delete, vm: vm, user: user, settingDesiredStatus: .absent, on: req.db)
-
-        if agentOnline {
-            Self.dispatchStateSync(operation, vm: vm, app: req.application)
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let app = req.application
+        let agentOnline: Bool
+        if let hypervisorId = vm.hypervisorId {
+            agentOnline = await app.agentService.agentIsOnline(agentId: hypervisorId)
         } else {
-            Self.runDirectVMDeletion(operation, vm: vm, app: req.application)
+            agentOnline = false
+        }
+
+        // Offline/unassigned: remove the record directly without agent teardown.
+        // If the agent ever comes back still carrying the VM, its observed-state
+        // report surfaces it as an orphan for operator attention.
+        let strategy: ResourceOperationCoordinator.Strategy =
+            agentOnline
+            ? .stateSync
+            : .directResolution { @Sendable db in
+                if vm.hypervisorId != nil {
+                    app.logger.warning(
+                        "Deleting VM record without agent teardown; agent is offline",
+                        metadata: ["vm_id": .string(vmID.uuidString)])
+                }
+                // Delete the VM, then recompute its quotas from the remaining
+                // VMs, in one transaction so the reservation counters and the
+                // VM row stay consistent.
+                do {
+                    try await db.transaction { db in
+                        try await vm.delete(on: db)
+                        try await QuotaEnforcementService.release(for: vm, on: db)
+                    }
+                } catch {
+                    throw ResourceOperationCoordinator.WorkError(
+                        "Failed to delete VM record: \(error.localizedDescription)")
+                }
+            }
+
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: strategy, on: req.db, app: app
+        ) { @Sendable db in
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: db)
         }
         return try operation.acceptedResponse()
-    }
-
-    /// Background half of `delete` for VMs whose agent is gone (never
-    /// assigned, or offline cluster-wide): remove the record directly without
-    /// agent teardown. If the agent ever comes back still carrying the VM,
-    /// its observed-state report surfaces it as an orphan for operator
-    /// attention — the same posture the imperative path took for dead agents.
-    private static func runDirectVMDeletion(_ operation: ResourceOperation, vm: VM, app: Application) {
-        guard let operationId = operation.id else { return }
-        let vmID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            if vm.hypervisorId != nil {
-                app.logger.warning(
-                    "Deleting VM record without agent teardown; agent is offline",
-                    metadata: ["vm_id": .string(vmID.uuidString)])
-            }
-
-            // Bail if shutdown's drain already cancelled us (see
-            // `Application.liveDB`), and reuse the captured handle below.
-            guard let db = app.liveDB else { return }
-            do {
-                // If the sweep already failed this operation, stop here: the
-                // user will retry, and removing the row under a failed
-                // operation would contradict it.
-                guard let current = try await ResourceOperation.find(operationId, on: db),
-                    current.status == .pending
-                else { return }
-
-                // Delete the VM, then recompute its quotas from the remaining VMs,
-                // in one transaction so the reservation counters and the VM row stay
-                // consistent. Deletion happens first so the removed VM drops out of
-                // the recount.
-                try await db.transaction { db in
-                    try await vm.delete(on: db)
-                    try await QuotaEnforcementService.release(for: vm, on: db)
-                }
-                await completeOperation(
-                    operationId, vmID: vmID, as: .succeeded, error: nil,
-                    settingVMStatus: nil, app: app)
-            } catch {
-                await completeOperation(
-                    operationId, vmID: vmID, as: .failed,
-                    error: "Failed to delete VM record: \(error.localizedDescription)",
-                    settingVMStatus: nil, app: app)
-            }
-        }
     }
 
     func pause(req: Request) async throws -> Response {
@@ -1197,10 +959,15 @@ struct VMController: RouteCollection {
 
         // No transitional status exists for pause; the VM stays `.running` until
         // the agent confirms, and the operation record carries the in-flight state.
-        let operation = try await beginOperation(
-            .pause, vm: vm, user: user, settingDesiredStatus: .paused, on: req.db)
-
-        Self.dispatchStateSync(operation, vm: vm, app: req.application)
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .pause, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            vm.setDesiredStatus(.paused)
+            try await vm.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -1214,10 +981,15 @@ struct VMController: RouteCollection {
         }
 
         // Counterpart of pause: the VM stays `.paused` until the agent confirms.
-        let operation = try await beginOperation(
-            .resume, vm: vm, user: user, settingDesiredStatus: .running, on: req.db)
-
-        Self.dispatchStateSync(operation, vm: vm, app: req.application)
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .resume, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -1252,12 +1024,15 @@ struct VMController: RouteCollection {
         // observed-state reports complete the operation (issue #260). No
         // transitional `.starting` is stored — in-flight state is derived
         // from desired != observed plus the pending operation.
-        let operation = try await beginOperation(
-            .boot, vm: vm, user: user,
-            settingDesiredStatus: .running,
-            on: req.db)
-
-        Self.dispatchStateSync(operation, vm: vm, app: req.application)
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -1270,12 +1045,15 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
         }
 
-        let operation = try await beginOperation(
-            .shutdown, vm: vm, user: user,
-            settingDesiredStatus: .shutdown,
-            on: req.db)
-
-        Self.dispatchStateSync(operation, vm: vm, app: req.application)
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .shutdown, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        ) { @Sendable db in
+            vm.setDesiredStatus(.shutdown)
+            try await vm.save(on: db)
+        }
 
         return try operation.acceptedResponse()
     }
@@ -1288,18 +1066,16 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
         }
 
-        // A reboot starts and ends `.running`, so no status change on any outcome;
-        // a failure is visible on the operation record.
-        let operation = try await beginOperation(.reboot, vm: vm, user: user, on: req.db)
-
-        Self.runVMOperation(
-            operation,
-            sending: .vmReboot,
-            statusOnSuccess: nil,
-            statusOnFailure: nil,
-            statusOnDispatchFailure: nil,
-            app: req.application
-        )
+        // A reboot starts and ends `.running`, so no status change on any
+        // outcome; it is an action, not a state, so it awaits an imperative
+        // agent response rather than riding the desired-state sync. A failure
+        // is visible on the operation record.
+        let vmID = try vm.requireID()
+        let userID = try user.requireID()
+        let operation = try await req.resourceOperationCoordinator.perform(
+            .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+            hypervisorId: vm.hypervisorId, dispatch: .awaitingResponse(.vmReboot),
+            on: req.db, app: req.application)
 
         return try operation.acceptedResponse()
     }
