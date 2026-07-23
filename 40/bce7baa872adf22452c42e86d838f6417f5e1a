@@ -1,0 +1,50 @@
+docs/architecture/multi-replica.md
+  s_cc67553789ea9b::t_3f93fca669bea9 21-31,35-37
+docs/architecture/control-plane.md
+  s_cc67553789ea9b::t_d6de64ad5a0c7b 80-84
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_cc67553789ea9b::t_68671dfc0859be 617
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_cc67553789ea9b::t_339054408c017f 1-484
+control-plane/Sources/App/Services/AgentService.swift
+  s_cc67553789ea9b::t_ed43eb52c2d4b2 757
+  s_cc67553789ea9b::t_015bc9ffcb87fb 1613-1616,1622,1627
+  s_cc67553789ea9b::t_1cfc57acd43ab9 522
+  s_cc67553789ea9b::t_6fb1459624dfa2 238-240
+  s_cc67553789ea9b::t_5fcb53ed9ea3ac 876
+  s_cc67553789ea9b::t_94b3f2b3770588 689,696
+  s_cc67553789ea9b::t_152c6ccd2404bf 3391,3398,3400
+  s_cc67553789ea9b::t_c02adf06bb7a4c 1669-1673
+  s_cc67553789ea9b::t_ee6793c348b55f 221
+  s_cc67553789ea9b::t_053333f2f94672 3614-3632
+  s_cc67553789ea9b::t_99e1dc75ef117e 3450-3453
+  s_cc67553789ea9b::t_0bfe9db5e8c7d9 639
+  s_cc67553789ea9b::t_b950e095bc21f4 672
+  s_cc67553789ea9b::t_51cee03e86a960 120
+  s_cc67553789ea9b::t_bf1999bec15239 2440
+control-plane/Tests/AppTests/ReplicaMessageBridgeTests.swift
+  s_cc67553789ea9b::t_dc6a6f5389f38f 1-89,91-216
+  s_cc67553789ea9b::t_caa580971b92d4 90
+CONTEXT.md
+  s_cc67553789ea9b::t_4a210f8acc0f7b 73-99
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_cc67553789ea9b::t_49b9a3e589312b 297,307,311
+  s_cc67553789ea9b::t_cfa1939e517893 332,334,340
+  s_cc67553789ea9b::t_fb097ed8b0add7 363,367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "40bce7baa872adf22452c42e86d838f6417f5e1a",
+  "prompts": {},
+  "sessions": {
+    "s_cc67553789ea9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a0f4be65-af59-460e-a922-54bef5832fc9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
