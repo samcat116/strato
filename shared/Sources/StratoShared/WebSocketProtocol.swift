@@ -334,7 +334,7 @@ extension AgentUpdateMessage {
 }
 
 public struct AgentRegisterResponseMessage: WebSocketMessage {
-    public let type: MessageType = .agentRegisterResponse
+    public var type: MessageType { .agentRegisterResponse }
     public let requestId: String
     public let timestamp: Date
     public let agentId: String  // The database UUID assigned to this agent

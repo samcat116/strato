@@ -25,7 +25,7 @@ struct MTLSArtifactDownloaderTests {
     // MARK: - Fixed-response loopback origin
 
     /// Answers every request with one canned status and body, then closes.
-    private final class FixedResponseHandler: ChannelInboundHandler {
+    private final class FixedResponseHandler: ChannelInboundHandler, Sendable {
         typealias InboundIn = HTTPServerRequestPart
         typealias OutboundOut = HTTPServerResponsePart
 
@@ -47,8 +47,9 @@ struct MTLSArtifactDownloaderTests {
 
             context.write(wrapOutboundOut(.head(head)), promise: nil)
             context.write(wrapOutboundOut(.body(.byteBuffer(body))), promise: nil)
+            let channel = context.channel
             context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
-                context.close(promise: nil)
+                channel.close(promise: nil)
             }
         }
     }

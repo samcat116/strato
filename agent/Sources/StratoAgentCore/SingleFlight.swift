@@ -73,7 +73,7 @@ public actor SingleFlight<Value: Sendable> {
             } catch {
                 result = .failure(error)
             }
-            await self.finish(key: key, flightID: flightID, result: result)
+            self.finish(key: key, flightID: flightID, result: result)
         }
     }
 

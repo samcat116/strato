@@ -30,7 +30,7 @@ struct OrganizationalUnitController: RouteCollection {
     // MARK: - OU CRUD Operations
 
     func index(req: Request) async throws -> [OrganizationalUnitResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -72,7 +72,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func show(req: Request) async throws -> OrganizationalUnitResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -111,7 +111,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func create(req: Request) async throws -> OrganizationalUnitResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -178,7 +178,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func update(req: Request) async throws -> OrganizationalUnitResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -247,7 +247,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -294,7 +294,7 @@ struct OrganizationalUnitController: RouteCollection {
     // MARK: - Hierarchy Operations
 
     func getTree(req: Request) async throws -> OrganizationalUnitTreeResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -320,7 +320,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func move(req: Request) async throws -> OrganizationalUnitResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -392,7 +392,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func indexSubOUs(req: Request) async throws -> [OrganizationalUnitResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -443,7 +443,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func createSubOU(req: Request) async throws -> OrganizationalUnitResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 

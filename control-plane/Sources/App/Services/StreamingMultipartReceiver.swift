@@ -120,7 +120,7 @@ enum StreamingMultipartReceiver {
                     reason: "Upload exceeds the maximum allowed size of \(maxBytes) bytes")
             }
 
-            var readable = chunk
+            let readable = chunk
             if let bytes = readable.getBytes(at: readable.readerIndex, length: readable.readableBytes) {
                 if headerBytes.count < ImageValidationService.headerProbeLength {
                     headerBytes.append(

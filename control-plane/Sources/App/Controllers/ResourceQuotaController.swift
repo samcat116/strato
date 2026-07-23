@@ -109,7 +109,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -128,7 +128,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func update(req: Request) async throws -> ResourceQuotaResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -219,7 +219,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -248,7 +248,7 @@ struct ResourceQuotaController: RouteCollection {
     // MARK: - Organization Context Operations
 
     func indexForOrganization(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -269,7 +269,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForOrganization(req: Request) async throws -> ResourceQuotaResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -306,7 +306,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func indexForOU(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -338,7 +338,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForOU(req: Request) async throws -> ResourceQuotaResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -386,7 +386,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func indexForProject(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -411,7 +411,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForProject(req: Request) async throws -> ResourceQuotaResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -461,7 +461,7 @@ struct ResourceQuotaController: RouteCollection {
     // MARK: - Usage Tracking
 
     func getUsage(req: Request) async throws -> QuotaUsageResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 

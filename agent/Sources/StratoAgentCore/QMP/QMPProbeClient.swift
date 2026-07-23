@@ -168,7 +168,7 @@ public actor QMPProbeClient {
                 .sorted { $0.topologyOrder.lexicographicallyPrecedes($1.topologyOrder) }
 
             for slot in free where present < target {
-                try await self.command(
+                _ = try await self.command(
                     channel, framer, execute: "device_add",
                     arguments: QMPProbe.DeviceAddArguments(
                         driver: slot.type, id: slot.deviceID, props: slot.props),
