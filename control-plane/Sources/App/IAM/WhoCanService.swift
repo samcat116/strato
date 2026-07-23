@@ -271,7 +271,13 @@ enum WhoCanService {
                 if let denying = try await CeilingEvaluator.denyingCeilings(
                     principal: principal, action: action, node: node, built: built, on: db)
                 {
-                    result.append(entry.markingCeilinged(denying))
+                    // Surface only named ceiling ids (`guardrail-`/`policy-`) —
+                    // the `chain-truncated` sentinel is a structural fail-closed
+                    // that names no policy, so the entry is still `ceilinged`
+                    // but its id list is empty rather than carrying a value the
+                    // API contract does not admit.
+                    let ids = denying.filter { $0.hasPrefix("guardrail-") || $0.hasPrefix("policy-") }
+                    result.append(entry.markingCeilinged(ids))
                 } else {
                     result.append(entry)
                 }

@@ -591,6 +591,16 @@ public func configure(_ app: Application) async throws {
     // via the watch, whose periodic re-read would outlive the test's
     // application. Tests that change policy (guardrail writes) drive
     // `cedarPolicySet.reconcile` directly.
+    //
+    // IAM #610: densify `iam_guardrails.cedar_text` before the set is built, so
+    // the compiled set uses the stored text rather than the cache's
+    // matcher-regeneration fallback. Idempotent, only touches NULL rows, and
+    // needs no version bump (regeneration is byte-identical). Skipped in
+    // `.testing`, where the fallback covers any null row and suites that need a
+    // dense column write it explicitly.
+    if app.environment != .testing {
+        try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+    }
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()

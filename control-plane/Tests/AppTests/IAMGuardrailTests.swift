@@ -671,4 +671,28 @@ final class IAMGuardrailTests {
             #expect(violations.isEmpty)
         }
     }
+
+    @Test("The boot backfill fills a null cedar_text from the matchers, idempotently")
+    func cedarTextBackfill() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Backfill")
+            let guardrail = try await GuardrailStore.create(
+                name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
+                actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
+                createdBy: nil, on: app.db)
+            // Simulate a row written before #610: the column existed but was null.
+            guardrail.cedarText = nil
+            try await guardrail.save(on: app.db)
+
+            let filled = try await GuardrailCedarTextBackfill.backfill(
+                on: app.db, logger: app.logger)
+            #expect(filled == 1)
+            let reloaded = try await Guardrail.find(guardrail.id!, on: app.db)
+            #expect(reloaded?.cedarText?.contains("forbid") == true)
+
+            // Idempotent: a second run finds nothing to fill.
+            let again = try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+            #expect(again == 0)
+        }
+    }
 }

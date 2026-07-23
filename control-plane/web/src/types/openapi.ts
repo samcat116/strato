@@ -6527,7 +6527,7 @@ export interface components {
             principalExternalToOrg: boolean;
             /** @description The grant is real but a ceiling (a guardrail or authored forbid) denies it, so this principal cannot actually act here and the enforcer agrees (#610). Marked, not filtered — a neutralised grant is exactly what an audit needs to see. Absent/false when no ceiling applies. */
             ceilinged?: boolean;
-            /** @description The ceiling policy ids that deny this grant (`guardrail-<id>` / `policy-<id>`), when `ceilinged`. */
+            /** @description The ceiling policy ids that deny this grant (`guardrail-<id>` / `policy-<id>`), when `ceilinged`. May be empty even when `ceilinged` is true if the denial is structural — a fail-closed on an inconsistent/truncated ancestor chain — rather than a named ceiling. */
             ceilingPolicyIDs?: string[];
         };
         /** @description A ceiling in force on the queried resource — a guardrail inherited down the tree, or an authored forbid policy scoped to it (#610). Which grants it neutralises is on the entries (`ceilinged`); this is the summary of what constrains the resource. */

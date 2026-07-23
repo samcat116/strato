@@ -43,7 +43,10 @@ enum CeilingEvaluator {
     /// from a forbid, so a non-nil result names the ceiling(s) in the way
     /// (`guardrail-<id>` / `policy-<id>`). A truncated ancestor chain is
     /// reported as a ceiling too, because the authorizer fails such a request
-    /// closed — reporting access here would disagree with enforcement.
+    /// closed — reporting access here would disagree with enforcement — via the
+    /// internal `["chain-truncated"]` signal, which is a non-nil "denied" that
+    /// names no policy; callers surfacing ids to the API filter it out (the
+    /// entry stays ceilinged, its id list is empty).
     static func denyingCeilings(
         principal: IAMPrincipal,
         action: String,

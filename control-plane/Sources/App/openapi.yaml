@@ -11385,7 +11385,9 @@ components:
           type: array
           description: >-
             The ceiling policy ids that deny this grant (`guardrail-<id>` /
-            `policy-<id>`), when `ceilinged`.
+            `policy-<id>`), when `ceilinged`. May be empty even when `ceilinged`
+            is true if the denial is structural — a fail-closed on an
+            inconsistent/truncated ancestor chain — rather than a named ceiling.
           items:
             type: string
 
