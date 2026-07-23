@@ -1114,6 +1114,137 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/security-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List security groups */
+        get: operations["listSecurityGroups"];
+        put?: never;
+        /** Create a security group */
+        post: operations["createSecurityGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/security-groups/{securityGroupId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        /** Get a security group */
+        get: operations["getSecurityGroup"];
+        /** Update a security group's name or description */
+        put: operations["updateSecurityGroup"];
+        post?: never;
+        /**
+         * Delete a security group
+         * @description Refused for the default group, while any NIC attaches the group, and while another group's rule references it.
+         */
+        delete: operations["deleteSecurityGroup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/security-groups/{securityGroupId}/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a rule to a security group
+         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+         */
+        post: operations["createSecurityGroupRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/security-groups/{securityGroupId}/rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+                /** @description The security group rule's id. */
+                ruleId: components["parameters"]["SecurityGroupRuleID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a rule from a security group */
+        delete: operations["deleteSecurityGroupRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/security-groups/{securityGroupId}/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach a security group to a VM NIC */
+        post: operations["attachSecurityGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/security-groups/{securityGroupId}/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Detach a security group from a VM NIC
+         * @description Refused when it would leave the NIC with no security group — every NIC keeps at least one.
+         */
+        post: operations["detachSecurityGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users": {
         parameters: {
             query?: never;
@@ -4500,6 +4631,8 @@ export interface components {
              * @default false
              */
             tpm: boolean;
+            /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
+            securityGroupIds?: string[];
         };
         UpdateVMRequest: {
             name?: string;
@@ -4996,6 +5129,92 @@ export interface components {
             networkName?: string;
             /** Format: date-time */
             createdAt?: string;
+        };
+        /**
+         * @description Traffic direction relative to the VM.
+         * @enum {string}
+         */
+        SecurityGroupRuleDirection: "ingress" | "egress";
+        /**
+         * @description Address family the rule matches.
+         * @enum {string}
+         */
+        SecurityGroupRuleEthertype: "ipv4" | "ipv6";
+        SecurityGroupRule: {
+            /** Format: uuid */
+            id: string;
+            direction: components["schemas"]["SecurityGroupRuleDirection"];
+            ethertype: components["schemas"]["SecurityGroupRuleEthertype"];
+            /**
+             * @description tcp, udp, or icmp; absent matches any protocol.
+             * @enum {string}
+             */
+            protocolName?: "tcp" | "udp" | "icmp";
+            /** @description tcp/udp: first destination port of the range. icmp: the ICMP type. */
+            portRangeMin?: number;
+            /** @description tcp/udp: last destination port of the range. icmp: the ICMP code. */
+            portRangeMax?: number;
+            /** @description CIDR peer; mutually exclusive with remoteGroupId. */
+            remoteCIDR?: string;
+            /**
+             * Format: uuid
+             * @description Security-group peer — matches the referenced group's current member addresses.
+             */
+            remoteGroupId?: string;
+            description?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        SecurityGroup: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string;
+            /** Format: uuid */
+            projectId: string;
+            /** @description The project's auto-created fallback group: undeletable and un-renamable, though its rules are editable. */
+            isDefault: boolean;
+            rules: components["schemas"]["SecurityGroupRule"][];
+            /** @description How many VM NICs currently attach this group. */
+            attachmentCount: number;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateSecurityGroupRequest: {
+            name: string;
+            description?: string;
+            /**
+             * Format: uuid
+             * @description Defaults to the caller's default project when omitted.
+             */
+            projectId?: string;
+        };
+        UpdateSecurityGroupRequest: {
+            name?: string;
+            description?: string;
+        };
+        CreateSecurityGroupRuleRequest: {
+            direction: components["schemas"]["SecurityGroupRuleDirection"];
+            ethertype: components["schemas"]["SecurityGroupRuleEthertype"];
+            /** @enum {string} */
+            protocolName?: "tcp" | "udp" | "icmp";
+            portRangeMin?: number;
+            portRangeMax?: number;
+            remoteCIDR?: string;
+            /** Format: uuid */
+            remoteGroupId?: string;
+            description?: string;
+        };
+        AttachSecurityGroupRequest: {
+            /** Format: uuid */
+            vmId: string;
+            /**
+             * Format: uuid
+             * @description The VM NIC; defaults to the VM's first interface.
+             */
+            interfaceId?: string;
         };
         /** @description The publicly readable projection of a user account. */
         UserPublic: {
@@ -7551,6 +7770,10 @@ export interface components {
         PoolID: string;
         /** @description The floating IP's id. */
         FloatingIPID: string;
+        /** @description The security group's id. */
+        SecurityGroupID: string;
+        /** @description The security group rule's id. */
+        SecurityGroupRuleID: string;
         /** @description Scope results to one organization. */
         OrganizationIdQuery: string;
         /** @description Scope results to one project. */
@@ -9580,6 +9803,239 @@ export interface operations {
                     "application/json": components["schemas"]["FloatingIP"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listSecurityGroups: {
+        parameters: {
+            query?: {
+                /** @description Scope results to one project. */
+                project_id?: components["parameters"]["ProjectIdQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The visible security groups. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityGroup"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSecurityGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description The created security group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The security group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSecurityGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated security group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    createSecurityGroupRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSecurityGroupRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The created rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityGroupRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteSecurityGroupRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+                /** @description The security group rule's id. */
+                ruleId: components["parameters"]["SecurityGroupRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    attachSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachSecurityGroupRequest"];
+            };
+        };
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    detachSecurityGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The security group's id. */
+                securityGroupId: components["parameters"]["SecurityGroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachSecurityGroupRequest"];
+            };
+        };
+        responses: {
+            204: components["responses"]["NoContent"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
