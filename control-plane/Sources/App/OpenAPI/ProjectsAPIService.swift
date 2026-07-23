@@ -650,6 +650,11 @@ struct ProjectsAPIService: APIProtocol {
                     on: transaction
                 )
             }
+            // Every project carries its mandatory default security group from
+            // birth; paths that assume it (VM create) also ensure it
+            // defensively.
+            _ = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: try project.requireID(), on: transaction)
         }
 
         return project

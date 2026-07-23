@@ -75,6 +75,7 @@ enum CedarSchemaBuilder {
         case "image": return [.image] + projectContainers
         case "network": return [.network] + projectContainers
         case "floatingip": return [.floatingIP] + projectContainers
+        case "securitygroup": return [.securityGroup] + projectContainers
         case "serviceaccount": return [.serviceAccount] + projectContainers
         case "operation": return [.vm, .sandbox] + projectContainers
         case "project": return projectContainers
@@ -218,7 +219,8 @@ enum CedarSchemaBuilder {
         case .organization: return []
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
-        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP, .serviceAccount:
+        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP, .securityGroup,
+            .serviceAccount:
             return [.project]
         case .network:
             // Project-scoped normally; a site-scoped network climbs to the

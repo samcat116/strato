@@ -572,6 +572,11 @@ public func configure(_ app: Application) async throws {
     // custom role on the org node, beyond the seeded admin/member vocabulary.
     app.migrations.add(AddRoleMappingsToOIDCProvider())
 
+    // Security groups: NIC-attached firewall rule sets realized as OVN ACLs
+    // on port groups, with a mandatory per-project default group.
+    app.migrations.add(CreateSecurityGroup())
+    app.migrations.add(SeedDefaultSecurityGroups())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

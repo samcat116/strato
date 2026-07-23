@@ -443,7 +443,7 @@ enum GuardrailStore {
         case .sandboxSnapshot:
             return try await SandboxSnapshot.find(node.id, on: db)?.environment
         case .organization, .organizationalUnit, .project, .image, .network,
-            .floatingIP, .volume, .volumeSnapshot, .site, .agent, .serviceAccount:
+            .floatingIP, .securityGroup, .volume, .volumeSnapshot, .site, .agent, .serviceAccount:
             // Listed exhaustively rather than defaulted: a new resource type
             // carrying an environment should fail to compile here, not quietly
             // fall out of every environment ceiling.
