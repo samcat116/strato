@@ -98,4 +98,87 @@ enum Telemetry {
     static func vmDriftDetected() {
         Counter(label: "strato_vm_drift_total").increment()
     }
+
+    // MARK: - HTTP request layer
+
+    /// RED metrics for the whole API surface, emitted once per request by
+    /// `MetricsMiddleware`. `route` is the matched route pattern (e.g.
+    /// `/api/vms/:vmID`) rather than the concrete path, so cardinality stays
+    /// bounded no matter how many resources exist; unmatched requests fall back
+    /// to `unmatched`. `status` is bucketed by class (`2xx`, `4xx`, ...) for the
+    /// counter to keep label cardinality low, while the duration timer carries
+    /// only method + route.
+    static func recordHTTPRequest(method: String, route: String, statusClass: String, durationSeconds: Double) {
+        Counter(
+            label: "strato_http_server_requests_total",
+            dimensions: [("method", method), ("route", route), ("status", statusClass)]
+        ).increment()
+        Timer(
+            label: "strato_http_server_request_duration_seconds",
+            dimensions: [("method", method), ("route", route)]
+        ).recordSeconds(durationSeconds)
+    }
+
+    // MARK: - Scheduler / placement
+
+    /// A placement decision resolved. `outcome` is `success` (an agent was
+    /// selected), `no_candidate` (constraints/resources left no eligible
+    /// agent), or `error` (an unexpected failure). `strategy` records which
+    /// selection policy ran. The companion timer captures selection latency.
+    static func recordPlacement(strategy: String, outcome: String, durationSeconds: Double) {
+        Counter(
+            label: "strato_scheduler_placements_total",
+            dimensions: [("strategy", strategy), ("outcome", outcome)]
+        ).increment()
+        Timer(
+            label: "strato_scheduler_placement_duration_seconds",
+            dimensions: [("strategy", strategy)]
+        ).recordSeconds(durationSeconds)
+    }
+
+    // MARK: - Authorization (Cedar)
+
+    /// A Cedar authorization decision was evaluated. `decision` is `allow` or
+    /// `deny`; the timer records evaluation latency (entity-slice load plus
+    /// policy-set evaluation). Every `IAMAuthorizer.authorize` funnels here, so
+    /// this is the allow/deny rate for the entire API.
+    static func recordAuthzDecision(allowed: Bool, durationSeconds: Double) {
+        Counter(
+            label: "strato_authz_decisions_total",
+            dimensions: [("decision", allowed ? "allow" : "deny")]
+        ).increment()
+        Timer(label: "strato_authz_evaluation_duration_seconds").recordSeconds(durationSeconds)
+    }
+
+    // MARK: - IPAM
+
+    /// A NIC address was allocated from a logical network's subnet. `family` is
+    /// `ipv4` or `ipv6`.
+    static func ipamAllocated(family: String) {
+        Counter(label: "strato_ipam_allocations_total", dimensions: [("family", family)]).increment()
+    }
+
+    /// An address allocation failed. `reason` distinguishes `pool_exhausted`
+    /// (no free host addresses) from configuration faults (`invalid_subnet`,
+    /// `invalid_gateway`). `pool_exhausted` in particular is the alertable
+    /// capacity signal.
+    static func ipamAllocationFailed(family: String, reason: String) {
+        Counter(
+            label: "strato_ipam_allocation_failures_total",
+            dimensions: [("family", family), ("reason", reason)]
+        ).increment()
+    }
+
+    // MARK: - Reconciliation / desired-state sync
+
+    /// A desired-state sync to a locally-socketed agent resolved. `outcome` is
+    /// `sent` or `failed` (assembly or send threw — the periodic timer will
+    /// retry). The timer captures assemble+send latency. Complements the
+    /// level-triggered failure counters (`strato_vm_errors_total`,
+    /// `strato_vm_drift_total`); the pushed-state size is carried on the sync
+    /// span rather than a metric to avoid a misleading fleet-wide gauge.
+    static func recordDesiredStateSync(outcome: String, durationSeconds: Double) {
+        Counter(label: "strato_agent_sync_total", dimensions: [("outcome", outcome)]).increment()
+        Timer(label: "strato_agent_sync_duration_seconds").recordSeconds(durationSeconds)
+    }
 }

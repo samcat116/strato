@@ -57,6 +57,18 @@ public func configure(_ app: Application) async throws {
         app.logger.info("Request logging enabled")
     }
 
+    // Observability middleware, registered high in the stack so they time the
+    // full request and so downstream child spans (authz, scheduler, etc.) nest
+    // under the per-request server span:
+    //  - Vapor's TracingMiddleware extracts inbound W3C trace context, opens one
+    //    server span per request with HTTP semantic-convention attributes, and
+    //    publishes it on request.serviceContext for the rest of the chain.
+    //  - MetricsMiddleware emits RED metrics (count + duration) for every route.
+    // Both go through the swift-otel-backed facades, which are no-ops when the
+    // respective pillar is disabled, so they are always safe to register.
+    app.middleware.use(TracingMiddleware())
+    app.middleware.use(MetricsMiddleware())
+
     // Whether browsers reach us over HTTPS. This can't be inferred from the Vapor
     // environment: the published image, single-host compose, and Helm chart all
     // run `--env production` yet default to serving plaintext HTTP (TLS, when
@@ -641,6 +653,19 @@ public func configure(_ app: Application) async throws {
         if metricsEnabled || logsEnabled || tracesEnabled {
             var otelConfig = OTel.Configuration.default
             otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
+
+            // Resource attributes stamped on every metric/log/trace so signals
+            // are queryable per build, per deployment, and per replica. Combined
+            // with anything supplied via OTEL_RESOURCE_ATTRIBUTES.
+            // `service.instance.id` uses the coordination replica ID so a metric
+            // series or a trace can be tied back to the exact process that emitted
+            // it in a multi-replica deployment.
+            otelConfig.resourceAttributes["service.version"] = BuildInfo.version
+            otelConfig.resourceAttributes["service.instance.id"] = app.replicaID
+            otelConfig.resourceAttributes["deployment.environment.name"] = app.environment.name
+            if BuildInfo.gitSHA != "unknown" {
+                otelConfig.resourceAttributes["vcs.revision"] = BuildInfo.gitSHA
+            }
 
             // Enable all three pillars of observability
             otelConfig.metrics.enabled = metricsEnabled

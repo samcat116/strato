@@ -2,6 +2,7 @@ import Vapor
 import Fluent
 import NIOConcurrencyHelpers
 import StratoShared
+import Tracing
 
 /// Scheduling strategy for VM placement
 enum SchedulingStrategy: String, Codable, Sendable {
@@ -419,31 +420,59 @@ final class SchedulerService: @unchecked Sendable {
         vmName: String = "unnamed"
     ) throws -> String {
         let selectedStrategy = strategy ?? defaultStrategy
+        let clock = ContinuousClock()
+        let start = clock.now
 
-        logger.info(
-            "Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))"
-        )
+        // One span per placement decision, nesting under the request span when
+        // called on a request path. `outcome`/duration are also emitted as
+        // metrics so placement is alertable without traces enabled.
+        return try withSpan("scheduler.select_agent", ofKind: .internal) { span in
+            span.attributes["scheduler.strategy"] = selectedStrategy.rawValue
+            span.attributes["scheduler.candidate_count"] = agents.count
+            span.attributes["vm.name"] = vmName
+            span.attributes["vm.hypervisor"] = requirements.hypervisorType.rawValue
+            do {
+                logger.info(
+                    "Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))"
+                )
 
-        let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
+                let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
 
-        // Apply scheduling strategy
-        let selectedAgent: SchedulableAgent
-        switch selectedStrategy {
-        case .bestFit:
-            selectedAgent = try selectBestFit(from: eligibleAgents)
-        case .leastLoaded:
-            selectedAgent = try selectLeastLoaded(from: eligibleAgents)
-        case .roundRobin:
-            selectedAgent = try selectRoundRobin(from: eligibleAgents)
-        case .random:
-            selectedAgent = try selectRandom(from: eligibleAgents)
+                // Apply scheduling strategy
+                let selectedAgent: SchedulableAgent
+                switch selectedStrategy {
+                case .bestFit:
+                    selectedAgent = try selectBestFit(from: eligibleAgents)
+                case .leastLoaded:
+                    selectedAgent = try selectLeastLoaded(from: eligibleAgents)
+                case .roundRobin:
+                    selectedAgent = try selectRoundRobin(from: eligibleAgents)
+                case .random:
+                    selectedAgent = try selectRandom(from: eligibleAgents)
+                }
+
+                logger.info(
+                    "Selected agent '\(selectedAgent.name)' for VM '\(vmName)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)"
+                )
+
+                span.attributes["scheduler.selected_agent"] = selectedAgent.name
+                Telemetry.recordPlacement(
+                    strategy: selectedStrategy.rawValue, outcome: "success",
+                    durationSeconds: (clock.now - start).asSeconds)
+                return selectedAgent.id
+            } catch {
+                // Every `SchedulerError` is a "no eligible agent" outcome (a
+                // constraint or capacity shortfall), distinct from an
+                // unexpected fault.
+                let outcome = error is SchedulerError ? "no_candidate" : "error"
+                span.attributes["scheduler.outcome"] = outcome
+                span.recordError(error)
+                Telemetry.recordPlacement(
+                    strategy: selectedStrategy.rawValue, outcome: outcome,
+                    durationSeconds: (clock.now - start).asSeconds)
+                throw error
+            }
         }
-
-        logger.info(
-            "Selected agent '\(selectedAgent.name)' for VM '\(vmName)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)"
-        )
-
-        return selectedAgent.id
     }
 
     // MARK: - Private Scheduling Algorithms
