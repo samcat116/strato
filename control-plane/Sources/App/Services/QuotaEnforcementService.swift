@@ -226,6 +226,11 @@ struct QuotaEnforcementService {
             try await resyncReservations(quota, on: db)
         }
 
+        // Baseline after resync but before this workload is applied: the
+        // quota.threshold_exceeded webhook (issue #559) fires only when this
+        // admission crosses a threshold the baseline was still under.
+        let baselines = quotas.map(QuotaUsageSnapshot.init(of:))
+
         for quota in quotas {
             let check = try apply(quota)
             guard check.allowed else {
@@ -239,8 +244,12 @@ struct QuotaEnforcementService {
 
         // Persists the resynced baselines plus the incoming workload; after its row
         // is inserted this equals each quota's true in-scope usage.
-        for quota in quotas {
+        for (quota, baseline) in zip(quotas, baselines) {
             try await quota.save(on: db)
+            // Same transaction as the reservation: the threshold event commits
+            // iff the admission commits.
+            try await WebhookEvents.enqueueQuotaThresholds(
+                quota: quota, baseline: baseline, project: project, on: db)
         }
     }
 

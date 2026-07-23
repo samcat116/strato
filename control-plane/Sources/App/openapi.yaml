@@ -145,6 +145,10 @@ tags:
     description: >-
       Shared Signals Framework (SSF) streams and the RFC 8935 push-delivery
       receiver.
+  - name: Webhooks
+    description: >-
+      User-managed webhook subscriptions to typed platform events, with
+      signed, outbox-backed delivery and per-subscription delivery history.
 
 security:
   - bearerAuth: []
@@ -6637,6 +6641,230 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SETErrorResponse"
+  /api/organizations/{organizationID}/webhooks:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listWebhooks
+      summary: List an organization's webhook subscriptions
+      description: Requires organization membership.
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The organization's webhook subscriptions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookSubscription"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createWebhook
+      summary: Create a webhook subscription
+      description: >-
+        Requires organization admin. The target URL is validated against the
+        SSRF guard. The response carries the generated signing secret — it is
+        stored encrypted and this is the only time it is shown.
+      tags: [Webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookRequest"
+      responses:
+        "201":
+          description: The created subscription plus its one-time signing secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookWithSecret"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/organizations/{organizationID}/webhooks/{webhookID}:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WebhookID"
+    get:
+      operationId: getWebhook
+      summary: Get a webhook subscription
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The subscription.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSubscription"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateWebhook
+      summary: Update a webhook subscription
+      description: >-
+        Requires organization admin. Omitted fields are left unchanged.
+        Re-activating a subscription clears its failure bookkeeping (and any
+        auto-disable reason).
+      tags: [Webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWebhookRequest"
+      responses:
+        "200":
+          description: The updated subscription.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSubscription"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook subscription
+      description: Requires organization admin. Also removes its delivery history.
+      tags: [Webhooks]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/organizations/{organizationID}/webhooks/{webhookID}/rotate-secret:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WebhookID"
+    post:
+      operationId: rotateWebhookSecret
+      summary: Rotate a webhook's signing secret
+      description: >-
+        Requires organization admin. Replaces the signing secret immediately;
+        the response is the only time the new secret is shown.
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The subscription plus its new one-time signing secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookWithSecret"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/organizations/{organizationID}/webhooks/{webhookID}/test:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WebhookID"
+    post:
+      operationId: sendWebhookTestEvent
+      summary: Enqueue a test event
+      description: >-
+        Requires organization admin. Enqueues a `webhook.test` delivery for
+        this subscription (bypassing its event-type selection); the delivery
+        sweep posts it like any other event.
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The enqueued test delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDelivery"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/webhooks/{webhookID}/deliveries:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WebhookID"
+      - name: limit
+        in: query
+        required: false
+        description: Maximum deliveries to return (1–200, default 50).
+        schema: { type: integer }
+    get:
+      operationId: listWebhookDeliveries
+      summary: List a webhook's recent deliveries
+      description: >-
+        Requires organization admin — delivery payloads carry operational
+        detail from any project in the organization. Newest first. Terminal
+        deliveries are pruned after the history retention window.
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The subscription's recent deliveries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookDelivery"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/organizations/{organizationID}/webhooks/{webhookID}/deliveries/{deliveryID}/redeliver:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        description: The organization's id.
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/WebhookID"
+      - $ref: "#/components/parameters/WebhookDeliveryID"
+    post:
+      operationId: redeliverWebhookDelivery
+      summary: Re-enqueue a delivery
+      description: >-
+        Requires organization admin. Resets a terminal (succeeded or dead)
+        delivery to pending with a fresh attempt budget; the delivery sweep
+        posts it again.
+      tags: [Webhooks]
+      responses:
+        "200":
+          description: The re-enqueued delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDelivery"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/logs:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -7300,6 +7528,22 @@ components:
       in: path
       required: true
       description: The Shared Signals stream's id.
+      schema:
+        type: string
+        format: uuid
+    WebhookID:
+      name: webhookID
+      in: path
+      required: true
+      description: The webhook subscription's id.
+      schema:
+        type: string
+        format: uuid
+    WebhookDeliveryID:
+      name: deliveryID
+      in: path
+      required: true
+      description: The webhook delivery's id.
       schema:
         type: string
         format: uuid
@@ -13467,6 +13711,161 @@ components:
           type: integer
         moreAvailable:
           type: boolean
+
+    WebhookEventType:
+      type: string
+      description: >-
+        A subscribable platform event type. `webhook.test` additionally
+        appears in deliveries created by the test endpoint but cannot be
+        subscribed to.
+      enum:
+        - operation.completed
+        - operation.failed
+        - vm.state_changed
+        - agent.connected
+        - agent.disconnected
+        - quota.threshold_exceeded
+
+    WebhookSubscription:
+      type: object
+      description: >-
+        A user-managed webhook subscription. The signing secret is never
+        included; it is returned once by create and rotate-secret.
+      required: [id, organizationId, name, url, eventTypes, isActive]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+          description: >-
+            When set, only events carrying this project are delivered; absent
+            means every event in the organization.
+        name:
+          type: string
+        url:
+          type: string
+        eventTypes:
+          type: array
+          description: Subscribed event types; empty subscribes to all types.
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        isActive:
+          type: boolean
+        disabledReason:
+          type: string
+          description: >-
+            Why the platform deactivated the subscription (continuous delivery
+            failure); absent for user-deactivated or active subscriptions.
+        failingSince:
+          type: string
+          format: date-time
+          description: >-
+            Start of the current unbroken delivery-failure streak; absent
+            after any successful delivery.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateWebhookRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          description: The https/http endpoint to POST events to.
+        projectId:
+          type: string
+          format: uuid
+          description: Narrow delivery to one project of the organization.
+        eventTypes:
+          type: array
+          description: Event types to subscribe to; empty or omitted means all.
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+
+    UpdateWebhookRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+        eventTypes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        isActive:
+          type: boolean
+
+    WebhookWithSecret:
+      type: object
+      description: A subscription plus its plaintext signing secret, shown exactly once.
+      required: [subscription, signingSecret]
+      properties:
+        subscription:
+          $ref: "#/components/schemas/WebhookSubscription"
+        signingSecret:
+          type: string
+
+    WebhookDelivery:
+      type: object
+      description: >-
+        One webhook delivery: the outbox row for a (event, subscription) pair,
+        kept after completion as delivery history. Deliveries are signed with
+        `X-Strato-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of
+        "<t>.<body>">` using the subscription's signing secret.
+      required: [id, subscriptionId, eventId, eventType, status, attempts, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subscriptionId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+          description: >-
+            Shared across the fan-out of one event to many subscriptions;
+            consumers dedupe on it (delivery is at-least-once).
+        eventType:
+          type: string
+        status:
+          type: string
+          enum: [pending, succeeded, dead]
+        attempts:
+          type: integer
+        nextAttemptAt:
+          type: string
+          format: date-time
+          description: Present only while the delivery is pending.
+        lastAttemptAt:
+          type: string
+          format: date-time
+        responseStatus:
+          type: integer
+          description: HTTP status of the last attempt, when the endpoint answered.
+        lastError:
+          type: string
+        deliveredAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        payload:
+          type: string
+          description: The exact JSON body posted, frozen at enqueue time.
 
     SETErrorResponse:
       type: object

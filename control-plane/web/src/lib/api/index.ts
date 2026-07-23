@@ -18,6 +18,7 @@ export { oauthApi } from "./oauth";
 export { scimTokensApi } from "./scim-tokens";
 export { oidcProvidersApi } from "./oidc-providers";
 export { ssfStreamsApi } from "./ssf-streams";
+export { webhooksApi } from "./webhooks";
 export { groupsApi } from "./groups";
 export { iamApi } from "./iam";
 export { quotasApi } from "./quotas";

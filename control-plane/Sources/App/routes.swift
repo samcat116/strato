@@ -54,6 +54,9 @@ func routes(_ app: Application) throws {
     // Shared Signals Framework receiver (issue #38)
     try app.register(collection: SSFStreamController())
 
+    // User-managed webhook notifications (issue #559)
+    try app.register(collection: WebhookSubscriptionController())
+
     // Image management controller
     try app.register(collection: ImageController())
 
