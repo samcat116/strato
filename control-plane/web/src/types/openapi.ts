@@ -2866,7 +2866,7 @@ export interface paths {
          *
          *     This is an operator-facing call authenticated with a normal user credential; the agent it provisions subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS. The response's `spire.joinToken` is a one-time bearer secret and is never returned again.
          *
-         *     Requires `manage_agents` on the target organization scope (system admins always pass), plus `manage` on `siteId` when one is given. One enrollment per agent name: revoke the existing one before re-enrolling.
+         *     Requires `manage_agents` on the target organization scope (system admins always pass), plus `manage` on the required `siteId`. One enrollment per agent name: revoke the existing one before re-enrolling.
          */
         post: operations["createAgentEnrollment"];
         delete?: never;
@@ -6286,7 +6286,7 @@ export interface components {
             artifactUrl: string;
             message?: string | null;
         };
-        /** @description A node enrollment. Exactly one of `organizationId` or `organizationalUnitId` is required — that scope is the capacity the registering agent becomes dedicated to. */
+        /** @description A node enrollment. Exactly one of `organizationId` or `organizationalUnitId` is required — that scope is the capacity the registering agent becomes dedicated to. A `siteId` is also required: every enrolled agent joins an availability zone. */
         CreateAgentEnrollmentRequest: {
             /** @description Unique agent name, restricted to characters SPIRE accepts in a SPIFFE ID path segment. */
             agentName: string;
@@ -6297,9 +6297,9 @@ export interface components {
             expirationHours: number;
             /**
              * Format: uuid
-             * @description Site the agent joins on registration. Must belong to a scope containing the enrollment's, and the caller needs `manage` on it.
+             * @description Site (availability zone) the agent joins on registration. Required. Must belong to a scope containing the enrollment's, and the caller needs `manage` on it.
              */
-            siteId?: string | null;
+            siteId: string;
             /** Format: uuid */
             organizationId?: string | null;
             /** Format: uuid */
