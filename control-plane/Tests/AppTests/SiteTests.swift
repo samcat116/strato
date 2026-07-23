@@ -746,7 +746,7 @@ final class SiteTests {
 
             // Controller: authoritative, sees the peer's network and the
             // pinned-but-unused one — even with no VMs of its own.
-            let controllerSync = try await app.agentService.assembleDesiredState(agentId: controllerId)
+            let controllerSync = try await app.desiredStateAssembler.assemble(agentId: controllerId)
             #expect(controllerSync.networksAuthoritative)
             let names = Set(controllerSync.networks.map(\.name))
             #expect(names.contains("peer-net"))
@@ -754,7 +754,7 @@ final class SiteTests {
 
             // Peer: hosts the VM (so the VM itself syncs to it), but topology
             // belongs to the controller.
-            let peerSync = try await app.agentService.assembleDesiredState(agentId: peerId)
+            let peerSync = try await app.desiredStateAssembler.assemble(agentId: peerId)
             #expect(!peerSync.networksAuthoritative)
             #expect(peerSync.networks.isEmpty)
             #expect(peerSync.vms.count == 1)
@@ -770,7 +770,7 @@ final class SiteTests {
                 app: app, project: project, named: "lone-vm", onAgent: agentId,
                 network: LogicalNetwork.defaultNetworkName)
 
-            let sync = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(!sync.networksAuthoritative)
             #expect(sync.networks.isEmpty)
             // The VM still syncs — only topology is withheld.
@@ -793,7 +793,7 @@ final class SiteTests {
                 app: app, project: project, named: "old-vm", onAgent: oldAgentId,
                 network: LogicalNetwork.defaultNetworkName)
 
-            let sync = try await app.agentService.assembleDesiredState(agentId: oldAgentId)
+            let sync = try await app.desiredStateAssembler.assemble(agentId: oldAgentId)
             #expect(sync.networksAuthoritative)
             #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
         }
@@ -807,7 +807,7 @@ final class SiteTests {
                 app: app, project: project, named: "legacy-vm", onAgent: agentId,
                 network: LogicalNetwork.defaultNetworkName)
 
-            let sync = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(sync.networksAuthoritative)
             #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
         }

@@ -368,7 +368,7 @@ private final class AgentTestClient: Sendable {
 
     /// Consume the desired-state sync the control plane pushes immediately after a
     /// successful registration. Reading it both asserts the sync happens and lets
-    /// the server-side `assembleDesiredState` DB work settle before teardown.
+    /// the server-side `DesiredStateAssembler` DB work settle before teardown.
     func expectDesiredStateSync() async throws {
         let envelope = try await nextEnvelope()
         #expect(envelope.type == .desiredState)

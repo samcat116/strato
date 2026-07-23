@@ -78,14 +78,14 @@ final class ImageDownloadScopingTests {
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: placedAgent)
+            let message = try await app.desiredStateAssembler.assemble(agentId: placedAgent)
             #expect(message.vms.first?.imageInfo?.imageId == image.id)
 
             #expect(await self.hasGrant(app: app, agentId: placedAgent, image: image))
 
             // The agent the VM is not placed on assembles an empty sync, and
             // gets nothing — this is the isolation the issue asks for.
-            let empty = try await app.agentService.assembleDesiredState(agentId: otherAgent)
+            let empty = try await app.desiredStateAssembler.assemble(agentId: otherAgent)
             #expect(empty.vms.isEmpty)
             #expect(await self.hasGrant(app: app, agentId: otherAgent, image: image) == false)
         }
@@ -105,7 +105,7 @@ final class ImageDownloadScopingTests {
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.vms.first?.imageInfo == nil)
             #expect(await self.hasGrant(app: app, agentId: agentId, image: image) == false)
         }

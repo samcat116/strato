@@ -241,7 +241,7 @@ final class DesiredStateReconciliationTests {
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.vms.count == 1)
             let entry = try #require(message.vms.first)
             #expect(entry.vmId == vm.id)
@@ -251,7 +251,7 @@ final class DesiredStateReconciliationTests {
             #expect(entry.spec.cpus == vm.cpu)
 
             // VMs on other agents are not included.
-            let other = try await app.agentService.assembleDesiredState(agentId: UUID().uuidString)
+            let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
             #expect(other.vms.isEmpty)
         }
     }
@@ -275,7 +275,7 @@ final class DesiredStateReconciliationTests {
                 vmID: vm.id!, network: "app-net", macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "app-net" })
             #expect(net.networkId == network.id)
             #expect(net.subnet == "10.20.0.0/24")
@@ -324,7 +324,7 @@ final class DesiredStateReconciliationTests {
                 createdByID: user.id!
             ).save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "fip-net" })
             let fips = try #require(net.floatingIPs)
             #expect(fips.count == 1)
@@ -334,7 +334,7 @@ final class DesiredStateReconciliationTests {
             #expect(fips[0].nicIndex == 0)
 
             // Another agent's sync must not carry this VM's floating IP.
-            let other = try await app.agentService.assembleDesiredState(agentId: UUID().uuidString)
+            let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
             #expect(!other.networks.contains { ($0.floatingIPs ?? []).isEmpty == false })
         }
     }
@@ -365,7 +365,7 @@ final class DesiredStateReconciliationTests {
                 interfaceID: nic.id!, createdByID: user.id!
             ).save(on: app.db)
 
-            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "fip-old-net" })
             #expect(net.floatingIPs == nil)
         }
