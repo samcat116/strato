@@ -232,11 +232,33 @@ Note that enabling the pillar only gets spans as far as the collector — see
   `scheduler.outcome`.
 - **`agent.desired_state_sync`** — a producer span per desired-state sync pushed
   to a locally-socketed agent, with `agent.id`, `sync.id`, and `sync.vm_count`.
+- **`fluent.query`** — one client span per database query, with
+  `fluent.query.operation` (`read`/`update`/…), `fluent.query.collection` (the
+  table), `fluent.query.namespace`, and a combined `fluent.query.summary`. No
+  call site in this repo opens it: FluentKit emits it itself (fluent-kit 1.57.0,
+  the version we resolve), so it appears the moment a real tracer is installed.
 
 Spans go through the swift-distributed-tracing facade, which installs a no-op
 tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sites
 cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
 is never bootstrapped).
+
+### Most `fluent.query` spans are roots, and that's expected
+
+In a trace backend you will see far more `fluent.query` spans standing alone as
+their own root than nested under a request — on the dev cluster, 95 of 100
+sampled traces containing a `fluent.query` were rooted at `fluent.query` itself,
+and the other 5 nested under `agent.desired_state_sync`.
+
+This is not broken context propagation. FluentKit captures whatever
+`ServiceContext` is current when the query is *built*, and most of the control
+plane's query volume comes from timer-driven background loops — the periodic
+desired-state sync, the agent heartbeat monitor, the audit-retention sweep,
+webhook delivery, SSF poll delivery — which run outside any request and so have
+no enclosing span to attach to. Queries issued while serving a request do nest:
+Vapor's `TracingMiddleware` opens the server span with `withSpan`, which sets
+the task-local `ServiceContext` for the rest of the responder chain. Orphan
+`fluent.query` roots are background work, not a lost `traceparent`.
 
 ### Correlating traces with logs
 
@@ -259,10 +281,20 @@ before OTel bootstraps and every deployment running with tracing off.
 
 ### Not yet traced
 
-Per-query database spans (Fluent has no built-in instrumentation) and outbound
-Valkey/HTTP client edges are not span-instrumented yet; a request's DB and
-coordination time currently shows up only as unattributed gaps under the request
-span.
+Outbound client edges — Valkey commands and outbound HTTP — still produce no
+spans, so coordination and outbound-call time shows up only as unattributed gaps
+under the parent span.
+
+The gap is no longer a missing-instrumentation problem: valkey-swift emits a
+client span per command (its `DistributedTracingSupport` trait is on by default)
+and AsyncHTTPClient emits one per request. Both, however, resolve
+`InstrumentationSystem.tracer` **eagerly**, when their configuration value is
+constructed — and `configure(_:)` builds both the Valkey client and Vapor's
+shared HTTP client configuration hundreds of lines before it calls
+`OTel.bootstrap`. Each therefore latches the no-op tracer for the lifetime of
+the process. Lighting these edges up is a matter of bootstrapping OpenTelemetry
+earlier in `configure(_:)`, ahead of the clients that capture the tracer — not
+of adding `withSpan` call sites.
 
 ## Alert runbook
 
