@@ -2,7 +2,6 @@ import Fluent
 import FluentPostgresDriver
 import NIOSSL
 import Vapor
-import OTel
 import Valkey
 
 public func configure(_ app: Application) async throws {
@@ -20,6 +19,14 @@ public func configure(_ app: Application) async throws {
             "gitSHA": .string(BuildInfo.gitSHA),
             "environment": .string(identity.environment),
         ])
+
+    // OpenTelemetry (metrics, logs, traces) goes in first, ahead of every client
+    // this function configures. Instrumented clients capture
+    // `InstrumentationSystem.tracer` when their *configuration* is built, not
+    // per request — bootstrapping later left the shared HTTP client and the
+    // Valkey client holding a NoOpTracer for the process lifetime, so neither
+    // emitted spans. See `Application.bootstrapObservability` for the details.
+    try app.bootstrapObservability()
 
     // Track fire-and-forget background work (async VM operations) so shutdown
     // can drain it before Fluent closes its connection pools. Registered
@@ -680,66 +687,6 @@ public func configure(_ app: Application) async throws {
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)
     app.configureSPIREIssuanceMetrics()
-
-    // Configure OpenTelemetry observability (metrics, logs, traces)
-    if app.environment != .testing {
-        let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
-        let logsEnabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
-        let tracesEnabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
-
-        // Only bootstrap OpenTelemetry if at least one feature is enabled
-        if metricsEnabled || logsEnabled || tracesEnabled {
-            var otelConfig = OTel.Configuration.default
-            otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
-
-            // Resource attributes stamped on every metric/log/trace so signals
-            // are queryable per build, per deployment, and per replica. Combined
-            // with anything supplied via OTEL_RESOURCE_ATTRIBUTES.
-            // `service.instance.id` uses the coordination replica ID so a metric
-            // series or a trace can be tied back to the exact process that emitted
-            // it in a multi-replica deployment.
-            otelConfig.resourceAttributes["service.version"] = BuildInfo.version
-            otelConfig.resourceAttributes["service.instance.id"] = app.replicaID
-            otelConfig.resourceAttributes["deployment.environment.name"] = app.environment.name
-            if BuildInfo.gitSHA != "unknown" {
-                otelConfig.resourceAttributes["vcs.revision"] = BuildInfo.gitSHA
-            }
-
-            // Enable all three pillars of observability
-            otelConfig.metrics.enabled = metricsEnabled
-            otelConfig.logs.enabled = logsEnabled
-            otelConfig.traces.enabled = tracesEnabled
-
-            // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
-            // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-            #if os(macOS)
-            if #available(macOS 15, *) {
-                otelConfig.metrics.otlpExporter.protocol = .grpc
-                otelConfig.logs.otlpExporter.protocol = .grpc
-                otelConfig.traces.otlpExporter.protocol = .grpc
-            }
-            #else
-            otelConfig.metrics.otlpExporter.protocol = .grpc
-            otelConfig.logs.otlpExporter.protocol = .grpc
-            otelConfig.traces.otlpExporter.protocol = .grpc
-            #endif
-
-            app.logger.info(
-                "Bootstrapping OpenTelemetry",
-                metadata: [
-                    "service": .string(otelConfig.serviceName),
-                    "metrics": .stringConvertible(otelConfig.metrics.enabled),
-                    "logs": .stringConvertible(otelConfig.logs.enabled),
-                    "traces": .stringConvertible(otelConfig.traces.enabled),
-                ])
-
-            let observability = try OTel.bootstrap(configuration: otelConfig)
-            app.lifecycle.use(OTelLifecycleHandler(observability: observability))
-            app.logger.info("OpenTelemetry observability service registered")
-        } else {
-            app.logger.info("OpenTelemetry disabled, skipping bootstrap")
-        }
-    }
 
     // The agent service's heartbeat monitor must not outlive the application:
     // the handler cancels it at shutdown (if the service was ever created).

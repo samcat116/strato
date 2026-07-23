@@ -232,11 +232,42 @@ Note that enabling the pillar only gets spans as far as the collector — see
   `scheduler.outcome`.
 - **`agent.desired_state_sync`** — a producer span per desired-state sync pushed
   to a locally-socketed agent, with `agent.id`, `sync.id`, and `sync.vm_count`.
+- **`fluent.query`** — a client span per database query, from FluentKit's own
+  instrumentation, with `fluent.query.collection` (the table), `.operation`
+  (read/create/update/delete), and `.summary`.
+- **Valkey commands** — a client span per command, from valkey-swift's own
+  instrumentation, named after the command (`GET`, `SETEX`, `PUBLISH`, …), plus
+  `Pipeline` and `MULTI` for batched and transactional execution.
+- **Outbound HTTP** — a client span per request made through the shared
+  `HTTPClient` (OIDC discovery/token/userinfo/JWKS, OCI registry manifests,
+  webhook deliveries, image fetches), from async-http-client's own
+  instrumentation, named after the HTTP method.
 
 Spans go through the swift-distributed-tracing facade, which installs a no-op
 tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sites
 cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
 is never bootstrapped).
+
+### Bootstrap ordering (why client spans can silently vanish)
+
+`configure(_:)` bootstraps OpenTelemetry **first**, ahead of every client it
+configures. This is load-bearing, not stylistic. Fluent resolves the tracer per
+query, but the Valkey and HTTP clients resolve it once, when their
+*configuration value* is constructed:
+
+- `HTTPClient.Configuration.TracingConfiguration.init()` stores
+  `InstrumentationSystem.tracer`. Vapor's `app.http.client.configuration` is a
+  get-modify-set property, so even reading it to set an unrelated option
+  materializes a config that has already captured a tracer.
+- `ValkeyTracingConfiguration.tracer` defaults the same way, captured when
+  `ValkeyClientConfiguration` is built in `configureValkey`.
+
+Whatever tracer is installed at that moment is the one those clients use for the
+life of the process. Bootstrapping afterwards left both holding the `NoOpTracer`
+— both libraries were instrumented and enabled, and neither emitted a single
+span. If Valkey or outbound-HTTP spans disappear from the backend while
+`fluent.query` and the request spans keep arriving, suspect that something was
+constructed ahead of `bootstrapObservability()`.
 
 ### Correlating traces with logs
 
@@ -257,12 +288,27 @@ The provider costs nothing when there is no active span: it reads
 `ServiceContext.current` and returns no metadata, which covers every line logged
 before OTel bootstraps and every deployment running with tracing off.
 
+### Known gap: client spans arrive unparented
+
+The three library-instrumented spans above (`fluent.query`, Valkey commands,
+outbound HTTP) currently export as **root spans** rather than children of the
+request span that caused them — verified against a local collector, where a
+Valkey `EVAL` issued by the session middleware inside a `GET /api/vms` request
+landed in its own trace. The work reaches the connection pool (or, for audit
+webhook delivery, a detached background task) on a task that did not inherit the
+caller's `ServiceContext`, so `startSpan` finds no current span to parent to.
+They are queryable on their own and carry full attributes; they just do not yet
+roll up under the request. The control plane's own `withSpan` call sites
+(`iam.authorize`, `scheduler.select_agent`) pass `req.serviceContext` explicitly
+and are unaffected.
+
 ### Not yet traced
 
-Per-query database spans (Fluent has no built-in instrumentation) and outbound
-Valkey/HTTP client edges are not span-instrumented yet; a request's DB and
-coordination time currently shows up only as unattributed gaps under the request
-span.
+The agent side of the WebSocket is not instrumented: a desired-state sync's
+`agent.desired_state_sync` producer span ends at the send, and the agent does not
+continue the trace through reconciliation. Cross-replica RPC and nudges
+forwarded over Valkey pub/sub likewise do not propagate trace context, so a
+mutation handled by another replica starts a new trace there.
 
 ## Alert runbook
 
