@@ -52,6 +52,13 @@ struct SwiftCedarEngineTests {
         if resourceType == .network, attrs["openToAllUsers"] == nil {
             attrs["openToAllUsers"] = .bool(false)
         }
+        if resourceType == .user {
+            // `User` is a resource type as well as a principal type, and its
+            // schema attributes are required in both roles — the same rule the
+            // entity-slice loader follows for a user standing as the resource.
+            if attrs["memberOfOrgs"] == nil { attrs["memberOfOrgs"] = .set([]) }
+            if attrs["systemAdmin"] == nil { attrs["systemAdmin"] = .bool(false) }
+        }
 
         var entities: [CedarEntity] = [
             CedarEntity(

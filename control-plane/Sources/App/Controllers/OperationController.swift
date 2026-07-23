@@ -41,7 +41,14 @@ struct OperationController: RouteCollection {
             }
         }
 
-        guard user.isSystemAdmin || operation.userID == user.id else {
+        // The resource is gone, so there is no node left to evaluate against.
+        // Two things can still make the row visible, and neither is a check
+        // skipped: the initiator sees their own operation by row scoping, and
+        // an admin sees it through the same scopeless-row gate the other
+        // node-less surfaces use — which flags the read for the admin audit
+        // trail rather than reading `isSystemAdmin` inline.
+        req.markRowScopedAuthorization()
+        guard operation.userID == user.id || req.allowsScopelessPlatformRow() else {
             throw Abort(.notFound)
         }
 

@@ -14,6 +14,8 @@ import Foundation
 /// folder rename ships its API/database leg with cutover, but nothing is
 /// gained by churning a brand-new schema through the old name).
 enum CedarEntityType: String, CaseIterable, Sendable {
+    /// Both a principal and — as the target of the `user:*` identity-plane
+    /// actions — a parentless resource. See `IAMNodeType.user`.
     case user = "User"
     case group = "Group"
     /// A directly registered SPIFFE workload identity (issue #491) — a
@@ -71,6 +73,7 @@ extension IAMNodeType {
         case .site: return .site
         case .agent: return .agent
         case .serviceAccount: return .serviceAccount
+        case .user: return .user
         }
     }
 }

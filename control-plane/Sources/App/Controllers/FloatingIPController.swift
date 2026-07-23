@@ -100,18 +100,22 @@ struct FloatingIPController: RouteCollection {
     /// GET /api/floating-ip-pools
     @Sendable
     func listPools(req: Request) async throws -> [FloatingIPPoolResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let pools = try await FloatingIPPool.query(on: req.db).sort(\.$name).all()
 
+        // One filter for everyone: a scoped pool is an evaluator check on its
+        // org/OU, which the tier-1 `platform-system-admin` policy answers for
+        // admins — so an admin's full view is a logged, guardrail-bound
+        // decision rather than a skipped check. A scopeless pool has no node
+        // and stays system-admin only, as in `requirePoolPermission`.
         var visible: [FloatingIPPool] = []
-        if user.isSystemAdmin {
-            visible = pools
-        } else {
-            for pool in pools {
-                guard let scope = pool.organizationScope else { continue }
-                let check = Self.poolScopeCheck(scope, manage: false)
-                if try await req.can(check.action, on: check.node) { visible.append(pool) }
+        for pool in pools {
+            guard let scope = pool.organizationScope else {
+                if req.allowsScopelessPlatformRow() { visible.append(pool) }
+                continue
             }
+            let check = Self.poolScopeCheck(scope, manage: false)
+            if try await req.can(check.action, on: check.node) { visible.append(pool) }
         }
 
         var responses: [FloatingIPPoolResponse] = []
@@ -269,15 +273,12 @@ struct FloatingIPController: RouteCollection {
             .with(\.$interface) { $0.with(\.$addresses) }
             .sort(\.$createdAt, .descending)
 
-        // Query-level list twin of the tier-1 platform-system-admin policy:
-        // admins see every row without per-row checks (they may hold no
-        // per-project bindings at all); an explicit project filter still
-        // narrows their view.
-        if user.isSystemAdmin {
-            if let requestedProjectId {
-                query = query.filter(\.$project.$id == requestedProjectId)
-            }
-        } else if let requestedProjectId {
+        // Project scoping runs for every caller. An admin holds no per-project
+        // bindings, but `getAccessibleProjects` asks the evaluator about each
+        // project and the tier-1 `platform-system-admin` policy answers yes —
+        // so an admin still sees every project's floating IPs, by a decision
+        // that is logged and that a guardrail can narrow.
+        if let requestedProjectId {
             let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")

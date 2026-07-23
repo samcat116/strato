@@ -62,6 +62,7 @@ enum IAMActionTranslator {
         case .site: return "site"
         case .agent: return "agent"
         case .serviceAccount: return "serviceaccount"
+        case .user: return "user"
         }
     }
 

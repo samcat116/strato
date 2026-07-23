@@ -58,6 +58,54 @@ enum CedarPolicyAssembler {
                     when { principal.systemAdmin };
                     """))
 
+        // The identity plane: a user reaches their own record. Before this,
+        // `UserController` spelled the same rule as
+        // `currentUser.isSystemAdmin || currentUser.id == userID` — a check
+        // the evaluator never saw. As a tier-1 permit the self half is here
+        // and the admin half is `platform-system-admin` above, so reading or
+        // deleting a user record is an ordinary logged decision rather than an
+        // `isSystemAdmin ||` disjunction the evaluator never saw.
+        let selfActions = IAMRoleRegistry.identityActions.sorted()
+            .map { "Action::\(CedarText.stringLiteral($0))" }
+            .joined(separator: ", ")
+        policies.append(
+            CedarPolicySource(
+                id: "platform-user-self",
+                text: """
+                    @id("platform-user-self")
+                    permit (principal is User, action in [\(selfActions)], resource is User)
+                    when { principal == resource };
+                    """))
+
+        // Cross-tenant safety interlock, previously `requireNoForeignWorkloads`
+        // in `AgentController`: while an agent hosts another organization's
+        // VMs, sandboxes, or volumes, a delegated org admin holding
+        // `agent:manage` must not force it offline, deregister it, or restart
+        // it into an update — any of which takes down or strands workloads
+        // belonging to a tenant they have no authority over. Only a system
+        // admin may, which is why this forbid excludes them explicitly: a
+        // `forbid` beats every `permit` in Cedar, `platform-system-admin`
+        // included.
+        //
+        // The `has` guard is what makes the attribute optional-by-action: the
+        // loader computes the inventory only for these actions, so an agent
+        // read (fleet listing) never pays for it and never matches here.
+        let guardedAgentActions = IAMRoleRegistry.agentForeignWorkloadGuardedActions.sorted()
+            .map { "Action::\(CedarText.stringLiteral($0))" }
+            .joined(separator: ", ")
+        policies.append(
+            CedarPolicySource(
+                id: "platform-agent-foreign-workloads",
+                text: """
+                    @id("platform-agent-foreign-workloads")
+                    forbid (principal is User, action in [\(guardedAgentActions)], resource is Agent)
+                    when {
+                        resource has hostsForeignWorkloads
+                        && resource.hostsForeignWorkloads
+                        && !principal.systemAdmin
+                    };
+                    """))
+
         // A global network — one with no project — is readable by every
         // authenticated user, because it is the fallback every VM create can
         // land on. Today a special case in `NetworkController` and `who-can`;
