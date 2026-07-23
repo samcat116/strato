@@ -1,0 +1,21 @@
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_23e999cd01a81a::t_a0aceb7abd1e14 637-642,644
+control-plane/Tests/AppTests/OrganizationMemberRoleTests.swift
+  s_23e999cd01a81a::t_1f0db9e5922ca1 115-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2f7520d96c271b3ccd29040d9dfe71e606af7726",
+  "prompts": {},
+  "sessions": {
+    "s_23e999cd01a81a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b02c051-da07-4eb7-b48f-5714856b9887",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
