@@ -143,6 +143,19 @@ extension OrganizationalUnit {
             .filter(\.$id != selfId)
             .all()
     }
+
+    /// The IDs of this OU and every ancestor OU up to (but excluding) the root
+    /// organization, derived from the materialized `path`. The `path` is
+    /// `/orgId/ouId/…/selfId`, so its first component is the organization and
+    /// every remaining component is an OU from the root ancestor down to self.
+    /// Falls back to just this OU's own id when the path can't be parsed.
+    func ancestorAndSelfOUIDs() -> [UUID] {
+        let ids = path.split(separator: "/").dropFirst().compactMap { UUID(uuidString: String($0)) }
+        if ids.isEmpty, let selfId = self.id {
+            return [selfId]
+        }
+        return ids
+    }
 }
 
 // MARK: - DTOs
