@@ -254,13 +254,15 @@ struct VolumeController: RouteCollection {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "delete")
 
-        // Validate volume can be deleted
+        // Validate volume can be deleted. Only an actively attached volume is
+        // undeletable; every other state — including the transitional ones a
+        // crash can strand a volume in — is an escape hatch (issue #644).
         guard volume.canDelete else {
             throw Abort(
                 .conflict,
                 reason:
                     "Volume cannot be deleted in status '\(volume.status.rawValue)'. "
-                    + "Must be 'available', 'error', or 'deleting'"
+                    + "Detach it from its VM first."
             )
         }
 
