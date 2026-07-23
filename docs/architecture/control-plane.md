@@ -77,6 +77,11 @@ The important ones to know when navigating `Services/`:
 - **`CoordinationService`** (actor) — the Valkey layer: agent presence keys,
   socket routing, singleton sweep locks, placement reservations, and
   replica pub/sub (nudges + RPC). See [multi-replica](./multi-replica.md).
+- **`ReplicaMessageBridge`** (actor, `app.replicaBridge`) — the cross-replica
+  seam over `CoordinationService`: route recording, the routing decision,
+  sync-nudge fan-out, correlated RPC forwarding, and the subscription
+  lifecycle. Delegates the two socket-bound operations back to `AgentService`
+  via `ReplicaBridgeDelegate`. See [multi-replica](./multi-replica.md).
 - **`SchedulerService`** (actor) — placement decisions; see
   [scheduler](./scheduler.md).
 - **`IPAMService`** — control-plane IP allocation (IPv4/IPv6) from a

@@ -70,3 +70,30 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
+
+## Cross-replica coordination
+
+- **Replica** — one control-plane process. Each generates a fresh `replicaID`
+  at startup; an agent's WebSocket lives on exactly one replica at a time.
+- **Socket route** — the `agent:{name}:replica` key naming the replica that
+  holds an agent's socket. Recorded on accept and refreshed by every heartbeat;
+  a crashed replica's claim expires by TTL.
+- **Nudge** — a fire-and-forget "your agent's desired state changed" message a
+  mutating replica sends to the socket-holding replica so it pushes a fresh
+  sync. A latency optimization only — the periodic sync is the backstop, so a
+  lost nudge is always safe.
+- **Cross-replica RPC** — the correlated request/reply forwarding for the two
+  exchanges that are *actions, not states* (volume operations, VM reboot) and
+  so cannot ride the level-triggered sync. When the serving replica lacks the
+  socket, the exchange is forwarded to the holder and the verdict returns on
+  the requester's reply channel.
+- **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns
+  the whole cross-replica seam: route recording, the local-vs-forward routing
+  decision, nudge fan-out, RPC forwarding, and the subscription lifecycle. It
+  composes `CoordinationService` (the Valkey / in-memory `CoordinationStore`
+  adapters).
+- **ReplicaBridgeDelegate** — the narrow seam the bridge depends on for the two
+  operations that require the local socket: running a forwarded exchange over a
+  held socket, and turning a nudge into a local desired-state sync. Production
+  adapter: `AgentService`. Test adapter: an in-memory fake, so the bridge is
+  testable through its own interface without a real agent socket.

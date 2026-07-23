@@ -614,8 +614,7 @@ struct AgentWebSocketController: RouteCollection {
             // replicas can route sync nudges here (issue #261). Refreshed
             // by every heartbeat; a crashed replica's claim expires by TTL.
             Task {
-                await req.application.coordination.recordAgentRoute(
-                    agentKey: agentKey, replicaId: req.application.replicaID)
+                await req.application.replicaBridge.recordRoute(agentKey: agentKey)
             }
 
             // Switch from buffering to routing, replaying any frames that

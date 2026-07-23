@@ -294,7 +294,7 @@ final class ReplicaRoutingAgentServiceTests {
 
             let envelope = try MessageEnvelope(
                 message: VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString))
-            let request = AgentService.AgentRPCRequest(
+            let request = ReplicaMessageBridge.AgentRPCRequest(
                 rpcId: "rpc-1",
                 replyChannel: replyChannel,
                 agentId: agentId,
@@ -304,11 +304,11 @@ final class ReplicaRoutingAgentServiceTests {
             )
             let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
 
-            await app.agentService.handleRPCRequest(payload)
+            await app.replicaBridge.handleRPCRequest(payload)
 
             let replies = await collector.waitFor(count: 1)
             let reply = try JSONDecoder().decode(
-                AgentService.AgentRPCReply.self, from: Data(try #require(replies.first).utf8))
+                ReplicaMessageBridge.AgentRPCReply.self, from: Data(try #require(replies.first).utf8))
             #expect(reply.rpcId == "rpc-1")
             #expect(reply.outcome == .unreachable)
         }
@@ -329,15 +329,15 @@ final class ReplicaRoutingAgentServiceTests {
                 Task {
                     guard
                         let request = try? JSONDecoder().decode(
-                            AgentService.AgentRPCRequest.self, from: Data(payload.utf8))
+                            ReplicaMessageBridge.AgentRPCRequest.self, from: Data(payload.utf8))
                     else { return }
-                    let reply = AgentService.AgentRPCReply(
+                    let reply = ReplicaMessageBridge.AgentRPCReply(
                         rpcId: request.rpcId, outcome: .success, data: nil, error: nil, details: nil)
                     guard let encodedData = try? JSONEncoder().encode(reply) else { return }
                     // Resolve through the requester's reply handler directly:
                     // deterministic regardless of when the service's own
                     // channel subscription lands.
-                    await app.agentService.handleRPCReply(String(decoding: encodedData, as: UTF8.self))
+                    await app.replicaBridge.handleRPCReply(String(decoding: encodedData, as: UTF8.self))
                 }
             }
 
@@ -360,11 +360,11 @@ final class ReplicaRoutingAgentServiceTests {
         try await withApp { app, _, _ in
             // First call arms the subscriptions (idempotent) and publishes a
             // probe; delivery is asynchronous, so poll for the round trip.
-            await app.agentService.verifyReplicaSubscriptions()
+            await app.replicaBridge.verifySubscriptions()
 
             var roundTripped = false
             for _ in 0..<100 {
-                roundTripped = await app.agentService.lastSubscriptionProbeRoundTripped
+                roundTripped = await app.replicaBridge.lastSubscriptionProbeRoundTripped
                 if roundTripped { break }
                 try await Task.sleep(for: .milliseconds(20))
             }

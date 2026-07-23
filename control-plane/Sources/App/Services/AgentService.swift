@@ -113,16 +113,11 @@ actor AgentService {
     /// it through the RPC bridge below, never directly.
     private var pendingRequests: [String: PendingRequest] = [:]
 
-    /// Requester-side halves of cross-replica RPCs awaiting a reply on this
-    /// replica's reply channel, keyed by RPC ID. Request-scoped: an entry
-    /// lives for one HTTP request's await and resolves by reply or timeout.
-    private var pendingRPCs: [String: PendingRPC] = [:]
-
     /// Exchange IDs whose awaiting task was cancelled before the exchange was
     /// armed (the arming runs in a separate task, so cancellation can win the
     /// race). Consumed at arming time so the continuation resumes immediately
     /// instead of suspending until its timeout. Entries that miss both the
-    /// pending maps and the arming (cancellation racing a normal completion)
+    /// pending map and the arming (cancellation racing a normal completion)
     /// linger, but the only canceller of these waits is shutdown's
     /// background-task drain, so the set is bounded to process teardown.
     private var cancelledExchanges: Set<String> = []
@@ -148,20 +143,6 @@ actor AgentService {
         /// so a completed request never leaves a timer sleeping to no purpose.
         var timeoutTask: Task<Void, Never>?
     }
-
-    /// A cross-replica RPC awaiting its reply message.
-    private struct PendingRPC {
-        let continuation: CheckedContinuation<AgentServiceResponse, Error>
-        var timeoutTask: Task<Void, Never>?
-    }
-
-    /// Health bookkeeping for the replica's pub/sub subscriptions (issue
-    /// #261 review): RediStack pins subscriptions to one dedicated connection
-    /// and does not restore them when it drops, so liveness is verified by
-    /// probing our own nudge channel from the heartbeat loop.
-    private var subscriptionsEstablished = false
-    private var lastProbeSent: Date?
-    private var lastProbeReceived: Date?
 
     /// Set at application shutdown. Guards against the init task arming the
     /// heartbeat monitor after `shutdown()` already ran.
@@ -237,7 +218,7 @@ actor AgentService {
         guard !isShutDown, !app.didShutdown else { return }
         startHeartbeatMonitoring()
         startupTask = Task {
-            await self.startReplicaSubscriptions()
+            await self.app.replicaBridge.start(delegate: self)
         }
     }
 
@@ -254,6 +235,9 @@ actor AgentService {
     /// these suspensions, so the tick can still hop back on to finish.
     func shutdown() async {
         isShutDown = true
+        // Close the bridge's subscription re-arm path before we stop driving
+        // it; its subscription tasks drain with the Valkey pools.
+        await app.replicaBridgeIfCreated?.shutdown()
         startupTask?.cancel()
         heartbeatTask?.cancel()
         if let startupTask {
@@ -535,7 +519,7 @@ actor AgentService {
         // every control-plane process — not just the one holding this socket —
         // can see the agent and route mutations to it.
         await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.recordRoute(agentKey: agentKey)
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
@@ -652,7 +636,7 @@ actor AgentService {
         // path.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -685,7 +669,7 @@ actor AgentService {
         // not run its cleanup once the connection entry is gone.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         app.logger.info(
             "Agent force unregistered",
@@ -702,16 +686,14 @@ actor AgentService {
             failPendingRequests(for: agentId)
         }
 
-        if let route = await app.coordination.agentRoute(agentKey: agentKey),
-            route != app.replicaID
-        {
+        if case .forward = await app.replicaBridge.remoteRoute(agentKey: agentKey) {
             app.logger.debug(
                 "Agent socket closed here but agent is routed to another replica; skipping offline mark",
                 metadata: ["agentKey": .string(agentKey)])
             return
         }
 
-        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -772,7 +754,7 @@ actor AgentService {
         // routing stay visible cluster-wide. The heartbeat arrived over this
         // process's socket, so the route is ours to claim.
         await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.recordRoute(agentKey: agentKey)
 
         // This heartbeat's resource report accounts for every VM the agent
         // lists, so any placement reservation still held for one of them
@@ -891,7 +873,7 @@ actor AgentService {
                     // Probe (and re-arm if dead) this replica's pub/sub
                     // subscriptions — a dropped Valkey connection loses them
                     // silently and RediStack does not restore them.
-                    await verifyReplicaSubscriptions()
+                    await app.replicaBridge.verifySubscriptions()
 
                     try self.checkTickPreconditions()
 
@@ -1628,24 +1610,22 @@ actor AgentService {
             return
         }
 
-        guard let route = await app.coordination.agentRoute(agentKey: name) else {
+        switch await app.replicaBridge.remoteRoute(agentKey: name) {
+        case .forward(let replicaId):
+            await app.replicaBridge.nudge(agentKey: name, toReplica: replicaId)
+        case .noRoute:
             // No route: the agent is offline everywhere. The sync it missed
             // is delivered by the registration-triggered sync on reconnect.
             app.logger.debug(
                 "No socket route for agent; sync deferred to reconnect",
                 metadata: ["agentKey": .string(name)])
-            return
-        }
-
-        if route == app.replicaID {
+        case .ownReplica:
             // The route says us, but no local socket exists — a connection
             // torn down before its route expired. The reconnect sync (or the
             // holder's periodic timer, wherever the agent lands) is the
             // backstop; nudging ourselves would find the same missing socket.
-            return
+            break
         }
-
-        await app.coordination.publishNudge(agentKey: name, toReplica: route)
     }
 
     /// Assemble and send the full desired-state sync over a locally held
@@ -1686,109 +1666,11 @@ actor AgentService {
         }
     }
 
-    // MARK: - Replica pub/sub (issue #261)
-
-    /// Sentinel published to our own nudge channel to verify the subscription
-    /// connection is alive. Cannot collide with a real nudge: nudges carry
-    /// agent names, and a leading NUL is not a legal agent name.
-    static let subscriptionProbeMessage = "\u{0}subscription-probe"
-
-    /// Subscribe to this replica's nudge and RPC channels. Called from init
-    /// and re-armed by `verifyReplicaSubscriptions()`; failure is logged and
-    /// fails open — the replica misses nudge latency (its periodic timer
-    /// still converges its own agents) and cannot serve cross-replica
-    /// exchanges, but stays available.
-    ///
-    /// Safe to call repeatedly: RediStack replaces the receiver when the
-    /// channel is already subscribed on a live connection, and leases a fresh
-    /// pub/sub connection when the previous one died.
-    private func startReplicaSubscriptions() async {
-        guard !isShutDown, !app.didShutdown else { return }
-        let replicaId = app.replicaID
-        do {
-            try await app.coordination.subscribe(
-                channel: CoordinationService.nudgeChannel(replicaId: replicaId)
-            ) { [weak self] agentKey in
-                Task { await self?.handleNudge(agentKey: agentKey) }
-            }
-            try await app.coordination.subscribe(
-                channel: CoordinationService.rpcChannel(replicaId: replicaId)
-            ) { [weak self] payload in
-                Task { await self?.handleRPCRequest(payload) }
-            }
-            try await app.coordination.subscribe(
-                channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)
-            ) { [weak self] payload in
-                Task { await self?.handleRPCReply(payload) }
-            }
-            subscriptionsEstablished = true
-            app.logger.info(
-                "Replica coordination channels subscribed", metadata: ["replicaId": .string(replicaId)])
-        } catch {
-            subscriptionsEstablished = false
-            app.logger.error(
-                "Failed to subscribe to replica coordination channels; cross-replica nudges and RPCs are unavailable on this replica: \(error)"
-            )
-        }
-    }
-
-    /// Verify the pub/sub subscriptions are actually receiving (issue #261
-    /// review finding). RediStack pins subscriptions to one dedicated
-    /// connection and never restores them after a drop (Valkey restart,
-    /// failover, network blip) — and a dead subscription is silent: this
-    /// replica would keep *publishing* RPCs whose replies it can no longer
-    /// hear, failing every cross-replica exchange by timeout. So each
-    /// heartbeat tick publishes a probe to our own nudge channel; a probe
-    /// that hasn't come back by the next tick means the subscription
-    /// connection is dead, and everything is re-armed. Runs on the 30s
-    /// heartbeat tick, bounding the silent window to about two ticks.
-    func verifyReplicaSubscriptions() async {
-        guard !isShutDown, !app.didShutdown else { return }
-
-        if !subscriptionsEstablished {
-            // The initial subscribe failed; keep retrying from here.
-            await startReplicaSubscriptions()
-        } else if let sent = lastProbeSent,
-            (lastProbeReceived ?? .distantPast) < sent,
-            Date().timeIntervalSince(sent) > 20
-        {
-            // The previous tick's probe never arrived: the subscription
-            // connection is dead even though publishes still work.
-            app.logger.warning(
-                "Replica subscription probe was not received; re-establishing channel subscriptions",
-                metadata: ["replicaId": .string(app.replicaID)])
-            await startReplicaSubscriptions()
-        }
-
-        lastProbeSent = Date()
-        do {
-            try await app.coordination.publish(
-                channel: CoordinationService.nudgeChannel(replicaId: app.replicaID),
-                message: Self.subscriptionProbeMessage
-            )
-        } catch {
-            // Publishing needs Valkey too; when it's down entirely the next
-            // tick's missed probe re-arms once it returns.
-            app.logger.warning("Failed to publish subscription probe: \(error)")
-        }
-    }
-
-    /// Test seam: whether the most recently published subscription probe has
-    /// been received back on the nudge channel.
-    var lastSubscriptionProbeRoundTripped: Bool {
-        guard let sent = lastProbeSent else { return false }
-        return (lastProbeReceived ?? .distantPast) >= sent
-    }
-
-    /// A nudge names an agent whose desired state changed on another replica.
-    /// If we (still) hold its socket, push a fresh sync; if not, the nudge
-    /// raced a disconnect and the periodic timer wherever the agent lands is
-    /// the backstop.
-    func handleNudge(agentKey: String) async {
-        if agentKey == Self.subscriptionProbeMessage {
-            lastProbeReceived = Date()
-            return
-        }
+    /// Deliver a cross-replica sync nudge (the `ReplicaBridgeDelegate` hook).
+    /// If we (still) hold the agent's socket, push a fresh sync; if not, the
+    /// nudge raced a disconnect and the periodic timer wherever the agent lands
+    /// is the backstop.
+    func deliverNudge(agentKey: String) async {
         guard let agentId = app.websocketManager.agentId(agentKey: agentKey) else {
             app.logger.debug(
                 "Nudge for agent without a local socket; ignoring",
@@ -2555,7 +2437,7 @@ actor AgentService {
         // The report arrived over this process's socket: refresh liveness and
         // routing alongside, mirroring the heartbeat path.
         await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+        await app.replicaBridge.recordRoute(agentKey: agentKey)
 
         // Every reported VM or sandbox is accounted for in the agent's
         // resource figures, so any placement reservation still held for one
@@ -3506,18 +3388,16 @@ actor AgentService {
         guard let name = await agentKey(forId: agentId) else {
             throw AgentServiceError.agentNotFound(agentId)
         }
-        guard let route = await app.coordination.agentRoute(agentKey: name),
-            route != app.replicaID
-        else {
+        guard case .forward(let replicaId) = await app.replicaBridge.remoteRoute(agentKey: name) else {
             // No route: the agent is offline everywhere. A route naming this
             // replica without a local socket is a stale claim from a torn-down
             // connection — the agent is equally unreachable from here.
             throw AgentServiceError.agentNotFound(agentId)
         }
 
-        return try await sendRPC(
+        return try await app.replicaBridge.call(
             envelope, requestId: message.requestId, agentId: agentId,
-            agentKey: name, toReplica: route, timeout: timeout)
+            agentKey: name, toReplica: replicaId, timeout: timeout)
     }
 
     /// Arm a pending-request continuation, push the envelope over the local
@@ -3567,13 +3447,12 @@ actor AgentService {
         }
     }
 
-    /// Resume a pending exchange's continuation with `CancellationError`, or
-    /// record a tombstone if the exchange hasn't been armed yet (the arming
-    /// task consumes it and resumes immediately).
+    /// Resume a pending local exchange's continuation with `CancellationError`,
+    /// or record a tombstone if the exchange hasn't been armed yet (the arming
+    /// task consumes it and resumes immediately). Cross-replica RPC waits carry
+    /// their own equivalent inside `ReplicaMessageBridge`.
     private func cancelPendingExchange(_ requestId: String) {
         if let continuation = removePendingRequest(requestId) {
-            continuation.resume(throwing: CancellationError())
-        } else if let continuation = removePendingRPC(requestId) {
             continuation.resume(throwing: CancellationError())
         } else {
             cancelledExchanges.insert(requestId)
@@ -3584,185 +3463,6 @@ actor AgentService {
     /// consumes the tombstone.
     private func consumeExchangeCancellation(_ requestId: String) -> Bool {
         cancelledExchanges.remove(requestId) != nil
-    }
-
-    // MARK: - Cross-replica RPC bridge (issue #261)
-
-    /// Wire format for forwarding a correlated agent exchange to the replica
-    /// holding the agent's socket. Serialized as JSON on the RPC channels.
-    struct AgentRPCRequest: Codable {
-        let rpcId: String
-        let replyChannel: String
-        let agentId: String
-        let agentKey: String
-        let envelope: MessageEnvelope
-        let timeoutSeconds: Double
-    }
-
-    enum AgentRPCOutcome: String, Codable {
-        case success
-        case error
-        /// The routed replica could not complete the exchange (socket gone,
-        /// send failure, or its local timeout).
-        case unreachable
-    }
-
-    struct AgentRPCReply: Codable {
-        let rpcId: String
-        let outcome: AgentRPCOutcome
-        let data: AnyCodableValue?
-        let error: String?
-        let details: String?
-    }
-
-    /// Requester half: publish the exchange to the holder's RPC channel and
-    /// await the reply on our own reply channel. The local deadline runs a
-    /// little past the holder's, so the holder's specific verdict (agent
-    /// error, its own timeout) normally wins over our generic one.
-    private func sendRPC(
-        _ envelope: MessageEnvelope,
-        requestId: String,
-        agentId: String,
-        agentKey: String,
-        toReplica replicaId: String,
-        timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        let request = AgentRPCRequest(
-            rpcId: requestId,
-            replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
-            agentId: agentId,
-            agentKey: agentKey,
-            envelope: envelope,
-            timeoutSeconds: Self.seconds(of: timeout)
-        )
-        let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
-        let channel = CoordinationService.rpcChannel(replicaId: replicaId)
-
-        // Cancellation-aware for the same reason as the local path: shutdown's
-        // background-task drain must be able to cut this wait short.
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                Task {
-                    guard !self.consumeExchangeCancellation(requestId) else {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-                    self.pendingRPCs[requestId] = PendingRPC(continuation: continuation)
-                    do {
-                        try await self.app.coordination.publish(channel: channel, message: payload)
-                    } catch {
-                        // The request never left this process; fail fast.
-                        if let pending = self.removePendingRPC(requestId) {
-                            pending.resume(throwing: error)
-                        }
-                        return
-                    }
-                    let timeoutTask = Task {
-                        try? await Task.sleep(for: timeout + .seconds(5))
-                        guard !Task.isCancelled else { return }
-                        self.timeoutRPC(requestId)
-                    }
-                    self.attachRPCTimeout(timeoutTask, to: requestId)
-                }
-            }
-        } onCancel: {
-            Task { await self.cancelPendingExchange(requestId) }
-        }
-    }
-
-    /// Holder half: run the forwarded exchange over our local socket and
-    /// publish the verdict to the requester's reply channel.
-    func handleRPCRequest(_ payload: String) async {
-        let request: AgentRPCRequest
-        do {
-            request = try JSONDecoder().decode(AgentRPCRequest.self, from: Data(payload.utf8))
-        } catch {
-            app.logger.error("Failed to decode cross-replica RPC request: \(error)")
-            return
-        }
-
-        let reply: AgentRPCReply
-        if app.websocketManager.getConnection(agentKey: request.agentKey) != nil {
-            do {
-                let response = try await sendEnvelopeAwaitingLocalResponse(
-                    request.envelope, requestId: request.rpcId, agentId: request.agentId,
-                    agentKey: request.agentKey, timeout: .seconds(request.timeoutSeconds))
-                switch response {
-                case .success(let data):
-                    reply = AgentRPCReply(
-                        rpcId: request.rpcId, outcome: .success, data: data, error: nil, details: nil)
-                case .error(let error, let details):
-                    reply = AgentRPCReply(
-                        rpcId: request.rpcId, outcome: .error, data: nil, error: error, details: details)
-                }
-            } catch {
-                reply = AgentRPCReply(
-                    rpcId: request.rpcId, outcome: .unreachable, data: nil,
-                    error: error.localizedDescription, details: nil)
-            }
-        } else {
-            // The route pointed here but the socket is gone (disconnect racing
-            // the routing key's TTL); tell the requester promptly instead of
-            // letting it wait out its deadline.
-            reply = AgentRPCReply(
-                rpcId: request.rpcId, outcome: .unreachable, data: nil,
-                error: "agent socket is not held by the routed replica", details: nil)
-        }
-
-        do {
-            let data = try JSONEncoder().encode(reply)
-            try await app.coordination.publish(
-                channel: request.replyChannel, message: String(decoding: data, as: UTF8.self))
-        } catch {
-            app.logger.error(
-                "Failed to publish cross-replica RPC reply; requester will time out: \(error)",
-                metadata: ["rpcId": .string(request.rpcId)])
-        }
-    }
-
-    /// Requester half, reply side: resolve the awaiting continuation.
-    func handleRPCReply(_ payload: String) async {
-        let reply: AgentRPCReply
-        do {
-            reply = try JSONDecoder().decode(AgentRPCReply.self, from: Data(payload.utf8))
-        } catch {
-            app.logger.error("Failed to decode cross-replica RPC reply: \(error)")
-            return
-        }
-
-        guard let continuation = removePendingRPC(reply.rpcId) else { return }
-        switch reply.outcome {
-        case .success:
-            continuation.resume(returning: .success(reply.data))
-        case .error:
-            continuation.resume(returning: .error(reply.error ?? "unknown agent error", reply.details))
-        case .unreachable:
-            continuation.resume(throwing: AgentServiceError.connectionLost)
-        }
-    }
-
-    private func removePendingRPC(_ rpcId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
-        guard let pending = pendingRPCs.removeValue(forKey: rpcId) else { return nil }
-        pending.timeoutTask?.cancel()
-        return pending.continuation
-    }
-
-    private func attachRPCTimeout(_ task: Task<Void, Never>, to rpcId: String) {
-        guard pendingRPCs[rpcId] != nil else {
-            task.cancel()
-            return
-        }
-        pendingRPCs[rpcId]?.timeoutTask = task
-    }
-
-    private func timeoutRPC(_ rpcId: String) {
-        if let continuation = removePendingRPC(rpcId) {
-            continuation.resume(throwing: AgentServiceError.requestTimeout)
-        }
-    }
-
-    private static func seconds(of duration: Duration) -> Double {
-        Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
     }
 
     private func storePendingRequest(
@@ -3908,6 +3608,25 @@ actor AgentService {
     func getAgentInfo(_ agentId: String) async -> Agent? {
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
         return try? await Agent.find(agentUUID, on: app.db)
+    }
+}
+
+// MARK: - ReplicaBridgeDelegate
+
+extension AgentService: ReplicaBridgeDelegate {
+    /// Holder half of a cross-replica RPC (`ReplicaMessageBridge` hook): run the
+    /// forwarded exchange over the locally held socket and await the agent's
+    /// correlated response. `deliverNudge` — the delegate's other half — lives
+    /// with the desired-state sync code above.
+    func runLocalExchange(
+        _ envelope: MessageEnvelope,
+        requestId: String,
+        agentId: String,
+        agentKey: String,
+        timeout: Duration
+    ) async throws -> AgentServiceResponse {
+        try await sendEnvelopeAwaitingLocalResponse(
+            envelope, requestId: requestId, agentId: agentId, agentKey: agentKey, timeout: timeout)
     }
 }
 
