@@ -1,0 +1,42 @@
+control-plane/web/src/types/openapi.ts
+  s_6671064d0155b3::t_be30ec44534223 3719,6967-6976,7001-7004,7032-7034,7053-7055
+control-plane/Sources/App/IAM/MemberRoleResolver.swift
+  s_6671064d0155b3::t_be30ec44534223 78-140
+control-plane/Sources/App/openapi.yaml
+  s_6671064d0155b3::t_be30ec44534223 5263-5264,12273-12289,12341-12346,12349-12352,12408-12411,12414-12415,12459-12462,12465-12466
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_6671064d0155b3::t_be30ec44534223 40-53,56-132
+  s_6671064d0155b3::t_6027f1095fdbdd 133
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_6671064d0155b3::t_be30ec44534223 81-85,87,120,142,158-170,237-251,365,384,402,423,442,460,482,509
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_6671064d0155b3::t_be30ec44534223 613-614,617-618,625
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_6671064d0155b3::t_be30ec44534223 77,99,208,220,1066-1069,1074,1078-1082,1084-1090,1105-1124,1143-1146
+  s_6671064d0155b3::t_187ccad91cdd6a 1147-1148
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_6671064d0155b3::t_be30ec44534223 71-72,92-93,116-138,143,167,542-650
+control-plane/Sources/App/configure.swift
+  s_6671064d0155b3::t_be30ec44534223 571-573
+  s_6671064d0155b3::t_b7d57fdf34a543 574
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_6671064d0155b3::t_be30ec44534223 131-134,181,185-188,197,201,295-298,310,321-323,352-353,356-359,363,369,373,383-392,398-401,404-446
+control-plane/Sources/App/Migrations/AddRoleMappingsToOIDCProvider.swift
+  s_6671064d0155b3::t_be30ec44534223 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "11ceb66a814e8fbb1fbdba922dc2253761140c2d",
+  "prompts": {},
+  "sessions": {
+    "s_6671064d0155b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fee7a23-4417-4878-a3b9-5a07242ef9f3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
