@@ -1,0 +1,31 @@
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_f7e9b5d276516f::t_b61d288df0b819 291-299
+control-plane/Sources/App/Controllers/VMController.swift
+  s_f7e9b5d276516f::t_a65c2410e577b1 238-247
+control-plane/Sources/App/Extensions/Request+Authorization.swift
+  s_e6a198b066af71::t_c9711c188e98d1 54-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "aa14e19efc89b9533ce3a64e5de40ab8a9bf5baf",
+  "prompts": {},
+  "sessions": {
+    "s_e6a198b066af71": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b384fbc4-d411-4567-9607-e66254091e42",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f7e9b5d276516f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4ae766f-bf41-40d3-8e16-0a18033be273",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
