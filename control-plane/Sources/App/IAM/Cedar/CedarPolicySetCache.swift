@@ -174,20 +174,6 @@ actor CedarPolicySetCache {
                 .filter(\.$enabled == true)
                 .all()
 
-            // Resolve the attach-node org for the external-principal
-            // guardrails — "external" means external to it. Sound to embed in
-            // compiled text: an attach node cannot move to another org, and
-            // guardrail writes bump the version.
-            var organizationIDsByGuardrail: [UUID: UUID] = [:]
-            for guardrail in guardrails
-            where guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
-                guard let id = guardrail.id, let node = guardrail.node else { continue }
-                let chain = try await IAMResourceTree.ancestors(of: node, on: db)
-                if let organization = chain.first(where: { $0.type == .organization }) {
-                    organizationIDsByGuardrail[id] = organization.id
-                }
-            }
-
             let schemaText = CedarSchemaBuilder.schemaText(roles: roles)
 
             // Pre-screen the *stored* role policy text individually. Cedar
@@ -259,8 +245,13 @@ actor CedarPolicySetCache {
             let staticText = CedarPolicyAssembler.staticPolicyText(roles: compilableRoles)
             let authoredText = CedarPolicyAssembler.authoredPolicyText(compilablePolicies)
             let authoredSources = CedarPolicyAssembler.authoredPolicySources(compilablePolicies)
-            let compiledGuardrails = CedarPolicyAssembler.guardrailPolicyText(
-                guardrails, organizationIDsByGuardrail: organizationIDsByGuardrail)
+
+            // Guardrails compile from their stored `cedar_text` verbatim since
+            // #610 — the same treatment authored policies get — so what is
+            // stored, shown, and enforced is one string. A row whose text
+            // predates the migration (null) falls back to matcher generation.
+            let compiledGuardrails = try await buildGuardrailPolicies(
+                guardrails, schemaText: schemaText, on: db)
 
             for skipped in compiledGuardrails.skipped {
                 // A skipped guardrail is a ceiling not being enforced by the
@@ -317,6 +308,81 @@ actor CedarPolicySetCache {
                     "error": .string("\(error)"),
                 ])
         }
+    }
+
+    /// Turn enabled guardrail rows into compiled `forbid` sources (#610).
+    ///
+    /// The stored `cedar_text` is compiled verbatim — the assembler already ran
+    /// at write time, whether from matchers or from hand-authored input. A row
+    /// with a null `cedar_text` (written before the migration, or racing the
+    /// boot backfill) falls back to regenerating from its matchers, so the set
+    /// is never missing a ceiling merely because the column has not been filled
+    /// yet.
+    ///
+    /// Each source is pre-screened individually the same way authored policies
+    /// are: Cedar validates per-policy, so a row that went stale against the
+    /// live schema is dropped alone (logged loudly — a dropped ceiling is
+    /// fail-open) instead of failing the whole-set compile and pinning every
+    /// replica to its previous build.
+    private func buildGuardrailPolicies(
+        _ guardrails: [Guardrail], schemaText: String, on db: any Database
+    ) async throws -> CedarPolicyAssembler.GuardrailPolicySet {
+        var sources: [CedarPolicySource] = []
+        var namesByID: [UUID: String] = [:]
+        var skipped: [CedarPolicyAssembler.SkippedGuardrail] = []
+
+        var needGeneration: [Guardrail] = []
+        for guardrail in guardrails {
+            guard let id = guardrail.id else {
+                skipped.append(
+                    CedarPolicyAssembler.SkippedGuardrail(id: nil, name: guardrail.name, reason: "row has no id"))
+                continue
+            }
+            namesByID[id] = guardrail.name
+            if let text = guardrail.cedarText, !text.isEmpty {
+                sources.append(CedarPolicySource(id: GuardrailText.policyID(id), text: text))
+            } else {
+                needGeneration.append(guardrail)
+            }
+        }
+
+        // Fallback generation for null-text rows: resolve the attach-node org
+        // only for the external-principal ceilings that need it.
+        if !needGeneration.isEmpty {
+            var organizationIDsByGuardrail: [UUID: UUID] = [:]
+            for guardrail in needGeneration
+            where guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
+                guard let id = guardrail.id, let node = guardrail.node else { continue }
+                let chain = try await IAMResourceTree.ancestors(of: node, on: db)
+                if let organization = chain.first(where: { $0.type == .organization }) {
+                    organizationIDsByGuardrail[id] = organization.id
+                }
+            }
+            let generated = CedarPolicyAssembler.guardrailPolicyText(
+                needGeneration, organizationIDsByGuardrail: organizationIDsByGuardrail)
+            sources += generated.policies
+            skipped += generated.skipped
+        }
+
+        // Pre-screen every guardrail source, dropping a stale one alone.
+        var compiledIDs: [UUID] = []
+        var screened: [CedarPolicySource] = []
+        for source in sources {
+            let id =
+                source.id.hasPrefix("guardrail-")
+                ? UUID(uuidString: String(source.id.dropFirst("guardrail-".count))) : nil
+            if let issue = engine.policyIssue(schemaText: schemaText, policy: source) {
+                skipped.append(
+                    CedarPolicyAssembler.SkippedGuardrail(
+                        id: id, name: id.flatMap { namesByID[$0] } ?? source.id, reason: issue))
+                continue
+            }
+            screened.append(source)
+            if let id { compiledIDs.append(id) }
+        }
+
+        return CedarPolicyAssembler.GuardrailPolicySet(
+            policies: screened, compiledGuardrailIDs: compiledIDs, skipped: skipped)
     }
 
 }

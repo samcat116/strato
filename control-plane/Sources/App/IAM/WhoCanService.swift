@@ -53,6 +53,16 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     /// here the same way it is in the members lists — reported, never
     /// filtered.
     let principalExternalToOrg: Bool
+    /// The grant is real but a ceiling (a guardrail or authored forbid) denies
+    /// it: this principal cannot actually perform the action here, and the
+    /// enforcer would agree (`can()` returns false for them). Marked rather than
+    /// filtered, like `principalDisabled` — a grant that a ceiling neutralises
+    /// is exactly what an admin auditing "who can reach this?" needs to see,
+    /// alongside "whose grant is now dead weight?" (#610).
+    let ceilinged: Bool
+    /// The ceiling policy ids that deny this grant (`guardrail-<id>` /
+    /// `policy-<id>`), when `ceilinged`. Nil otherwise.
+    let ceilingPolicyIDs: [String]?
 
     init(
         principal: WhoCanPrincipalRef,
@@ -62,7 +72,9 @@ struct WhoCanEntry: Content, Hashable, Sendable {
         via: WhoCanPrincipalRef?,
         expiresAt: Date?,
         principalDisabled: Bool = false,
-        principalExternalToOrg: Bool = false
+        principalExternalToOrg: Bool = false,
+        ceilinged: Bool = false,
+        ceilingPolicyIDs: [String]? = nil
     ) {
         self.principal = principal
         self.source = source
@@ -72,21 +84,47 @@ struct WhoCanEntry: Content, Hashable, Sendable {
         self.expiresAt = expiresAt
         self.principalDisabled = principalDisabled
         self.principalExternalToOrg = principalExternalToOrg
+        self.ceilinged = ceilinged
+        self.ceilingPolicyIDs = ceilingPolicyIDs
     }
 
     fileprivate func markingPrincipalDisabled() -> WhoCanEntry {
         WhoCanEntry(
             principal: principal, source: source, role: role, grantedOn: grantedOn,
             via: via, expiresAt: expiresAt, principalDisabled: true,
-            principalExternalToOrg: principalExternalToOrg)
+            principalExternalToOrg: principalExternalToOrg,
+            ceilinged: ceilinged, ceilingPolicyIDs: ceilingPolicyIDs)
     }
 
     fileprivate func markingPrincipalExternal() -> WhoCanEntry {
         WhoCanEntry(
             principal: principal, source: source, role: role, grantedOn: grantedOn,
             via: via, expiresAt: expiresAt, principalDisabled: principalDisabled,
-            principalExternalToOrg: true)
+            principalExternalToOrg: true,
+            ceilinged: ceilinged, ceilingPolicyIDs: ceilingPolicyIDs)
     }
+
+    fileprivate func markingCeilinged(_ policyIDs: [String]) -> WhoCanEntry {
+        WhoCanEntry(
+            principal: principal, source: source, role: role, grantedOn: grantedOn,
+            via: via, expiresAt: expiresAt, principalDisabled: principalDisabled,
+            principalExternalToOrg: principalExternalToOrg,
+            ceilinged: true, ceilingPolicyIDs: policyIDs)
+    }
+}
+
+/// A ceiling (a guardrail or an authored forbid policy) in force at the queried
+/// node — the "what constrains this resource" half of a who-can answer (#610).
+struct WhoCanCeiling: Content, Hashable, Sendable {
+    enum Kind: String, Content, Sendable {
+        case guardrail
+        case policy
+    }
+    let kind: Kind
+    let id: UUID
+    let name: String
+    /// The container the ceiling hangs on (guardrails) or the owner (policies).
+    let node: IAMNode
 }
 
 /// Whether an authored policy's action scope covers the queried action, as far
@@ -129,13 +167,23 @@ struct WhoCanResult: Content, Sendable {
     /// Reported as a flag rather than by enumerating every user, which would
     /// be unbounded and would go stale at the next signup.
     let openToAllAuthenticatedUsers: Bool
-    /// Authored policies in force on this resource that may bear on the action
-    /// (issue #606) — best-effort, matched on action scope and containment.
+    /// Authored **permit** policies in force on this resource that may bear on
+    /// the action (issue #606) — best-effort, matched on action scope and
+    /// containment. Authored *forbids* are not here: they are reflected exactly
+    /// in `ceilings` and per-entry `ceilinged` (#610), so only the permits —
+    /// which *widen* access to principals a reverse lookup cannot enumerate —
+    /// remain a caveat.
     let authoredPolicies: [WhoCanPolicyMatch]
-    /// When true, at least one authored policy above bears on this query and
-    /// its principals cannot be enumerated here, so `principals` is again not
-    /// the whole answer. Exact enumeration waits on #484.
+    /// When true, at least one authored **permit** policy above bears on this
+    /// query and its principals cannot be enumerated here, so `principals` is
+    /// not the whole answer — someone the list does not name may also be able
+    /// to act.
     let authoredPolicyCaveat: Bool
+    /// The ceilings in force on this resource: guardrails inherited down the
+    /// tree plus authored forbid policies scoped to it (#610). Which grants each
+    /// one actually neutralises is on the entries themselves (`ceilinged`); this
+    /// is the "what constrains this resource" summary.
+    let ceilings: [WhoCanCeiling]
 }
 
 /// The reverse index: "who can do action A on resource R?" (issue #478).
@@ -158,7 +206,15 @@ enum WhoCanService {
     // MARK: - Reverse lookup
 
     /// Every principal that can perform `action` on `node`, with the reason.
-    static func whoCan(action: String, node: IAMNode, on db: any Database) async throws -> WhoCanResult {
+    ///
+    /// `app` is threaded so the ceiling pass can evaluate the compiled policy
+    /// set (which reflects hand-authored guardrails and authored forbid policies
+    /// exactly, #610); without it the pass falls back to the matcher-built
+    /// guardrails it can read straight from the tree. The controller passes
+    /// `req.application`.
+    static func whoCan(
+        action: String, node: IAMNode, app: Application? = nil, on db: any Database
+    ) async throws -> WhoCanResult {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         var entries: [WhoCanEntry] = []
 
@@ -168,18 +224,103 @@ enum WhoCanService {
 
         var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db)
         principals = try await markingExternalPrincipals(principals, chain: chain, on: db)
+        principals = try await markingCeilingedPrincipals(
+            principals, action: action, node: node, app: app, on: db)
 
-        let authoredPolicies = try await authoredPolicyMatches(action: action, chain: chain, on: db)
+        // Only authored *permits* are a caveat now — they widen access to
+        // principals a reverse lookup cannot enumerate. Authored forbids are
+        // reflected exactly in `ceilings` and per-entry `ceilinged`.
+        let authoredPermits = try await authoredPolicyMatches(
+            action: action, chain: chain, effect: .permit, on: db)
+        let ceilings = try await ceilingsInForce(action: action, chain: chain, on: db)
 
         return WhoCanResult(
             principals: principals,
             openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
                 action: action, node: node, on: db),
-            authoredPolicies: authoredPolicies,
-            // Any applicable authored policy makes the principal list partial:
-            // its own principals are outside what a reverse lookup can see.
-            authoredPolicyCaveat: !authoredPolicies.isEmpty
+            authoredPolicies: authoredPermits,
+            authoredPolicyCaveat: !authoredPermits.isEmpty,
+            ceilings: ceilings
         )
+    }
+
+    /// Flag entries a ceiling denies, so the list agrees with the enforcer:
+    /// a granted principal a guardrail or authored forbid neutralises is marked
+    /// rather than dropped (#610).
+    ///
+    /// Group entries are left alone — a group is not a request principal, and
+    /// its members' own entries carry whether a ceiling reaches them. With the
+    /// compiled set in hand the check is exact for every ceiling kind; without
+    /// it (internal callers with no `app`) it reflects the matcher-built
+    /// guardrails readable from the tree.
+    private static func markingCeilingedPrincipals(
+        _ entries: [WhoCanEntry], action: String, node: IAMNode, app: Application?, on db: any Database
+    ) async throws -> [WhoCanEntry] {
+        let built = await app?.cedarPolicySet.current
+        var result: [WhoCanEntry] = []
+        result.reserveCapacity(entries.count)
+        for entry in entries {
+            guard
+                let principal = CeilingEvaluator.requestPrincipal(
+                    type: entry.principal.type, id: entry.principal.id)
+            else {
+                result.append(entry)
+                continue
+            }
+            if let built {
+                if let denying = try await CeilingEvaluator.denyingCeilings(
+                    principal: principal, action: action, node: node, built: built, on: db)
+                {
+                    result.append(entry.markingCeilinged(denying))
+                } else {
+                    result.append(entry)
+                }
+            } else {
+                let forbidding = try await GuardrailStore.forbidding(
+                    action: action, principalType: entry.principal.type,
+                    principalID: entry.principal.id, node: node, on: db)
+                if forbidding.isEmpty {
+                    result.append(entry)
+                } else {
+                    let ids = forbidding.compactMap { guardrail in
+                        guardrail.id.map { "guardrail-\($0.uuidString.lowercased())" }
+                    }
+                    result.append(entry.markingCeilinged(ids))
+                }
+            }
+        }
+        return result
+    }
+
+    /// The ceilings in force at the queried node: guardrails inherited down the
+    /// tree whose actions cover `action`, plus authored forbid policies scoped
+    /// to the resource (#610).
+    private static func ceilingsInForce(
+        action: String, chain: [IAMNode], on db: any Database
+    ) async throws -> [WhoCanCeiling] {
+        var ceilings: [WhoCanCeiling] = []
+
+        for guardrail in try await GuardrailStore.effective(along: chain, on: db) {
+            guard let id = guardrail.id, let node = guardrail.node else { continue }
+            // A matcher row is filtered by its action patterns; an authored row
+            // carries free-form Cedar whose action scope is not structurally
+            // enumerable here, so it is always listed as in force.
+            if !guardrail.authored, !GuardrailActions.matches(guardrail.actions, action: action) {
+                continue
+            }
+            ceilings.append(WhoCanCeiling(kind: .guardrail, id: id, name: guardrail.name, node: node))
+        }
+
+        for match in try await authoredPolicyMatches(
+            action: action, chain: chain, effect: .forbid, on: db)
+        {
+            ceilings.append(
+                WhoCanCeiling(kind: .policy, id: match.policyID, name: match.name, node: match.owner))
+        }
+
+        return ceilings.sorted {
+            ($0.kind.rawValue, $0.name) < ($1.kind.rawValue, $1.name)
+        }
     }
 
     /// The authored policies in force on the queried node that may bear on the
@@ -192,7 +333,7 @@ enum WhoCanService {
     /// — those are exactly what a reverse lookup cannot invert, and what the
     /// caveat flag warns about. Formal enumeration waits on #484.
     private static func authoredPolicyMatches(
-        action: String, chain: [IAMNode], on db: any Database
+        action: String, chain: [IAMNode], effect wanted: IAMPolicyEffect, on db: any Database
     ) async throws -> [WhoCanPolicyMatch] {
         let inScope = try await PolicyStore.inScope(along: chain, on: db)
         guard !inScope.isEmpty else { return [] }
@@ -203,6 +344,7 @@ enum WhoCanService {
             guard let id = policy.id, let owner = policy.owner, let effect = policy.policyEffect,
                 let ownerNodeType = owner.nodeType
             else { continue }
+            guard effect == wanted else { continue }
             guard
                 let shape = try? CedarAuthoredPolicyInspector.describe(
                     cedarText: policy.cedarText, policyID: PolicyDescriptor.policyID(id))
@@ -504,9 +646,15 @@ enum WhoCanService {
     ///
     /// This is the arbitrary-principal form of `can-i`: it reports what the
     /// bindings model says, the same model the evaluator enforces from since
-    /// cutover (#482).
+    /// cutover (#482) — and, since #610, subtracts ceilings so it agrees with
+    /// the enforcer about a grant a guardrail or authored forbid neutralises.
+    ///
+    /// `app` threads the compiled set for exact ceiling reflection over every
+    /// ceiling kind; without it, the ceiling gate reflects the matcher-built
+    /// guardrails readable from the tree.
     static func can(
-        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
+        app: Application? = nil, on db: any Database
     ) async throws -> Bool {
         let user = principalType == .user ? try await User.find(principalID, on: db) : nil
 
@@ -517,6 +665,27 @@ enum WhoCanService {
         // guarding only one branch lets the others answer `true`.
         if let user, user.disabledAt != nil { return false }
 
+        guard
+            try await isGranted(
+                principalType: principalType, principalID: principalID, action: action, node: node,
+                user: user, on: db)
+        else { return false }
+
+        // A ceiling subtracts even from a system admin — guardrails bind admins
+        // since cutover — so the gate applies to every granted path, not just
+        // bindings.
+        return try await !isCeilinged(
+            principalType: principalType, principalID: principalID, action: action, node: node,
+            app: app, on: db)
+    }
+
+    /// Whether a grant reaches `(principal, action, node)` — the bindings-model
+    /// view, before ceilings. Extracted so the ceiling gate wraps every
+    /// grant-bearing path at once.
+    private static func isGranted(
+        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
+        user: User?, on db: any Database
+    ) async throws -> Bool {
         if let user, user.isSystemAdmin { return true }
 
         // Actions open to every authenticated user need no grant — otherwise
@@ -576,6 +745,25 @@ enum WhoCanService {
         }
 
         return false
+    }
+
+    /// Whether a ceiling denies `(principal, action, node)`. With the compiled
+    /// set in hand it is exact for every ceiling kind (matcher and authored
+    /// guardrails, authored forbid policies); without it, it reflects the
+    /// matcher-built guardrails read straight from the tree.
+    private static func isCeilinged(
+        principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
+        app: Application?, on db: any Database
+    ) async throws -> Bool {
+        if let built = await app?.cedarPolicySet.current,
+            let principal = CeilingEvaluator.requestPrincipal(type: principalType, id: principalID)
+        {
+            return try await CeilingEvaluator.denyingCeilings(
+                principal: principal, action: action, node: node, built: built, on: db) != nil
+        }
+        let forbidding = try await GuardrailStore.forbidding(
+            action: action, principalType: principalType, principalID: principalID, node: node, on: db)
+        return !forbidding.isEmpty
     }
 }
 

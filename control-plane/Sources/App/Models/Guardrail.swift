@@ -45,7 +45,29 @@ final class Guardrail: Model, @unchecked Sendable {
     @Field(key: "effect")
     var effect: String
 
+    /// The Cedar `forbid` this guardrail compiles to — the compiled source of
+    /// truth since #610. For a matcher-built row (`authored == false`) it is
+    /// generated from the matchers below and they stay canonical; for an
+    /// authored row (`authored == true`) an admin wrote it directly and the
+    /// matchers are inert placeholders. The policy-set cache compiles this
+    /// verbatim under `guardrail-<id>`, exactly like an authored policy.
+    ///
+    /// Optional only for rows written before #610's migration: the cache falls
+    /// back to regenerating from the matchers for a null, and the boot backfill
+    /// populates it. Every write since #610 sets it.
+    @OptionalField(key: "cedar_text")
+    var cedarText: String?
+
+    /// Whether this row's forbid was hand-authored (`true`) or assembled from
+    /// the matcher vocabulary (`false`). Decides whether the matcher columns
+    /// describe the row and whether the write-time check reads them or the
+    /// stored text.
+    @Field(key: "authored")
+    var authored: Bool
+
     /// Canonicalized action patterns: exact actions, `service:*`, or `*`.
+    /// Canonical for a matcher-built row; a placeholder (`["*"]`) for an
+    /// authored one.
     @Field(key: "actions")
     var actions: [String]
 
@@ -89,6 +111,8 @@ final class Guardrail: Model, @unchecked Sendable {
         actions: [String],
         principalMatch: GuardrailPrincipalMatch,
         resourceMatch: GuardrailResourceMatch,
+        cedarText: String? = nil,
+        authored: Bool = false,
         enabled: Bool = true,
         createdBy: UUID? = nil
     ) {
@@ -103,6 +127,8 @@ final class Guardrail: Model, @unchecked Sendable {
         self.principalMatchID = principalMatch.subjectID
         self.resourceMatchKind = resourceMatch.kind.rawValue
         self.resourceMatchValue = resourceMatch.value
+        self.cedarText = cedarText
+        self.authored = authored
         self.enabled = enabled
         self.createdBy = createdBy
     }
