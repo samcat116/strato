@@ -235,65 +235,16 @@ struct VMController: RouteCollection {
 
         let image: Image = foundImage
 
-        // Determine project context
-        let projectId: UUID
-        if let requestedProjectId = createRequest.projectId {
-            // Verify user has access to the requested project
-            guard let project = try await Project.find(requestedProjectId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Project not found")
-            }
-
-            // Verify user belongs to the project's organization
-            let rootOrgId = try await project.getRootOrganizationId(on: req.db)
-            guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
-                throw Abort(.forbidden, reason: "Access denied to project")
-            }
-
-            projectId = requestedProjectId
-        } else {
-            guard let currentOrgId = user.currentOrganizationId else {
-                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
-            }
-
-            // Find or create default project for organization
-            let defaultProject = try await Project.query(on: req.db)
-                .filter(\Project.$organization.$id, .equal, currentOrgId)
-                .filter(\Project.$name, .equal, "Default Project")
-                .first()
-
-            guard let project = defaultProject else {
-                throw Abort(.badRequest, reason: "No default project found. Please specify a project.")
-            }
-            projectId = project.id!
-        }
-
-        // Get project to validate environment
-        guard let project = try await Project.find(projectId, on: req.db) else {
-            throw Abort(.internalServerError, reason: "Project not found")
-        }
-
-        // Require create permission on the target project. Org membership alone
-        // (checked above) is not enough: `virtual_machine.create` resolves to
-        // `project->create_resources`, so a user who only inherits `view_project`
-        // as an org member — with no role in this project — must not be able to
-        // create VMs here. Mirrors the create_volume/create_network gates on the
-        // sibling controllers.
-        let canCreate = try await req.can("create_resources", on: "project", id: projectId.uuidString)
-        guard canCreate else {
-            throw Abort(.forbidden, reason: "You don't have permission to create VMs in this project")
-        }
-
-        // Determine environment
-        let environment = createRequest.environment ?? project.defaultEnvironment
-
-        // Validate environment exists in project
-        if !project.hasEnvironment(environment) {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))"
-            )
-        }
+        // Resolve the target project and environment (org membership, the
+        // create_resources permission, and environment validity). Shared with
+        // sandbox creation via `req.resolveProjectForCreate` (issue #675).
+        let (project, environment) = try await req.resolveProjectForCreate(
+            requestedProjectId: createRequest.projectId,
+            requestedEnvironment: createRequest.environment,
+            user: user,
+            resourceKind: "VMs"
+        )
+        let projectId = try project.requireID()
 
         // Resolve which logical network the VM's NIC attaches to. Omitting both
         // fields keeps the historical default-network behavior (including the
