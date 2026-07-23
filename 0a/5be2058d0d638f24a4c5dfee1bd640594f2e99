@@ -1,0 +1,24 @@
+docs/deployment/observability.md
+  s_4d2915c4bfb015::t_d35a717f019e80 306-310
+  s_4d2915c4bfb015::t_863ae657e8929c 240-249,256-276,337-341
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_4d2915c4bfb015::t_863ae657e8929c 1-91
+control-plane/Sources/App/configure.swift
+  s_4d2915c4bfb015::t_863ae657e8929c 23-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0a5be2058d0d638f24a4c5dfee1bd640594f2e99",
+  "prompts": {},
+  "sessions": {
+    "s_4d2915c4bfb015": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8d00ace-d719-43b1-9af1-ca0c13323acc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
