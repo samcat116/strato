@@ -98,6 +98,90 @@ final class QuotaEnforcementTests {
         }
     }
 
+    // MARK: - Nested-OU (ancestor) scope resolution (issue #645)
+
+    @Test("applicableQuotas resolves ancestor-OU quotas for a deeply nested project")
+    func applicableQuotasResolvesAncestorOUs() async throws {
+        try await withApp { app, _, org, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // Org → Engineering → TeamA → Project P.
+            let eng = try await builder.createOU(name: "Engineering", description: "d", organization: org)
+            let teamA = try await builder.createOU(
+                name: "TeamA", description: "d", organization: org, parentOU: eng)
+            let project = try await builder.createProject(
+                name: "P", description: "d", ou: teamA)
+
+            let orgQuota = try await builder.createResourceQuota(name: "org", organization: org)
+            let engQuota = try await builder.createResourceQuota(name: "eng", ou: eng)  // intermediate
+            let teamAQuota = try await builder.createResourceQuota(name: "teamA", ou: teamA)  // direct
+            let projQuota = try await builder.createResourceQuota(name: "proj", project: project)
+            // A sibling OU's quota must NOT be resolved.
+            let teamB = try await builder.createOU(
+                name: "TeamB", description: "d", organization: org, parentOU: eng)
+            _ = try await builder.createResourceQuota(name: "teamB", ou: teamB)
+
+            let resolved = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: "development", on: app.db)
+            let ids = Set(resolved.compactMap { $0.id })
+            #expect(
+                ids == Set([orgQuota.id, engQuota.id, teamAQuota.id, projQuota.id].compactMap { $0 }))
+        }
+    }
+
+    @Test("reserve reserves against an ancestor-OU quota and rejects when it is exceeded")
+    func reserveEnforcesAncestorOUQuota() async throws {
+        try await withApp { app, _, org, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let eng = try await builder.createOU(name: "Engineering", description: "d", organization: org)
+            let teamA = try await builder.createOU(
+                name: "TeamA", description: "d", organization: org, parentOU: eng)
+            let project = try await builder.createProject(name: "P", description: "d", ou: teamA)
+
+            // The department cap lives on the intermediate OU, two levels above P.
+            let engQuota = try await builder.createResourceQuota(
+                name: "dept", maxVCPUs: 4, ou: eng)
+
+            // A create that fits is reserved against the ancestor quota.
+            try await QuotaEnforcementService.reserve(
+                for: project, environment: "development",
+                vcpus: 3, memory: gb(2), storage: gb(10), on: app.db)
+            let afterReserve = try await ResourceQuota.find(engQuota.id, on: app.db)!
+            #expect(afterReserve.reservedVCPUs == 3)
+            #expect(afterReserve.vmCount == 1)
+
+            // A create for a VM row so the resync baseline reflects the first reservation.
+            _ = try await builder.createVM(name: "first", project: project)  // cpu 2
+
+            // The next create would push the department past its 4-vCPU cap → rejected.
+            await #expect(throws: Abort.self) {
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 3, memory: gb(1), storage: gb(1), on: app.db)
+            }
+        }
+    }
+
+    @Test("calculateActualUsage reports non-zero usage for an intermediate-OU quota")
+    func intermediateOUQuotaReportsUsage() async throws {
+        try await withApp { app, _, org, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // Org → Engineering → TeamA → Project P (grandchild of Engineering).
+            let eng = try await builder.createOU(name: "Engineering", description: "d", organization: org)
+            let teamA = try await builder.createOU(
+                name: "TeamA", description: "d", organization: org, parentOU: eng)
+            let project = try await builder.createProject(name: "P", description: "d", ou: teamA)
+
+            _ = try await builder.createVM(name: "a", project: project)  // cpu 2
+            _ = try await builder.createVM(name: "b", project: project)  // cpu 2
+
+            let engQuota = try await builder.createResourceQuota(name: "dept", ou: eng)
+            let (usage, vms, _) = try await engQuota.calculateActualUsage(on: app.db)
+            // Before the fix this aggregated over the empty set and reported 0.
+            #expect(vms.count == 2)
+            #expect(usage.vcpus == 4)
+        }
+    }
+
     // MARK: - Service-level reserve / release
 
     @Test("reserve increments every applicable quota")
