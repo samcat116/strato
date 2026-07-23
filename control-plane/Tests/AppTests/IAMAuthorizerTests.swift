@@ -58,7 +58,8 @@ final class IAMAuthorizerTests {
         resourceType: String,
         resourceID: String,
         path: String = "/api/vms",
-        state: IAMRequestAuthState? = nil
+        state: IAMRequestAuthState? = nil,
+        cache: IAMRequestCache? = nil
     ) async throws -> Bool {
         try await IAMAuthorizer.checkLegacyVocabulary(
             userID: user.id!,
@@ -67,6 +68,7 @@ final class IAMAuthorizerTests {
             resourceID: resourceID,
             context: IAMCheckContext(path: path, method: "GET", requestID: "test-request"),
             state: state,
+            cache: cache,
             app: app,
             db: app.db
         )
@@ -160,6 +162,66 @@ final class IAMAuthorizerTests {
             #expect(entry.cedarDecision == "deny")
             #expect(entry.tier == "guardrail")
             #expect(entry.determiningPolicies == ["guardrail-\(guardrail.id!.uuidString.lowercased())"])
+        }
+    }
+
+    @Test("A repeat of the same check in one request is decided and recorded once")
+    func requestScopedDecisionMemo() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(app, prefix: "memo")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: tree.user.id!, role: .viewer,
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+
+            // The shape of a guarded object route: the middleware checks, then
+            // the handler re-checks the identical triple through
+            // `Request.authorizedVM`.
+            let cache = IAMRequestCache()
+            let state = IAMRequestAuthState()
+            let middleware = try await check(
+                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
+                resourceID: tree.vm.id!.uuidString, state: state, cache: cache)
+            let handler = try await check(
+                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
+                resourceID: tree.vm.id!.uuidString, state: state, cache: cache)
+            #expect(middleware)
+            #expect(handler)
+            // The memoized answer still counts as a decision this request made.
+            #expect(state.decisionEvaluated.withLockedValue { $0 })
+
+            let entry = try await onlyEntry(app)
+            #expect(entry.iamAction == "vm:read")
+            // The row count is the point: one question, one decision, one row.
+            try await Task.sleep(for: .milliseconds(250))
+            let rows = try await IAMDecisionLog.query(on: app.db).count()
+            #expect(rows == 1)
+        }
+    }
+
+    @Test("The request memo is keyed by the whole check, not just the resource")
+    func requestMemoDoesNotConflateChecks() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(app, prefix: "memokey")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: tree.user.id!, role: .viewer,
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+
+            // Same principal, same VM, different action: a viewer may read it
+            // but not start it, so a memo keyed on the resource alone would
+            // hand back the wrong verdict.
+            let cache = IAMRequestCache()
+            let read = try await check(
+                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
+                resourceID: tree.vm.id!.uuidString, cache: cache)
+            let start = try await check(
+                app, user: tree.user, permission: "start", resourceType: "virtual_machine",
+                resourceID: tree.vm.id!.uuidString, cache: cache)
+            #expect(read)
+            #expect(!start)
         }
     }
 

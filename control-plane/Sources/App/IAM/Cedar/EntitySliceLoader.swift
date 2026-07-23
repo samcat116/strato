@@ -135,8 +135,10 @@ enum EntitySliceLoader {
     /// action resolution happens in the policy set, so one slice serves any
     /// action on the node — and there is no per-action code path here to get
     /// out of sync.
-    static func load(userID: UUID, node: IAMNode, on db: any Database) async throws -> CedarEntitySlice {
-        try await load(principal: .user(userID), node: node, on: db)
+    static func load(
+        userID: UUID, node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
+    ) async throws -> CedarEntitySlice {
+        try await load(principal: .user(userID), node: node, cache: cache, on: db)
     }
 
     /// Gather the slice for "may `principal` act on `node`?" — the typed form
@@ -147,27 +149,30 @@ enum EntitySliceLoader {
     ///   Only used to decide whether to compute attributes expensive enough to
     ///   be worth skipping when no policy could read them (today: the agent
     ///   foreign-workload inventory). Passing nil simply omits those.
+    /// - Parameter cache: the request-scoped cache (#686). The principal's
+    ///   memberships and the resource's ancestor chain are the same for every
+    ///   check in a request, so they are loaded once and reused; passing nil
+    ///   loads everything, which is what callers outside a request do.
     static func load(
-        principal: IAMPrincipal, node: IAMNode, action: String? = nil, on db: any Database
+        principal: IAMPrincipal, node: IAMNode, action: String? = nil,
+        cache: IAMRequestCache? = nil, on db: any Database
     ) async throws -> CedarEntitySlice {
-        let chain = try await IAMResourceTree.ancestors(of: node, on: db)
-
-        let user = principal.type == .user ? try await User.find(principal.id, on: db) : nil
-        let groupIDs: [UUID]
-        let organizationIDs: [UUID]
+        // Independent loads: the chain walk knows nothing about the principal
+        // and the memberships know nothing about the resource. Only the
+        // bindings query below needs both.
+        let resolution: IAMResourceTree.Resolution
+        let facts: IAMUserFacts
         if principal.type == .user {
-            groupIDs = try await UserGroup.query(on: db)
-                .filter(\.$user.$id == principal.id)
-                .all()
-                .map { $0.$group.id }
-            organizationIDs = try await UserOrganization.query(on: db)
-                .filter(\.$user.$id == principal.id)
-                .all()
-                .map { $0.$organization.id }
+            async let resolved = IAMResourceTree.resolve(node, cache: cache, on: db)
+            async let principalFacts = IAMUserFacts.load(userID: principal.id, cache: cache, on: db)
+            (resolution, facts) = try await (resolved, principalFacts)
         } else {
-            groupIDs = []
-            organizationIDs = []
+            resolution = try await IAMResourceTree.resolve(node, cache: cache, on: db)
+            facts = .none
         }
+        let chain = resolution.chain
+        let groupIDs = facts.groupIDs
+        let organizationIDs = facts.organizationIDs
 
         var grants = CedarRoleGrants()
         var skippedConditionedBindings = 0
@@ -227,9 +232,9 @@ enum EntitySliceLoader {
         // project-less as the VM-create fallback (`platform-open-network-read`).
         var chainComplete = chain.last?.type == .organization
         if !chainComplete, node.type == .network, chain.count == 1 {
-            if let network = try await LogicalNetwork.find(node.id, on: db) {
-                chainComplete = network.$project.id == nil && network.$site.id == nil
-            }
+            // A network row we could not read leaves both facts nil, which
+            // reads here as "not the global network" — incomplete, denied.
+            chainComplete = resolution.leaf.networkHasProject == false && resolution.leaf.networkHasSite == false
         }
         // A user record is the third rootless-by-design shape: it has no
         // parent at all (see `IAMNodeType.user`), so its one-element chain is
@@ -254,10 +259,8 @@ enum EntitySliceLoader {
         // chain entry would leave the store with none at all.
         let principalIsResource = principal.type == .user && node.cedarUID == principalUID
         if principal.type == .user {
-            var attrs = userAttrs(organizationIDs: organizationIDs, isSystemAdmin: user?.isSystemAdmin ?? false)
-            if principalIsResource,
-                let environment = try await GuardrailStore.resourceEnvironment(of: node, on: db)
-            {
+            var attrs = userAttrs(organizationIDs: organizationIDs, isSystemAdmin: facts.isSystemAdmin)
+            if principalIsResource, let environment = resolution.leaf.environment {
                 attrs["environment"] = .string(environment)
             }
             entities.append(
@@ -289,23 +292,18 @@ enum EntitySliceLoader {
                 // must carry them too, or the whole entity store fails schema
                 // validation and the check fails closed. (The self-check case
                 // never reaches here: it merged into the principal above.)
-                let target = try await User.find(chainNode.id, on: db)
-                let targetOrgIDs = try await UserOrganization.query(on: db)
-                    .filter(\.$user.$id == chainNode.id)
-                    .all()
-                    .map { $0.$organization.id }
+                let target = try await IAMUserFacts.load(userID: chainNode.id, cache: cache, on: db)
                 attrs = userAttrs(
-                    organizationIDs: targetOrgIDs, isSystemAdmin: target?.isSystemAdmin ?? false)
+                    organizationIDs: target.organizationIDs, isSystemAdmin: target.isSystemAdmin)
             }
             if chainNode == node {
-                if let environment = try await GuardrailStore.resourceEnvironment(of: node, on: db) {
+                if let environment = resolution.leaf.environment {
                     attrs["environment"] = .string(environment)
                 }
                 if node.type == .network {
                     // Missing row → false: an unreadable network must not
                     // become world-readable.
-                    let network = try await LogicalNetwork.find(node.id, on: db)
-                    attrs["openToAllUsers"] = .bool(network.map { $0.$project.id == nil } ?? false)
+                    attrs["openToAllUsers"] = .bool(resolution.leaf.networkHasProject == false)
                 }
                 if node.type == .agent, let action,
                     IAMRoleRegistry.agentForeignWorkloadGuardedActions.contains(action)

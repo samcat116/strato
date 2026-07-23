@@ -146,6 +146,65 @@ final class EntitySliceLoaderTests {
         }
     }
 
+    // MARK: - Chain resolution and the request cache (issue #686)
+
+    @Test("A stale materialized folder path does not change the chain")
+    func staleFolderPathIsOnlyAHint() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Stale")
+            let expected = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
+
+            // The batched folder walk uses `path` to prefetch the rows it is
+            // about to need; the parent pointers stay authoritative. Corrupt
+            // the hint in both directions — a path naming nothing, and a path
+            // naming an unrelated folder — and the chain must not move.
+            let unrelated = try await builder.createOU(
+                name: "Stale Unrelated", description: "d", organization: tree.org)
+            tree.childOU.path = "/nonsense"
+            try await tree.childOU.save(on: app.db)
+            tree.ou.path = "/\(tree.org.id!.uuidString)/\(unrelated.id!.uuidString)/\(tree.ou.id!.uuidString)"
+            try await tree.ou.save(on: app.db)
+
+            let actual = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
+            #expect(actual == expected)
+            #expect(
+                actual == [
+                    tree.vmNode,
+                    tree.projectNode,
+                    IAMNode(type: .organizationalUnit, id: tree.childOU.id!),
+                    IAMNode(type: .organizationalUnit, id: tree.ou.id!),
+                    tree.orgNode,
+                ])
+        }
+    }
+
+    @Test("Loading through a request cache yields the same slices as loading without one")
+    func requestCachedSlicesAreUnchanged() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Cache")
+            let user = try await builder.createUser(username: "cache-user", email: "cache@example.com")
+            try await builder.addUserToOrganization(user: user, organization: tree.org)
+            let group = try await builder.createGroup(name: "cache-team", description: "d", organization: tree.org)
+            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .group, principalID: group.id!, role: .viewer,
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+
+            let cache = IAMRequestCache()
+            for node in [tree.vmNode, tree.projectNode, tree.orgNode] {
+                let uncached = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.db)
+                let first = try await EntitySliceLoader.load(
+                    userID: user.id!, node: node, cache: cache, on: app.db)
+                let second = try await EntitySliceLoader.load(
+                    userID: user.id!, node: node, cache: cache, on: app.db)
+                #expect(first == uncached)
+                #expect(second == uncached)
+            }
+        }
+    }
+
     // MARK: - Principal
 
     @Test("The principal carries group parent edges, org memberships, and the systemAdmin attribute")

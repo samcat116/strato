@@ -74,6 +74,7 @@ enum IAMAuthorizer {
         legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
+        cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
     ) async throws -> CedarCheckDecision {
@@ -84,6 +85,7 @@ enum IAMAuthorizer {
             legacyEquivalent: legacyEquivalent,
             context: context,
             state: state,
+            cache: cache,
             app: app,
             db: db
         )
@@ -101,6 +103,13 @@ enum IAMAuthorizer {
     /// span per evaluation (nesting under the request span) plus the allow/deny
     /// rate and evaluation latency as metrics. A thrown 503/500 records the
     /// error on the span but is not counted as an allow/deny decision.
+    ///
+    /// A repeat of a triple this request already decided is answered from
+    /// `cache` (#686) — the object routes ask the same question twice on
+    /// purpose, middleware then handler. The repeat still gets a span (marked
+    /// `iam.cache_hit`) so the double-check stays visible in a trace, but it is
+    /// not counted as a second decision or written to the decision log: it is
+    /// one decision, consulted twice.
     static func authorize(
         principal: IAMPrincipal,
         action: String,
@@ -108,6 +117,7 @@ enum IAMAuthorizer {
         legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
+        cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
     ) async throws -> CedarCheckDecision {
@@ -117,6 +127,13 @@ enum IAMAuthorizer {
             span.attributes["iam.action"] = action
             span.attributes["iam.resource_type"] = node.type.rawValue
             span.attributes["iam.principal"] = principal.subject
+            let key = IAMRequestCache.DecisionKey(principal: principal, action: action, node: node)
+            if let memoized = cache?.decision(for: key) {
+                span.attributes["iam.cache_hit"] = true
+                span.attributes["iam.decision"] = memoized.allowed ? "allow" : "deny"
+                markAuditState(memoized, state: state)
+                return memoized
+            }
             let decision = try await evaluate(
                 principal: principal,
                 action: action,
@@ -124,13 +141,27 @@ enum IAMAuthorizer {
                 legacyEquivalent: legacyEquivalent,
                 context: context,
                 state: state,
+                cache: cache,
                 app: app,
                 db: db
             )
+            cache?.store(decision: decision, for: key)
+            span.attributes["iam.cache_hit"] = false
             span.attributes["iam.decision"] = decision.allowed ? "allow" : "deny"
             Telemetry.recordAuthzDecision(
                 allowed: decision.allowed, durationSeconds: (clock.now - start).asSeconds)
             return decision
+        }
+    }
+
+    /// The audit flags a decision sets, applied on every consultation — a
+    /// memoized answer is still an answer this request acted on, and the
+    /// default-deny middleware's "did the handler check anything?" assertion
+    /// must see it.
+    private static func markAuditState(_ decision: CedarCheckDecision, state: IAMRequestAuthState?) {
+        state?.decisionEvaluated.withLockedValue { $0 = true }
+        if decision.allowed, decision.determiningPolicyIDs.contains("platform-system-admin") {
+            state?.adminPolicyUsed.withLockedValue { $0 = true }
         }
     }
 
@@ -145,6 +176,7 @@ enum IAMAuthorizer {
         legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
+        cache: IAMRequestCache?,
         app: Application,
         db: any Database
     ) async throws -> CedarCheckDecision {
@@ -153,7 +185,7 @@ enum IAMAuthorizer {
         let outcome: IAMDecisionEngine.Decision
         do {
             outcome = try await IAMDecisionEngine.decide(
-                principal: principal, action: action, node: node, built: built, on: db)
+                principal: principal, action: action, node: node, built: built, cache: cache, on: db)
         } catch let failure as IAMDecisionEngine.EvaluationFailure {
             app.logger.error(
                 "Cedar evaluation failed; failing closed",
@@ -191,10 +223,7 @@ enum IAMAuthorizer {
             }
         }
 
-        state?.decisionEvaluated.withLockedValue { $0 = true }
-        if outcome.verdict.allowed, outcome.verdict.determiningPolicyIDs.contains("platform-system-admin") {
-            state?.adminPolicyUsed.withLockedValue { $0 = true }
-        }
+        markAuditState(outcome.verdict, state: state)
 
         app.iamDecisionRecorder.recordInBackground(
             IAMDecisionRecord(
@@ -224,6 +253,7 @@ enum IAMAuthorizer {
         resourceID: String,
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
+        cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
     ) async throws -> Bool {
@@ -255,6 +285,7 @@ enum IAMAuthorizer {
             legacyEquivalent: equivalent,
             context: context,
             state: state,
+            cache: cache,
             app: app,
             db: db
         )
@@ -285,6 +316,7 @@ extension Request {
             legacyEquivalent: legacyEquivalent,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id),
             state: iamAuthState,
+            cache: iamCache,
             app: application,
             db: db
         )
@@ -330,6 +362,7 @@ extension Request {
             resourceID: id,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: self.id),
             state: iamAuthState,
+            cache: iamCache,
             app: application,
             db: db
         )

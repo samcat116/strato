@@ -334,11 +334,14 @@ enum GuardrailStore {
         node: IAMNode,
         on db: any Database
     ) async throws -> [Guardrail] {
-        let chain = try await IAMResourceTree.ancestors(of: node, on: db)
+        let resolution = try await IAMResourceTree.resolve(node, on: db)
+        let chain = resolution.chain
         let candidates = try await effective(along: chain, on: db)
         guard !candidates.isEmpty else { return [] }
 
-        let environment = try await resourceEnvironment(of: node, on: db)
+        // The walk already read the leaf row, so its environment comes back
+        // with the chain instead of costing a second read of the same row.
+        let environment = resolution.leaf.environment
         let organizationID = chain.first(where: { $0.type == .organization })?.id
 
         var matched: [Guardrail] = []
@@ -368,31 +371,4 @@ enum GuardrailStore {
         return matched
     }
 
-    /// The `environment` attribute of a resource, for resource-side matching.
-    ///
-    /// Every type that stores one has to be listed, or an environment ceiling
-    /// silently stops covering that type — a snapshot of a production sandbox
-    /// is as much a production resource as the sandbox. Containers are absent
-    /// because they genuinely have no environment: it is an attribute, never a
-    /// container.
-    ///
-    /// Shared with `EntitySliceLoader` (#480), which stamps the same attribute
-    /// onto the Cedar entity so the compiled environment ceilings match
-    /// exactly what this store's own evaluation matches.
-    static func resourceEnvironment(of node: IAMNode, on db: any Database) async throws -> String? {
-        switch node.type {
-        case .virtualMachine:
-            return try await VM.find(node.id, on: db)?.environment
-        case .sandbox:
-            return try await Sandbox.find(node.id, on: db)?.environment
-        case .sandboxSnapshot:
-            return try await SandboxSnapshot.find(node.id, on: db)?.environment
-        case .organization, .organizationalUnit, .project, .image, .network,
-            .floatingIP, .securityGroup, .volume, .volumeSnapshot, .site, .agent, .serviceAccount, .user:
-            // Listed exhaustively rather than defaulted: a new resource type
-            // carrying an environment should fail to compile here, not quietly
-            // fall out of every environment ceiling.
-            return nil
-        }
-    }
 }

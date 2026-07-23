@@ -119,9 +119,11 @@ enum IAMDecisionEngine {
         action: String,
         node: IAMNode,
         built: CedarPolicySetCache.Built,
+        cache: IAMRequestCache? = nil,
         on db: any Database
     ) async throws -> Decision {
-        let slice = try await EntitySliceLoader.load(principal: principal, node: node, action: action, on: db)
+        let slice = try await EntitySliceLoader.load(
+            principal: principal, node: node, action: action, cache: cache, on: db)
 
         guard CedarSchemaBuilder.resourceTypes(for: action).contains(node.type.cedarEntityType) else {
             return Decision(
