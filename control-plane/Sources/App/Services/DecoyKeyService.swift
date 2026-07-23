@@ -89,7 +89,7 @@ extension Application {
             lazyService(DecoyKeyCacheKey.self) { DecoyKeyCache() }
         }
         set {
-            storage[DecoyKeyCacheKey.self] = newValue
+            setStorageValue(DecoyKeyCacheKey.self, to: newValue)
         }
     }
 

@@ -429,7 +429,7 @@ extension Application {
             lazyService(AuditServiceKey.self) { AuditService(app: self) }
         }
         set {
-            storage[AuditServiceKey.self] = newValue
+            setStorageValue(AuditServiceKey.self, to: newValue)
         }
     }
 

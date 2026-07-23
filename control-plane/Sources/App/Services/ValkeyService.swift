@@ -63,13 +63,13 @@ extension Application {
     /// Whether Valkey is enabled and configured
     var valkeyEnabled: Bool {
         get { storage[ValkeyEnabledKey.self] ?? false }
-        set { storage[ValkeyEnabledKey.self] = newValue }
+        set { setStorageValue(ValkeyEnabledKey.self, to: newValue) }
     }
 
     /// Valkey configuration (if enabled)
     var valkeyConfiguration: ValkeyConfiguration? {
         get { storage[ValkeyConfigKey.self] }
-        set { storage[ValkeyConfigKey.self] = newValue }
+        set { setStorageValue(ValkeyConfigKey.self, to: newValue) }
     }
 
     /// The shared Valkey client. Only available after `configureValkey` ran
@@ -105,8 +105,8 @@ extension Application {
             logger: logger
         )
 
-        storage[ValkeyClientKey.self] = client
-        storage[ValkeyTasksKey.self] = ValkeyBackgroundTasks()
+        setStorageValue(ValkeyClientKey.self, to: client)
+        setStorageValue(ValkeyTasksKey.self, to: ValkeyBackgroundTasks())
         valkeyConfiguration = config
         valkeyEnabled = true
         lifecycle.use(ValkeyLifecycleHandler())

@@ -511,7 +511,7 @@ extension Application {
             lazyService(ImageFetchServiceKey.self) { ImageFetchService(app: self) }
         }
         set {
-            storage[ImageFetchServiceKey.self] = newValue
+            setStorageValue(ImageFetchServiceKey.self, to: newValue)
         }
     }
 }

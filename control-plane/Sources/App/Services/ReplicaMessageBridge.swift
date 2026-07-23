@@ -472,7 +472,7 @@ extension Application {
             lazyService(ReplicaMessageBridgeKey.self) { ReplicaMessageBridge(app: self) }
         }
         set {
-            storage[ReplicaMessageBridgeKey.self] = newValue
+            setStorageValue(ReplicaMessageBridgeKey.self, to: newValue)
         }
     }
 

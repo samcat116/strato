@@ -203,7 +203,7 @@ extension Application {
             let lock = locks.lock(for: GuardrailAnalyzerKey.self)
             lock.lock()
             defer { lock.unlock() }
-            storage[GuardrailAnalyzerKey.self] = newValue
+            setStorageValue(GuardrailAnalyzerKey.self, to: newValue)
         }
     }
 

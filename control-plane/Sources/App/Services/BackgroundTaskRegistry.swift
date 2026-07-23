@@ -85,7 +85,7 @@ extension Application {
     }
 
     func setUpBackgroundTaskRegistry() {
-        storage[BackgroundTaskRegistryKey.self] = BackgroundTaskRegistry()
+        setStorageValue(BackgroundTaskRegistryKey.self, to: BackgroundTaskRegistry())
         lifecycle.use(BackgroundTaskLifecycle())
     }
 

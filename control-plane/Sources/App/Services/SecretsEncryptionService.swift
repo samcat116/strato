@@ -209,7 +209,7 @@ extension Application {
     /// until `configure()` installs the environment-derived service.
     var secretsEncryption: SecretsEncryptionService {
         get { storage[SecretsEncryptionServiceKey.self] ?? .disabled }
-        set { storage[SecretsEncryptionServiceKey.self] = newValue }
+        set { setStorageValue(SecretsEncryptionServiceKey.self, to: newValue) }
     }
 }
 

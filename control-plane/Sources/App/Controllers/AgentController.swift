@@ -785,12 +785,10 @@ struct AgentController: RouteCollection {
                 )
             }
             targetVersion = target
-            artifact = try await AgentUpdateArtifacts.resolveArtifact(
-                targetVersion: target,
+            artifact = try await req.application.agentArtifactResolver.resolve(
+                version: target,
                 operatingSystem: os,
-                architecture: architecture,
-                client: req.client,
-                logger: req.logger
+                architecture: architecture
             )
         }
         let artifactURL = artifact.url

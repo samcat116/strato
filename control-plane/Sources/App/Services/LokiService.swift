@@ -283,7 +283,7 @@ extension Application {
             lazyService(LokiServiceKey.self) { LokiService(app: self) }
         }
         set {
-            storage[LokiServiceKey.self] = newValue
+            setStorageValue(LokiServiceKey.self, to: newValue)
         }
     }
 

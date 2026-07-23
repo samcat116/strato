@@ -33,11 +33,15 @@ struct ResolvedAgentArtifact: Equatable {
     let tarballMember: String
 }
 
-/// The seam through which release artifacts are resolved for an agent update,
-/// at rollout-assignment time (the auto-update sweep) and sync-assembly time
-/// (`DesiredStateAssembler`). A value wrapping one closure so tests can
-/// substitute a stub without a release host; production resolves via
-/// `AgentUpdateArtifacts.resolveArtifact`.
+/// The seam through which release artifacts are resolved for an agent update:
+/// rollout-assignment time (the auto-update sweep), sync-assembly time
+/// (`DesiredStateAssembler`), and the imperative update endpoint. A value
+/// wrapping one closure so tests can substitute a stub without a release host;
+/// production resolves via `AgentUpdateArtifacts.resolveArtifact`.
+///
+/// Every resolution goes through here, so installing `.refusing` under
+/// `.testing` (see `configure`) is what makes "the suite never talks to the
+/// release host" a property of the code rather than a habit.
 struct AgentArtifactResolver: Sendable {
     private let resolveArtifact:
         @Sendable (String, OperatingSystem, CPUArchitecture) async throws -> ResolvedAgentArtifact
@@ -56,29 +60,55 @@ struct AgentArtifactResolver: Sendable {
     }
 }
 
+extension AgentArtifactResolver {
+    /// Resolves against the configured release host — what production runs.
+    static func releaseHost(app: Application) -> AgentArtifactResolver {
+        AgentArtifactResolver { version, operatingSystem, architecture in
+            try await AgentUpdateArtifacts.resolveArtifact(
+                targetVersion: version,
+                operatingSystem: operatingSystem,
+                architecture: architecture,
+                client: app.client,
+                logger: app.logger)
+        }
+    }
+
+    /// Refuses every resolution, saying why.
+    ///
+    /// This is the *default*, and what `configure` installs under `.testing`.
+    /// A resolver that quietly fell back to fetching from github.com made a
+    /// missing stub indistinguishable from a real outage: the sweep's
+    /// unresolvable-artifact branch swallowed the 404 and simply declined to
+    /// assign, so the only evidence was a test asserting on fields that were
+    /// nil for a reason nothing on the failing path named — the
+    /// `AgentAutoUpdateTests.staleTargetIsReset` CI flake. Failing closed keeps
+    /// an unconfigured resolver an obvious error, and keeps a test process off
+    /// the network.
+    static func refusing(_ reason: String) -> AgentArtifactResolver {
+        AgentArtifactResolver { _, _, _ in
+            throw Abort(.internalServerError, reason: reason)
+        }
+    }
+}
+
 extension Application {
     private struct AgentArtifactResolverKey: StorageKey {
         typealias Value = AgentArtifactResolver
     }
 
-    /// The release-artifact resolver shared by the auto-update sweep and the
-    /// desired-state assembler — one seam, so an assignment can never resolve
-    /// differently from the sync that carries it. Defaults to the real release
-    /// host; tests assign a stub.
+    /// The release-artifact resolver shared by the auto-update sweep, the
+    /// desired-state assembler, and the imperative update endpoint — one seam,
+    /// so an assignment can never resolve differently from the sync that
+    /// carries it. `configure` installs the real one; tests assign a stub.
     var agentArtifactResolver: AgentArtifactResolver {
         get {
             storage[AgentArtifactResolverKey.self]
-                ?? AgentArtifactResolver { version, operatingSystem, architecture in
-                    try await AgentUpdateArtifacts.resolveArtifact(
-                        targetVersion: version,
-                        operatingSystem: operatingSystem,
-                        architecture: architecture,
-                        client: self.client,
-                        logger: self.logger)
-                }
+                ?? .refusing(
+                    "No agent artifact resolver is installed. configure() installs one; a test that exercises artifact resolution must assign app.agentArtifactResolver itself."
+                )
         }
         set {
-            storage[AgentArtifactResolverKey.self] = newValue
+            setStorageValue(AgentArtifactResolverKey.self, to: newValue)
         }
     }
 }

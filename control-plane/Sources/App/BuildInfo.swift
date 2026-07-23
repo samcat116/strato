@@ -96,7 +96,7 @@ extension Application {
             return identity
         }
         set {
-            self.storage[InstanceIdentityKey.self] = newValue
+            self.setStorageValue(InstanceIdentityKey.self, to: newValue)
         }
     }
 }
