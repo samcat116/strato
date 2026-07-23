@@ -173,6 +173,180 @@ final class ProjectMemberTests {
         }
     }
 
+    // MARK: - Unified role vocabulary (issue #608)
+
+    /// A user-created role owned by `ownerType`/`ownerID`, saved directly. The
+    /// resolver reads only its name/actions/owner, and the canonical permit
+    /// keeps any policy-set rebuild happy.
+    private func makeRole(
+        name: String,
+        ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        actions: [String],
+        on db: Database
+    ) async throws -> IAMRoleDefinition {
+        let id = UUID()
+        let role = IAMRoleDefinition(
+            id: id,
+            name: name,
+            ownerType: ownerType,
+            ownerID: ownerID,
+            cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
+            actions: actions,
+            managed: false
+        )
+        try await role.save(on: db)
+        return role
+    }
+
+    @Test("Granting by IAM role name binds the seeded role and stores its id")
+    func grantByIAMRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "operator"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            // Mirror row stores the seeded operator id, and the binding matches.
+            let member = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .first()
+            #expect(member?.role == IAMRole.operator.seededID.uuidString)
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+            #expect(bindings.map(\.role) == [IAMRole.operator.seededID.uuidString])
+        }
+    }
+
+    @Test("Granting by an in-scope role UUID binds that role")
+    func grantByRoleUUIDInScope() async throws {
+        try await withApp { app, project, _, target, _, token in
+            let role = try await makeRole(
+                name: "deployer", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:start"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: role.id!.uuidString))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+            #expect(bindings.map(\.role) == [role.id!.uuidString])
+        }
+    }
+
+    @Test("Granting by an out-of-scope role UUID is a 400 naming the mismatch")
+    func grantByRoleUUIDOutOfScope() async throws {
+        try await withApp { app, project, _, target, _, token in
+            // A role owned by a different, unrelated organization: not on this
+            // project's ancestor chain.
+            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Org")
+            let role = try await makeRole(
+                name: "foreign", ownerType: .organization, ownerID: otherOrg.id!,
+                actions: ["vm:read"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: role.id!.uuidString))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("not in the hierarchy"))
+            }
+
+            let count = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .count()
+            #expect(count == 0)
+        }
+    }
+
+    @Test("Listing normalizes legacy rows to a role id and a display name")
+    func listReturnsRoleDisplayName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            // A legacy mirror row storing the relational name "member".
+            try await ProjectMember(projectID: project.id!, userID: target.id!, role: "member")
+                .save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: target.id!, role: .editor,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+
+            try await app.test(.GET, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(ProjectMemberController.ProjectMembersResponse.self)
+                let member = try #require(body.users.first { $0.userId == target.id })
+                // Legacy "member" is normalized to the editor id + name.
+                #expect(member.role == IAMRole.editor.seededID.uuidString)
+                #expect(member.roleDisplayName == "editor")
+            }
+        }
+    }
+
+    @Test("updateRole revokes the old binding across legacy and UUID formats")
+    func updateRoleRevokesAcrossStoredFormats() async throws {
+        try await withApp { app, project, _, target, _, token in
+            // Seed a legacy "member" row + its editor binding, then PATCH to a
+            // custom role by UUID.
+            try await ProjectMember(projectID: project.id!, userID: target.id!, role: "member")
+                .save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: target.id!, role: .editor,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+
+            let role = try await makeRole(
+                name: "deployer", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:start"], on: app.db)
+
+            try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.UpdateMemberRoleRequest(role: role.id!.uuidString))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Old editor binding gone, new custom-role binding present, and the
+            // mirror row now stores the custom role id.
+            let roles = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+                .map(\.role)
+            #expect(roles == [role.id!.uuidString])
+
+            let member = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .first()
+            #expect(member?.role == role.id!.uuidString)
+        }
+    }
+
     @Test("Granting requires manage_project")
     func grantRequiresManageProject() async throws {
         try await withApp { app, project, _, target, _, _ in

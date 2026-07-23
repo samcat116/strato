@@ -146,7 +146,7 @@ export function MembersTable({
                     disabled={isPending}
                   >
                     <SelectTrigger className="w-32 bg-background border-border text-foreground capitalize">
-                      <SelectValue />
+                      <SelectValue placeholder={member.roleDisplayName} />
                     </SelectTrigger>
                     <SelectContent className="bg-card border-border">
                       {ROLES.map((role) => (
@@ -165,7 +165,7 @@ export function MembersTable({
                     variant="secondary"
                     className="bg-muted text-foreground capitalize"
                   >
-                    {member.role}
+                    {member.roleDisplayName}
                   </Badge>
                 )}
               </TableCell>
