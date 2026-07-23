@@ -1,13 +1,42 @@
-import Vapor
 import Logging
 import NIOCore
 import NIOPosix
+import OTel
+// Terminal / ConsoleLogger below come from ConsoleKit, which Vapor re-exports;
+// it is not a direct dependency of this target.
+import Vapor
 
 @main
 enum Entrypoint {
     static func main() async throws {
         var env = try Environment.detect()
-        try LoggingSystem.bootstrap(from: &env)
+
+        // Vapor's own `LoggingSystem.bootstrap(from:)` is this, minus the
+        // metadata provider — it is re-spelled here only to attach one.
+        //
+        // The provider stamps `trace_id` / `span_id` / `trace_flags` onto every
+        // line logged inside a span, which is what makes a log line
+        // addressable from its trace (and vice versa: Grafana's Loki
+        // datasource extracts `trace_id` from the rendered metadata and links
+        // it to Tempo). Without it the two signals can only be correlated by
+        // pod and timestamp.
+        //
+        // Safe to install unconditionally: it reads `ServiceContext.current`
+        // and returns no metadata when there is no active span — which is the
+        // case for all logging before OTel bootstraps in `configure`, and for
+        // every deployment that leaves tracing disabled.
+        let metadataProvider = OTel.makeLoggingMetadataProvider()
+        try LoggingSystem.bootstrap(from: &env) { level in
+            let console = Terminal()
+            return { (label: String) in
+                ConsoleLogger(
+                    label: label,
+                    console: console,
+                    level: level,
+                    metadataProvider: metadataProvider
+                )
+            }
+        }
 
         let app = try await Application.make(env)
 

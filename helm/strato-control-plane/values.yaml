@@ -533,6 +533,40 @@ opentelemetry:
   traces:
     enabled: true
 
+    # Where the collector forwards spans. Without this the traces pipeline
+    # terminates in the `debug` exporter — the collector receives every span,
+    # logs a one-line summary per batch, and drops them. Point it at a trace
+    # backend that speaks OTLP (Tempo, Jaeger, an upstream collector) to keep
+    # them:
+    #
+    #   opentelemetry:
+    #     traces:
+    #       exporter:
+    #         otlp:
+    #           endpoint: tempo.monitoring.svc.cluster.local:4317
+    #
+    # Setting an endpoint also drops `debug` from the traces pipeline, so the
+    # collector stops narrating every batch to its own stdout.
+    exporter:
+      otlp:
+        # host:port, no scheme — the collector's OTLP exporter takes an
+        # endpoint, not a URL, and rejects a http:// prefix at startup. gRPC
+        # (conventionally :4317), matching what the control plane itself
+        # speaks.
+        endpoint: ""
+        # Plaintext by default: the usual deployment has the backend in the
+        # same cluster, one hop away. Set false and supply the CA below when
+        # the endpoint is off-cluster.
+        insecure: true
+        # PEM CA bundle path, mounted into the collector by other means. Only
+        # consulted when insecure is false.
+        caFile: ""
+        # Extra headers on every export — a tenant ID for a multi-tenant
+        # backend (`X-Scope-OrgID`), or an API token for a hosted one. For a
+        # secret value prefer a header referencing an env var over a literal
+        # here, since this file is usually in git.
+        headers: {}
+
   # OTel Collector configuration
   collector:
     enabled: true

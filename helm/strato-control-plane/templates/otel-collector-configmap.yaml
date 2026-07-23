@@ -1,4 +1,12 @@
 {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.collector.enabled }}
+{{- /*
+  The traces OTLP exporter, or nil when no endpoint is configured. Resolved once
+  here so the exporters block and the pipeline below cannot disagree about
+  whether it exists — a pipeline referencing an unrendered exporter is a
+  collector that crash-loops on "exporter not found" at startup.
+*/}}
+{{- $tracesExporter := (.Values.opentelemetry.traces.exporter | default dict).otlp | default dict }}
+{{- $tracesOTLP := ternary $tracesExporter nil (not (empty $tracesExporter.endpoint)) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -56,6 +64,23 @@ data:
         endpoint: "0.0.0.0:{{ .Values.opentelemetry.collector.service.prometheusPort }}"
       {{- end }}
 
+      {{- if $tracesOTLP }}
+      # Forwards spans to an external trace backend. Named otlp/traces rather
+      # than plain otlp so it can never be mistaken for the otlp *receiver*
+      # above, which speaks the same protocol in the other direction.
+      otlp/traces:
+        endpoint: "{{ $tracesOTLP.endpoint }}"
+        tls:
+          insecure: {{ $tracesOTLP.insecure }}
+          {{- with $tracesOTLP.caFile }}
+          ca_file: "{{ . }}"
+          {{- end }}
+        {{- with $tracesOTLP.headers }}
+        headers:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
+
     service:
       extensions: [health_check]
 
@@ -68,7 +93,10 @@ data:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch, resourcedetection]
-          exporters: [debug]
+          # With a real backend configured, `debug` is dropped rather than kept
+          # alongside it: at any real span rate it turns every batch into
+          # collector stdout, which the cluster's log shipper then pays to store.
+          exporters: [{{ if $tracesOTLP }}otlp/traces{{ else }}debug{{ end }}]
 
         logs:
           receivers: [otlp]
