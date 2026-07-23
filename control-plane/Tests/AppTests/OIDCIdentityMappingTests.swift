@@ -68,7 +68,8 @@ final class OIDCIdentityMappingTests {
         groupsClaim: String? = "groups",
         groupMappings: (TestDataBuilder, Organization) async throws -> [OIDCGroupMapping] = { _, _ in [] },
         adminClaimValues: [String] = [],
-        defaultRole: String = "member",
+        roleMappings: (TestDataBuilder, Organization) async throws -> [OIDCRoleMapping] = { _, _ in [] },
+        defaultRole: (TestDataBuilder, Organization) async throws -> String = { _, _ in "member" },
         _ test: (Application, Organization, OIDCProvider, OIDCIdentityService) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -88,7 +89,8 @@ final class OIDCIdentityMappingTests {
                 groupsClaim: groupsClaim,
                 groupMappings: try await groupMappings(builder, org),
                 adminClaimValues: adminClaimValues,
-                defaultRole: defaultRole
+                roleMappings: try await roleMappings(builder, org),
+                defaultRole: try await defaultRole(builder, org)
             )
             try await provider.save(on: app.db)
 
@@ -111,11 +113,34 @@ final class OIDCIdentityMappingTests {
             name: "JIT User", preferredUsername: "jituser-\(subject)")
     }
 
+    /// Create an org-owned custom role bindable at `orgID`.
+    private func makeOrgRole(
+        name: String, orgID: UUID, actions: [String] = ["vm:read"], on db: Database
+    ) async throws -> IAMRoleDefinition {
+        let id = UUID()
+        let role = IAMRoleDefinition(
+            id: id, name: name, ownerType: .organization, ownerID: orgID,
+            cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
+            actions: actions, managed: false)
+        try await role.save(on: db)
+        return role
+    }
+
+    private func orgBindingRoles(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [String] {
+        try await RoleBinding.query(on: db)
+            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+            .filter(\.$principalID == userID)
+            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+            .filter(\.$nodeID == orgID)
+            .all()
+            .map(\.role)
+    }
+
     // MARK: - JIT provisioning
 
     @Test("JIT user gets the provider's default role and an org role binding")
     func jitUsesDefaultRole() async throws {
-        try await withIdentityTestApp(defaultRole: "admin") { app, org, provider, service in
+        try await withIdentityTestApp(defaultRole: { _, _ in "admin" }) { app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
@@ -139,7 +164,7 @@ final class OIDCIdentityMappingTests {
 
     @Test("JIT user with a matching admin claim value is provisioned as admin")
     func jitAdminClaimValue() async throws {
-        try await withIdentityTestApp(adminClaimValues: ["strato-admins"], defaultRole: "member") {
+        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) {
             app, org, provider, service in
             let admin = try await service.resolveUser(
                 userInfo: userInfo(subject: "sub-a", email: "a@example.com"),
@@ -512,6 +537,115 @@ final class OIDCIdentityMappingTests {
             let demoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
             #expect(demoted?.role == "member")
+        }
+    }
+
+    // MARK: - Custom-role claim mapping (issue #611)
+
+    @Test("A role mapping provisions a JIT user with the mapped custom role and binds it")
+    func jitRoleMappingCustomRole() async throws {
+        var auditorID: UUID!
+        try await withIdentityTestApp(roleMappings: { builder, org in
+            let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
+            auditorID = auditor.id!
+            return [OIDCRoleMapping(claimValue: "idp-auditors", roleID: auditor.id!)]
+        }) { app, org, provider, service in
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org,
+                groupValues: ["idp-auditors", "unrelated"])
+
+            // The mirror row stores the role id; the binding names the same id.
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == auditorID.uuidString)
+            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
+            #expect(bindings == [auditorID.uuidString])
+        }
+    }
+
+    @Test("A custom-role default role provisions and binds that role when no claim matches")
+    func jitDefaultRoleCustomRole() async throws {
+        var auditorID: UUID!
+        try await withIdentityTestApp(defaultRole: { builder, org in
+            let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
+            auditorID = auditor.id!
+            return auditor.id!.uuidString
+        }) { app, org, provider, service in
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
+
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == auditorID.uuidString)
+            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
+            #expect(bindings == [auditorID.uuidString])
+        }
+    }
+
+    @Test("Role mappings drive reconciliation without admin claim values, and reset to default when the claim is lost")
+    func reconcileCustomRoleAndBack() async throws {
+        var auditorID: UUID!
+        try await withIdentityTestApp(roleMappings: { builder, org in
+            let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
+            auditorID = auditor.id!
+            return [OIDCRoleMapping(claimValue: "idp-auditors", roleID: auditor.id!)]
+        }) { app, org, provider, service in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "member1", email: "member1@example.com")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+
+            // Claim present → promoted to the custom role, with a matching binding.
+            try await service.reconcileOrganizationRole(
+                user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-auditors"])
+            var membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == auditorID.uuidString)
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [auditorID.uuidString])
+
+            // Claim lost → reset to the provider default (bare "member"), binding revoked.
+            try await service.reconcileOrganizationRole(
+                user: user, provider: provider, organizationID: org.id!, groupValues: [])
+            membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == "member")
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
+        }
+    }
+
+    @Test("An admin claim value takes precedence over a matching role mapping")
+    func adminClaimBeatsRoleMapping() async throws {
+        try await withIdentityTestApp(
+            adminClaimValues: ["strato-admins"],
+            roleMappings: { builder, org in
+                let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
+                return [OIDCRoleMapping(claimValue: "idp-auditors", roleID: auditor.id!)]
+            }
+        ) { app, org, provider, service in
+            // Token carries both the admin claim value and the role-mapped value.
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org,
+                groupValues: ["strato-admins", "idp-auditors"])
+
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == "admin")
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [IAMRole.admin.seededID.uuidString])
+        }
+    }
+
+    @Test("A role mapping to a deleted role falls back to the default without failing login")
+    func roleMappingToMissingRoleFallsBack() async throws {
+        try await withIdentityTestApp(roleMappings: { _, _ in
+            [OIDCRoleMapping(claimValue: "idp-auditors", roleID: UUID())]
+        }) { app, org, provider, service in
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org, groupValues: ["idp-auditors"])
+
+            // Fell back to bare membership; no binding, and no crash.
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == "member")
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
         }
     }
 }

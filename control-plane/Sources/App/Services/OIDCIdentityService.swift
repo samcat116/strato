@@ -128,7 +128,10 @@ struct OIDCIdentityService {
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
-        let role = desiredOrganizationRole(provider: provider, groupValues: groupValues)
+        // The claim-driven role, resolved across the unified vocabulary — a
+        // legacy literal, or a scoped custom role id (issue #611).
+        let resolvedRole = await resolveDesiredOrgRole(
+            provider: provider, organizationID: organizationID, groupValues: groupValues)
 
         // Reaching here with an email that already belongs to a user means we were
         // not allowed to link to that account — either the IdP didn't verify the
@@ -175,13 +178,14 @@ struct OIDCIdentityService {
             let membership = UserOrganization(
                 userID: userID,
                 organizationID: organizationID,
-                role: role
+                role: resolvedRole.storedRole
             )
             try await membership.save(on: transaction)
 
-            // Org admins get an admin binding on the org node, in the same
-            // transaction as the mirror row — without it the new user
-            // authenticates but fails every permission check.
+            // The claim-driven role gets its binding on the org node, in the
+            // same transaction as the mirror row — without it the new user
+            // authenticates but fails every permission check. Bare membership
+            // (default "member") maps to no binding.
             //
             // Deliberately not gated by the write-time ceiling check (#484),
             // unlike the administrative grant APIs: this runs during sign-in,
@@ -190,11 +194,11 @@ struct OIDCIdentityService {
             // request this user makes, so a ceiling is enforced either way —
             // what is given up is only the explanation at write time, for a
             // grant no human is watching anyway.
-            if let bindingRole = IAMRole.fromOrganizationRole(role) {
+            if let bindingRoleID = resolvedRole.bindingRoleID {
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
-                    role: bindingRole,
+                    roleID: bindingRoleID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     createdBy: nil,
@@ -288,9 +292,10 @@ struct OIDCIdentityService {
     // MARK: - Org role reconciliation
 
     /// Reconcile the user's org role with the token's claims. Opt-in: does
-    /// nothing unless the provider configures admin claim values. When
-    /// configured, the IdP is authoritative — a matching claim value grants
-    /// "admin", otherwise the user is set to the provider's default role.
+    /// nothing unless the provider configures admin claim values or role
+    /// mappings. When configured, the IdP is authoritative — a matching claim
+    /// value grants the mapped role (admin, or a scoped custom role, issue
+    /// #611), otherwise the user is set to the provider's default role.
     /// Demoting the organization's last admin is skipped so a misconfigured
     /// IdP cannot lock everyone out.
     func reconcileOrganizationRole(
@@ -302,7 +307,7 @@ struct OIDCIdentityService {
         // As with group sync, an unset groups claim disables role mapping —
         // empty claim values must not demote anyone.
         guard provider.groupsClaim != nil else { return }
-        guard !provider.adminClaimValuesArray.isEmpty, let userID = user.id else { return }
+        guard mapsOrganizationRole(provider), let userID = user.id else { return }
 
         guard
             let membership = try await UserOrganization.query(on: db)
@@ -313,8 +318,9 @@ struct OIDCIdentityService {
             return
         }
 
-        let desired = desiredOrganizationRole(provider: provider, groupValues: groupValues)
-        guard membership.role != desired else { return }
+        let resolved = await resolveDesiredOrgRole(
+            provider: provider, organizationID: organizationID, groupValues: groupValues)
+        guard membership.role != resolved.storedRole else { return }
 
         if membership.role == "admin" {
             // Only admins who can actually sign in count: an admin disabled
@@ -343,27 +349,28 @@ struct OIDCIdentityService {
             }
         }
 
-        let oldRole = membership.role
-        membership.role = desired
+        let previousRole = membership.role
+        membership.role = resolved.storedRole
         try await db.transaction { transaction in
             try await membership.save(on: transaction)
-            // Swap the role binding with the mirror-row update (admin↔member;
-            // bare membership has none).
-            if let oldBinding = IAMRole.fromOrganizationRole(oldRole) {
+            // Swap the role binding with the mirror-row update. The previously
+            // stored value may be a legacy literal or a role id; bare
+            // membership ("member") has no binding on either side.
+            if let oldBindingID = MemberRoleResolver.organizationStoredRoleID(previousRole) {
                 try await RoleBindingService.revoke(
                     principalType: .user,
                     principalID: userID,
-                    role: oldBinding,
+                    roleID: oldBindingID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     on: transaction
                 )
             }
-            if let newBinding = IAMRole.fromOrganizationRole(desired) {
+            if let newBindingID = resolved.bindingRoleID {
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
-                    role: newBinding,
+                    roleID: newBindingID,
                     nodeType: .organization,
                     nodeID: organizationID,
                     createdBy: nil,
@@ -373,13 +380,68 @@ struct OIDCIdentityService {
         }
     }
 
-    /// The org role the token's claims call for: "admin" when any configured
-    /// admin claim value is present, the provider's default role otherwise.
+    /// The raw org role token the claims call for, before resolution. In
+    /// precedence order (issue #611):
+    ///  1. any configured admin claim value present → the literal `"admin"`;
+    ///  2. the first role mapping whose claim value is present → its role id;
+    ///  3. the provider's configured default role.
+    ///
+    /// Admin claim values keep the top of the order for backward compatibility:
+    /// an org that grants "admin" by claim keeps doing so even if a role mapping
+    /// also matches. The returned value is a *token* — a legacy literal, an IAM
+    /// name, or a role id — that `resolveDesiredOrgRole` turns into a binding.
     func desiredOrganizationRole(provider: OIDCProvider, groupValues: [String]) -> String {
         let adminValues = Set(provider.adminClaimValuesArray)
         if !adminValues.isEmpty && groupValues.contains(where: adminValues.contains) {
             return "admin"
         }
+        let claimValues = Set(groupValues)
+        for mapping in provider.roleMappingsArray where claimValues.contains(mapping.claimValue) {
+            return mapping.roleID.uuidString
+        }
         return provider.defaultRole
+    }
+
+    /// True when the provider drives the org role from claims at all — either
+    /// admin claim values or role mappings are configured. Role reconciliation
+    /// is opt-in on this being true, so a provider that maps only group
+    /// memberships never touches anyone's role.
+    func mapsOrganizationRole(_ provider: OIDCProvider) -> Bool {
+        !(provider.adminClaimValuesArray.isEmpty && provider.roleMappingsArray.isEmpty)
+    }
+
+    /// Resolve the claim-driven role token to a concrete org membership role
+    /// and binding, scoped to the organization (issue #611).
+    ///
+    /// Resolution is lenient: a provider whose mapping names a role that was
+    /// since deleted or moved out of scope must not block the login. On failure
+    /// it falls back to the provider's default role, then to bare membership —
+    /// mirroring how group-membership sync skips a vanished group rather than
+    /// failing. Provider config is validated at write time, so this is the rare
+    /// after-the-fact path.
+    func resolveDesiredOrgRole(
+        provider: OIDCProvider, organizationID: UUID, groupValues: [String]
+    ) async -> MemberRoleResolver.ResolvedOrgRole {
+        let raw = desiredOrganizationRole(provider: provider, groupValues: groupValues)
+        do {
+            return try await MemberRoleResolver.resolveOrganizationRole(
+                raw, organizationID: organizationID, on: db)
+        } catch {
+            logger.warning(
+                "OIDC role mapping did not resolve; falling back to the provider default role",
+                metadata: [
+                    "organization_id": .string(organizationID.uuidString),
+                    "requested_role": .string(raw),
+                    "error": .string(String(describing: error)),
+                ])
+            if raw != provider.defaultRole,
+                let fallback = try? await MemberRoleResolver.resolveOrganizationRole(
+                    provider.defaultRole, organizationID: organizationID, on: db)
+            {
+                return fallback
+            }
+            return MemberRoleResolver.ResolvedOrgRole(
+                storedRole: "member", bindingRoleID: nil, actions: [], label: "member")
+        }
     }
 }
