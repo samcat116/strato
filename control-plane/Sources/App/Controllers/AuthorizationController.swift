@@ -90,7 +90,7 @@ struct AuthorizationController: RouteCollection {
         }
 
         if let principal = payload.principal {
-            return try await checkForPrincipal(principal, payload.checks, caller: user, req: req)
+            return try await checkForPrincipal(principal, payload.checks, req: req)
         }
 
         var results: [String: Bool] = [:]
@@ -98,7 +98,7 @@ struct AuthorizationController: RouteCollection {
             // Action names carry a `:`; anything else is the legacy
             // vocabulary and goes through the same translation as `req.can`.
             if item.permission.contains(":") {
-                let node = try Self.node(resourceType: item.resourceType, resourceId: item.resourceId)
+                let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
                 results[item.key] = try await req.can(item.permission, on: node)
             } else {
                 results[item.key] = try await IAMAuthorizer.checkLegacyVocabulary(
@@ -119,16 +119,16 @@ struct AuthorizationController: RouteCollection {
 
     /// Evaluate checks on behalf of another principal, from the bindings table.
     private func checkForPrincipal(
-        _ principal: PrincipalRequest, _ checks: [PermissionCheckItem], caller: User, req: Request
+        _ principal: PrincipalRequest, _ checks: [PermissionCheckItem], req: Request
     ) async throws -> CheckResponse {
         // Gate each distinct resource once: a batch may ask fifty questions
         // about the same VM, and the gate is a tree walk plus evaluator calls.
         var gated: Set<IAMNode> = []
         var results: [String: Bool] = [:]
         for item in checks {
-            let node = try Self.node(resourceType: item.resourceType, resourceId: item.resourceId)
+            let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
             if gated.insert(node).inserted {
-                try await Self.requirePolicyRead(on: node, caller: caller, req: req)
+                try await Self.requirePolicyRead(on: node, req: req)
             }
             results[item.key] = try await WhoCanService.can(
                 principalType: principal.type,
@@ -184,13 +184,13 @@ struct AuthorizationController: RouteCollection {
     /// access via explicit binding is supported by design, and hiding it here
     /// would defeat the point of the endpoint.
     func whoCan(req: Request) async throws -> WhoCanResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
         let payload = try req.content.decode(WhoCanRequest.self)
-        let node = try Self.node(resourceType: payload.resourceType, resourceId: payload.resourceId)
-        try await Self.requirePolicyRead(on: node, caller: user, req: req)
+        let node = try IAMNode(resourceType: payload.resourceType, resourceId: payload.resourceId)
+        try await Self.requirePolicyRead(on: node, req: req)
 
         let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
         let result = try await WhoCanService.whoCan(
@@ -210,17 +210,14 @@ struct AuthorizationController: RouteCollection {
 
     // MARK: - Helpers
 
-    private static func node(resourceType: String, resourceId: String) throws -> IAMNode {
-        try IAMPolicyGate.node(resourceType: resourceType, resourceId: resourceId)
-    }
-
     /// Reading who holds access is itself an administrative act — the answer
-    /// lists other people's grants. See `IAMPolicyGate` for the rule.
-    private static func requirePolicyRead(on node: IAMNode, caller: User, req: Request) async throws {
-        try await IAMPolicyGate.requirePolicyRead(
-            on: node,
-            deniedReason: "Reading access policy requires admin on the resource or a container above it",
-            req: req
-        )
+    /// lists other people's grants: `iam:readPolicy`, the same gate the
+    /// policy, role, and guardrail APIs use.
+    private static func requirePolicyRead(on node: IAMNode, req: Request) async throws {
+        guard try await req.can("iam:readPolicy", on: node) else {
+            throw Abort(
+                .forbidden,
+                reason: "Reading access policy requires admin on the resource or a container above it")
+        }
     }
 }

@@ -185,7 +185,7 @@ struct GuardrailController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "nodeType and nodeId query parameters are required")
         }
-        let node = try IAMPolicyGate.node(resourceType: nodeType, resourceId: nodeId)
+        let node = try IAMNode(resourceType: nodeType, resourceId: nodeId)
         try await requirePolicyAdmin(on: node, write: false, req: req)
 
         let effective = req.query[Bool.self, at: "effective"] ?? false
@@ -216,7 +216,7 @@ struct GuardrailController: RouteCollection {
     func create(req: Request) async throws -> Response {
         let user = try requireUser(req)
         let payload = try req.content.decode(CreateGuardrailRequest.self)
-        let node = try IAMPolicyGate.node(resourceType: payload.nodeType, resourceId: payload.nodeId)
+        let node = try IAMNode(resourceType: payload.nodeType, resourceId: payload.nodeId)
         try await requirePolicyAdmin(on: node, write: true, req: req)
 
         // Two input modes, mirroring roles (#605): the structured matchers (the
@@ -453,11 +453,8 @@ struct GuardrailController: RouteCollection {
     /// policy set (so system admins flow through `platform-system-admin` and
     /// appear in decision logs).
     private func requirePolicyAdmin(on node: IAMNode, write: Bool, req: Request) async throws {
-        let reason = "Managing guardrails requires admin on the node or a container above it"
-        if write {
-            try await IAMPolicyGate.requirePolicyWrite(on: node, deniedReason: reason, req: req)
-        } else {
-            try await IAMPolicyGate.requirePolicyRead(on: node, deniedReason: reason, req: req)
+        guard try await req.can(write ? "iam:setPolicy" : "iam:readPolicy", on: node) else {
+            throw Abort(.forbidden, reason: "Managing guardrails requires admin on the node or a container above it")
         }
     }
 }
