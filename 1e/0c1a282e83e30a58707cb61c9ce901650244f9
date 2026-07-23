@@ -1,0 +1,64 @@
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_89f07431899a23::t_602c72010072bd 250-252,255-257,259-260,266,272-275,277
+  s_89f07431899a23::t_32efec5915448a 632-637,639,641-648,651,653-668,671-686,688,690-696,700-710,713-716
+  s_89f07431899a23::t_cab81ef60ce87d 191-199,211-214,216,218,229
+  s_89f07431899a23::t_ad9219b1ae00f8 442-444,449-452
+control-plane/Tests/AppTests/ServiceAccountAPITests.swift
+  s_89f07431899a23::t_da6561051973fa 189,204,426
+control-plane/Tests/AppTests/CrossOrgBindingTests.swift
+  s_89f07431899a23::t_da6561051973fa 272
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_89f07431899a23::t_c37fc6149827e1 328-329
+control-plane/Tests/AppTests/WhoCanEvaluatorAgreementTests.swift
+  s_89f07431899a23::t_902eb8ba920409 1-193,224-256
+  s_89f07431899a23::t_3992490f752b7a 194-223
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_89f07431899a23::t_8828c4b326a84a 58-61,63-73
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_89f07431899a23::t_bd6b6fb5e60881 35-43
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_89f07431899a23::t_6ee9f725b5e673 12-17
+  s_89f07431899a23::t_767fc77b5e3eca 137-140,151,153-157,159,163,165,168,170,174-176,178-191,195,204-206,212
+control-plane/Tests/AppTests/WorkloadPrincipalTests.swift
+  s_89f07431899a23::t_da6561051973fa 247,258,262
+docs/architecture/iam.md
+  s_89f07431899a23::t_b490784d3bb228 679-682
+  s_89f07431899a23::t_f8e78463b6e8f7 644-651
+  s_89f07431899a23::t_7f13233c94a94d 423-428
+  s_89f07431899a23::t_66b58b47dda2c7 664-674
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_89f07431899a23::t_636881d6b8f867 101-116
+  s_89f07431899a23::t_ec646630ac3f6c 23-37,40-41,45-47,49,56-63,65-69
+  s_89f07431899a23::t_629597ddd2d1f1 126-137,146-147,161
+  s_89f07431899a23::t_f8ab84a1322da9 1-22,38-39,42-44,48,50-55,64,70-100,117-125,138-145,148-160,162-163
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_89f07431899a23::t_2d17f34dccc2c3 11-12
+control-plane/Tests/AppTests/IAMWhoCanTests.swift
+  s_89f07431899a23::t_babccf004a3bf7 8-11
+  s_89f07431899a23::t_da6561051973fa 132,285,292,296,300,317,321,341,380,517,541
+  s_89f07431899a23::t_d4417670b0b13d 483
+  s_89f07431899a23::t_e44a0235902859 92-93,115-116,155-156,175-176,203-204,218-219,223-224,237-238,262-263,401-402
+control-plane/Tests/AppTests/EntitySliceLoaderTests.swift
+  s_89f07431899a23::t_e44a0235902859 537-538
+  s_89f07431899a23::t_9b1dfbf6f6b4b9 542
+  s_89f07431899a23::t_e48d4278785599 469-470
+  s_89f07431899a23::t_2c16759bfbe337 460,462-463,467-468
+  s_89f07431899a23::t_3aee896ccee436 495
+  s_89f07431899a23::t_abfd85dd60ecba 18-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1e0c1a282e83e30a58707cb61c9ce901650244f9",
+  "prompts": {},
+  "sessions": {
+    "s_89f07431899a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bfd02f47-9bbc-4d3e-949e-756a8d6e804b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
