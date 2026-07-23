@@ -606,14 +606,23 @@ export interface AgentEnrollmentListItem {
   usedAt?: string;
 }
 
+export type SiteStatus = "active" | "draining" | "maintenance" | "decommissioned";
+
 export interface Site {
   id: string;
   name: string;
   description?: string;
+  status: SiteStatus;
+  latitude?: number;
+  longitude?: number;
+  locationLabel?: string;
+  regionCode?: string;
+  labels: Record<string, string>;
   networkControllerAgentId?: string;
   organizationId?: string;
   organizationalUnitId?: string;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CreateSiteRequest {
@@ -621,6 +630,27 @@ export interface CreateSiteRequest {
   description?: string;
   organizationId?: string;
   organizationalUnitId?: string;
+  status?: SiteStatus;
+  latitude?: number;
+  longitude?: number;
+  locationLabel?: string;
+  regionCode?: string;
+  labels?: Record<string, string>;
+}
+
+/**
+ * PUT full-replace for descriptive fields; an omitted `status` leaves the
+ * current lifecycle unchanged.
+ */
+export interface UpdateSiteRequest {
+  description?: string;
+  networkControllerAgentId?: string;
+  status?: SiteStatus;
+  latitude?: number;
+  longitude?: number;
+  locationLabel?: string;
+  regionCode?: string;
+  labels?: Record<string, string>;
 }
 
 export interface APIKey {

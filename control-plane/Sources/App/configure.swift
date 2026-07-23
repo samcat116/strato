@@ -567,6 +567,9 @@ public func configure(_ app: Application) async throws {
     // custom role on the org node, beyond the seeded admin/member vocabulary.
     app.migrations.add(AddRoleMappingsToOIDCProvider())
 
+    // Site metadata: lifecycle status, advisory location, and free-form labels.
+    app.migrations.add(AddSiteMetadata())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

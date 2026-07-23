@@ -88,6 +88,53 @@ struct SiteController: RouteCollection {
             .count
     }
 
+    /// Trim a free-text metadata string, mapping blank input to nil so a
+    /// whitespace-only value never masquerades as "set".
+    private static func normalized(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    /// Validates the descriptive metadata shared by create and update. Cheap,
+    /// range-and-length only — location is advisory, so the bar is "not
+    /// obviously garbage", not canonical correctness.
+    private static func validateMetadata(
+        latitude: Double?, longitude: Double?, locationLabel: String?, regionCode: String?,
+        labels: [String: String]?
+    ) throws {
+        // Coordinates are only meaningful as a pair.
+        guard (latitude == nil) == (longitude == nil) else {
+            throw Abort(.badRequest, reason: "latitude and longitude must be provided together")
+        }
+        if let latitude, !(-90...90).contains(latitude) {
+            throw Abort(.badRequest, reason: "latitude must be between -90 and 90")
+        }
+        if let longitude, !(-180...180).contains(longitude) {
+            throw Abort(.badRequest, reason: "longitude must be between -180 and 180")
+        }
+        if let label = normalized(locationLabel), label.count > 200 {
+            throw Abort(.badRequest, reason: "locationLabel must be 200 characters or fewer")
+        }
+        if let region = normalized(regionCode), region.count > 64 {
+            throw Abort(.badRequest, reason: "regionCode must be 64 characters or fewer")
+        }
+        if let labels {
+            guard labels.count <= 64 else {
+                throw Abort(.badRequest, reason: "A site may have at most 64 labels")
+            }
+            for (key, value) in labels {
+                guard !key.isEmpty, key.count <= 128 else {
+                    throw Abort(.badRequest, reason: "Label keys must be 1-128 characters")
+                }
+                guard value.count <= 256 else {
+                    throw Abort(.badRequest, reason: "Label value for '\(key)' must be 256 characters or fewer")
+                }
+            }
+        }
+    }
+
     private func findSite(_ req: Request) async throws -> Site {
         guard let siteId = req.parameters.get("siteId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid site ID")
@@ -156,7 +203,20 @@ struct SiteController: RouteCollection {
             throw Abort(.badRequest, reason: "Site name must be 1-100 characters")
         }
 
-        let site = Site(name: name, description: create.description, organizationScope: scope)
+        try Self.validateMetadata(
+            latitude: create.latitude, longitude: create.longitude,
+            locationLabel: create.locationLabel, regionCode: create.regionCode, labels: create.labels)
+
+        let site = Site(
+            name: name,
+            description: create.description,
+            status: create.status ?? .active,
+            latitude: create.latitude,
+            longitude: create.longitude,
+            locationLabel: Self.normalized(create.locationLabel),
+            regionCode: Self.normalized(create.regionCode),
+            labels: create.labels ?? [:],
+            organizationScope: scope)
         do {
             try await site.save(on: req.db)
         } catch {
@@ -220,8 +280,21 @@ struct SiteController: RouteCollection {
             }
         }
 
+        try Self.validateMetadata(
+            latitude: update.latitude, longitude: update.longitude,
+            locationLabel: update.locationLabel, regionCode: update.regionCode, labels: update.labels)
+
         site.description = update.description
         site.$networkControllerAgent.id = update.networkControllerAgentId
+        // Full-replace for descriptive fields; `status` is the exception — an
+        // omitted status leaves the current lifecycle untouched (see
+        // `UpdateSiteRequest`).
+        if let status = update.status { site.status = status }
+        site.latitude = update.latitude
+        site.longitude = update.longitude
+        site.locationLabel = Self.normalized(update.locationLabel)
+        site.regionCode = Self.normalized(update.regionCode)
+        site.labels = update.labels ?? [:]
         try await site.save(on: req.db)
 
         // Topology authority may have moved: the old controller must stop

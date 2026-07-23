@@ -6354,6 +6354,25 @@ export interface components {
             id: string;
             name: string;
             description?: string | null;
+            status: components["schemas"]["SiteStatus"];
+            /**
+             * Format: double
+             * @description Decimal degrees (WGS84), −90…90. Paired with longitude.
+             */
+            latitude?: number | null;
+            /**
+             * Format: double
+             * @description Decimal degrees (WGS84), −180…180. Paired with latitude.
+             */
+            longitude?: number | null;
+            /** @description Human-readable location, e.g. "Equinix DC1, Ashburn VA". */
+            locationLabel?: string | null;
+            /** @description Short operator-defined region/zone slug, e.g. "us-east-1". */
+            regionCode?: string | null;
+            /** @description Free-form operator labels; empty object when unset. */
+            labels: {
+                [key: string]: string;
+            };
             /**
              * Format: uuid
              * @description The member agent that authors this site's shared OVN northbound database; null when none is designated.
@@ -6365,7 +6384,14 @@ export interface components {
             organizationalUnitId?: string | null;
             /** Format: date-time */
             createdAt?: string | null;
+            /** Format: date-time */
+            updatedAt?: string | null;
         };
+        /**
+         * @description Operational lifecycle of an availability zone.
+         * @enum {string}
+         */
+        SiteStatus: "active" | "draining" | "maintenance" | "decommissioned";
         /** @description Exactly one of `organizationId` or `organizationalUnitId` is required. */
         CreateSiteRequest: {
             name: string;
@@ -6374,12 +6400,34 @@ export interface components {
             organizationId?: string | null;
             /** Format: uuid */
             organizationalUnitId?: string | null;
+            /** @description Lifecycle at creation; defaults to `active` when omitted. */
+            status?: components["schemas"]["SiteStatus"] | null;
+            /** Format: double */
+            latitude?: number | null;
+            /** Format: double */
+            longitude?: number | null;
+            locationLabel?: string | null;
+            regionCode?: string | null;
+            labels?: {
+                [key: string]: string;
+            } | null;
         };
-        /** @description Full-replace (PUT) semantics: every field is applied as given, so omitting a field clears it. */
+        /** @description Full-replace (PUT) semantics for descriptive fields: omitting one clears it (labels omitted → empty map). `status` is the exception — an omitted status leaves the current lifecycle unchanged. */
         UpdateSiteRequest: {
             description?: string | null;
             /** Format: uuid */
             networkControllerAgentId?: string | null;
+            /** @description When omitted, the current status is left unchanged. */
+            status?: components["schemas"]["SiteStatus"] | null;
+            /** Format: double */
+            latitude?: number | null;
+            /** Format: double */
+            longitude?: number | null;
+            locationLabel?: string | null;
+            regionCode?: string | null;
+            labels?: {
+                [key: string]: string;
+            } | null;
         };
         /** @description SPIFFE/SPIRE trust-domain state as reported by the SPIRE server. */
         WorkloadIdentityOverview: {
