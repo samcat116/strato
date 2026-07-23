@@ -4330,6 +4330,168 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organizations/{organizationID}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * List an organization's webhook subscriptions
+         * @description Requires organization membership.
+         */
+        get: operations["listWebhooks"];
+        put?: never;
+        /**
+         * Create a webhook subscription
+         * @description Requires organization admin. The target URL is validated against the SSRF guard. The response carries the generated signing secret — it is stored encrypted and this is the only time it is shown.
+         */
+        post: operations["createWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/webhooks/{webhookID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        /** Get a webhook subscription */
+        get: operations["getWebhook"];
+        /**
+         * Update a webhook subscription
+         * @description Requires organization admin. Omitted fields are left unchanged. Re-activating a subscription clears its failure bookkeeping (and any auto-disable reason).
+         */
+        put: operations["updateWebhook"];
+        post?: never;
+        /**
+         * Delete a webhook subscription
+         * @description Requires organization admin. Also removes its delivery history.
+         */
+        delete: operations["deleteWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/webhooks/{webhookID}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a webhook's signing secret
+         * @description Requires organization admin. Replaces the signing secret immediately; the response is the only time the new secret is shown.
+         */
+        post: operations["rotateWebhookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/webhooks/{webhookID}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue a test event
+         * @description Requires organization admin. Enqueues a `webhook.test` delivery for this subscription (bypassing its event-type selection); the delivery sweep posts it like any other event.
+         */
+        post: operations["sendWebhookTestEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/webhooks/{webhookID}/deliveries": {
+        parameters: {
+            query?: {
+                /** @description Maximum deliveries to return (1–200, default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a webhook's recent deliveries
+         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Newest first. Terminal deliveries are pruned after the history retention window.
+         */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/webhooks/{webhookID}/deliveries/{deliveryID}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+                /** @description The webhook delivery's id. */
+                deliveryID: components["parameters"]["WebhookDeliveryID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-enqueue a delivery
+         * @description Requires organization admin. Resets a terminal (succeeded or dead) delivery to pending with a fresh attempt budget; the delivery sweep posts it again.
+         */
+        post: operations["redeliverWebhookDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/logs": {
         parameters: {
             query?: {
@@ -7417,6 +7579,94 @@ export interface components {
             failed: number;
             moreAvailable: boolean;
         };
+        /**
+         * @description A subscribable platform event type. `webhook.test` additionally appears in deliveries created by the test endpoint but cannot be subscribed to.
+         * @enum {string}
+         */
+        WebhookEventType: "operation.completed" | "operation.failed" | "vm.state_changed" | "agent.connected" | "agent.disconnected" | "quota.threshold_exceeded";
+        /** @description A user-managed webhook subscription. The signing secret is never included; it is returned once by create and rotate-secret. */
+        WebhookSubscription: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            organizationId: string;
+            /**
+             * Format: uuid
+             * @description When set, only events carrying this project are delivered; absent means every event in the organization.
+             */
+            projectId?: string;
+            name: string;
+            url: string;
+            /** @description Subscribed event types; empty subscribes to all types. */
+            eventTypes: components["schemas"]["WebhookEventType"][];
+            isActive: boolean;
+            /** @description Why the platform deactivated the subscription (continuous delivery failure); absent for user-deactivated or active subscriptions. */
+            disabledReason?: string;
+            /**
+             * Format: date-time
+             * @description Start of the current unbroken delivery-failure streak; absent after any successful delivery.
+             */
+            failingSince?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateWebhookRequest: {
+            name: string;
+            /** @description The https/http endpoint to POST events to. */
+            url: string;
+            /**
+             * Format: uuid
+             * @description Narrow delivery to one project of the organization.
+             */
+            projectId?: string;
+            /** @description Event types to subscribe to; empty or omitted means all. */
+            eventTypes?: components["schemas"]["WebhookEventType"][];
+        };
+        UpdateWebhookRequest: {
+            name?: string;
+            url?: string;
+            eventTypes?: components["schemas"]["WebhookEventType"][];
+            isActive?: boolean;
+        };
+        /** @description A subscription plus its plaintext signing secret, shown exactly once. */
+        WebhookWithSecret: {
+            subscription: components["schemas"]["WebhookSubscription"];
+            signingSecret: string;
+        };
+        /** @description One webhook delivery: the outbox row for a (event, subscription) pair, kept after completion as delivery history. Deliveries are signed with `X-Strato-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">` using the subscription's signing secret. */
+        WebhookDelivery: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            subscriptionId: string;
+            /**
+             * Format: uuid
+             * @description Shared across the fan-out of one event to many subscriptions; consumers dedupe on it (delivery is at-least-once).
+             */
+            eventId: string;
+            eventType: string;
+            /** @enum {string} */
+            status: "pending" | "succeeded" | "dead";
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description Present only while the delivery is pending.
+             */
+            nextAttemptAt?: string;
+            /** Format: date-time */
+            lastAttemptAt?: string;
+            /** @description HTTP status of the last attempt, when the endpoint answered. */
+            responseStatus?: number;
+            lastError?: string;
+            /** Format: date-time */
+            deliveredAt?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** @description The exact JSON body posted, frozen at enqueue time. */
+            payload: string;
+        };
         /** @description The RFC 8935 error envelope returned by the push-delivery endpoint. Unlike the rest of the API this is not the standard Strato `Error` body. */
         SETErrorResponse: {
             /** @description An RFC 8935 error code, e.g. `invalid_request`. */
@@ -7661,6 +7911,10 @@ export interface components {
         SCIMGroupID: string;
         /** @description The Shared Signals stream's id. */
         SSFStreamID: string;
+        /** @description The webhook subscription's id. */
+        WebhookID: string;
+        /** @description The webhook delivery's id. */
+        WebhookDeliveryID: string;
         /** @description An RFC 7644 §3.4.2.2 filter expression. */
         SCIMFilterQuery: string;
         /** @description 1-based index of the first result (RFC 7644 §3.4.2.4). */
@@ -15656,6 +15910,268 @@ export interface operations {
                     "application/json": components["schemas"]["SETErrorResponse"];
                 };
             };
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's webhook subscriptions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSubscription"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhookRequest"];
+            };
+        };
+        responses: {
+            /** @description The created subscription plus its one-time signing secret. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookWithSecret"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSubscription"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhookRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated subscription. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSubscription"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    rotateWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription plus its new one-time signing secret. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookWithSecret"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    sendWebhookTestEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The enqueued test delivery. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDelivery"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: {
+                /** @description Maximum deliveries to return (1–200, default 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription's recent deliveries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDelivery"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    redeliverWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: string;
+                /** @description The webhook subscription's id. */
+                webhookID: components["parameters"]["WebhookID"];
+                /** @description The webhook delivery's id. */
+                deliveryID: components["parameters"]["WebhookDeliveryID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The re-enqueued delivery. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDelivery"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listVMLogs: {
