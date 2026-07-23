@@ -112,6 +112,33 @@ final class OrganizationMemberRoleTests {
         }
     }
 
+    @Test("The seeded admin role id is stored as the literal 'admin'")
+    func seededAdminIdNormalizesToLiteral() async throws {
+        try await withApp { app, org, _, token, target in
+            // Granting admin by its well-known id must land the same membership
+            // semantics as the literal "admin", so the last-admin guards — which
+            // key on that literal — still count this member (issue #608 review).
+            try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["userEmail": target.email, "role": IAMRole.admin.seededID.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+            let m = try await membership(target.id!, org.id!, on: app.db)
+            #expect(m?.role == "admin")
+            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [IAMRole.admin.seededID.uuidString])
+
+            // With two admins now, the literal-admin caller can be demoted — the
+            // by-id admin counts, so this is no longer the last admin.
+            try await app.test(.GET, "/api/organizations/\(org.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let body = try res.content.decode([OrganizationMemberResponse].self)
+                #expect(body.filter { $0.role == "admin" }.count == 2)
+            }
+        }
+    }
+
     @Test("An in-scope org-owned role UUID binds that role")
     func orgOwnedRoleUUIDInScope() async throws {
         try await withApp { app, org, _, token, target in

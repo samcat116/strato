@@ -634,8 +634,14 @@ struct OrganizationController: RouteCollection {
             acceptsLegacyProjectRoles: false,
             on: db
         )
+        // The seeded admin role — reachable by IAM name (already caught above as
+        // the literal) or by its well-known id — *is* the org-admin membership
+        // under another name. Store it as the literal "admin" so the last-admin
+        // guards, which key on that literal, count it; otherwise an admin
+        // granted by id would be invisible to them (issue #608 review).
+        let storedRole = resolved.id == IAMRole.admin.seededID ? "admin" : resolved.id.uuidString
         return ResolvedOrgRole(
-            storedRole: resolved.id.uuidString,
+            storedRole: storedRole,
             bindingRoleID: resolved.id,
             actions: resolved.actions,
             label: resolved.displayName
