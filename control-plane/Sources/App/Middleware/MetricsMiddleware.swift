@@ -24,17 +24,21 @@ struct MetricsMiddleware: AsyncMiddleware {
         let start = clock.now
 
         func record(statusCode: UInt) {
-            // Each value is computed into its own explicitly-typed local so the
-            // type-checker solves them independently. In particular the matched
-            // path is resolved into a local *before* the helper call: passing
-            // `request.route?.path` (an optional chain) directly into the static
-            // call tripped a type-checker diagnostic-engine failure ("failed to
-            // produce diagnostic for expression").
             let method = request.method.rawValue
             let statusClass = "\(statusCode / 100)xx"
             let durationSeconds = (clock.now - start).asSeconds
-            let routePath: [PathComponent]? = request.route?.path
-            let route = MetricsMiddleware.routeLabel(forPath: routePath)
+            // Derive the route pattern the way Vapor's own TracingMiddleware
+            // does — `route.path.map { "\($0)" }` — without ever naming
+            // `PathComponent`. That type is ambiguous in this module (RoutingKit,
+            // Soto, and OpenAPIKit each define one); annotating it tripped a
+            // type-checker diagnostic-engine failure ("failed to produce
+            // diagnostic for expression"). The helper then works on plain
+            // strings, keeping the pattern/fallback branch unit-testable.
+            var routeSegments: [String]?
+            if let matchedRoute = request.route {
+                routeSegments = matchedRoute.path.map { "\($0)" }
+            }
+            let route = MetricsMiddleware.routeLabel(fromSegments: routeSegments)
             Telemetry.recordHTTPRequest(
                 method: method,
                 route: route,
@@ -54,12 +58,14 @@ struct MetricsMiddleware: AsyncMiddleware {
         }
     }
 
-    /// The low-cardinality `route` label: the matched route's *pattern*
-    /// (`/api/vms/:vmID`), or `unmatched` when routing found no route (a genuine
-    /// 404). Factored out so the derivation — including the parameterized-pattern
-    /// vs. fallback branch — is unit-testable without standing up a `Request`.
-    static func routeLabel(forPath path: [PathComponent]?) -> String {
-        guard let path else { return "unmatched" }
-        return "/" + path.map { "\($0)" }.joined(separator: "/")
+    /// The low-cardinality `route` label built from the matched route's path
+    /// segments (e.g. `["api", "vms", ":vmID"]` -> `/api/vms/:vmID`), or
+    /// `unmatched` when routing found no route (a genuine 404). Takes plain
+    /// strings — the caller maps the route's `PathComponent`s to their
+    /// descriptions — so the derivation stays unit-testable without standing up
+    /// a `Request` and without naming the ambiguous `PathComponent` type.
+    static func routeLabel(fromSegments segments: [String]?) -> String {
+        guard let segments else { return "unmatched" }
+        return "/" + segments.joined(separator: "/")
     }
 }

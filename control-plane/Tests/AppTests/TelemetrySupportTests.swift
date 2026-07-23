@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import Vapor
 
 @testable import App
 
@@ -40,19 +39,17 @@ struct TelemetrySupportTests {
 
     @Test("a parameterized route collapses to its pattern, not the concrete path")
     func routeLabelPattern() {
-        let path: [PathComponent] = ["api", "vms", ":vmID"]
-        #expect(MetricsMiddleware.routeLabel(forPath: path) == "/api/vms/:vmID")
+        #expect(MetricsMiddleware.routeLabel(fromSegments: ["api", "vms", ":vmID"]) == "/api/vms/:vmID")
     }
 
     @Test("a constant route keeps its literal segments")
     func routeLabelConstant() {
-        let path: [PathComponent] = ["health", "ready"]
-        #expect(MetricsMiddleware.routeLabel(forPath: path) == "/health/ready")
+        #expect(MetricsMiddleware.routeLabel(fromSegments: ["health", "ready"]) == "/health/ready")
     }
 
     @Test("an unmatched request falls back rather than leaking a path")
     func routeLabelUnmatched() {
-        #expect(MetricsMiddleware.routeLabel(forPath: nil) == "unmatched")
+        #expect(MetricsMiddleware.routeLabel(fromSegments: nil) == "unmatched")
     }
 
     // MARK: - SchedulerService.placementOutcome
