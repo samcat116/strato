@@ -164,50 +164,23 @@ actor WebSocketClient {
                 // Store WebSocket in thread-safe box (still on EventLoop)
                 wsHolderRef.set(ws)
 
-                // Set up handlers directly on the EventLoop (no Task hop)
-                ws.onText { _, text in
-                    loggerRef.debug("Received WebSocket text message", metadata: ["length": .string("\(text.count)")])
-
-                    // Parse JSON to MessageEnvelope
+                // Text and binary frames carry the same JSON envelope, so both
+                // decode through here. Routine receipt is logged at `.debug`:
+                // an idle agent still takes a heartbeat ack every ~15s and a
+                // desired-state sync every ~30s, and at INFO that alone is the
+                // dominant source of log volume across a fleet (issue #705).
+                // Nothing here is actionable — the lines an operator needs
+                // (reconnects, registration failures, reconciliation errors)
+                // are logged where they happen.
+                let decodeAndYield: @Sendable (String) -> Void = { text in
                     guard let data = text.data(using: .utf8) else {
-                        loggerRef.error("Failed to convert text message to UTF-8 data")
+                        loggerRef.error("Failed to convert message to UTF-8 data")
                         return
                     }
 
                     do {
                         let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-                        loggerRef.info(
-                            "Received message from control plane",
-                            metadata: [
-                                "type": .string(envelope.type.rawValue)
-                            ])
-
-                        // Preserve arrival order: hand off to the agent's ordered inbound
-                        // pipeline rather than spawning an unordered per-frame Task.
-                        inboundRef.yield(envelope)
-                    } catch {
-                        loggerRef.error("Failed to decode text message: \(error)")
-                    }
-                }
-
-                ws.onBinary { _, buffer in
-                    loggerRef.debug("Received WebSocket binary message")
-
-                    // Convert binary buffer to string
-                    guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                        loggerRef.error("Failed to convert binary buffer to string")
-                        return
-                    }
-
-                    // Parse JSON to MessageEnvelope
-                    guard let data = text.data(using: .utf8) else {
-                        loggerRef.error("Failed to convert string to UTF-8 data")
-                        return
-                    }
-
-                    do {
-                        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-                        loggerRef.info(
+                        loggerRef.debug(
                             "Received message from control plane",
                             metadata: [
                                 "type": .string(envelope.type.rawValue)
@@ -219,6 +192,22 @@ actor WebSocketClient {
                     } catch {
                         loggerRef.error("Failed to decode message: \(error)")
                     }
+                }
+
+                // Set up handlers directly on the EventLoop (no Task hop)
+                ws.onText { _, text in
+                    loggerRef.trace("Received WebSocket text message", metadata: ["length": .string("\(text.count)")])
+                    decodeAndYield(text)
+                }
+
+                ws.onBinary { _, buffer in
+                    loggerRef.trace("Received WebSocket binary message")
+
+                    guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
+                        loggerRef.error("Failed to convert binary buffer to string")
+                        return
+                    }
+                    decodeAndYield(text)
                 }
 
                 ws.onClose.whenComplete { _ in

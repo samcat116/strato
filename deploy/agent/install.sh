@@ -574,7 +574,10 @@ setup_spire() {
   cat > "$SPIRE_CONF_DIR/agent.conf" << EOF
 agent {
     data_dir = "$SPIRE_DATA_DIR"
-    log_level = "INFO"
+    # A healthy spire-agent has nothing to say between SVID rotations, and one
+    # of these ships alongside every node — keep the steady state silent and
+    # raise this by hand when debugging attestation.
+    log_level = "WARN"
     server_address = "$host"
     server_port = "$port"
     socket_path = "$SPIRE_SOCKET"
