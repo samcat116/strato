@@ -74,6 +74,7 @@ struct OIDCController: RouteCollection {
             defaultRole: createRequest.defaultRole,
             groupMappings: createRequest.groupMappings,
             adminClaimValues: createRequest.adminClaimValues,
+            roleMappings: createRequest.roleMappings,
             organizationID: organizationID,
             on: req.db
         )
@@ -95,6 +96,7 @@ struct OIDCController: RouteCollection {
             groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
             groupMappings: createRequest.groupMappings ?? [],
             adminClaimValues: createRequest.adminClaimValues ?? [],
+            roleMappings: createRequest.roleMappings ?? [],
             defaultRole: createRequest.defaultRole ?? "member"
         )
 
@@ -203,6 +205,7 @@ struct OIDCController: RouteCollection {
             defaultRole: updateRequest.defaultRole,
             groupMappings: updateRequest.groupMappings,
             adminClaimValues: updateRequest.adminClaimValues,
+            roleMappings: updateRequest.roleMappings,
             organizationID: organizationID,
             on: req.db
         )
@@ -214,6 +217,7 @@ struct OIDCController: RouteCollection {
         if let adminClaimValues = updateRequest.adminClaimValues {
             provider.setAdminClaimValuesArray(adminClaimValues)
         }
+        if let roleMappings = updateRequest.roleMappings { provider.setRoleMappingsArray(roleMappings) }
         if let defaultRole = updateRequest.defaultRole { provider.defaultRole = defaultRole }
 
         // Same HTTPS validation the create path applies — the login flow posts
@@ -1059,19 +1063,31 @@ struct OIDCController: RouteCollection {
     }
 
     /// Validate the claim-mapping fields of a create/update request: the
-    /// default role must be a known org role, admin claim values must not be
-    /// blank, and every group mapping must reference a group in the
-    /// provider's organization.
+    /// default role and every role mapping must resolve to a role bindable at
+    /// the org (a legacy literal, an IAM name, or an org-scoped role id —
+    /// issue #611), admin claim values must not be blank, and every group
+    /// mapping must reference a group in the provider's organization.
     private func validateClaimMappingConfig(
         defaultRole: String?,
         groupMappings: [OIDCGroupMapping]?,
         adminClaimValues: [String]?,
+        roleMappings: [OIDCRoleMapping]?,
         organizationID: UUID,
         on db: Database
     ) async throws {
+        // The default role now spans the unified vocabulary: still `member` or
+        // `admin`, but also an IAM role name or a role id owned at or above the
+        // org. Resolving it here rejects a bad id or an out-of-scope role up
+        // front, so the login path's lenient resolver is only ever the
+        // after-the-fact (role deleted since) safety net.
         if let defaultRole = defaultRole {
-            guard ["member", "admin"].contains(defaultRole) else {
-                throw Abort(.badRequest, reason: "Default role must be 'member' or 'admin'")
+            do {
+                _ = try await MemberRoleResolver.resolveOrganizationRole(
+                    defaultRole, organizationID: organizationID, on: db)
+            } catch {
+                throw Abort(
+                    .badRequest,
+                    reason: "Default role '\(defaultRole)' is not bindable in this organization: \(abortReason(error))")
             }
         }
 
@@ -1082,6 +1098,26 @@ struct OIDCController: RouteCollection {
             for value in adminClaimValues {
                 guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw Abort(.badRequest, reason: "Admin claim values must not be empty")
+                }
+            }
+        }
+
+        // Role mappings: a non-blank claim value bound to a role the org can
+        // grant. Same scope check as the member endpoints (issue #608/#611).
+        if let roleMappings = roleMappings {
+            for mapping in roleMappings {
+                guard !mapping.claimValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw Abort(.badRequest, reason: "Role mapping claim values must not be empty")
+                }
+                do {
+                    _ = try await MemberRoleResolver.resolveOrganizationRole(
+                        mapping.roleID.uuidString, organizationID: organizationID, on: db)
+                } catch {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Role mapping for claim value '\(mapping.claimValue)' references a role not bindable in this organization: \(abortReason(error))"
+                    )
                 }
             }
         }
@@ -1102,6 +1138,12 @@ struct OIDCController: RouteCollection {
         guard orgGroupCount == groupIDs.count else {
             throw Abort(.badRequest, reason: "Group mappings must reference groups in this organization")
         }
+    }
+
+    /// The human-readable reason from an error, preferring an `AbortError`'s
+    /// own reason so a resolver rejection surfaces its explanation.
+    private func abortReason(_ error: any Error) -> String {
+        (error as? any AbortError)?.reason ?? String(describing: error)
     }
 
 }

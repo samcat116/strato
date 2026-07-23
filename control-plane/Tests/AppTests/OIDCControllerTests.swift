@@ -37,7 +37,99 @@ final class OIDCControllerTests: BaseTestCase {
         return provider
     }
 
+    /// An org-owned custom role bindable at `organizationID`.
+    @discardableResult
+    private func makeOrgRole(
+        name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: Database
+    ) async throws -> IAMRoleDefinition {
+        let id = UUID()
+        let role = IAMRoleDefinition(
+            id: id, name: name, ownerType: .organization, ownerID: organizationID,
+            cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
+            actions: actions, managed: false)
+        try await role.save(on: db)
+        return role
+    }
+
     // MARK: - Provider management
+
+    @Test("Create provider with a valid org-scoped role mapping succeeds")
+    func testCreateProviderAcceptsScopedRoleMapping() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let role = try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
+
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        groupsClaim: "groups",
+                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: role.id!)],
+                        defaultRole: role.id!.uuidString
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok || res.status == .created)
+                let provider = try res.content.decode(OIDCProviderResponse.self)
+                #expect(provider.roleMappings?.first?.roleID == role.id!)
+                #expect(provider.defaultRole == role.id!.uuidString)
+            }
+        }
+    }
+
+    @Test("Create provider rejects a role mapping to a role owned by another org")
+    func testCreateProviderRejectsOutOfScopeRoleMapping() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Org")
+            let foreignRole = try await makeOrgRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
+
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        groupsClaim: "groups",
+                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: foreignRole.id!)]
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Create provider rejects a default role naming an unknown role id")
+    func testCreateProviderRejectsUnknownDefaultRole() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        defaultRole: UUID().uuidString
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
 
     @Test("Create provider with blank admin claim values fails")
     func testCreateProviderRejectsBlankAdminClaimValues() async throws {

@@ -563,6 +563,10 @@ public func configure(_ app: Application) async throws {
     // policies compiled into the policy set beside role permits and guardrails.
     app.migrations.add(CreateIAMPolicy())
 
+    // Per-provider claim→role map (issue #611): OIDC logins can bind a scoped
+    // custom role on the org node, beyond the seeded admin/member vocabulary.
+    app.migrations.add(AddRoleMappingsToOIDCProvider())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

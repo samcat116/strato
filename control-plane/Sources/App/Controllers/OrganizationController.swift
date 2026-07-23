@@ -609,62 +609,19 @@ struct OrganizationController: RouteCollection {
 
     // MARK: - Org role resolution (issue #608)
 
-    /// A membership role resolved for storage and binding.
-    private struct ResolvedOrgRole {
-        /// What `UserOrganization.role` stores: a legacy literal, or a role id.
-        let storedRole: String
-        /// The role id to bind on the org node, or nil for bare membership.
-        let bindingRoleID: UUID?
-        /// The role's action set, for the guardrail write-check.
-        let actions: Set<String>
-        /// A human-readable label for logs and refusals.
-        let label: String
-    }
-
     /// Resolve a requested org membership role across the unified vocabulary.
-    ///
-    /// Legacy `admin`/`member` keep their literal semantics: stored verbatim,
-    /// `admin` carrying the admin binding and `member` none, so the last-admin
-    /// guards continue to key on the literal. Everything else — an IAM role
-    /// name or an org-owned role id — resolves through `MemberRoleResolver`,
-    /// scoped to the org, and stores the role id (issue #608).
+    /// Thin wrapper over the shared `MemberRoleResolver.resolveOrganizationRole`
+    /// (issue #611 lifted this out so the OIDC provisioning flow shares it).
     private static func resolveOrgRole(
         _ raw: String, organizationID: UUID, on db: any Database
-    ) async throws -> ResolvedOrgRole {
-        if raw == "admin" || raw == "member" {
-            let iamRole = IAMRole.fromOrganizationRole(raw)
-            return ResolvedOrgRole(
-                storedRole: raw,
-                bindingRoleID: iamRole?.seededID,
-                actions: iamRole.map { IAMRoleRegistry.actions(for: $0) } ?? [],
-                label: raw
-            )
-        }
-        let resolved = try await MemberRoleResolver.resolve(
-            raw,
-            scopeNode: IAMNode(type: .organization, id: organizationID),
-            acceptsLegacyProjectRoles: false,
-            on: db
-        )
-        // The seeded admin role — reachable by IAM name (already caught above as
-        // the literal) or by its well-known id — *is* the org-admin membership
-        // under another name. Store it as the literal "admin" so the last-admin
-        // guards, which key on that literal, count it; otherwise an admin
-        // granted by id would be invisible to them (issue #608 review).
-        let storedRole = resolved.id == IAMRole.admin.seededID ? "admin" : resolved.id.uuidString
-        return ResolvedOrgRole(
-            storedRole: storedRole,
-            bindingRoleID: resolved.id,
-            actions: resolved.actions,
-            label: resolved.displayName
-        )
+    ) async throws -> MemberRoleResolver.ResolvedOrgRole {
+        try await MemberRoleResolver.resolveOrganizationRole(raw, organizationID: organizationID, on: db)
     }
 
     /// The role id a stored membership value names, for revoking its binding:
     /// a UUID directly, or a legacy literal via `fromOrganizationRole`
     /// (`member` names none).
     private static func orgStoredRoleID(_ stored: String) -> UUID? {
-        if let uuid = UUID(uuidString: stored) { return uuid }
-        return IAMRole.fromOrganizationRole(stored)?.seededID
+        MemberRoleResolver.organizationStoredRoleID(stored)
     }
 }
