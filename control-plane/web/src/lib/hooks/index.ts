@@ -126,14 +126,6 @@ export {
   iamErrorMessage,
 } from "./use-iam";
 export {
-  useFolders,
-  useFolderTree,
-  useCreateFolder,
-  useUpdateFolder,
-  useDeleteFolder,
-  folderErrorMessage,
-} from "./use-folders";
-export {
   useOrganizationQuotas,
   useProjectQuotas,
   useInvalidateQuotas,
@@ -145,6 +137,7 @@ export {
 export type { QuotaCreateTarget } from "./use-quotas";
 export { useHierarchy, useHierarchySearch } from "./use-hierarchy";
 export { usePermissions } from "./use-permissions";
+export { useCurrentOrgAccess } from "./use-current-org-access";
 export {
   useProjectMembers,
   useGrantProjectMember,

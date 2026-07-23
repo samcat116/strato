@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Save, Plus } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,28 +12,22 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { organizationsApi } from "@/lib/api/organizations";
-import { useOrganizationMembers, usePermissions } from "@/lib/hooks";
-import { MembersTable, AddMemberDialog } from "@/components/organization-members";
-import { GroupsSection } from "@/components/organization-groups";
-import { RolesSection, PoliciesSection } from "@/components/iam";
-import { FoldersSection } from "@/components/folders";
+import { usePermissions } from "@/lib/hooks";
 import { SCIMTokensSection } from "@/components/scim-tokens";
 import { OIDCProvidersSection } from "@/components/oidc-providers";
 import { SSFStreamsSection } from "@/components/ssf-streams";
-import { useAuth, useOrganization } from "@/providers";
+import { useOrganization } from "@/providers";
 import { toast } from "sonner";
 
 export default function OrganizationSettingsPage() {
   const searchParams = useSearchParams();
   const idParam = searchParams.get("id");
   const { currentOrg } = useOrganization();
-  const { user } = useAuth();
 
   // Use URL param if provided, otherwise use current org
   const id = idParam || currentOrg?.id || "";
 
   const [isLoading, setIsLoading] = useState(false);
-  const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -48,9 +42,6 @@ export default function OrganizationSettingsPage() {
     queryFn: () => organizationsApi.get(id),
     enabled: !!id,
   });
-
-  const { data: members = [], isLoading: isMembersLoading } =
-    useOrganizationMembers(id);
 
   // Permission-driven gating (IAM can-i checks) rather than a hardcoded role string.
   const { permissions } = usePermissions(
@@ -134,44 +125,17 @@ export default function OrganizationSettingsPage() {
       {/* Tabs */}
       <Tabs defaultValue="general" className="space-y-6">
         <TabsList className="bg-card border-border">
-          <TabsTrigger
-            value="general"
-            className="data-[state=active]:bg-muted"
-          >
+          <TabsTrigger value="general" className="data-[state=active]:bg-muted">
             General
           </TabsTrigger>
-          <TabsTrigger
-            value="members"
-            className="data-[state=active]:bg-muted"
-          >
-            Members
+          <TabsTrigger value="oidc" className="data-[state=active]:bg-muted">
+            OIDC
           </TabsTrigger>
-          <TabsTrigger
-            value="groups"
-            className="data-[state=active]:bg-muted"
-          >
-            Groups
+          <TabsTrigger value="scim" className="data-[state=active]:bg-muted">
+            SCIM
           </TabsTrigger>
-          <TabsTrigger
-            value="roles"
-            className="data-[state=active]:bg-muted"
-          >
-            Roles
-          </TabsTrigger>
-          <TabsTrigger
-            value="policies"
-            className="data-[state=active]:bg-muted"
-          >
-            Policies
-          </TabsTrigger>
-          <TabsTrigger
-            value="folders"
-            className="data-[state=active]:bg-muted"
-          >
-            Folders
-          </TabsTrigger>
-          <TabsTrigger value="auth" className="data-[state=active]:bg-muted">
-            Authentication
+          <TabsTrigger value="ssf" className="data-[state=active]:bg-muted">
+            SSF
           </TabsTrigger>
         </TabsList>
 
@@ -252,87 +216,21 @@ export default function OrganizationSettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* Members Tab */}
-        <TabsContent value="members">
-          <Card className="bg-card border-border">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-lg font-semibold text-foreground">
-                Organization Members
-              </CardTitle>
-              {canManageMembers && (
-                <Button
-                  size="sm"
-                  className="bg-primary hover:bg-primary/90"
-                  onClick={() => setAddMemberOpen(true)}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Member
-                </Button>
-              )}
-            </CardHeader>
-            <CardContent>
-              {!canManageMembers && (
-                <p className="text-sm text-muted-foreground mb-4">
-                  You need admin rights to add, remove, or change the roles of
-                  members.
-                </p>
-              )}
-              <MembersTable
-                orgId={id}
-                members={members}
-                isLoading={isMembersLoading}
-                canManage={canManageMembers}
-                currentUserId={user?.id}
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Groups Tab */}
-        <TabsContent value="groups">
-          <GroupsSection orgId={id} canManage={canManageMembers} />
-        </TabsContent>
-
-        {/* Roles Tab */}
-        <TabsContent value="roles">
-          <RolesSection
-            ownerType="organization"
-            ownerId={id}
-            canManage={canManageMembers}
-          />
-        </TabsContent>
-
-        {/* Policies Tab */}
-        <TabsContent value="policies">
-          <PoliciesSection
-            ownerType="organization"
-            ownerId={id}
-            canManage={canManageMembers}
-          />
-        </TabsContent>
-
-        {/* Folders Tab */}
-        <TabsContent value="folders">
-          <FoldersSection orgId={id} canManage={canManageMembers} />
-        </TabsContent>
-
-        {/* Authentication Tab */}
-        <TabsContent value="auth" className="space-y-6">
+        {/* OIDC Tab */}
+        <TabsContent value="oidc">
           <OIDCProvidersSection orgId={id} canManage={canManageMembers} />
+        </TabsContent>
 
+        {/* SCIM Tab */}
+        <TabsContent value="scim">
           <SCIMTokensSection orgId={id} canManage={canManageMembers} />
+        </TabsContent>
 
+        {/* SSF Tab */}
+        <TabsContent value="ssf">
           <SSFStreamsSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
       </Tabs>
-
-      {canManageMembers && (
-        <AddMemberDialog
-          orgId={id}
-          open={addMemberOpen}
-          onOpenChange={setAddMemberOpen}
-        />
-      )}
     </div>
   );
 }
