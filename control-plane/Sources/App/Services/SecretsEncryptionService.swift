@@ -167,6 +167,18 @@ struct SecretsEncryptionService: @unchecked Sendable {
         if migratedPullSecrets > 0 {
             logger.info("Encrypted \(migratedPullSecrets) stored registry pull secret(s) at rest")
         }
+
+        let subscriptions = try await WebhookSubscription.query(on: db).all()
+        var migratedSigningSecrets = 0
+        for subscription in subscriptions
+        where !subscription.signingSecret.hasPrefix(Self.encryptedPrefix) {
+            subscription.signingSecret = try encrypt(subscription.signingSecret)
+            try await subscription.save(on: db)
+            migratedSigningSecrets += 1
+        }
+        if migratedSigningSecrets > 0 {
+            logger.info("Encrypted \(migratedSigningSecrets) stored webhook signing secret(s) at rest")
+        }
     }
 }
 
