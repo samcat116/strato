@@ -64,7 +64,8 @@ struct NetworkOrchestrator: Sendable {
                 dhcpEnabled: spec.dhcpEnabled,
                 dnsServers: spec.dnsServers,
                 domainName: spec.domainName,
-                leaseTime: spec.leaseTime
+                leaseTime: spec.leaseTime,
+                securityGroupIds: spec.securityGroupIds
             )
 
             do {

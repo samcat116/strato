@@ -1939,8 +1939,24 @@ extension Agent {
                 // (decoded as []); that absence must NOT be read as "tear down
                 // all L3" — skip network reconciliation and fall back to VM-only.
                 if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
+                    // This host's own VM ports' desired security-group
+                    // membership, derived from each NIC's spec (nicIndex is
+                    // the NIC's position in the spec list, matching the LSP
+                    // names createVMNetwork derives). Converged on every
+                    // agent; port groups + ACLs themselves are authored only
+                    // by the topology authority from `message.securityGroups`.
+                    let portMemberships = message.vms.flatMap { vm in
+                        vm.spec.networks.enumerated().map { index, spec in
+                            DesiredPortMembership(
+                                portName: OVNNaming.vmPortName(
+                                    vmId: vm.vmId.uuidString, nicIndex: index),
+                                securityGroupIds: spec.securityGroupIds)
+                        }
+                    }
                     await networkService?.reconcileNetworks(
-                        message.networks, authoritative: message.networksAuthoritative)
+                        message.networks, authoritative: message.networksAuthoritative,
+                        securityGroups: message.securityGroups,
+                        portMemberships: portMemberships)
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a
                 // control plane older than the sandbox protocol (v5) omits
