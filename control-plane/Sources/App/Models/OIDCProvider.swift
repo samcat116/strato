@@ -78,8 +78,13 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @Field(key: "admin_claim_values")
     var adminClaimValues: String  // JSON array of claim values granting the org "admin" role
 
+    @Field(key: "role_mappings")
+    var roleMappings: String  // JSON array of OIDCRoleMapping (claim value → org role id)
+
+    // Org role for JIT-provisioned users when no claim matches, default
+    // "member". May also be an IAM role name or an org-owned role id (#611).
     @Field(key: "default_role")
-    var defaultRole: String  // Org role for JIT-provisioned users, default "member"
+    var defaultRole: String
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
@@ -112,6 +117,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping] = [],
         adminClaimValues: [String] = [],
+        roleMappings: [OIDCRoleMapping] = [],
         defaultRole: String = "member"
     ) {
         self.id = id
@@ -133,6 +139,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.groupsClaim = groupsClaim
         self.groupMappings = Self.encodeJSON(groupMappings, fallback: "[]")
         self.adminClaimValues = Self.encodeJSON(adminClaimValues, fallback: "[]")
+        self.roleMappings = Self.encodeJSON(roleMappings, fallback: "[]")
         self.defaultRole = defaultRole
     }
 }
@@ -146,6 +153,19 @@ struct OIDCGroupMapping: Content, Equatable {
     let claimValue: String
     /// The Strato group (must belong to the provider's organization).
     let groupID: UUID
+}
+
+/// Maps a value of the provider's groups claim to a Strato role bound on the
+/// organization node (issue #611). When a login token carries the claim value,
+/// the user's org membership is reconciled to this role — the claim-driven
+/// analog of the org member endpoints accepting scoped role ids (#608). The
+/// role must be bindable at the org: platform-owned, or owned by the provider's
+/// organization or one of its ancestors.
+struct OIDCRoleMapping: Content, Equatable {
+    /// The claim value as sent by the IdP.
+    let claimValue: String
+    /// The role to bind on the org node.
+    let roleID: UUID
 }
 
 extension OIDCProvider: Content {}
@@ -212,6 +232,21 @@ extension OIDCProvider {
     /// Set admin claim values from an array
     func setAdminClaimValuesArray(_ values: [String]) {
         self.adminClaimValues = Self.encodeJSON(values, fallback: "[]")
+    }
+
+    /// Get role mappings as a typed array
+    var roleMappingsArray: [OIDCRoleMapping] {
+        guard let data = roleMappings.data(using: .utf8),
+            let array = try? JSONDecoder().decode([OIDCRoleMapping].self, from: data)
+        else {
+            return []
+        }
+        return array
+    }
+
+    /// Set role mappings from a typed array
+    func setRoleMappingsArray(_ mappings: [OIDCRoleMapping]) {
+        self.roleMappings = Self.encodeJSON(mappings, fallback: "[]")
     }
 
     /// Hosts this provider's discovery document vouched for, as a set for the
@@ -327,6 +362,7 @@ struct CreateOIDCProviderRequest: Content {
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
+    let roleMappings: [OIDCRoleMapping]?
     let defaultRole: String?
 
     init(
@@ -345,6 +381,7 @@ struct CreateOIDCProviderRequest: Content {
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
+        roleMappings: [OIDCRoleMapping]? = nil,
         defaultRole: String? = nil
     ) {
         self.name = name
@@ -362,6 +399,7 @@ struct CreateOIDCProviderRequest: Content {
         self.groupsClaim = groupsClaim
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
+        self.roleMappings = roleMappings
         self.defaultRole = defaultRole
     }
 }
@@ -382,6 +420,7 @@ struct UpdateOIDCProviderRequest: Content {
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
+    let roleMappings: [OIDCRoleMapping]?
     let defaultRole: String?
 
     init(
@@ -400,6 +439,7 @@ struct UpdateOIDCProviderRequest: Content {
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
+        roleMappings: [OIDCRoleMapping]? = nil,
         defaultRole: String? = nil
     ) {
         self.name = name
@@ -417,6 +457,7 @@ struct UpdateOIDCProviderRequest: Content {
         self.groupsClaim = groupsClaim
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
+        self.roleMappings = roleMappings
         self.defaultRole = defaultRole
     }
 }
@@ -438,6 +479,7 @@ struct OIDCProviderResponse: Content {
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
+    let roleMappings: [OIDCRoleMapping]?
     let defaultRole: String?
     let createdAt: Date?
     let updatedAt: Date?
@@ -464,6 +506,7 @@ struct OIDCProviderResponse: Content {
         self.groupsClaim = includeClaimMappings ? provider.groupsClaim : nil
         self.groupMappings = includeClaimMappings ? provider.groupMappingsArray : nil
         self.adminClaimValues = includeClaimMappings ? provider.adminClaimValuesArray : nil
+        self.roleMappings = includeClaimMappings ? provider.roleMappingsArray : nil
         self.defaultRole = includeClaimMappings ? provider.defaultRole : nil
         self.createdAt = provider.createdAt
         self.updatedAt = provider.updatedAt

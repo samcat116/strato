@@ -75,6 +75,69 @@ enum MemberRoleResolver {
         Resolved(id: role.seededID, displayName: role.rawValue, actions: IAMRoleRegistry.actions(for: role))
     }
 
+    // MARK: - Organization membership roles (issue #608/#611)
+
+    /// An organization membership role resolved for storage and binding.
+    struct ResolvedOrgRole: Sendable {
+        /// What `UserOrganization.role` stores: a legacy literal, or a role id.
+        let storedRole: String
+        /// The role id to bind on the org node, or nil for bare membership.
+        let bindingRoleID: UUID?
+        /// The role's action set, for the guardrail write-check.
+        let actions: Set<String>
+        /// A human-readable label for logs and refusals.
+        let label: String
+    }
+
+    /// Resolve a requested org membership role across the unified vocabulary —
+    /// the shared path for the org member endpoints (issue #608) and the OIDC
+    /// provisioning flow (issue #611).
+    ///
+    /// Legacy `admin`/`member` keep their literal semantics: stored verbatim,
+    /// `admin` carrying the admin binding and `member` none, so the last-admin
+    /// guards continue to key on the literal. Everything else — an IAM role
+    /// name or an org-owned role id — resolves through `resolve`, scoped to the
+    /// org, and stores the role id.
+    ///
+    /// The seeded admin role — reachable by IAM name or by its well-known id —
+    /// *is* the org-admin membership under another name, so it is stored as the
+    /// literal `"admin"`; otherwise an admin granted by id would be invisible to
+    /// the last-admin guards, which key on that literal (issue #608 review).
+    static func resolveOrganizationRole(
+        _ raw: String, organizationID: UUID, on db: any Database
+    ) async throws -> ResolvedOrgRole {
+        if raw == "admin" || raw == "member" {
+            let iamRole = IAMRole.fromOrganizationRole(raw)
+            return ResolvedOrgRole(
+                storedRole: raw,
+                bindingRoleID: iamRole?.seededID,
+                actions: iamRole.map { IAMRoleRegistry.actions(for: $0) } ?? [],
+                label: raw
+            )
+        }
+        let resolved = try await resolve(
+            raw,
+            scopeNode: IAMNode(type: .organization, id: organizationID),
+            acceptsLegacyProjectRoles: false,
+            on: db
+        )
+        let storedRole = resolved.id == IAMRole.admin.seededID ? "admin" : resolved.id.uuidString
+        return ResolvedOrgRole(
+            storedRole: storedRole,
+            bindingRoleID: resolved.id,
+            actions: resolved.actions,
+            label: resolved.displayName
+        )
+    }
+
+    /// The role id a stored membership value names, for revoking its binding:
+    /// a UUID directly, or a legacy literal via `fromOrganizationRole`
+    /// (`member` names none).
+    static func organizationStoredRoleID(_ stored: String) -> UUID? {
+        if let uuid = UUID(uuidString: stored) { return uuid }
+        return IAMRole.fromOrganizationRole(stored)?.seededID
+    }
+
     /// A non-platform role is bindable only at or below its owner: the owner
     /// node must sit on the target's ancestor chain, or the grant is refused
     /// with the mismatch named (issue #608).

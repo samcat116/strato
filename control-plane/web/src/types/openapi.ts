@@ -3716,7 +3716,7 @@ export interface paths {
         };
         /**
          * List an organization's OIDC providers
-         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `defaultRole`) are redacted for non-admins. Client secrets are never returned.
+         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRole`) are redacted for non-admins. Client secrets are never returned.
          */
         get: operations["listOIDCProviders"];
         put?: never;
@@ -6942,6 +6942,16 @@ export interface components {
              */
             groupID: string;
         };
+        /** @description Maps one value of the provider's groups claim to a Strato role bound on the organization node. When a login token carries the claim value, the user's org role is reconciled to this role. The role must be bindable at the org (platform-owned, or owned by the org or one of its ancestors). */
+        OIDCRoleMapping: {
+            /** @description The claim value as emitted by the IdP. */
+            claimValue: string;
+            /**
+             * Format: uuid
+             * @description The role to bind on the organization node.
+             */
+            roleID: string;
+        };
         /** @description A configured OIDC identity provider. The client secret is never returned. Claim-mapping fields are omitted for non-admin readers. */
         OIDCProviderConfig: {
             /** Format: uuid */
@@ -6966,11 +6976,10 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             /** @description Admin-only. Claim values that grant the organization admin role. */
             adminClaimValues?: string[];
-            /**
-             * @description Admin-only. Organization role for newly provisioned users.
-             * @enum {string}
-             */
-            defaultRole?: "member" | "admin";
+            /** @description Admin-only. Claim values mapped to org-scoped roles bound on login. */
+            roleMappings?: components["schemas"]["OIDCRoleMapping"][];
+            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            defaultRole?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -6998,8 +7007,9 @@ export interface components {
             groupsClaim?: string;
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
-            /** @enum {string} */
-            defaultRole?: "member" | "admin";
+            roleMappings?: components["schemas"]["OIDCRoleMapping"][];
+            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            defaultRole?: string;
         };
         /** @description Every field is optional. Omitted URL fields keep their stored value; an empty string clears them. */
         UpdateOIDCProviderRequest: {
@@ -7018,8 +7028,9 @@ export interface components {
             groupsClaim?: string;
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
-            /** @enum {string} */
-            defaultRole?: "member" | "admin";
+            roleMappings?: components["schemas"]["OIDCRoleMapping"][];
+            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            defaultRole?: string;
         };
         /** @description The outcome of a provider configuration test. */
         OIDCProviderTestResult: {

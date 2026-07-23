@@ -5260,8 +5260,8 @@ paths:
       summary: List an organization's OIDC providers
       description: >-
         Members see the provider list; claim-mapping fields (`groupsClaim`,
-        `groupMappings`, `adminClaimValues`, `defaultRole`) are redacted for
-        non-admins. Client secrets are never returned.
+        `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRole`) are
+        redacted for non-admins. Client secrets are never returned.
       tags: [OIDC]
       responses:
         "200":
@@ -12200,6 +12200,23 @@ components:
           format: uuid
           description: The Strato group; must belong to the provider's organization.
 
+    OIDCRoleMapping:
+      type: object
+      description: >-
+        Maps one value of the provider's groups claim to a Strato role bound on
+        the organization node. When a login token carries the claim value, the
+        user's org role is reconciled to this role. The role must be bindable at
+        the org (platform-owned, or owned by the org or one of its ancestors).
+      required: [claimValue, roleID]
+      properties:
+        claimValue:
+          type: string
+          description: The claim value as emitted by the IdP.
+        roleID:
+          type: string
+          format: uuid
+          description: The role to bind on the organization node.
+
     OIDCProviderConfig:
       type: object
       description: >-
@@ -12251,10 +12268,18 @@ components:
           description: Admin-only. Claim values that grant the organization admin role.
           items:
             type: string
+        roleMappings:
+          type: array
+          description: >-
+            Admin-only. Claim values mapped to org-scoped roles bound on login.
+          items:
+            $ref: "#/components/schemas/OIDCRoleMapping"
         defaultRole:
           type: string
-          description: Admin-only. Organization role for newly provisioned users.
-          enum: [member, admin]
+          description: >-
+            Admin-only. Organization role for newly provisioned users when no
+            claim matches: `member`, `admin`, an IAM role name, or a role id
+            bindable at the org.
         createdAt:
           type: string
           format: date-time
@@ -12310,9 +12335,14 @@ components:
           type: array
           items:
             type: string
+        roleMappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/OIDCRoleMapping"
         defaultRole:
           type: string
-          enum: [member, admin]
+          description: >-
+            `member`, `admin`, an IAM role name, or a role id bindable at the org.
 
     UpdateOIDCProviderRequest:
       type: object
@@ -12356,9 +12386,14 @@ components:
           type: array
           items:
             type: string
+        roleMappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/OIDCRoleMapping"
         defaultRole:
           type: string
-          enum: [member, admin]
+          description: >-
+            `member`, `admin`, an IAM role name, or a role id bindable at the org.
 
     OIDCProviderTestResult:
       type: object
