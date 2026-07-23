@@ -46,7 +46,9 @@ moment (image import finished, snapshot completed, floating IP attached, …).
 **Settings → Webhooks** in the UI, or `/api/organizations/:orgID/webhooks`):
 target URL, selected event types (empty = all), an optional project scope
 filter, an active flag, and a per-subscription signing secret. Org members can
-read subscriptions and delivery history; org admins mutate (the same
+read subscription configuration; org admins mutate, and delivery history is
+admin-only too — delivery rows carry frozen event payloads (resource names,
+error strings) from any project in the organization (the same
 `OrganizationAccessService` Cedar gates as SSF streams).
 
 - **Secrets** are generated server-side (`whsec_…`), stored encrypted at rest
@@ -107,9 +109,18 @@ as the audit-retention and SSF poll sweeps. Each pass drains due pending rows
 
 Reliability falls out of the same machinery as the rest of the control plane:
 PostgreSQL is the only source of truth (any replica can enqueue — it is just
-a row insert in the caller's transaction), the sweep lock ensures one drainer
-per pass, and delivery is **at-least-once** — a crash between POST and the
-success write replays the delivery. Consumers dedupe on the event id.
+a row insert in the caller's transaction), and delivery is **at-least-once**
+— a crash between POST and the success write replays the delivery once the
+claim lease lapses. Consumers dedupe on the event id.
+
+Concurrent drainers are safe by construction, not by the sweep lock alone:
+each pass **claims** its batch with a single atomic
+`UPDATE … SET next_attempt_at = now() + lease … FOR UPDATE SKIP LOCKED …
+RETURNING`, so a pass that outlives the lock TTL and an overlapping tick on
+another replica claim disjoint rows. Within a pass, POSTs fan out with
+bounded concurrency so a few timing-out endpoints cannot head-of-line-block
+healthy ones. The sweep lock remains as an optimization that keeps idle
+replicas from running the claim query every tick.
 
 ## Configuration
 

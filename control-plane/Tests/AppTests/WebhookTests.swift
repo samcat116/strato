@@ -179,6 +179,17 @@ struct WebhookSubscriptionAPITests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
+
+            // Delivery history is admin-only: payloads carry operational
+            // detail from any project in the organization.
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            try await app.test(
+                .GET, "\(base)/\(subscription.id!.uuidString)/deliveries"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
         }
     }
 
@@ -384,6 +395,35 @@ struct WebhookOutboxTests {
             #expect(!wonAgain)
             let countAfter = try await WebhookDelivery.query(on: app.db).count()
             #expect(countAfter == 1)
+        }
+    }
+
+    @Test("A successful delete emits completion after the resource row is gone")
+    func deleteCompletionSurvivesRowRemoval() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            _ = try await makeSubscription(app, fixture: fixture)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "doomed-vm", project: fixture.project)
+
+            // `begin` stamps the delivery context while the VM row exists.
+            let operation = try await ResourceOperation.begin(
+                .delete, resourceKind: .virtualMachine, resourceID: vm.requireID(),
+                userID: fixture.user.requireID(), on: app.db)
+            #expect(operation.organizationID == fixture.organization.id)
+            #expect(operation.resourceName == "doomed-vm")
+
+            // The deletion paths remove the row before the completion lands.
+            try await vm.delete(on: app.db)
+
+            let won = try await operation.completeIfPending(as: .succeeded, error: nil, on: app.db)
+            #expect(won)
+
+            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            #expect(delivery.eventType == "operation.completed")
+            #expect(delivery.payload.contains("\"operationKind\":\"delete\""))
+            #expect(delivery.payload.contains("doomed-vm"))
+            #expect(delivery.payload.contains(fixture.organization.id!.uuidString))
         }
     }
 

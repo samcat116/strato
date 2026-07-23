@@ -594,6 +594,9 @@ public func configure(_ app: Application) async throws {
     // plus the transactional delivery outbox drained by the delivery sweep.
     app.migrations.add(CreateWebhookSubscription())
     app.migrations.add(CreateWebhookDelivery())
+    // Delivery context stamped at operation-begin time so delete completions
+    // can still be announced after the resource row is gone (PR #668 review).
+    app.migrations.add(AddDeliveryContextToResourceOperation())
 
     try await app.autoMigrate()
 

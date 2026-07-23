@@ -2,8 +2,9 @@ import AsyncHTTPClient
 import Crypto
 import Fluent
 import Foundation
-import NIOCore
 import NIOConcurrencyHelpers
+import NIOCore
+import SQLKit
 import Vapor
 
 /// Drains the `webhook_deliveries` outbox (issue #559).
@@ -39,6 +40,17 @@ final class WebhookDeliveryService: @unchecked Sendable {
 
     /// Due rows fetched per pass; anything beyond rolls to the next pass.
     static let batchSize = 50
+
+    /// Concurrent POSTs per pass. Bounded fan-out keeps a few slow or
+    /// timing-out endpoints from head-of-line-blocking deliveries to healthy
+    /// endpoints behind them in the batch (PR #668 review).
+    static let maxConcurrentDeliveries = 8
+
+    /// How long a claimed row stays invisible to other drainers. Sized to
+    /// cover a worst-case attempt (DNS resolution plus the request timeout)
+    /// with generous slack; a drainer that crashes mid-attempt simply lets
+    /// the lease lapse and the row is retried.
+    static let claimLeaseSeconds = 120
 
     /// Terminal deliveries are kept this long as browsable history.
     static let historyRetentionDays = 7
@@ -104,6 +116,13 @@ final class WebhookDeliveryService: @unchecked Sendable {
     /// directly without the timer. `acquiringLock: false` skips the
     /// cluster-singleton lock — tests running several passes back-to-back
     /// would otherwise be serialized by their own previous pass's lock TTL.
+    ///
+    /// Correctness under concurrent passes comes from the atomic row claim in
+    /// `claimDueDeliveries`, not the sweep lock: a pass slower than the lock
+    /// TTL can overlap the next tick (here or on another replica), but each
+    /// row is only ever claimed by one of them. The lock is an optimization —
+    /// it keeps the other replicas from even running the claim query on
+    /// every tick.
     func sweepOnce(acquiringLock: Bool = true) async {
         if acquiringLock {
             guard
@@ -118,22 +137,66 @@ final class WebhookDeliveryService: @unchecked Sendable {
 
         guard let db = app.liveDB else { return }
         do {
-            let due = try await WebhookDelivery.query(on: db)
-                .filter(\.$status == WebhookDeliveryStatus.pending.rawValue)
-                .filter(\.$nextAttemptAt <= Date())
-                .sort(\.$nextAttemptAt)
-                .limit(Self.batchSize)
-                .with(\.$subscription)
-                .all()
+            let due = try await claimDueDeliveries(on: db)
 
-            for delivery in due {
-                await attempt(delivery, on: db)
+            // Bounded fan-out: up to maxConcurrentDeliveries in flight, each
+            // finished attempt admitting the next claimed row.
+            await withTaskGroup(of: Void.self) { group in
+                var remaining = due.makeIterator()
+                var inFlight = 0
+                while inFlight < Self.maxConcurrentDeliveries, let delivery = remaining.next() {
+                    group.addTask { await self.attempt(delivery, on: db) }
+                    inFlight += 1
+                }
+                while await group.next() != nil {
+                    if let delivery = remaining.next() {
+                        group.addTask { await self.attempt(delivery, on: db) }
+                    }
+                }
             }
 
             try await pruneHistory(on: db)
         } catch {
             logger.error("Webhook delivery sweep failed: \(error)")
         }
+    }
+
+    /// Atomically claim the due pending rows by pushing `next_attempt_at`
+    /// forward one lease (PR #668 review). The single UPDATE makes overlapping
+    /// drainers — a pass that outlived the sweep-lock TTL, or another
+    /// replica's tick — claim disjoint sets instead of double-POSTing the
+    /// same rows: whoever wins the row lock moves the row out of the other's
+    /// WHERE clause. `FOR UPDATE SKIP LOCKED` keeps the losers from queueing
+    /// on rows the winner is still claiming. The attempt's own verdict then
+    /// overwrites the lease (backoff, dead, or succeeded).
+    private func claimDueDeliveries(on db: Database) async throws -> [WebhookDelivery] {
+        guard let sql = db as? SQLDatabase else { return [] }
+        struct ClaimedRow: Decodable {
+            let id: UUID
+        }
+        let claimed = try await sql.raw(
+            """
+            UPDATE webhook_deliveries
+            SET next_attempt_at = now() + (\(bind: Self.claimLeaseSeconds) * interval '1 second'),
+                updated_at = now()
+            WHERE id IN (
+                SELECT id FROM webhook_deliveries
+                WHERE status = \(bind: WebhookDeliveryStatus.pending.rawValue)
+                  AND next_attempt_at <= now()
+                ORDER BY next_attempt_at
+                LIMIT \(bind: Self.batchSize)
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id
+            """
+        ).all(decoding: ClaimedRow.self)
+        guard !claimed.isEmpty else { return [] }
+
+        return try await WebhookDelivery.query(on: db)
+            .filter(\.$id ~~ claimed.map(\.id))
+            .sort(\.$nextAttemptAt)
+            .with(\.$subscription)
+            .all()
     }
 
     /// One delivery attempt, recording the verdict on the row (and the
@@ -185,7 +248,7 @@ final class WebhookDeliveryService: @unchecked Sendable {
         guard let url = URL(string: subscription.url) else {
             throw SSRFGuard.BlockedHostError(reason: "Webhook URL is not a valid URL")
         }
-        try await SSRFGuard.validate(
+        let approvedAddresses = try await SSRFGuard.validate(
             url: url, environment: app.environment, on: app.threadPool)
 
         let secret = try app.secretsEncryption.decrypt(subscription.signingSecret)
@@ -204,9 +267,37 @@ final class WebhookDeliveryService: @unchecked Sendable {
             name: "X-Strato-Delivery-Id", value: delivery.id?.uuidString ?? "")
         request.body = .bytes(ByteBuffer(string: delivery.payload))
 
-        let response = try await app.http.client.shared.execute(
-            request, timeout: .seconds(Self.requestTimeoutSeconds))
-        return Int(response.status.code)
+        // Pin the connection to an address the guard approved (its documented
+        // rebind gap): the shared client would re-resolve the name at connect
+        // time, and a low-TTL record could point it at an internal address
+        // between validation and connect. `approvedAddresses` is empty when
+        // private hosts are allowed (testing/dev) — then the shared client is
+        // fine. TLS certificate validation still runs against the hostname;
+        // only resolution is overridden.
+        guard let host = url.host, let pinnedAddress = approvedAddresses.first else {
+            let response = try await app.http.client.shared.execute(
+                request, timeout: .seconds(Self.requestTimeoutSeconds))
+            return Int(response.status.code)
+        }
+
+        var configuration = HTTPClient.Configuration()
+        // The shared client disallows redirects globally (configure.swift); a
+        // transient client must not silently reintroduce redirect-following,
+        // which would defeat the SSRF validation of the final destination.
+        configuration.redirectConfiguration = .disallow
+        configuration.dnsOverride = [host: pinnedAddress]
+        let client = HTTPClient(
+            eventLoopGroupProvider: .shared(app.eventLoopGroup),
+            configuration: configuration)
+        do {
+            let response = try await client.execute(
+                request, timeout: .seconds(Self.requestTimeoutSeconds))
+            try await client.shutdown()
+            return Int(response.status.code)
+        } catch {
+            try? await client.shutdown()
+            throw error
+        }
     }
 
     /// HMAC-SHA256 over `"<timestamp>.<payload>"`, hex-encoded — the `v1`

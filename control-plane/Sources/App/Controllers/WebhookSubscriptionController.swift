@@ -175,9 +175,13 @@ struct WebhookSubscriptionController: RouteCollection {
 
     // MARK: - Delivery history
 
+    /// Admin-only, unlike the subscription list: delivery rows carry frozen
+    /// event payloads (resource names, error strings, quota numbers) from
+    /// *any* project in the organization, which bare org membership does not
+    /// otherwise grant a view of (PR #668 review).
     func listDeliveries(req: Request) async throws -> [WebhookDeliveryResponse] {
         let subscription = try await requireSubscription(req)
-        try await OrganizationAccessService.requireMember(
+        try await OrganizationAccessService.requireAdmin(
             organizationID: subscription.$organization.id, on: req)
 
         let limit = min(max(req.query[Int.self, at: "limit"] ?? 50, 1), 200)

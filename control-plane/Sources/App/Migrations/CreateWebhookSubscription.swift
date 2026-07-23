@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 
 /// User-managed webhook subscriptions (issue #559): one row per endpoint an
 /// organization has subscribed to typed platform events.
@@ -28,9 +29,21 @@ struct CreateWebhookSubscription: AsyncMigration {
             .field("created_at", .datetime)
             .field("updated_at", .datetime)
             .create()
+
+        // Every emitted event runs `organization_id = ? AND is_active = true`
+        // (WebhookEvents.enqueue), and Postgres does not index FK columns
+        // automatically.
+        if let sql = database as? SQLDatabase {
+            try await sql.raw(
+                "CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_org_active ON webhook_subscriptions (organization_id, is_active)"
+            ).run()
+        }
     }
 
     func revert(on database: Database) async throws {
+        if let sql = database as? SQLDatabase {
+            try await sql.raw("DROP INDEX IF EXISTS idx_webhook_subscriptions_org_active").run()
+        }
         try await database.schema("webhook_subscriptions").delete()
     }
 }

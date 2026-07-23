@@ -170,16 +170,24 @@ enum WebhookEvents {
     /// funnel every completion path (agent report, post-202 task, stuck sweep)
     /// goes through — so individual sources need no wiring.
     ///
-    /// Context (org/project/name) is resolved from the live resource row; a
-    /// resource that is already gone (a delete op failed by the sweep after
-    /// row removal) has no organization to deliver to, so it is skipped.
+    /// Context (org/project/name) comes from the operation row itself, where
+    /// `begin` captured it — the resource may already be gone by completion
+    /// time (a successful delete removes the row first). Operations without
+    /// stamped context (pre-migration rows, direct-construction sites) fall
+    /// back to resolving from the live resource; only when both are missing
+    /// is there genuinely no organization to deliver to, and the event is
+    /// skipped.
     static func enqueueOperationCompletion(
         for operation: ResourceOperation, on db: Database
     ) async throws {
-        guard
-            let context = try await resourceContext(
+        var context: (organizationID: UUID, projectID: UUID?, resourceName: String?)?
+        if let organizationID = operation.organizationID {
+            context = (organizationID, operation.projectID, operation.resourceName)
+        } else {
+            context = try await resourceContext(
                 kind: operation.resourceKind, id: operation.resourceID, on: db)
-        else { return }
+        }
+        guard let context else { return }
 
         var data: [String: CodableValue] = [
             "operationId": .string(operation.id?.uuidString ?? ""),
@@ -203,7 +211,9 @@ enum WebhookEvents {
 
     /// Resolves the owning organization/project and display name for an
     /// operation's resource. Nil when the resource row no longer exists.
-    private static func resourceContext(
+    /// Internal so `ResourceOperation.begin` can stamp the same context onto
+    /// the operation row while the resource still exists.
+    static func resourceContext(
         kind: OperationResourceKind, id: UUID, on db: Database
     ) async throws -> (organizationID: UUID, projectID: UUID?, resourceName: String?)? {
         let projectID: UUID?

@@ -217,16 +217,20 @@ export function WebhooksTable({
                       )}
                     </Button>
                   )}
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => onViewDeliveries(webhook)}
-                    aria-label={`View deliveries for ${webhook.name}`}
-                    title="View deliveries"
-                  >
-                    <History className="h-4 w-4" />
-                  </Button>
+                  {/* Delivery history is admin-only server-side: payloads
+                      carry operational detail from any project in the org. */}
+                  {canManage && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => onViewDeliveries(webhook)}
+                      aria-label={`View deliveries for ${webhook.name}`}
+                      title="View deliveries"
+                    >
+                      <History className="h-4 w-4" />
+                    </Button>
+                  )}
                   {canManage && (
                     <>
                       <Button
