@@ -1127,8 +1127,93 @@ actor AgentService {
                         "timeoutSeconds": .string("\(Int(timeout))"),
                     ])
             }
+
+            // Volumes are the one resource kind mutated through the same
+            // async-agent-RPC pattern that was never brought under the
+            // ResourceOperation umbrella (issue #644), so there is no operation
+            // row to sweep. This backstop recovers them directly instead: a
+            // volume left in a transitional status past its budget — the only
+            // signal we have, since there is no pending operation to consult —
+            // is returned to a resting state. Without it, a crash mid-operation
+            // (rolling upgrade, OOM kill) strands the volume in that status
+            // permanently.
+            let transitionalVolumes = try await Volume.query(on: db)
+                .filter(\.$status ~~ [.creating, .attaching, .detaching, .resizing, .snapshotting, .cloning])
+                .all()
+
+            for volume in transitionalVolumes {
+                guard let volumeID = volume.id else { continue }
+                // `updatedAt` is stamped on the transition into the transitional
+                // status; `createdAt` is the fallback for a `.creating` row whose
+                // provisioning never started.
+                let changedAt = volume.updatedAt ?? volume.createdAt ?? now
+                let budget = stuckVolumeBudgetSeconds(for: volume.status)
+                guard now.timeIntervalSince(changedAt) > budget else { continue }
+
+                let previous = volume.status
+                let resolved: VolumeStatus
+                switch previous {
+                case .snapshotting, .cloning:
+                    // The source volume's data is untouched by an interrupted
+                    // snapshot or clone (both read the source; the overlay/target
+                    // is a separate row). Return it to a healthy resting state
+                    // rather than error it. The orphaned snapshot/clone-target
+                    // row is a `.creating` volume/snapshot resolved on its own.
+                    resolved = volume.$vm.id != nil ? .attached : .available
+                default:
+                    // creating/attaching/detaching/resizing: the agent-side
+                    // outcome is unknown, so `.error` is the honest, recoverable
+                    // state (`canDelete` allows it). Attachment fields are left
+                    // as-is deliberately — clearing them and returning to
+                    // `.available` would risk re-attaching a volume the agent may
+                    // actually have connected to a guest.
+                    resolved = .error
+                    volume.errorMessage =
+                        "Volume operation did not complete (control-plane restart or lost agent "
+                        + "response); recovered by the stuck-operation sweep after \(Int(budget))s"
+                }
+                volume.status = resolved
+                try await volume.save(on: db)
+
+                app.logger.warning(
+                    "Volume stuck in transitional state past budget; recovered",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "stuckStatus": .string(previous.rawValue),
+                        "resolvedStatus": .string(resolved.rawValue),
+                        "budgetSeconds": .string("\(Int(budget))"),
+                    ])
+            }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
+        }
+    }
+
+    /// How long a volume may sit in a given transitional status before the
+    /// stuck-operation sweep treats it as lost (issue #644). Volumes carry no
+    /// `ResourceOperation` row, so — unlike the VM/sandbox backstops above,
+    /// which skip any resource with a pending operation — the sweep cannot tell
+    /// an operation still in flight on a live replica from one abandoned by a
+    /// crash. It has only elapsed time. Each budget therefore sits comfortably
+    /// above the matching `VolumeService` RPC timeout so a legitimately slow
+    /// operation on a live replica is never clobbered mid-flight; the extra
+    /// margin only delays recovery of a genuinely stuck volume, which is rare.
+    private func stuckVolumeBudgetSeconds(for status: VolumeStatus) -> TimeInterval {
+        switch status {
+        case .creating, .cloning:
+            // VolumeService.transferTimeout is 600s (image download / full-disk
+            // copy); a live create/clone resolves the row by then.
+            return 900
+        case .snapshotting:
+            // VolumeService.snapshotTimeout is 120s.
+            return 300
+        case .attaching, .detaching, .resizing:
+            // VolumeService.defaultTimeout is 30s.
+            return 180
+        case .available, .attached, .deleting, .error:
+            // Not transitional (or, for `.deleting`, deliberately left to the
+            // retryable-delete path); never queried by the sweep above.
+            return 300
         }
     }
 
