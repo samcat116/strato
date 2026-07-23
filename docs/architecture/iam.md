@@ -124,8 +124,8 @@ language, one evaluator.
 ### The store (shipped)
 
 `iam_guardrails` (`GuardrailStore`, `POST/GET/PATCH/DELETE /api/iam/guardrails`).
-As with bindings, customers assemble a guardrail from a fixed vocabulary rather
-than authoring policy text:
+A guardrail is assembled from a fixed matcher vocabulary — the builder — or,
+since #610, written directly as a Cedar `forbid`:
 
 | Field | Vocabulary |
 |---|---|
@@ -133,6 +133,22 @@ than authoring policy text:
 | actions | exact registry actions, `service:*`, or `*` (empty ⇒ `*`) |
 | principal match | `any`, `user`, `group`, `external_to_organization` |
 | resource match | `any`, `environment` |
+
+**`cedar_text` is the compiled source of truth (#610).** Guardrails join roles
+and authored policies on the same model: a write sends **either** the matchers
+(the server assembles the forbid) **or** a hand-written `cedarText` — both at
+once is a `400`, the same XOR roles enforce for `actions`/`cedarText`. Either
+way the stored `cedar_text` is what the policy-set cache compiles verbatim under
+`guardrail-<id>`, so what is stored, shown, and enforced is one string. An
+`authored` flag records which input produced the row; on an authored row the
+matcher columns are inert placeholders and the Cedar text is the whole story. A
+hand-authored forbid is held to the guardrail shape — forbid-only, resource
+scope contained inside the attach node (the same containment `PolicyStore` gives
+an authored policy, but the target is the attach node), and not self-locking —
+and compiled against the live schema at write time, so Cedar's own errors are a
+`400`, not a row the cache drops at boot (`GuardrailText`). Rows written before
+the migration carry a null `cedar_text`; the cache regenerates those from the
+matchers, so a ceiling is never missing merely because the column is unfilled.
 
 Notes on the shape, each of which is load-bearing:
 
@@ -160,7 +176,13 @@ Notes on the shape, each of which is load-bearing:
   stay legal and useful ("contractors may not set policy here") — someone
   outside the condition can still undo them. Refusing is not a view about
   strict policy — it is refusing to let one write lock an org out
-  irrecoverably.
+  irrecoverably. For an **authored** guardrail the check is structural and
+  deliberately conservative — it fires only on the clearest self-lock
+  (unconstrained principal, no conditions, an action scope that could reach
+  `iam:setPolicy`). A cleverly conditioned authored forbid can still fence out
+  policy administration, but a guardrail is managed by admins of its attach node
+  *or any container above it*, so a lower one is always removable from above;
+  only one at the org root is truly stuck.
 - Guardrails can be **disabled** without being deleted. Ceilings get switched
   off to unblock an incident far more often than they get removed, and the row
   is the record of what was in force.
@@ -214,6 +236,16 @@ The question is split deliberately:
   on which overlapping action is asked about, only on the resource type, so the
   enumeration is one query per reachable resource type per candidate guardrail
   — complete, not sampled.
+
+**Matcher ceilings only (#610).** The write-time check runs against matcher-built
+guardrails. An authored guardrail's principal side is free-form Cedar this check
+cannot resolve against the database, and resolving it symbolically would make
+the solver invent memberships it was never told about (the very thing the
+principal-side split above exists to avoid) — so rather than refuse bindings on
+a guess, authored ceilings rely on eval-time enforcement, which is exact and
+always in force. The trade-off is that an authored ceiling gives no *write-time*
+explanation; the eval-time denial still names it. `who-can`, whose queries are
+concrete, reflects authored ceilings exactly without a solver — see below.
 
 **Fail closed.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on `PATH`) names the SMT
 solver; the control-plane image ships one. With no solver, gated binding writes
@@ -378,14 +410,29 @@ containment analysis is #484's follow-up. `POST /api/iam/policies/validate`
 runs the same preparation without saving. Deleting an org or project removes
 the policies it owns.
 
-Because a reverse lookup cannot invert an authored policy's principal scope or
-conditions, `who-can` reports authored policies **best-effort**: a `policies`
-section lists every enabled policy whose resource scope is on the queried
-node's chain and whose action scope could cover the action (matched off the
-EST), and an `authoredPolicyCaveat` flag warns that `principals` is not the
-whole answer wherever such a policy is in force. Exact enumeration waits on
-#484. For symmetry, guardrail DTOs now also carry their generated `forbid` text
-read-only, so the UI can show the Cedar a ceiling compiles to.
+Because a reverse lookup cannot invert an authored **permit**'s principal scope
+or conditions, `who-can` reports those **best-effort**: a `policies` section
+lists every enabled permit whose resource scope is on the queried node's chain
+and whose action scope could cover the action (matched off the EST), and an
+`authoredPolicyCaveat` flag warns that `principals` is not the whole answer
+wherever such a permit is in force — someone the list does not name may also be
+able to act.
+
+**Ceilings are reflected exactly (#610).** A `who-can` query fixes the action
+and the node, so a *forbid* — a guardrail or an authored forbid policy — is
+concrete and needs no solver: `who-can` evaluates the compiled set for each
+granted principal it enumerates (a non-recording pass, so the reverse lookup
+does not flood the decision log) and marks the ones a ceiling neutralises
+`ceilinged`, alongside a `ceilings` section naming what constrains the resource.
+`WhoCanService.can` subtracts ceilings the same way, so it agrees with the
+enforcer about a grant a ceiling takes back. This is why authored *forbids* left
+the best-effort caveat above — only permits, which widen access, remain
+un-invertible. Marking rather than filtering is deliberate: an admin auditing
+"who can reach this?" needs to see both a ceilinged grant and a live one. This
+is what #484 unblocked for guardrails — the symbolic machinery is for the
+subtree-quantified write-time check; the concrete reverse lookup only needed the
+compiled set. Guardrail DTOs also carry their `cedar_text` so the UI can show
+the Cedar a ceiling compiles to.
 
 ### Membership and visibility
 

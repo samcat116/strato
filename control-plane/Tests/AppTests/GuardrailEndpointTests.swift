@@ -57,7 +57,8 @@ final class GuardrailEndpointTests {
         name: String,
         effect: String? = nil,
         org: Organization,
-        actions: [String]? = ["vm:delete"]
+        actions: [String]? = ["vm:delete"],
+        cedarText: String? = nil
     ) -> GuardrailController.CreateGuardrailRequest {
         GuardrailController.CreateGuardrailRequest(
             name: name,
@@ -65,9 +66,10 @@ final class GuardrailEndpointTests {
             effect: effect,
             nodeType: "organization",
             nodeId: org.id!.uuidString,
-            actions: actions,
+            actions: cedarText == nil ? actions : nil,
             principalMatch: nil,
             resourceMatch: nil,
+            cedarText: cedarText,
             enabled: nil
         )
     }
@@ -250,6 +252,60 @@ final class GuardrailEndpointTests {
                     let decoded = try res.content.decode(GuardrailController.PolicySetVersionResponse.self)
                     #expect(decoded.version > 0)
                 })
+        }
+    }
+
+    // MARK: - Authored guardrails (#610)
+
+    @Test("An authored forbid is created and returned with authored=true and its cedarText")
+    func authoredGuardrailEndpoint() async throws {
+        try await withApp { app, fixture in
+            let projectLiteral = IAMNode(type: .project, id: fixture.project.id!).cedarUID.cedarLiteral
+            let text =
+                "forbid(principal, action in [Action::\"vm:delete\"], resource in \(projectLiteral));"
+            let body = GuardrailController.CreateGuardrailRequest(
+                name: "authored-ceiling", description: "d", effect: nil,
+                nodeType: "project", nodeId: fixture.project.id!.uuidString,
+                actions: nil, principalMatch: nil, resourceMatch: nil, cedarText: text, enabled: nil)
+
+            try await app.test(
+                .POST, "/api/iam/guardrails",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    try req.content.encode(body)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .created)
+                    let written = try res.content.decode(GuardrailController.GuardrailWriteResponse.self)
+                    #expect(written.guardrail.authored == true)
+                    #expect(written.guardrail.cedarText == text)
+                    #expect(written.guardrail.effect == "forbid")
+                })
+        }
+    }
+
+    @Test("Sending both matchers and cedarText is a 400 that writes nothing")
+    func ambiguousInputRejected() async throws {
+        try await withApp { app, fixture in
+            let projectLiteral = IAMNode(type: .project, id: fixture.project.id!).cedarUID.cedarLiteral
+            let body = GuardrailController.CreateGuardrailRequest(
+                name: "ambiguous", description: nil, effect: nil,
+                nodeType: "project", nodeId: fixture.project.id!.uuidString,
+                actions: ["vm:delete"], principalMatch: nil, resourceMatch: nil,
+                cedarText: "forbid(principal, action, resource in \(projectLiteral));", enabled: nil)
+
+            try await app.test(
+                .POST, "/api/iam/guardrails",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    try req.content.encode(body)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                })
+
+            let count = try await Guardrail.query(on: app.db).count()
+            #expect(count == 0)
         }
     }
 }

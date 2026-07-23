@@ -6525,6 +6525,20 @@ export interface components {
             principalDisabled: boolean;
             /** @description The principal lives outside the resource's organization — a user with no membership there, or a group owned by another org. Cross-org access is reported and marked, never filtered; it is exactly what most needs to be visible. */
             principalExternalToOrg: boolean;
+            /** @description The grant is real but a ceiling (a guardrail or authored forbid) denies it, so this principal cannot actually act here and the enforcer agrees (#610). Marked, not filtered — a neutralised grant is exactly what an audit needs to see. Absent/false when no ceiling applies. */
+            ceilinged?: boolean;
+            /** @description The ceiling policy ids that deny this grant (`guardrail-<id>` / `policy-<id>`), when `ceilinged`. May be empty even when `ceilinged` is true if the denial is structural — a fail-closed on an inconsistent/truncated ancestor chain — rather than a named ceiling. */
+            ceilingPolicyIDs?: string[];
+        };
+        /** @description A ceiling in force on the queried resource — a guardrail inherited down the tree, or an authored forbid policy scoped to it (#610). Which grants it neutralises is on the entries (`ceilinged`); this is the summary of what constrains the resource. */
+        IAMWhoCanCeiling: {
+            /** @enum {string} */
+            kind: "guardrail" | "policy";
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The container a guardrail hangs on, or the owner of a policy. */
+            node: components["schemas"]["IAMNode"];
         };
         IAMWhoCanResponse: {
             resource: components["schemas"]["IAMNode"];
@@ -6534,10 +6548,12 @@ export interface components {
             principals: components["schemas"]["IAMWhoCanEntry"][];
             /** @description When true, `principals` is not the whole answer: every authenticated user can perform this action here. */
             openToAllAuthenticatedUsers: boolean;
-            /** @description Authored policies (issue #606) in force on this resource that may bear on the action, matched best-effort on action scope and containment. Their principals are not in `principals`. */
+            /** @description Authored **permit** policies (issue #606) in force on this resource that may bear on the action, matched best-effort on action scope and containment. Their principals are not in `principals`. Authored forbids are reflected exactly in `ceilings` instead (#610). */
             authoredPolicies: components["schemas"]["IAMWhoCanPolicyMatch"][];
-            /** @description When true, an authored policy above bears on this query and its principals could not be enumerated — `principals` is again partial. */
+            /** @description When true, an authored permit above bears on this query and its principals could not be enumerated — `principals` is again partial. */
             authoredPolicyCaveat: boolean;
+            /** @description The ceilings in force on this resource — guardrails inherited down the tree plus authored forbid policies scoped to it (#610). Which grants each neutralises is on the entries (`ceilinged`). */
+            ceilings: components["schemas"]["IAMWhoCanCeiling"][];
         };
         /** @description An authored policy that may bear on the queried action and resource. Best-effort: which principals it permits or forbids, and any conditions, cannot be enumerated from a reverse lookup. */
         IAMWhoCanPolicyMatch: {
@@ -6769,14 +6785,16 @@ export interface components {
              * @enum {string}
              */
             effect: "forbid";
-            /** @description Exact actions, `service:*` wildcards, or `*`. An empty list means every action. */
+            /** @description Exact actions, `service:*` wildcards, or `*`. An empty list means every action. Placeholder (`["*"]`) on an authored guardrail. */
             actions: string[];
             principalMatch: components["schemas"]["IAMGuardrailPrincipalMatch"];
             resourceMatch: components["schemas"]["IAMGuardrailResourceMatch"];
             /** @description Which side carries the constraint; derived from the two matches. */
             shape: string;
-            /** @description The generated Cedar `forbid` this guardrail compiles to, read-only, for UI display (issue #606). Absent when the row cannot be rendered (an unknown node type, or an external-principal ceiling whose attach node resolves to no organization). */
+            /** @description The Cedar `forbid` this guardrail compiles to — the stored source of truth since #610 (matcher-generated or hand-authored). Absent only when the row cannot be rendered (an unknown node type, or an external-principal ceiling whose attach node resolves to no organization). */
             cedarText?: string;
+            /** @description Whether the forbid was hand-authored (`true`) or assembled from the matchers (`false`, #610). On an authored row the matcher fields are placeholders; a builder UI reads this to choose the editor. */
+            authored: boolean;
             enabled: boolean;
             /** Format: uuid */
             createdBy?: string;
@@ -6817,15 +6835,19 @@ export interface components {
             principalMatch?: components["schemas"]["IAMGuardrailPrincipalMatch"];
             /** @description Defaults to `any`. */
             resourceMatch?: components["schemas"]["IAMGuardrailResourceMatch"];
+            /** @description Advanced (#610): a hand-written Cedar `forbid`, held to the guardrail shape (forbid-only, contained to the attach node, not self-locking). Sent instead of the matchers — the two together are a `400`. */
+            cedarText?: string;
             /** @default true */
             enabled: boolean;
         };
-        /** @description Partial update; omitted fields are left unchanged. */
+        /** @description Partial update; omitted fields are left unchanged. A guardrail's input mode is fixed at creation: send matcher fields for a matcher-built guardrail, `cedarText` for an authored one — the wrong mode's fields are a `400`. */
         IAMGuardrailUpdateRequest: {
             description?: string;
             actions?: string[];
             principalMatch?: components["schemas"]["IAMGuardrailPrincipalMatch"];
             resourceMatch?: components["schemas"]["IAMGuardrailResourceMatch"];
+            /** @description Advanced (#610): edit an authored guardrail's Cedar text. Rejected on a matcher-built guardrail. */
+            cedarText?: string;
             enabled?: boolean;
         };
         IAMGuardrailListResponse: {

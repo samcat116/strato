@@ -130,6 +130,7 @@ struct AuthorizationController: RouteCollection {
                 principalID: principal.id,
                 action: item.permission,
                 node: node,
+                app: req.application,
                 on: req.db
             )
         }
@@ -158,9 +159,15 @@ struct AuthorizationController: RouteCollection {
         /// Authored policies (issue #606) that may bear on this action, matched
         /// best-effort. Their principals are not in `principals`.
         let authoredPolicies: [WhoCanPolicyMatch]
-        /// When true, an authored policy above bears on this query and its
-        /// principals could not be enumerated — `principals` is again partial.
+        /// When true, an authored permit policy above bears on this query and
+        /// its principals could not be enumerated — `principals` is again
+        /// partial.
         let authoredPolicyCaveat: Bool
+        /// The ceilings in force on this resource (guardrails + authored
+        /// forbids). Which grants each neutralises is on the entries
+        /// (`ceilinged`); this is the "what constrains this resource" summary
+        /// (#610).
+        let ceilings: [WhoCanCeiling]
     }
 
     /// POST /api/authorization/who-can
@@ -181,7 +188,8 @@ struct AuthorizationController: RouteCollection {
         try await Self.requirePolicyRead(on: node, caller: user, req: req)
 
         let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
-        let result = try await WhoCanService.whoCan(action: payload.action, node: node, on: req.db)
+        let result = try await WhoCanService.whoCan(
+            action: payload.action, node: node, app: req.application, on: req.db)
 
         return WhoCanResponse(
             resource: node,
@@ -190,7 +198,8 @@ struct AuthorizationController: RouteCollection {
             principals: result.principals,
             openToAllAuthenticatedUsers: result.openToAllAuthenticatedUsers,
             authoredPolicies: result.authoredPolicies,
-            authoredPolicyCaveat: result.authoredPolicyCaveat
+            authoredPolicyCaveat: result.authoredPolicyCaveat,
+            ceilings: result.ceilings
         )
     }
 
