@@ -767,19 +767,27 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Adds a freshly created/reused LSP to its security groups' port groups
     /// plus the drop group. Throws `DependencyPendingError` when a group's
-    /// port group doesn't exist yet — the authority's sync realizes it and
-    /// the VM create retries — so a managed NIC can never come up filtered by
-    /// nothing.
+    /// port group doesn't exist — or exists without its generation stamp,
+    /// i.e. its ACLs aren't realized yet (rows and ACLs commit in separate
+    /// transactions) — the authority's sync realizes it and the VM create
+    /// retries, so a managed NIC can never come up filtered by nothing. The
+    /// drop group joins first: if a later add fails, the port is already
+    /// default-deny rather than allow-only.
     private func joinSecurityGroups(portName: String, portUUID: String?, groupIds: [UUID]) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        var groups = groupIds.map { OVNNaming.portGroupName(securityGroupId: $0) }
-        groups.append(OVNNaming.dropPortGroupName)
-        for group in groups.sorted() {
+        let groups =
+            [OVNNaming.dropPortGroupName] + groupIds.map { OVNNaming.portGroupName(securityGroupId: $0) }.sorted()
+        for group in groups {
             guard let portGroup = try await ovnManager.getPortGroup(named: group) else {
                 throw DependencyPendingError(
                     "port group \(group) does not exist yet; waiting for the site's network controller to realize it"
+                )
+            }
+            guard portGroup.external_ids?[Self.generationKey] != nil else {
+                throw DependencyPendingError(
+                    "port group \(group) exists but its ACLs are not realized yet; waiting for the site's network controller"
                 )
             }
             guard let portUUID else { continue }
@@ -2110,8 +2118,14 @@ extension NetworkError: ClassifiableError {
 
 extension NetworkServiceLinux: SecurityGroupActuator {
     /// External-id key carrying the generation a port group's ACL set was
-    /// built from; absence forces a rewrite (see `needsACLRewrite`).
+    /// built from; absence forces a rewrite (see `needsACLRewrite`) and marks
+    /// the group not-yet-enforcing for the membership paths — the row can
+    /// exist committed transactions before its ACLs do.
     static let generationKey = "strato-generation"
+    /// External-id key carrying the `aclSchemaRevision` that wrote the ACLs,
+    /// so builder fixes roll out on agent upgrade without waiting for rule
+    /// edits to bump each group's generation.
+    static let builderRevisionKey = "strato-builder-rev"
 
     func observeSecurityGroups() async throws -> [ObservedPortGroup] {
         #if os(Linux)
@@ -2123,7 +2137,8 @@ extension NetworkServiceLinux: SecurityGroupActuator {
             .map {
                 ObservedPortGroup(
                     name: $0.name,
-                    generation: $0.external_ids?[Self.generationKey].flatMap(Int64.init))
+                    generation: $0.external_ids?[Self.generationKey].flatMap(Int64.init),
+                    builderRevision: $0.external_ids?[Self.builderRevisionKey].flatMap(Int64.init))
             }
         #else
         return []
@@ -2137,31 +2152,38 @@ extension NetworkServiceLinux: SecurityGroupActuator {
         }
 
         let pgUUID: String
+        var supersededACLs: [String] = []
         if let existing = try await ovnManager.getPortGroup(named: plan.name) {
-            let observedGeneration = existing.external_ids?[Self.generationKey].flatMap(Int64.init)
             guard
                 SecurityGroupReconciler.needsACLRewrite(
-                    planned: plan.generation, observed: observedGeneration)
+                    planned: plan.generation,
+                    observed: existing.external_ids?[Self.generationKey].flatMap(Int64.init),
+                    observedBuilderRevision: existing.external_ids?[Self.builderRevisionKey]
+                        .flatMap(Int64.init))
             else { return }
             guard let uuid = existing.uuid else {
                 throw NetworkError.ovnError("Port group \(plan.name) has no UUID")
             }
             pgUUID = uuid
-            // Full replace: OVN ACL rows have no natural key to diff on, and a
-            // group's rule set is small. The generation stamp is written only
-            // after the new set is in place, so a crash mid-rewrite leaves the
-            // old stamp and the next sync redoes the whole rewrite.
-            for aclUUID in existing.acls ?? [] {
-                try await ovnManager.deleteACL(uuid: aclUUID)
-            }
+            supersededACLs = existing.acls ?? []
         } else {
-            // Created without the generation stamp for the same crash-safety
-            // reason; `ports` stays untouched here and always (membership
-            // belongs to each VM's hosting agent).
+            // Created without the generation stamp: the membership paths read
+            // a stamp-less group as not-yet-enforcing and refuse to join it,
+            // so a port can never go live behind a group whose ACLs aren't
+            // written yet. `ports` stays untouched here and always
+            // (membership belongs to each VM's hosting agent).
             pgUUID = try await ovnManager.createPortGroup(
                 OVNPortGroup(name: plan.name, external_ids: [Self.managedKey: Self.managedValue]))
         }
 
+        // Full replace, NEW SET FIRST: OVN ACL rows have no natural key to
+        // diff on, and each write is its own OVSDB transaction. Creating
+        // before deleting means the group never has *fewer* ACLs than it
+        // started with — with both sets present the drops still drop and the
+        // allows still allow, so live members (the drop group holds every
+        // managed port on the site) never lose their default-deny, and a rule
+        // edit never blacks out the group's allows. Deleting first would open
+        // exactly those windows. Duplicates during the overlap are harmless.
         for acl in plan.acls {
             _ = try await ovnManager.createACL(
                 OVNACL(
@@ -2172,7 +2194,12 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     external_ids: acl.externalIDs),
                 onPortGroup: plan.name)
         }
+        for aclUUID in supersededACLs {
+            try await ovnManager.deleteACL(uuid: aclUUID)
+        }
 
+        // Stamps last: a crash anywhere above leaves them absent/stale and
+        // the next sync redoes the whole rewrite.
         try await ovnManager.updatePortGroup(
             uuid: pgUUID,
             OVNPortGroup(
@@ -2180,6 +2207,7 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                 external_ids: [
                     Self.managedKey: Self.managedValue,
                     Self.generationKey: String(plan.generation),
+                    Self.builderRevisionKey: String(SecurityGroupACLBuilder.aclSchemaRevision),
                 ]))
         logger.info(
             "Security-group port group converged",
@@ -2230,9 +2258,18 @@ extension NetworkServiceLinux: SecurityGroupActuator {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        guard try await ovnManager.getPortGroup(named: group) != nil else {
+        guard let portGroup = try await ovnManager.getPortGroup(named: group) else {
             throw DependencyPendingError(
                 "port group \(group) does not exist yet; waiting for the site's network controller to realize it"
+            )
+        }
+        // Existence is not enforcement: the authority realizes a group as
+        // separate transactions (row, then ACLs, then the generation stamp),
+        // so a stamp-less row is a group whose ACLs are not written yet —
+        // joining it would put the port behind a drop group with no drops.
+        guard portGroup.external_ids?[Self.generationKey] != nil else {
+            throw DependencyPendingError(
+                "port group \(group) exists but its ACLs are not realized yet; waiting for the site's network controller"
             )
         }
         guard let portUUID = try await ovnManager.getLogicalSwitchPort(named: portName)?.uuid else {

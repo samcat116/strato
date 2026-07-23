@@ -81,6 +81,13 @@ public enum SecurityGroupACLBuilder {
     /// deployments replace it on upgrade (the generation mechanism reused).
     public static let dropGroupRevision: Int64 = 1
 
+    /// Bumped whenever this builder's ACL *construction* changes — a fixed
+    /// match syntax, a newly expressible rule shape — so upgraded agents
+    /// rewrite every group's ACLs even though the control-plane generations
+    /// didn't move. Without it, a builder fix would sit unapplied until some
+    /// unrelated rule edit happened to bump each group.
+    public static let aclSchemaRevision: Int64 = 1
+
     static let managedKey = "strato-managed"
     static let managedValue = "true"
 
@@ -223,16 +230,19 @@ public struct PortGroupPlan: Equatable, Sendable {
     }
 }
 
-/// A managed Port_Group as observed in the NB: its name and the generation
-/// stamped when its ACLs were last written (nil for rows predating the stamp,
-/// which forces a rewrite).
+/// A managed Port_Group as observed in the NB: its name, the generation its
+/// ACLs were last written from, and the builder revision that wrote them
+/// (nil stamps — rows predating them, or a crash mid-rewrite — force a
+/// rewrite).
 public struct ObservedPortGroup: Equatable, Sendable {
     public let name: String
     public let generation: Int64?
+    public let builderRevision: Int64?
 
-    public init(name: String, generation: Int64?) {
+    public init(name: String, generation: Int64?, builderRevision: Int64? = nil) {
         self.name = name
         self.generation = generation
+        self.builderRevision = builderRevision
     }
 }
 
@@ -311,11 +321,19 @@ public enum SecurityGroupReconciler {
     }
 
     /// Whether a port group's ACLs need (re)writing: yes for a missing
-    /// generation stamp (pre-stamp row or fresh creation) or an older one; a
-    /// *newer* stored generation means this sync is stale — leave the ACLs
-    /// alone rather than downgrade them.
-    public static func needsACLRewrite(planned: Int64, observed: Int64?) -> Bool {
+    /// generation stamp (pre-stamp row, fresh creation, or a crash between
+    /// ACL writes and stamping), an older generation, or ACLs written by a
+    /// different builder revision (an agent upgrade that changed match
+    /// construction must roll its fixes out without waiting for rule edits).
+    /// A *newer* stored generation means this sync is stale — leave the ACLs
+    /// alone rather than downgrade them, builder revision included: the
+    /// current-generation sync that follows performs the schema rewrite.
+    public static func needsACLRewrite(
+        planned: Int64, observed: Int64?, observedBuilderRevision: Int64? = nil
+    ) -> Bool {
         guard let observed else { return true }
+        if planned < observed { return false }
+        if observedBuilderRevision != SecurityGroupACLBuilder.aclSchemaRevision { return true }
         return planned > observed
     }
 }
@@ -410,10 +428,22 @@ extension SecurityGroupReconciler {
         for membership in managed {
             guard let desired = membership.desiredGroups else { continue }
             let current = observed[membership.portName] ?? []
-            for group in desired.subtracting(current).sorted() {
+            // The drop group joins FIRST: additions are one OVSDB round trip
+            // each, and a port that lands in an allow group before the drop
+            // group would spend the gap default-allow on live traffic. If the
+            // drop-group add fails, the port's allow-group adds are skipped
+            // entirely this pass (fail closed, retried next sync) — removals
+            // below still run, since they only ever narrow access.
+            let additions = desired.subtracting(current).sorted {
+                ($0 == OVNNaming.dropPortGroupName ? 0 : 1, $0) < ($1 == OVNNaming.dropPortGroupName ? 0 : 1, $1)
+            }
+            var portPending = false
+            for group in additions {
+                if portPending { break }
                 do {
                     try await actuator.addPort(named: membership.portName, toGroup: group)
                 } catch {
+                    if group == OVNNaming.dropPortGroupName { portPending = true }
                     logger.warning(
                         "Could not add port to security-group port group (retried next sync)",
                         metadata: [

@@ -197,11 +197,30 @@ struct SecurityGroupReconcilerTests {
 
     @Test("ACL rewrite triggers on missing or older stamps, not on newer ones")
     func generationGuard() {
+        let rev = SecurityGroupACLBuilder.aclSchemaRevision
         #expect(SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: nil))
-        #expect(SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 2))
-        #expect(!SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 3))
+        #expect(
+            SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 2, observedBuilderRevision: rev))
+        #expect(
+            !SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 3, observedBuilderRevision: rev))
         // A newer stored generation means this sync is stale: don't downgrade.
-        #expect(!SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 4))
+        #expect(
+            !SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 4, observedBuilderRevision: rev))
+    }
+
+    @Test("A builder-revision change rewrites current groups but never stale syncs")
+    func builderRevisionGuard() {
+        let stale = SecurityGroupACLBuilder.aclSchemaRevision - 1
+        // Same generation, older builder: the upgrade's fixed ACLs roll out.
+        #expect(
+            SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 3, observedBuilderRevision: stale))
+        // Missing revision stamp (pre-revision rows): rewrite.
+        #expect(
+            SecurityGroupReconciler.needsACLRewrite(planned: 3, observed: 3, observedBuilderRevision: nil))
+        // A stale sync must not rewrite with outdated rules, even to apply
+        // the new builder — the current-generation sync does that.
+        #expect(
+            !SecurityGroupReconciler.needsACLRewrite(planned: 2, observed: 3, observedBuilderRevision: stale))
     }
 
     // MARK: - Membership
@@ -237,6 +256,42 @@ struct SecurityGroupReconcilerTests {
         #expect(observedPorts == ["vm-A"])
     }
 
+    @Test("A port joins the drop group before any allow group")
+    func membershipDropGroupFirst() async {
+        let actuator = RecordingSecurityGroupActuator()
+        let memberships = [
+            DesiredPortMembership(portName: "vm-A", securityGroupIds: [groupId, peerId])
+        ]
+        await SecurityGroupReconciler.reconcileMembership(
+            memberships: memberships, actuator: actuator, logger: Logger(label: "test"))
+
+        let added = await actuator.added
+        #expect(added.first?.group == OVNNaming.dropPortGroupName)
+        #expect(Set(added.map(\.group)) == [OVNNaming.dropPortGroupName, pg, peerPG])
+    }
+
+    @Test("A failed drop-group join skips the port's allow groups entirely (fail closed)")
+    func membershipDropGroupFailureSkipsAllows() async {
+        let actuator = RecordingSecurityGroupActuator(
+            failingGroups: [OVNNaming.dropPortGroupName])
+        let memberships = [
+            DesiredPortMembership(portName: "vm-A", securityGroupIds: [groupId]),
+            // A port already in the drop group converges its allows normally.
+            DesiredPortMembership(portName: "vm-B", securityGroupIds: [groupId]),
+        ]
+        let actuatorWithB = actuator
+        await actuatorWithB.seedMembership(port: "vm-B", groups: [OVNNaming.dropPortGroupName])
+        await SecurityGroupReconciler.reconcileMembership(
+            memberships: memberships, actuator: actuator, logger: Logger(label: "test"))
+
+        let added = await actuator.added
+        // vm-A: the drop add failed, so no allow group was joined — a port in
+        // allow groups without the drop group would be default-allow.
+        #expect(!added.contains(Membership(port: "vm-A", group: pg)))
+        // vm-B: already default-denied, its allow group converged.
+        #expect(added.contains(Membership(port: "vm-B", group: pg)))
+    }
+
     @Test("Authority reconcile ensures plans then tears down leftovers")
     func authorityReconcile() async throws {
         let group = DesiredSecurityGroup(id: groupId, generation: 2, rules: [rule()])
@@ -263,6 +318,8 @@ private struct Membership: Equatable {
 }
 
 private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
+    struct AddFailed: Error {}
+
     private(set) var ensured: [PortGroupPlan] = []
     private(set) var removedGroups: [String] = []
     private(set) var added: [Membership] = []
@@ -270,11 +327,20 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
     private(set) var observedPorts: [String] = []
 
     private let observed: [ObservedPortGroup]
-    private let membership: [String: Set<String>]
+    private var membership: [String: Set<String>]
+    private let failingGroups: Set<String>
 
-    init(observed: [ObservedPortGroup] = [], membership: [String: Set<String>] = [:]) {
+    init(
+        observed: [ObservedPortGroup] = [], membership: [String: Set<String>] = [:],
+        failingGroups: Set<String> = []
+    ) {
         self.observed = observed
         self.membership = membership
+        self.failingGroups = failingGroups
+    }
+
+    func seedMembership(port: String, groups: Set<String>) {
+        membership[port] = groups
     }
 
     func observeSecurityGroups() async throws -> [ObservedPortGroup] { observed }
@@ -293,6 +359,7 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
     }
 
     func addPort(named portName: String, toGroup group: String) async throws {
+        if failingGroups.contains(group) { throw AddFailed() }
         added.append(Membership(port: portName, group: group))
     }
 
