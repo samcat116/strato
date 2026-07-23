@@ -590,6 +590,14 @@ public func configure(_ app: Application) async throws {
     // run when the column was added).
     app.migrations.add(EnforceSiteStatusEnum())
 
+    // Event notifications (issue #559): user-managed webhook subscriptions
+    // plus the transactional delivery outbox drained by the delivery sweep.
+    app.migrations.add(CreateWebhookSubscription())
+    app.migrations.add(CreateWebhookDelivery())
+    // Delivery context stamped at operation-begin time so delete completions
+    // can still be announced after the resource row is gone (PR #668 review).
+    app.migrations.add(AddDeliveryContextToResourceOperation())
+
     // Security groups: NIC-attached firewall rule sets realized as OVN ACLs
     // on port groups, with a mandatory per-project default group.
     app.migrations.add(CreateSecurityGroup())
@@ -753,6 +761,11 @@ public func configure(_ app: Application) async throws {
     // from their transmitters. The handler arms the sweep at boot and cancels
     // it at shutdown.
     app.lifecycle.use(SSFPollLifecycleHandler())
+
+    // Webhook notifications (issue #559): periodically drain the
+    // webhook_deliveries outbox. The handler arms the sweep at boot and
+    // cancels it at shutdown.
+    app.lifecycle.use(WebhookDeliveryLifecycleHandler())
 
     // Blue/green drain: flip `/health/ready` to 503 on SIGTERM so a load
     // balancer pulls this replica before Vapor stops accepting connections.

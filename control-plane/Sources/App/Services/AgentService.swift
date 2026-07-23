@@ -539,6 +539,8 @@ actor AgentService {
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
+        await WebhookEvents.emitAgentPresence(
+            agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
         app.logger.info(
             "Agent registered",
             metadata: [
@@ -654,6 +656,8 @@ actor AgentService {
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        await WebhookEvents.emitAgentPresence(
+            agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 
@@ -724,6 +728,9 @@ actor AgentService {
                 {
                     agent.status = .offline
                     try await agent.save(on: db)
+                    await WebhookEvents.emitAgentPresence(
+                        agent: agent, connected: false, reason: "connection_closed",
+                        on: db, logger: self.app.logger)
                 }
             } catch {
                 self.app.logger.error("Failed to update agent offline status in database: \(error)")
@@ -816,6 +823,8 @@ actor AgentService {
                 try await vm.save(on: db)
                 divergent += 1
                 Telemetry.vmEnteredError(reason: "reconciliation")
+                await WebhookEvents.emitVMStateChanged(
+                    vm: vm, previous: previous, current: .error, on: db, logger: app.logger)
 
                 app.logger.warning(
                     "VM missing from agent heartbeat; marking as error",
@@ -990,6 +999,8 @@ actor AgentService {
 
                 Telemetry.agentDisconnected(reason: "stale")
                 Telemetry.recordAgentUp(agentName: agent.name, up: false)
+                await WebhookEvents.emitAgentPresence(
+                    agent: agent, connected: false, reason: "stale", on: app.db, logger: app.logger)
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
                     metadata: ["agentName": .string(agent.name)])
@@ -2765,10 +2776,12 @@ actor AgentService {
             changed = true
         }
 
+        var statusTransition: (previous: VMStatus, current: VMStatus)?
         if vm.status != observed.status, observed.status != .unknown || vm.status.isTransitional {
             let previous = vm.status
             vm.setStatus(observed.status)
             changed = true
+            statusTransition = (previous, observed.status)
 
             // Drift telemetry: an out-of-band change (no operation in flight
             // asked for anything) means agent reality moved on its own — e.g.
@@ -2786,6 +2799,11 @@ actor AgentService {
         }
         if changed {
             try await vm.save(on: db)
+        }
+        if let transition = statusTransition {
+            await WebhookEvents.emitVMStateChanged(
+                vm: vm, previous: transition.previous, current: transition.current,
+                on: db, logger: app.logger)
         }
 
         guard let operation = pendingOperation else { return }
@@ -2807,12 +2825,14 @@ actor AgentService {
             // reason instead of waiting out its completion budget.
             if try await operation.completeIfPending(as: .failed, error: lastError, on: db) {
                 var failedChanged = false
+                var enteredError = false
                 if observed.status == .unknown {
                     // The VM has no settled presence on the agent (e.g. the
                     // create never got off the ground) — surface it as error
                     // rather than leaving a healthy-looking resting state.
                     vm.setStatus(.error)
                     failedChanged = true
+                    enteredError = true
                     Telemetry.vmEnteredError(reason: "convergence_failed")
                 }
                 // The intent was not achieved and the user has been told: stop
@@ -2824,6 +2844,11 @@ actor AgentService {
                 }
                 if failedChanged {
                     try await vm.save(on: db)
+                }
+                if enteredError {
+                    await WebhookEvents.emitVMStateChanged(
+                        vm: vm, previous: observed.status, current: .error,
+                        on: db, logger: app.logger)
                 }
             }
         }
@@ -3002,6 +3027,8 @@ actor AgentService {
         vm.setStatus(.error)
         try await vm.save(on: db)
         Telemetry.vmEnteredError(reason: "reconciliation")
+        await WebhookEvents.emitVMStateChanged(
+            vm: vm, previous: previous, current: .error, on: db, logger: app.logger)
         app.logger.warning(
             "VM missing from agent observed-state report; marking as error until re-converged",
             metadata: [
