@@ -311,6 +311,32 @@ extension VM {
         return true
     }
 
+    /// Resolves the in-flight state a failed operation left on this VM
+    /// (issue #259/#412): a still-transitional VM — or one whose `create` never
+    /// settled (`.created`) — is escalated to `.error`, then desired state is
+    /// realigned with observed reality (`revertDesiredToObserved`) so the
+    /// unachieved intent does not linger and replay destructively on a later
+    /// sync. Shared by `ResourceOperationCoordinator.recordVerdict` and the
+    /// stuck-operation sweep; `telemetryReason` keeps a reported failure
+    /// (`operation_failed`) distinct from a swept timeout (`stuck_operation`)
+    /// in the error metric. Returns whether anything changed; does not persist
+    /// — call `save(on:)` afterwards.
+    @discardableResult
+    func resolveForStuckOperation(
+        _ operation: ResourceOperation, telemetryReason: String = "operation_failed"
+    ) -> Bool {
+        var changed = false
+        if status.isTransitional || (operation.kind == .create && status == .created) {
+            setStatus(.error)
+            changed = true
+            Telemetry.vmEnteredError(reason: telemetryReason)
+        }
+        if revertDesiredToObserved() {
+            changed = true
+        }
+        return changed
+    }
+
     var canPause: Bool {
         return status == .running
     }

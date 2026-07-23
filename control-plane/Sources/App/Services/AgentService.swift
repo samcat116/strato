@@ -1034,23 +1034,15 @@ actor AgentService {
                 let budget = operation.completionBudgetSeconds
                 guard age > budget else { continue }
 
-                guard
-                    try await operation.completeIfPending(
-                        as: .failed,
+                // The shared verdict path marks the operation failed (iff still
+                // pending) and resolves whatever in-flight state it left on its
+                // resource — each resource kind's own `resolveForStuckOperation`.
+                guard let operationID = operation.id,
+                    await app.resourceOperationCoordinator.recordVerdict(
+                        operationID: operationID, as: .failed,
                         error: "Operation timed out: no completion after \(Int(budget))s",
-                        on: db
-                    )
+                        telemetryReason: "stuck_operation", on: app)
                 else { continue }
-
-                // Resolve whatever in-flight state the failed operation left
-                // on its resource — each resource kind has its own notion of
-                // "stuck" and its own way back to a resting state.
-                switch operation.resourceKind {
-                case .virtualMachine:
-                    try await resolveVMForStuckOperation(operation, on: db)
-                case .sandbox:
-                    try await resolveSandboxForStuckOperation(operation, on: db)
-                }
 
                 app.logger.warning(
                     "Operation stuck pending past budget; marking as failed",
@@ -1218,51 +1210,6 @@ actor AgentService {
         }
     }
 
-    /// Resolves the VM state a swept (timed-out) operation left in flight.
-    /// `.created` only counts as stuck for a create — for every other kind it
-    /// is a legitimate resting state.
-    private func resolveVMForStuckOperation(_ operation: ResourceOperation, on db: Database) async throws {
-        guard let vm = try await VM.find(operation.resourceID, on: db) else { return }
-
-        var changed = false
-        if vm.status.isTransitional || (operation.kind == .create && vm.status == .created) {
-            vm.setStatus(.error)
-            changed = true
-            Telemetry.vmEnteredError(reason: "stuck_operation")
-        }
-        // The operation failed: realign desired state with observed reality
-        // so the unachieved intent (e.g. a delete's `.absent`) doesn't linger
-        // and replay destructively on a later sync or protocol upgrade
-        // (issue #260).
-        if vm.revertDesiredToObserved() {
-            changed = true
-        }
-        if changed {
-            try await vm.save(on: db)
-        }
-    }
-
-    /// Sandbox counterpart of `resolveVMForStuckOperation`. A stuck create is
-    /// recognized by the sandbox never having been confirmed by any agent
-    /// (`observedGeneration == 0`) — sandboxes have no `.created`-style
-    /// pre-placement status, so the fresh row's `.stopped` cannot carry that
-    /// signal the way a VM's `.created` does.
-    private func resolveSandboxForStuckOperation(_ operation: ResourceOperation, on db: Database) async throws {
-        guard let sandbox = try await Sandbox.find(operation.resourceID, on: db) else { return }
-
-        var changed = false
-        if sandbox.status.isTransitional || (operation.kind == .create && sandbox.observedGeneration == 0) {
-            sandbox.setStatus(.error)
-            changed = true
-        }
-        if sandbox.revertDesiredToObserved() {
-            changed = true
-        }
-        if changed {
-            try await sandbox.save(on: db)
-        }
-    }
-
     // MARK: - Sandbox expiry (issue #424)
 
     /// How long a terminal sandbox's record is kept by default.
@@ -1407,7 +1354,11 @@ actor AgentService {
             if let onlineAgentID {
                 await syncDesiredState(agentId: onlineAgentID)
             } else {
-                SandboxController.runDirectSandboxDeletion(operation, sandbox: sandbox, app: app)
+                app.resourceOperationCoordinator.dispatch(
+                    operation, resourceKind: .sandbox, resourceID: sandboxID, hypervisorId: nil,
+                    dispatch: .directResolution { @Sendable [app = self.app] db in
+                        try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+                    }, app: app)
             }
         } catch {
             // `begin` rejects with 409 when an operation is already pending —

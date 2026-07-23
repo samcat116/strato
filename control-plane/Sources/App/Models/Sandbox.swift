@@ -244,6 +244,27 @@ extension Sandbox {
         return true
     }
 
+    /// Sandbox counterpart of `VM.resolveForStuckOperation`: escalates a
+    /// still-transitional sandbox — or one whose `create` was never confirmed
+    /// by any agent (`observedGeneration == 0`; sandboxes have no
+    /// `.created`-style pre-placement status) — to `.error`, then realigns
+    /// desired state with observed reality. Shared by
+    /// `ResourceOperationCoordinator.recordVerdict` and the stuck-operation
+    /// sweep. Returns whether anything changed; does not persist — call
+    /// `save(on:)` afterwards.
+    @discardableResult
+    func resolveForStuckOperation(_ operation: ResourceOperation) -> Bool {
+        var changed = false
+        if status.isTransitional || (operation.kind == .create && observedGeneration == 0) {
+            setStatus(.error)
+            changed = true
+        }
+        if revertDesiredToObserved() {
+            changed = true
+        }
+        return changed
+    }
+
     /// The wire spec for this sandbox, assembled fresh at every sync. `network`
     /// is the sandbox's single NIC spec (issue #416), built by the caller from
     /// the eager-loaded interface + its logical network, or nil for a sandbox
