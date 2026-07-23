@@ -1,0 +1,19 @@
+docs/deployment/observability.md
+  s_a7fdc8e50034fe::t_76bd7deccbfed5 194-198,205-221,224-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1a41f2c02ebbbe19dbed3061600829c72cd4c4f8",
+  "prompts": {},
+  "sessions": {
+    "s_a7fdc8e50034fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94f5a929-5dd5-4341-8f65-657311343ef7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
