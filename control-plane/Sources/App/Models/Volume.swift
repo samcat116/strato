@@ -226,11 +226,23 @@ extension Volume {
         return status == .available || status == .attached
     }
 
-    /// `.deleting` is retryable: a control-plane restart mid-delete leaves the
-    /// record in that state with no sweep to recover it, and agent-side volume
-    /// directory deletion is idempotent, so re-issuing the DELETE is always safe.
+    /// A volume is deletable from every state except while actively `.attached`
+    /// to a VM (detach it first). `.deleting` was always retryable — agent-side
+    /// directory removal is idempotent, so re-issuing the DELETE is safe — and
+    /// issue #644 extends the same escape hatch to the other transitional
+    /// states (`.creating`, `.attaching`, `.detaching`, `.resizing`,
+    /// `.snapshotting`, `.cloning`). A control-plane crash mid-operation could
+    /// otherwise strand a volume in one of those with no recovery but manual
+    /// database surgery. `sweepStuckOperations()` also recovers these back to a
+    /// resting state, but delete stays available as the immediate escape hatch.
     var canDelete: Bool {
-        return status == .available || status == .error || status == .deleting
+        switch status {
+        case .attached:
+            return false
+        case .available, .error, .deleting,
+            .creating, .attaching, .detaching, .resizing, .snapshotting, .cloning:
+            return true
+        }
     }
 }
 
