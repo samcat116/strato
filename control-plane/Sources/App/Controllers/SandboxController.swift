@@ -820,9 +820,14 @@ struct SandboxController: RouteCollection {
         await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
         guard !Task.isCancelled else { return }
-        try await db.transaction { db in
-            try await sandbox.delete(on: db)
-            try await QuotaEnforcementService.release(for: sandbox, on: db)
+        do {
+            try await db.transaction { db in
+                try await sandbox.delete(on: db)
+                try await QuotaEnforcementService.release(for: sandbox, on: db)
+            }
+        } catch {
+            throw ResourceOperationCoordinator.WorkError(
+                "Failed to delete sandbox record: \(error.localizedDescription)")
         }
     }
 }

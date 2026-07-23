@@ -1048,22 +1048,13 @@ actor AgentService {
                 // The shared verdict path marks the operation failed (iff still
                 // pending) and resolves whatever in-flight state it left on its
                 // resource — each resource kind's own `resolveForStuckOperation`.
-                guard let operationID = operation.id,
-                    await app.resourceOperationCoordinator.recordVerdict(
-                        operationID: operationID, as: .failed,
-                        error: "Operation timed out: no completion after \(Int(budget))s",
-                        telemetryReason: "stuck_operation", on: app)
-                else { continue }
-
-                app.logger.warning(
-                    "Operation stuck pending past budget; marking as failed",
-                    metadata: [
-                        "operationId": .string(operation.id?.uuidString ?? ""),
-                        "resourceKind": .string(operation.resourceKind.rawValue),
-                        "resourceId": .string(operation.resourceID.uuidString),
-                        "kind": .string(operation.kind.rawValue),
-                        "budgetSeconds": .string("\(Int(budget))"),
-                    ])
+                // `recordVerdict` logs the failure (the timeout error names the
+                // budget), so no separate "stuck past budget" warning here.
+                guard let operationID = operation.id else { continue }
+                _ = await app.resourceOperationCoordinator.recordVerdict(
+                    operationID: operationID, as: .failed,
+                    error: "Operation timed out: no completion after \(Int(budget))s",
+                    telemetryReason: "stuck_operation", on: app)
             }
 
             // Transitional VMs with no pending operation: the operation completed

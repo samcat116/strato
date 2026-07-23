@@ -77,6 +77,15 @@ struct ResourceOperationCoordinator {
         case directResolution(@Sendable (any Database) async throws -> Void)
     }
 
+    /// Wraps a dispatch-work failure with a locating prefix so it reads well in
+    /// the operation row's `error` — `.directResolution` records the thrown
+    /// error's `localizedDescription`, which is bare without this.
+    struct WorkError: Error, LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
+    }
+
     /// Begins the operation (atomic insert + 409 double-submit guard + the
     /// caller's desired-state/spec mutation) and hands it off to the background
     /// dispatch, returning the pending row for the `202` response.

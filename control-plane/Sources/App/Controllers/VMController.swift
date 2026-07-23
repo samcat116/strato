@@ -882,9 +882,14 @@ struct VMController: RouteCollection {
                 // Delete the VM, then recompute its quotas from the remaining
                 // VMs, in one transaction so the reservation counters and the
                 // VM row stay consistent.
-                try await db.transaction { db in
-                    try await vm.delete(on: db)
-                    try await QuotaEnforcementService.release(for: vm, on: db)
+                do {
+                    try await db.transaction { db in
+                        try await vm.delete(on: db)
+                        try await QuotaEnforcementService.release(for: vm, on: db)
+                    }
+                } catch {
+                    throw ResourceOperationCoordinator.WorkError(
+                        "Failed to delete VM record: \(error.localizedDescription)")
                 }
             }
 

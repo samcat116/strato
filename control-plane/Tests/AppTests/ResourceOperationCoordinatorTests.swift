@@ -59,6 +59,28 @@ final class ResourceOperationCoordinatorTests {
         try await app.shutdownForTesting()
     }
 
+    /// Boots a configured test app with an org, project, and one sandbox — for
+    /// the `.sandbox` resource-kind path (its create-stuck signal differs).
+    private func withSandbox(_ test: (Application, Sandbox, UUID) async throws -> Void) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Coord Org")
+            let project = try await builder.createProject(
+                name: "Coord Project", description: "coordinator tests", organization: org)
+            let sandbox = try await builder.createSandbox(name: "coord-sbx", project: project)
+
+            try await test(app, sandbox, UUID())
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     @Test("perform(.stateSync) on an online agent applies the mutation, nudges, and leaves the op pending")
     func stateSyncOnlineNudges() async throws {
         try await withVM { app, vm, userID in
@@ -272,6 +294,84 @@ final class ResourceOperationCoordinatorTests {
             let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
             let status = reloadedOp?.status
             #expect(status == .succeeded)
+        }
+    }
+
+    @Test("perform(.directResolution) removes the record and records success")
+    func directResolutionDeletesRecord() async throws {
+        try await withVM { app, vm, userID in
+            let coordinator = ResourceOperationCoordinator(
+                agentDispatch: FakeAgentDispatch(), logger: app.logger)
+            let vmID = try vm.requireID()
+
+            let operation = try await coordinator.perform(
+                .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+                hypervisorId: nil,
+                dispatch: .directResolution { db in try await vm.delete(on: db) },
+                on: app.db, app: app
+            ) { db in
+                vm.setDesiredStatus(.absent)
+                try await vm.save(on: db)
+            }
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+
+            let opID = try operation.requireID()
+            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
+            let status = reloadedOp?.status
+            #expect(status == .succeeded)
+            let goneVM = try await VM.find(vmID, on: app.db)
+            #expect(goneVM == nil)
+        }
+    }
+
+    @Test("directResolution short-circuits when the operation is already terminal")
+    func directResolutionGuardsResolvedOperation() async throws {
+        try await withVM { app, vm, userID in
+            let coordinator = ResourceOperationCoordinator(
+                agentDispatch: FakeAgentDispatch(), logger: app.logger)
+            let vmID = try vm.requireID()
+
+            let operation = try await ResourceOperation.begin(
+                .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID, on: app.db)
+            let opID = try operation.requireID()
+            // The sweep already failed it.
+            _ = await coordinator.recordVerdict(operationID: opID, as: .failed, error: "swept", on: app)
+
+            coordinator.dispatch(
+                operation, resourceKind: .virtualMachine, resourceID: vmID, hypervisorId: nil,
+                dispatch: .directResolution { db in try await vm.delete(on: db) }, app: app)
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+
+            // The removal work must not have run under a failed operation.
+            let stillVM = try await VM.find(vmID, on: app.db)
+            #expect(stillVM != nil)
+            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
+            let status = reloadedOp?.status
+            #expect(status == .failed)
+        }
+    }
+
+    @Test("recordVerdict(.failed) on a sandbox create escalates a never-confirmed sandbox to .error")
+    func recordVerdictResolvesSandboxCreateFailure() async throws {
+        try await withSandbox { app, sandbox, userID in
+            let coordinator = ResourceOperationCoordinator(
+                agentDispatch: FakeAgentDispatch(), logger: app.logger)
+            let sandboxID = try sandbox.requireID()
+
+            // A fresh sandbox has observedGeneration 0 — never confirmed by an
+            // agent — which is the sandbox create-stuck signal.
+            let operation = try await ResourceOperation.begin(
+                .create, resourceKind: .sandbox, resourceID: sandboxID, userID: userID, on: app.db)
+            let opID = try operation.requireID()
+
+            let won = await coordinator.recordVerdict(
+                operationID: opID, as: .failed, error: "placement failed", on: app)
+            #expect(won)
+
+            let reloaded = try await Sandbox.find(sandboxID, on: app.db)
+            let status = reloaded?.status
+            #expect(status == .error)
         }
     }
 }
