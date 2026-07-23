@@ -11311,7 +11311,7 @@ components:
       description: >-
         An availability zone: the agents that share one OVN deployment, so a
         logical network pinned to the site can span its nodes.
-      required: [id, name]
+      required: [id, name, status, labels]
       properties:
         id:
           type: string
@@ -11321,6 +11321,31 @@ components:
         description:
           type: string
           nullable: true
+        status:
+          $ref: '#/components/schemas/SiteStatus'
+        latitude:
+          type: number
+          format: double
+          nullable: true
+          description: Decimal degrees (WGS84), −90…90. Paired with longitude.
+        longitude:
+          type: number
+          format: double
+          nullable: true
+          description: Decimal degrees (WGS84), −180…180. Paired with latitude.
+        locationLabel:
+          type: string
+          nullable: true
+          description: Human-readable location, e.g. "Equinix DC1, Ashburn VA".
+        regionCode:
+          type: string
+          nullable: true
+          description: Short operator-defined region/zone slug, e.g. "us-east-1".
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Free-form operator labels; empty object when unset.
         networkControllerAgentId:
           type: string
           format: uuid
@@ -11340,6 +11365,19 @@ components:
           type: string
           format: date-time
           nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    SiteStatus:
+      type: string
+      description: Operational lifecycle of an availability zone.
+      enum:
+        - active
+        - draining
+        - maintenance
+        - decommissioned
 
     CreateSiteRequest:
       type: object
@@ -11362,12 +11400,36 @@ components:
           type: string
           format: uuid
           nullable: true
+        status:
+          description: Lifecycle at creation; defaults to `active` when omitted.
+          allOf:
+            - $ref: '#/components/schemas/SiteStatus'
+        latitude:
+          type: number
+          format: double
+          nullable: true
+        longitude:
+          type: number
+          format: double
+          nullable: true
+        locationLabel:
+          type: string
+          nullable: true
+        regionCode:
+          type: string
+          nullable: true
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
 
     UpdateSiteRequest:
       type: object
       description: >-
-        Full-replace (PUT) semantics: every field is applied as given, so
-        omitting a field clears it.
+        Full-replace (PUT) semantics for descriptive fields: omitting one clears
+        it (labels omitted → empty map). `status` is the exception — an omitted
+        status leaves the current lifecycle unchanged.
       properties:
         description:
           type: string
@@ -11375,6 +11437,29 @@ components:
         networkControllerAgentId:
           type: string
           format: uuid
+          nullable: true
+        status:
+          description: When omitted, the current status is left unchanged.
+          allOf:
+            - $ref: '#/components/schemas/SiteStatus'
+        latitude:
+          type: number
+          format: double
+          nullable: true
+        longitude:
+          type: number
+          format: double
+          nullable: true
+        locationLabel:
+          type: string
+          nullable: true
+        regionCode:
+          type: string
+          nullable: true
+        labels:
+          type: object
+          additionalProperties:
+            type: string
           nullable: true
 
     WorkloadIdentityOverview:

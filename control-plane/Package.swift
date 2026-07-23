@@ -42,6 +42,12 @@ let package = Package(
         .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0"),
         // 📈 swift-metrics facade (backed by swift-otel when OTEL_METRICS_ENABLED)
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.0.0"),
+        // 🧵 swift-distributed-tracing facade (backed by swift-otel when
+        // OTEL_TRACES_ENABLED; a no-op tracer otherwise, so `withSpan` call
+        // sites need no feature gating). Already pulled transitively by
+        // swift-otel and Vapor; declared here so the App target can `import
+        // Tracing` directly.
+        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.4.0"),
         // 🔴 Valkey client (coordination, rate limiting, sessions)
         .package(url: "https://github.com/valkey-io/valkey-swift.git", from: "1.4.0"),
         // SPIRE Server registration API (gRPC over Unix socket / loopback TCP)
@@ -110,6 +116,7 @@ let package = Package(
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "OTel", package: "swift-otel"),
                 .product(name: "Metrics", package: "swift-metrics"),
+                .product(name: "Tracing", package: "swift-distributed-tracing"),
                 .product(name: "Valkey", package: "valkey-swift"),
                 .product(name: "SotoS3", package: "soto"),
                 .product(name: "CedarPolicy", package: "swift-cedar"),

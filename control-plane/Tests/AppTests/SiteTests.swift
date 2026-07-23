@@ -155,6 +155,108 @@ final class SiteTests {
         }
     }
 
+    @Test("Site metadata round-trips; status stays put unless explicitly changed")
+    func siteMetadataRoundTrips() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let orgId = project.$organization.id
+            var siteId: UUID?
+
+            // Create with a full metadata payload.
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "meta-dc", description: "primary",
+                        organizationId: orgId, organizationalUnitId: nil,
+                        status: .draining, latitude: 38.9445, longitude: -77.4558,
+                        locationLabel: "  Equinix DC1  ", regionCode: "us-east-1",
+                        labels: ["tier": "production", "provider": "equinix"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let site = try res.content.decode(SiteResponse.self)
+                #expect(site.status == .draining)
+                #expect(site.latitude == 38.9445)
+                #expect(site.longitude == -77.4558)
+                // Location label is trimmed on the way in.
+                #expect(site.locationLabel == "Equinix DC1")
+                #expect(site.regionCode == "us-east-1")
+                #expect(site.labels == ["tier": "production", "provider": "equinix"])
+                #expect(site.updatedAt != nil)
+                siteId = site.id
+            }
+            let id = try #require(siteId)
+
+            // A PUT that omits status leaves the lifecycle untouched, but
+            // full-replaces the descriptive fields (labels omitted → empty).
+            try await app.test(.PUT, "/api/sites/\(id.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(description: "primary", regionCode: "us-east-2"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let site = try res.content.decode(SiteResponse.self)
+                #expect(site.status == .draining)  // unchanged
+                #expect(site.regionCode == "us-east-2")
+                #expect(site.latitude == nil)  // cleared by full-replace
+                #expect(site.labels.isEmpty)  // cleared by full-replace
+            }
+
+            // Sending status explicitly changes it.
+            try await app.test(.PUT, "/api/sites/\(id.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateSiteRequest(status: .active))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let site = try res.content.decode(SiteResponse.self)
+                #expect(site.status == .active)
+            }
+        }
+    }
+
+    @Test("Label keys and values are trimmed on the way in")
+    func siteLabelsAreTrimmed() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let orgId = project.$organization.id
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "labels-trim", organizationId: orgId,
+                        labels: ["  tier  ": "  production  "]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let site = try res.content.decode(SiteResponse.self)
+                #expect(site.labels == ["tier": "production"])
+            }
+        }
+    }
+
+    @Test("Invalid site metadata is rejected")
+    func siteMetadataValidation() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let orgId = project.$organization.id
+
+            // Latitude out of range.
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "bad-lat", organizationId: orgId, latitude: 91, longitude: 0))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // A lone coordinate (latitude without longitude).
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(name: "lone-coord", organizationId: orgId, latitude: 10))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     @Test("Designating a network controller requires site membership")
     func controllerMustBeMember() async throws {
         try await withSiteTestApp { app, _, _, token in
