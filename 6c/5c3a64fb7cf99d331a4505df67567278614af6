@@ -1,0 +1,39 @@
+control-plane/web/src/app/(dashboard)/access/groups/page.tsx
+  s_a9352e629e6879::t_1b8bda97e0676c 4-5,7-8,12-14,19,21-24,30-35,37
+control-plane/web/src/app/(dashboard)/access/policies/page.tsx
+  s_a9352e629e6879::t_f7d9b666705d52 3-27,30-38
+control-plane/web/src/app/(dashboard)/access/roles/page.tsx
+  s_a9352e629e6879::t_a8fab2bd7330cb 1-40
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_a9352e629e6879::t_dde1efb593184c 6,15,19,128,131-132,134-135,137-138,219-220,222,224-225,227,229-230
+control-plane/web/src/components/layout/nav.ts
+  s_a9352e629e6879::t_545d4ee1616950 21,26,28,80-82
+control-plane/web/src/lib/hooks/index.ts
+  s_6671064d0155b3::t_c0ef9b7a436707 140
+control-plane/web/src/lib/hooks/use-current-org-access.ts
+  s_a9352e629e6879::t_2bea607dfda736 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6c5c3a64fb7cf99d331a4505df67567278614af6",
+  "prompts": {},
+  "sessions": {
+    "s_6671064d0155b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fee7a23-4417-4878-a3b9-5a07242ef9f3",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a9352e629e6879": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "812b41de-c0c4-488e-a292-6da3a95217da",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
