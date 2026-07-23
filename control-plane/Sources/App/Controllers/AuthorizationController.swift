@@ -109,6 +109,7 @@ struct AuthorizationController: RouteCollection {
                     context: IAMCheckContext(
                         path: req.url.path, method: req.method.rawValue, requestID: req.id),
                     state: req.iamAuthState,
+                    cache: req.iamCache,
                     app: req.application,
                     db: req.db
                 )

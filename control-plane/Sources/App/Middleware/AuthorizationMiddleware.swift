@@ -337,6 +337,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             context: IAMCheckContext(
                 path: request.url.path, method: request.method.rawValue, requestID: request.id),
             state: request.iamAuthState,
+            cache: request.iamCache,
             app: request.application,
             db: request.db
         )

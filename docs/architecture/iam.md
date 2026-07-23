@@ -957,6 +957,40 @@ Two enforcement details worth naming:
   class is denied by the middleware before Vapor's router can 404 it. A
   deliberate default-deny consequence (and mild enumeration hardening).
 
+#### The request-scoped cache (shipped with #686)
+
+A check reads three things from the database: the principal's group and
+organization memberships, the ancestor chain above the resource, and the
+bindings along that chain. The first two are the same for every check in a
+request, and the resource-mapped routes ask the *same question twice* on
+purpose — the middleware evaluates the path-derived check and the handler
+re-checks the same triple through `Request.authorizedVM` as defense in depth.
+Before #686 that cost two entity slices, two evaluations and two decision-log
+rows to answer one question.
+
+`IAMRequestCache` (`req.iamCache`) memoizes, for the life of one request:
+the per-user facts (`IAMUserFacts`: system-admin flag, group ids, org ids,
+seeded with the `User` the session already authenticated), the resolved
+ancestor chain per node, and the verdict per `(principal, action, node)`. A
+memoized verdict still sets the audit flags — a consulted decision is one the
+request acted on — but is not counted as a second decision or logged again;
+its span carries `iam.cache_hit` so the double-check stays visible in a trace.
+
+Staleness is not a hazard here: a mutation landing mid-request cannot make a
+decision already made wrong, because the request was authorized against the
+state it read. Nothing is cached beyond the request, so grant and revoke stay
+free of invalidation machinery.
+
+Two related shapes fall out of the same pass. The ancestor walk now returns
+the leaf row's IAM-relevant attributes (`IAMLeafFacts`: `environment`, and a
+network's project/site nullity) instead of discarding the row and re-reading
+it for each attribute — one read of the leaf per check, and one place that
+knows which resource types carry an environment. And a folder chain resolves
+in at most two queries rather than one per level: the materialized
+`organizational_units.path` prefetches the rows the walk is about to need,
+while the parent pointers stay authoritative, so a stale path costs a query,
+never a wrong chain.
+
 ## Migration plan
 
 Phases; each landed independently:
