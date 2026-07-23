@@ -1,0 +1,89 @@
+control-plane/Sources/App/Models/WebhookSubscription.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-183
+control-plane/web/src/components/webhooks/webhook-secret-dialog.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-91
+control-plane/Sources/App/Migrations/CreateWebhookDelivery.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-49
+control-plane/Sources/App/Migrations/CreateWebhookSubscription.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-49
+control-plane/web/src/components/webhooks/webhook-form-dialog.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-352
+control-plane/web/src/components/webhooks/index.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-10
+control-plane/web/src/types/api.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 821-881
+control-plane/web/src/components/webhooks/webhooks-section.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-252
+control-plane/Sources/App/routes.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 57-59
+docs/architecture/overview.md
+  s_071366b7d1e1c2::t_a73be2a9eac720 229
+control-plane/web/src/lib/api/index.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 21
+control-plane/web/src/components/webhooks/webhook-deliveries-dialog.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-342
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 229-233,247,249-252
+control-plane/web/src/lib/hooks/use-webhooks.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-107
+control-plane/web/src/app/(dashboard)/settings/webhooks/page.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-40
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-292
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-334
+control-plane/web/src/lib/api/webhooks.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-76
+control-plane/web/src/components/webhooks/webhooks-table.tsx
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-276
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-401
+control-plane/Tests/AppTests/WebhookTests.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-817
+docs/architecture/webhooks.md
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-131
+docs/.vitepress/config.mts
+  s_071366b7d1e1c2::t_a73be2a9eac720 54
+control-plane/Sources/App/Models/WebhookDelivery.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-128
+control-plane/web/src/components/layout/nav.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 29,103
+control-plane/Sources/App/Services/AgentService.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 542-543,659-660,731-733,826-827,1002-1003,2779,2784,2803-2807,2828,2835,2848-2852,3030-3031
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 138-151,185-190,196-199,246-255
+control-plane/Sources/App/configure.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 593-599,765-768
+  s_071366b7d1e1c2::t_cafa4f55f02461 600
+  s_071366b7d1e1c2::t_1e6e60ade73455 769
+control-plane/web/src/components/webhooks/event-catalog.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-46
+control-plane/Sources/App/Migrations/AddDeliveryContextToResourceOperation.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 1-28
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_071366b7d1e1c2::t_a73be2a9eac720 170-181
+control-plane/web/src/types/openapi.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 4464-4625,7801-7888,8137-8140,16371-16632
+control-plane/web/src/lib/hooks/index.ts
+  s_071366b7d1e1c2::t_a73be2a9eac720 97-106
+  s_071366b7d1e1c2::t_ba81d2f17c4acf 96
+control-plane/Sources/App/openapi.yaml
+  s_071366b7d1e1c2::t_a73be2a9eac720 148-151,6644-6867,7534-7549,13715-13868
+  s_071366b7d1e1c2::t_83fc8ab310b7c4 13869
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3f48b864b73f5126d5d8037cbeb4f1adce2f8fa2",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
