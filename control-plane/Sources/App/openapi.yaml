@@ -4955,6 +4955,142 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/iam/policies:
+    get:
+      operationId: listPolicies
+      summary: List the authored policies an owner defines
+      description: >-
+        The authored Cedar policies owned by one organization or project.
+        Admin-gated on the owner (`iam:readPolicy`).
+      tags: [IAM]
+      parameters:
+        - $ref: "#/components/parameters/PolicyOwnerTypeQuery"
+        - $ref: "#/components/parameters/PolicyOwnerIdQuery"
+      responses:
+        "200":
+          description: The policies the owner defines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMPolicyListResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createPolicy
+      summary: Create an authored policy
+      description: >-
+        Stores a permit or forbid written directly in Cedar, owned by an
+        organization or project. The effect is read off the parsed text, not
+        sent by the client. The resource scope must name a concrete entity
+        (`resource == X` or `resource in X`) inside the owner's subtree —
+        containment is checked against the resource tree, and applies equally
+        to forbids. The principal scope is unrestricted. The candidate is
+        compiled at write time; the row and the policy-set version bump commit
+        together.
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMPolicyCreateRequest"
+      responses:
+        "201":
+          description: The created policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMPolicy"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/iam/policies/validate:
+    post:
+      operationId: validatePolicy
+      summary: Compile an authored policy without saving it
+      description: >-
+        Runs the same preparation a write does — derive the effect, check
+        containment against the owner's subtree, compile against the live
+        schema — and returns the result instead of storing it. Authenticated
+        rather than admin-gated: it touches no stored policy.
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMPolicyValidateRequest"
+      responses:
+        "200":
+          description: The accepted Cedar text and the effect derived from it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMPolicyValidateResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/iam/policies/{policyID}:
+    parameters:
+      - $ref: "#/components/parameters/PolicyID"
+    get:
+      operationId: getPolicy
+      summary: Get an authored policy
+      description: Admin-gated on the policy's owner (`iam:readPolicy`).
+      tags: [IAM]
+      responses:
+        "200":
+          description: The policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMPolicy"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updatePolicy
+      summary: Update an authored policy
+      description: >-
+        Partial update; omitted fields are left unchanged. Sending `cedarText`
+        re-derives the effect and re-checks containment under the same rules a
+        create applies. The owner is immutable. Every update bumps the
+        policy-set version — enabling or disabling changes the compiled set.
+      tags: [IAM]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IAMPolicyUpdateRequest"
+      responses:
+        "200":
+          description: The updated policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMPolicy"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deletePolicy
+      summary: Delete an authored policy
+      description: >-
+        Removes the policy. The delete and the policy-set version bump commit
+        together.
+      tags: [IAM]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/iam/actions:
     get:
       operationId: listIAMActions
@@ -6774,6 +6910,31 @@ components:
       in: query
       required: true
       description: The id of the organization or project defining the roles.
+      schema:
+        type: string
+        format: uuid
+    PolicyID:
+      name: policyID
+      in: path
+      required: true
+      description: The authored policy's id.
+      schema:
+        type: string
+        format: uuid
+    PolicyOwnerTypeQuery:
+      name: ownerType
+      in: query
+      required: true
+      description: >-
+        Which kind of owner defines the policies being listed. Authored
+        policies are owned by an organization or project only.
+      schema:
+        $ref: "#/components/schemas/IAMRoleOwnerType"
+    PolicyOwnerIdQuery:
+      name: ownerId
+      in: query
+      required: true
+      description: The id of the organization or project defining the policies.
       schema:
         type: string
         format: uuid
@@ -11214,7 +11375,8 @@ components:
 
     IAMWhoCanResponse:
       type: object
-      required: [resource, action, ancestors, principals, openToAllAuthenticatedUsers]
+      required:
+        [resource, action, ancestors, principals, openToAllAuthenticatedUsers, authoredPolicies, authoredPolicyCaveat]
       properties:
         resource:
           $ref: "#/components/schemas/IAMNode"
@@ -11234,6 +11396,44 @@ components:
           description: >-
             When true, `principals` is not the whole answer: every
             authenticated user can perform this action here.
+        authoredPolicies:
+          type: array
+          description: >-
+            Authored policies (issue #606) in force on this resource that may
+            bear on the action, matched best-effort on action scope and
+            containment. Their principals are not in `principals`.
+          items:
+            $ref: "#/components/schemas/IAMWhoCanPolicyMatch"
+        authoredPolicyCaveat:
+          type: boolean
+          description: >-
+            When true, an authored policy above bears on this query and its
+            principals could not be enumerated — `principals` is again partial.
+
+    IAMWhoCanPolicyMatch:
+      type: object
+      description: >-
+        An authored policy that may bear on the queried action and resource.
+        Best-effort: which principals it permits or forbids, and any
+        conditions, cannot be enumerated from a reverse lookup.
+      required: [policyID, name, effect, owner, actionMatch]
+      properties:
+        policyID:
+          type: string
+          format: uuid
+        name:
+          type: string
+        effect:
+          $ref: "#/components/schemas/IAMPolicyEffect"
+        owner:
+          $ref: "#/components/schemas/IAMNode"
+        actionMatch:
+          type: string
+          description: >-
+            Whether the policy's action scope covers the queried action, as far
+            as its text can be read. `unknown` when the scope cannot be
+            enumerated (an action-group reference).
+          enum: [matches, unknown]
 
     IAMGuardrailPrincipalMatchKind:
       type: string
@@ -11463,6 +11663,132 @@ components:
           type: array
           items:
             type: string
+    IAMPolicyEffect:
+      type: string
+      description: >-
+        A policy's effect, derived from its Cedar text. Unlike a role
+        (permit-only) or a guardrail (forbid-only), an authored policy may be
+        either.
+      enum: [permit, forbid]
+    IAMPolicy:
+      type: object
+      description: >-
+        An authored Cedar policy: a permit or forbid written directly in Cedar
+        policy language, owned by an organization or project and compiled into
+        the policy set under the id `policy-<uuid>`.
+      required: [id, name, ownerType, ownerId, cedarText, effect, enabled]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        ownerType:
+          $ref: "#/components/schemas/IAMRoleOwnerType"
+        ownerId:
+          type: string
+          format: uuid
+          description: The owning organization or project.
+        cedarText:
+          type: string
+          description: >-
+            The policy in Cedar policy language, compiled verbatim.
+            Round-trips: this value is accepted as `cedarText` on a later write.
+        effect:
+          $ref: "#/components/schemas/IAMPolicyEffect"
+        enabled:
+          type: boolean
+          description: >-
+            Disabled policies stay in the table but are left out of the
+            compiled set.
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    IAMPolicyListResponse:
+      type: object
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items:
+            $ref: "#/components/schemas/IAMPolicy"
+    IAMPolicyCreateRequest:
+      type: object
+      required: [name, ownerType, ownerId, cedarText]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        ownerType:
+          $ref: "#/components/schemas/IAMRoleOwnerType"
+        ownerId:
+          type: string
+          format: uuid
+        cedarText:
+          type: string
+          description: >-
+            The Cedar permit or forbid. The effect is read off it; there is no
+            action-list shorthand — an authored policy is Cedar by definition.
+        enabled:
+          type: boolean
+          description: Defaults to true when omitted.
+        id:
+          type: string
+          format: uuid
+          description: >-
+            Optional pre-allocated id (a `validate` round-trip hands one out).
+            The server allocates one when it is omitted.
+    IAMPolicyUpdateRequest:
+      type: object
+      description: >-
+        Partial update. Sending `cedarText` re-derives the effect and re-checks
+        containment; omitted fields are left unchanged.
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        cedarText:
+          type: string
+        enabled:
+          type: boolean
+    IAMPolicyValidateRequest:
+      type: object
+      required: [ownerType, ownerId, cedarText]
+      properties:
+        ownerType:
+          $ref: "#/components/schemas/IAMRoleOwnerType"
+        ownerId:
+          type: string
+          format: uuid
+        cedarText:
+          type: string
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The policy being edited, so the id its compiled form uses is
+            stable. Omit for a policy that does not exist yet.
+    IAMPolicyValidateResponse:
+      type: object
+      required: [id, cedarText, effect]
+      properties:
+        id:
+          type: string
+          format: uuid
+        cedarText:
+          type: string
+        effect:
+          $ref: "#/components/schemas/IAMPolicyEffect"
     IAMActionCatalogEntry:
       type: object
       required: [action, service, resourceTypes, roles, membershipDerived]
@@ -11544,6 +11870,13 @@ components:
         shape:
           type: string
           description: Which side carries the constraint; derived from the two matches.
+        cedarText:
+          type: string
+          description: >-
+            The generated Cedar `forbid` this guardrail compiles to, read-only,
+            for UI display (issue #606). Absent when the row cannot be rendered
+            (an unknown node type, or an external-principal ceiling whose attach
+            node resolves to no organization).
         enabled:
           type: boolean
         createdBy:

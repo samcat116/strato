@@ -68,12 +68,18 @@ struct GuardrailController: RouteCollection {
         let resourceMatch: ResourceMatchDTO
         /// Which side carries the constraint — derived, see `Guardrail.shape`.
         let shape: String
+        /// The generated Cedar `forbid` this guardrail compiles to, read-only,
+        /// for the UI to display (issue #606). Nil when the row cannot be
+        /// rendered (an unknown node type, or an external-principal ceiling
+        /// whose attach node resolves to no organization) — the same rows the
+        /// compiled set skips.
+        let cedarText: String?
         let enabled: Bool
         let createdBy: UUID?
         let createdAt: Date?
         let updatedAt: Date?
 
-        init(_ guardrail: Guardrail) throws {
+        init(_ guardrail: Guardrail, cedarText: String?) throws {
             guard let id = guardrail.id, let node = guardrail.node else {
                 throw Abort(.internalServerError, reason: "Guardrail row is missing its id or node")
             }
@@ -86,6 +92,7 @@ struct GuardrailController: RouteCollection {
             self.principalMatch = PrincipalMatchDTO.from(try guardrail.principalMatch())
             self.resourceMatch = ResourceMatchDTO.from(try guardrail.resourceMatch())
             self.shape = guardrail.shape
+            self.cedarText = cedarText
             self.enabled = guardrail.enabled
             self.createdBy = guardrail.createdBy
             self.createdAt = guardrail.createdAt
@@ -173,13 +180,13 @@ struct GuardrailController: RouteCollection {
             return GuardrailListResponse(
                 node: node,
                 ancestors: ancestors,
-                guardrails: try guardrails.map(GuardrailDTO.init)
+                guardrails: try await dtos(guardrails, on: req.db)
             )
         }
 
         let guardrails = try await GuardrailStore.attached(to: node, on: req.db)
         return GuardrailListResponse(
-            node: node, ancestors: nil, guardrails: try guardrails.map(GuardrailDTO.init))
+            node: node, ancestors: nil, guardrails: try await dtos(guardrails, on: req.db))
     }
 
     /// GET /api/iam/guardrails/:guardrailID
@@ -187,7 +194,7 @@ struct GuardrailController: RouteCollection {
         _ = try requireUser(req)
         let guardrail = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(guardrail), write: false, req: req)
-        return try GuardrailDTO(guardrail)
+        return try await dto(guardrail, on: req.db)
     }
 
     /// POST /api/iam/guardrails
@@ -225,7 +232,7 @@ struct GuardrailController: RouteCollection {
         let response = Response(status: .created)
         try response.content.encode(
             GuardrailWriteResponse(
-                guardrail: try GuardrailDTO(guardrail),
+                guardrail: try await dto(guardrail, on: req.db),
                 shadowedBindings: try await shadowed(by: guardrail, req: req)
             ))
         return response
@@ -268,7 +275,7 @@ struct GuardrailController: RouteCollection {
         await req.application.announcePolicySetChange()
 
         return GuardrailWriteResponse(
-            guardrail: try GuardrailDTO(updated),
+            guardrail: try await dto(updated, on: req.db),
             shadowedBindings: try await shadowed(by: updated, req: req)
         )
     }
@@ -374,6 +381,40 @@ struct GuardrailController: RouteCollection {
             throw Abort(.internalServerError, reason: "Guardrail row names an unknown node type")
         }
         return node
+    }
+
+    /// A guardrail as a DTO, with its generated Cedar forbid attached.
+    private func dto(_ guardrail: Guardrail, on db: any Database) async throws -> GuardrailDTO {
+        try GuardrailDTO(guardrail, cedarText: try await cedarText(for: guardrail, on: db))
+    }
+
+    /// A batch of guardrails as DTOs, each with its generated forbid.
+    private func dtos(_ guardrails: [Guardrail], on db: any Database) async throws -> [GuardrailDTO] {
+        var result: [GuardrailDTO] = []
+        result.reserveCapacity(guardrails.count)
+        for guardrail in guardrails {
+            result.append(try await dto(guardrail, on: db))
+        }
+        return result
+    }
+
+    /// The Cedar `forbid` a guardrail compiles to, for read-only UI display
+    /// (issue #606). Produced by the same assembler the compiled set uses, so
+    /// what the UI shows is what the evaluator enforces. An external-principal
+    /// ceiling needs its attach node's organization resolved — the one input
+    /// the assembler cannot derive on its own — so this walks the tree for it.
+    private func cedarText(for guardrail: Guardrail, on db: any Database) async throws -> String? {
+        guard let id = guardrail.id, let node = guardrail.node else { return nil }
+        var organizationIDsByGuardrail: [UUID: UUID] = [:]
+        if guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
+            let chain = try await IAMResourceTree.ancestors(of: node, on: db)
+            if let organization = chain.first(where: { $0.type == .organization }) {
+                organizationIDsByGuardrail[id] = organization.id
+            }
+        }
+        let compiled = CedarPolicyAssembler.guardrailPolicyText(
+            [guardrail], organizationIDsByGuardrail: organizationIDsByGuardrail)
+        return compiled.policies.first?.text
     }
 
     /// Reading a node's guardrails is `iam:readPolicy`; changing them is

@@ -181,7 +181,7 @@ struct ProjectsAPIService: APIProtocol {
         // roles it owns (issue #605), which would otherwise be bindable
         // nowhere while still shaping the Cedar schema. Removing roles is a
         // policy-set change and bumps the version.
-        let removedRoles = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             // Service accounts cascade away with the project row, but their
             // bindings do not (no FK on either side): each account carries at
             // least its creator's binding on its own node, and may hold
@@ -200,13 +200,17 @@ struct ProjectsAPIService: APIProtocol {
             try await project.delete(on: db)
             try await RoleBindingService.revokeAll(nodeType: .project, nodeID: projectID, on: db)
             let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
-            if removedRoles > 0 {
+            let removedPolicies = try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
+            let removed = removedRoles + removedPolicies
+            if removed > 0 {
                 try await PolicySetVersionService.bump(
-                    reason: "project deleted: \(removedRoles) owned role(s) removed", on: db)
+                    reason:
+                        "project deleted: \(removedRoles) owned role(s), \(removedPolicies) owned policy(ies) removed",
+                    on: db)
             }
-            return removedRoles
+            return removed
         }
-        if removedRoles > 0 {
+        if removed > 0 {
             await req.application.announcePolicySetChange()
         }
         return .noContent(.init())

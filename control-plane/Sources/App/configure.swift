@@ -554,6 +554,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateServiceAccount())
     app.migrations.add(CreateWorkloadRegistration())
 
+    // IAM authored policies (issue #606): org/project-owned Cedar permit/forbid
+    // policies compiled into the policy set beside role permits and guardrails.
+    app.migrations.add(CreateIAMPolicy())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

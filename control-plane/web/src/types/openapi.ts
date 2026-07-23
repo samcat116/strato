@@ -3506,6 +3506,81 @@ export interface paths {
         patch: operations["updateRole"];
         trace?: never;
     };
+    "/api/iam/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the authored policies an owner defines
+         * @description The authored Cedar policies owned by one organization or project. Admin-gated on the owner (`iam:readPolicy`).
+         */
+        get: operations["listPolicies"];
+        put?: never;
+        /**
+         * Create an authored policy
+         * @description Stores a permit or forbid written directly in Cedar, owned by an organization or project. The effect is read off the parsed text, not sent by the client. The resource scope must name a concrete entity (`resource == X` or `resource in X`) inside the owner's subtree — containment is checked against the resource tree, and applies equally to forbids. The principal scope is unrestricted. The candidate is compiled at write time; the row and the policy-set version bump commit together.
+         */
+        post: operations["createPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/iam/policies/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compile an authored policy without saving it
+         * @description Runs the same preparation a write does — derive the effect, check containment against the owner's subtree, compile against the live schema — and returns the result instead of storing it. Authenticated rather than admin-gated: it touches no stored policy.
+         */
+        post: operations["validatePolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/iam/policies/{policyID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The authored policy's id. */
+                policyID: components["parameters"]["PolicyID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get an authored policy
+         * @description Admin-gated on the policy's owner (`iam:readPolicy`).
+         */
+        get: operations["getPolicy"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an authored policy
+         * @description Removes the policy. The delete and the policy-set version bump commit together.
+         */
+        delete: operations["deletePolicy"];
+        options?: never;
+        head?: never;
+        /**
+         * Update an authored policy
+         * @description Partial update; omitted fields are left unchanged. Sending `cedarText` re-derives the effect and re-checks containment under the same rules a create applies. The owner is immutable. Every update bumps the policy-set version — enabling or disabling changes the compiled set.
+         */
+        patch: operations["updatePolicy"];
+        trace?: never;
+    };
     "/api/iam/actions": {
         parameters: {
             query?: never;
@@ -6459,6 +6534,23 @@ export interface components {
             principals: components["schemas"]["IAMWhoCanEntry"][];
             /** @description When true, `principals` is not the whole answer: every authenticated user can perform this action here. */
             openToAllAuthenticatedUsers: boolean;
+            /** @description Authored policies (issue #606) in force on this resource that may bear on the action, matched best-effort on action scope and containment. Their principals are not in `principals`. */
+            authoredPolicies: components["schemas"]["IAMWhoCanPolicyMatch"][];
+            /** @description When true, an authored policy above bears on this query and its principals could not be enumerated — `principals` is again partial. */
+            authoredPolicyCaveat: boolean;
+        };
+        /** @description An authored policy that may bear on the queried action and resource. Best-effort: which principals it permits or forbids, and any conditions, cannot be enumerated from a reverse lookup. */
+        IAMWhoCanPolicyMatch: {
+            /** Format: uuid */
+            policyID: string;
+            name: string;
+            effect: components["schemas"]["IAMPolicyEffect"];
+            owner: components["schemas"]["IAMNode"];
+            /**
+             * @description Whether the policy's action scope covers the queried action, as far as its text can be read. `unknown` when the scope cannot be enumerated (an action-group reference).
+             * @enum {string}
+             */
+            actionMatch: "matches" | "unknown";
         };
         /**
          * @description Which principals a guardrail constrains.
@@ -6576,6 +6668,78 @@ export interface components {
             cedarText: string;
             actions: string[];
         };
+        /**
+         * @description A policy's effect, derived from its Cedar text. Unlike a role (permit-only) or a guardrail (forbid-only), an authored policy may be either.
+         * @enum {string}
+         */
+        IAMPolicyEffect: "permit" | "forbid";
+        /** @description An authored Cedar policy: a permit or forbid written directly in Cedar policy language, owned by an organization or project and compiled into the policy set under the id `policy-<uuid>`. */
+        IAMPolicy: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /**
+             * Format: uuid
+             * @description The owning organization or project.
+             */
+            ownerId: string;
+            /** @description The policy in Cedar policy language, compiled verbatim. Round-trips: this value is accepted as `cedarText` on a later write. */
+            cedarText: string;
+            effect: components["schemas"]["IAMPolicyEffect"];
+            /** @description Disabled policies stay in the table but are left out of the compiled set. */
+            enabled: boolean;
+            /** Format: uuid */
+            createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        IAMPolicyListResponse: {
+            policies: components["schemas"]["IAMPolicy"][];
+        };
+        IAMPolicyCreateRequest: {
+            name: string;
+            description?: string;
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /** Format: uuid */
+            ownerId: string;
+            /** @description The Cedar permit or forbid. The effect is read off it; there is no action-list shorthand — an authored policy is Cedar by definition. */
+            cedarText: string;
+            /** @description Defaults to true when omitted. */
+            enabled?: boolean;
+            /**
+             * Format: uuid
+             * @description Optional pre-allocated id (a `validate` round-trip hands one out). The server allocates one when it is omitted.
+             */
+            id?: string;
+        };
+        /** @description Partial update. Sending `cedarText` re-derives the effect and re-checks containment; omitted fields are left unchanged. */
+        IAMPolicyUpdateRequest: {
+            name?: string;
+            description?: string;
+            cedarText?: string;
+            enabled?: boolean;
+        };
+        IAMPolicyValidateRequest: {
+            ownerType: components["schemas"]["IAMRoleOwnerType"];
+            /** Format: uuid */
+            ownerId: string;
+            cedarText: string;
+            /**
+             * Format: uuid
+             * @description The policy being edited, so the id its compiled form uses is stable. Omit for a policy that does not exist yet.
+             */
+            id?: string;
+        };
+        IAMPolicyValidateResponse: {
+            /** Format: uuid */
+            id: string;
+            cedarText: string;
+            effect: components["schemas"]["IAMPolicyEffect"];
+        };
         IAMActionCatalogEntry: {
             action: string;
             service: string;
@@ -6611,6 +6775,8 @@ export interface components {
             resourceMatch: components["schemas"]["IAMGuardrailResourceMatch"];
             /** @description Which side carries the constraint; derived from the two matches. */
             shape: string;
+            /** @description The generated Cedar `forbid` this guardrail compiles to, read-only, for UI display (issue #606). Absent when the row cannot be rendered (an unknown node type, or an external-principal ceiling whose attach node resolves to no organization). */
+            cedarText?: string;
             enabled: boolean;
             /** Format: uuid */
             createdBy?: string;
@@ -7368,6 +7534,12 @@ export interface components {
         RoleOwnerTypeQuery: components["schemas"]["IAMRoleOwnerType"];
         /** @description The id of the organization or project defining the roles. */
         RoleOwnerIdQuery: string;
+        /** @description The authored policy's id. */
+        PolicyID: string;
+        /** @description Which kind of owner defines the policies being listed. Authored policies are owned by an organization or project only. */
+        PolicyOwnerTypeQuery: components["schemas"]["IAMRoleOwnerType"];
+        /** @description The id of the organization or project defining the policies. */
+        PolicyOwnerIdQuery: string;
         /** @description The type of the tree node a role would be bound on. */
         RoleBindableNodeTypeQuery: components["schemas"]["IAMNodeType"];
         /** @description The id of the tree node a role would be bound on. */
@@ -13531,6 +13703,167 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IAMRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listPolicies: {
+        parameters: {
+            query: {
+                /** @description Which kind of owner defines the policies being listed. Authored policies are owned by an organization or project only. */
+                ownerType: components["parameters"]["PolicyOwnerTypeQuery"];
+                /** @description The id of the organization or project defining the policies. */
+                ownerId: components["parameters"]["PolicyOwnerIdQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The policies the owner defines. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMPolicyListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMPolicyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The created policy. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    validatePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMPolicyValidateRequest"];
+            };
+        };
+        responses: {
+            /** @description The accepted Cedar text and the effect derived from it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMPolicyValidateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The authored policy's id. */
+                policyID: components["parameters"]["PolicyID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deletePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The authored policy's id. */
+                policyID: components["parameters"]["PolicyID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updatePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The authored policy's id. */
+                policyID: components["parameters"]["PolicyID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IAMPolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IAMPolicy"];
                 };
             };
             400: components["responses"]["BadRequest"];

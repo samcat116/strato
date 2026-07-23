@@ -39,6 +39,16 @@ enum CedarEntityType: String, CaseIterable, Sendable {
     /// The types a role binding or guardrail node can be — every entity type
     /// except the principals.
     static let nodeTypes: [CedarEntityType] = IAMNodeType.allCases.map(\.cedarEntityType)
+
+    /// The tree-node type this entity type stands for, or nil for a
+    /// principal-only type (`User`, `Group`, `Workload`) that names no place in
+    /// the resource tree. `ServiceAccount` is both, and resolves to its node
+    /// type here. The reverse of `IAMNodeType.cedarEntityType`; used to map an
+    /// authored policy's resource scope back onto the tree for containment
+    /// (issue #606).
+    var nodeType: IAMNodeType? {
+        IAMNodeType.allCases.first { $0.cedarEntityType == self }
+    }
 }
 
 extension IAMNodeType {
