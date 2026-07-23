@@ -263,7 +263,7 @@ final class IAMGuardrailTests {
                 createdBy: nil, on: app.db)
             _ = try await GuardrailStore.update(
                 guardrail, description: nil, actions: nil, principalMatch: nil, resourceMatch: nil,
-                enabled: false, on: app.db)
+                cedarText: nil, enabled: false, engine: app.cedarEngine, on: app.db)
 
             let effective = try await GuardrailStore.effective(at: tree.vmNode, on: app.db)
             #expect(effective.isEmpty)
@@ -518,6 +518,181 @@ final class IAMGuardrailTests {
                 node: tree.vmNode, on: app.db)
 
             #expect(violations.map(\.name) == ["a-org-ceiling", "b-project-ceiling"])
+        }
+    }
+
+    // MARK: - Authored guardrails (#610)
+
+    /// A forbid scoped to `node`, forbidding `vm:delete` — the authored
+    /// equivalent of a `{actions: ["vm:delete"]}` matcher guardrail.
+    private func authoredForbid(on node: IAMNode) -> String {
+        "forbid(principal, action in [Action::\"vm:delete\"], resource in \(node.cedarUID.cedarLiteral));"
+    }
+
+    @Test("A matcher-built guardrail stores the Cedar forbid it assembles to")
+    func matcherStoresCedarText() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "MatcherText")
+            let guardrail = try await GuardrailStore.create(
+                name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
+                actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
+                createdBy: nil, on: app.db)
+            #expect(guardrail.authored == false)
+            let stored = guardrail.cedarText
+            #expect(stored?.contains("forbid") == true)
+            #expect(stored?.contains(tree.projectNode.cedarUID.cedarLiteral) == true)
+        }
+    }
+
+    @Test("A hand-authored forbid is stored, flagged authored, and compiles")
+    func authoredForbidStored() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Authored")
+            let text = authoredForbid(on: tree.projectNode)
+            let guardrail = try await GuardrailStore.createAuthored(
+                name: "authored-no-delete", description: nil, node: tree.projectNode,
+                cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+            #expect(guardrail.authored == true)
+            #expect(guardrail.cedarText == text)
+            #expect(guardrail.effect == GuardrailEffect.forbid.rawValue)
+        }
+    }
+
+    @Test("An authored permit is rejected — guardrails are forbid-only")
+    func authoredMustForbid() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredPermit")
+            let text =
+                "permit(principal, action in [Action::\"vm:delete\"], resource in \(tree.projectNode.cedarUID.cedarLiteral));"
+            await #expect(throws: GuardrailError.authoredMustForbid("permit")) {
+                _ = try await GuardrailStore.createAuthored(
+                    name: "nope", description: nil, node: tree.projectNode,
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+            }
+            let count = try await Guardrail.query(on: app.db).count()
+            #expect(count == 0)
+        }
+    }
+
+    @Test("An authored forbid scoped outside the attach node is refused")
+    func authoredContainment() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredScope")
+            // Attached to the project, but scoped to the org above it.
+            let text = authoredForbid(on: tree.orgNode)
+            await #expect(throws: GuardrailError.self) {
+                _ = try await GuardrailStore.createAuthored(
+                    name: "out-of-scope", description: nil, node: tree.projectNode,
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+            }
+        }
+    }
+
+    @Test("An authored forbid with an unscoped resource is refused")
+    func authoredUnscoped() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredUnscoped")
+            let text = "forbid(principal, action in [Action::\"vm:delete\"], resource);"
+            await #expect(throws: GuardrailError.authoredUnscopedResource) {
+                _ = try await GuardrailStore.createAuthored(
+                    name: "unscoped", description: nil, node: tree.projectNode,
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+            }
+        }
+    }
+
+    @Test("An unconditional authored forbid over iam:setPolicy is refused as self-locking")
+    func authoredSelfLock() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredLock")
+            // Unconstrained principal, no conditions, unconstrained action ⇒ reaches iam:setPolicy.
+            let text = "forbid(principal, action, resource in \(tree.orgNode.cedarUID.cedarLiteral));"
+            await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
+                _ = try await GuardrailStore.createAuthored(
+                    name: "locked", description: nil, node: tree.orgNode,
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+            }
+        }
+    }
+
+    @Test("Editing a matcher guardrail with cedarText is a mode mismatch")
+    func updateModeMismatch() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "ModeMismatch")
+            let guardrail = try await GuardrailStore.create(
+                name: "matcher", description: nil, effect: nil, node: tree.projectNode,
+                actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
+                createdBy: nil, on: app.db)
+            await #expect(throws: GuardrailError.self) {
+                _ = try await GuardrailStore.update(
+                    guardrail, description: nil, actions: nil, principalMatch: nil, resourceMatch: nil,
+                    cedarText: self.authoredForbid(on: tree.projectNode), enabled: nil,
+                    engine: app.cedarEngine, on: app.db)
+            }
+        }
+    }
+
+    @Test("The structured evaluation skips authored rows")
+    func forbiddingSkipsAuthored() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "SkipAuthored")
+            let user = try await builder.createUser(username: "sa-user", email: "sa-user@example.com")
+            _ = try await GuardrailStore.createAuthored(
+                name: "authored-ceiling", description: nil, node: tree.projectNode,
+                cedarText: authoredForbid(on: tree.projectNode), createdBy: nil,
+                engine: app.cedarEngine, on: app.db)
+            // `forbidding` reads structured matchers, which an authored row does
+            // not carry — it must not match on the placeholder `.any`.
+            let forbidding = try await GuardrailStore.forbidding(
+                action: "vm:delete", principalType: .user, principalID: user.id!,
+                node: tree.vmNode, on: app.db)
+            #expect(forbidding.isEmpty)
+        }
+    }
+
+    @Test("An authored guardrail is skipped by the write-time check; the solver is never consulted")
+    func authoredSkippedInWriteCheck() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "AuthoredWriteCheck")
+            let user = try await builder.createUser(username: "awc-user", email: "awc-user@example.com")
+            _ = try await GuardrailStore.createAuthored(
+                name: "authored-ceiling", description: nil, node: tree.projectNode,
+                cedarText: authoredForbid(on: tree.projectNode), createdBy: nil,
+                engine: app.cedarEngine, on: app.db)
+            let binding = ProposedBinding(
+                principalType: .user, principalID: user.id!, role: .editor, node: tree.projectNode)
+            // An unavailable analyzer would `503` if consulted; a matcher ceiling
+            // here would. That it stays empty proves authored rows are skipped.
+            let violations = try await GuardrailWriteCheck.violations(
+                for: binding, analyzer: UnavailableGuardrailAnalyzer(reason: "test"),
+                on: app.db, logger: app.logger)
+            #expect(violations.isEmpty)
+        }
+    }
+
+    @Test("The boot backfill fills a null cedar_text from the matchers, idempotently")
+    func cedarTextBackfill() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Backfill")
+            let guardrail = try await GuardrailStore.create(
+                name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
+                actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
+                createdBy: nil, on: app.db)
+            // Simulate a row written before #610: the column existed but was null.
+            guardrail.cedarText = nil
+            try await guardrail.save(on: app.db)
+
+            let filled = try await GuardrailCedarTextBackfill.backfill(
+                on: app.db, logger: app.logger)
+            #expect(filled == 1)
+            let reloaded = try await Guardrail.find(guardrail.id!, on: app.db)
+            #expect(reloaded?.cedarText?.contains("forbid") == true)
+
+            // Idempotent: a second run finds nothing to fill.
+            let again = try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+            #expect(again == 0)
         }
     }
 }

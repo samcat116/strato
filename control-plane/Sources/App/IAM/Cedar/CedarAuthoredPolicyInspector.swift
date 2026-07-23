@@ -49,6 +49,15 @@ struct AuthoredPolicyShape: Equatable, Sendable {
     /// something that is not a resolvable entity.
     let resourceScope: AuthoredResourceScope?
     let actionScope: AuthoredActionScope
+    /// Whether the principal scope is anything other than the unconstrained
+    /// `principal` (`==`/`in`/`is`). Read for the authored-guardrail self-lock
+    /// check (#610), which refuses an *unconditional* forbid that could reach
+    /// `iam:setPolicy` for everyone.
+    let principalConstrained: Bool
+    /// Whether the policy carries any `when`/`unless` conditions. Same reader as
+    /// `principalConstrained`: a conditioned forbid over `iam:setPolicy` leaves
+    /// someone outside the condition able to undo it, so it is not self-locking.
+    let hasConditions: Bool
 }
 
 /// Why a piece of authored-policy text is not usable as a policy. Every case
@@ -91,8 +100,28 @@ enum CedarAuthoredPolicyInspector {
         return AuthoredPolicyShape(
             effect: effect,
             resourceScope: resourceScope(est),
-            actionScope: actionScope(est)
+            actionScope: actionScope(est),
+            principalConstrained: principalConstrained(est),
+            hasConditions: hasConditions(est)
         )
+    }
+
+    /// Whether the principal scope is constrained at all — anything other than
+    /// the unconstrained `principal` (EST op `All`).
+    private static func principalConstrained(_ est: [String: Any]) -> Bool {
+        guard let scope = est["principal"] as? [String: Any], let op = scope["op"] as? String else {
+            // An unreadable principal scope is treated as constrained: the
+            // self-lock check errs toward *allowing* the write, and only the
+            // clearly-unconstrained form should trip it.
+            return true
+        }
+        return op != "All"
+    }
+
+    /// Whether the policy carries any `when`/`unless` conditions.
+    private static func hasConditions(_ est: [String: Any]) -> Bool {
+        guard let conditions = est["conditions"] as? [Any] else { return false }
+        return !conditions.isEmpty
     }
 
     // MARK: - Parsing

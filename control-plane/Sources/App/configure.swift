@@ -563,6 +563,11 @@ public func configure(_ app: Application) async throws {
     // policies compiled into the policy set beside role permits and guardrails.
     app.migrations.add(CreateIAMPolicy())
 
+    // IAM #610: guardrails store their compiled Cedar forbid as the source of
+    // truth (matcher builder or hand-authored), unifying them with roles and
+    // authored policies.
+    app.migrations.add(AddCedarTextToGuardrail())
+
     // Per-provider claim→role map (issue #611): OIDC logins can bind a scoped
     // custom role on the org node, beyond the seeded admin/member vocabulary.
     app.migrations.add(AddRoleMappingsToOIDCProvider())
@@ -593,6 +598,16 @@ public func configure(_ app: Application) async throws {
     // via the watch, whose periodic re-read would outlive the test's
     // application. Tests that change policy (guardrail writes) drive
     // `cedarPolicySet.reconcile` directly.
+    //
+    // IAM #610: densify `iam_guardrails.cedar_text` before the set is built, so
+    // the compiled set uses the stored text rather than the cache's
+    // matcher-regeneration fallback. Idempotent, only touches NULL rows, and
+    // needs no version bump (regeneration is byte-identical). Skipped in
+    // `.testing`, where the fallback covers any null row and suites that need a
+    // dense column write it explicitly.
+    if app.environment != .testing {
+        try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+    }
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()

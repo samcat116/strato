@@ -126,16 +126,19 @@ extension ResourceQuota: Content {}
 
 extension ResourceQuota {
     /// The project IDs within this quota's scope (its project, the projects of
-    /// its organizational unit, or every project of its organization). Nil when
-    /// the scoping entity no longer exists (e.g. deleted concurrently).
+    /// its organizational unit *and every descendant OU*, or every project of
+    /// its organization). Nil when the scoping entity no longer exists (e.g.
+    /// deleted concurrently).
     private func scopedProjectIDs(on db: Database) async throws -> [UUID]? {
         if let projectID = $project.id {
             return [projectID]
         }
         if let ouID = $organizationalUnit.id {
-            let projects = try await Project.query(on: db)
-                .filter(\.$organizationalUnit.$id == ouID)
-                .all()
+            guard let ou = try await OrganizationalUnit.find(ouID, on: db) else { return nil }
+            // Include projects nested under descendant OUs, not just direct
+            // children, so a quota on an intermediate folder measures every
+            // workload beneath it (issue #645).
+            let projects = try await ou.getAllProjects(on: db)
             return projects.compactMap { $0.id }
         }
         if let orgID = $organization.id {

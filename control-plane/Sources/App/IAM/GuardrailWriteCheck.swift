@@ -146,7 +146,16 @@ enum GuardrailWriteCheck {
         logger: Logger
     ) async throws -> [GuardrailViolation] {
         let chain = try await IAMResourceTree.ancestors(of: binding.node, on: db)
+        // Matcher-built ceilings only. An authored ceiling's principal side is
+        // free-form Cedar this check cannot resolve against the database — the
+        // exactness that keeps the matcher path from inventing memberships the
+        // solver was never told about (see `applies`). Rather than refuse
+        // bindings on a symbolic guess, authored ceilings rely on eval-time
+        // enforcement, which is exact and always in force. The trade-off is an
+        // authored ceiling gives no *write-time* explanation; the eval-time
+        // denial still names it (#610).
         let candidates = try await GuardrailStore.effective(along: chain, on: db)
+            .filter { !$0.authored }
         guard !candidates.isEmpty else { return [] }
         let organizationID = chain.first(where: { $0.type == .organization })?.id
 
@@ -182,7 +191,12 @@ enum GuardrailWriteCheck {
         on db: any Database,
         logger: Logger
     ) async throws -> [ShadowedBinding] {
-        guard guardrail.enabled, let node = guardrail.node else { return [] }
+        // Authored ceilings are not analyzed against existing bindings for the
+        // same reason they are skipped on binding writes (`violations`): their
+        // free-form principal side cannot be resolved against the database, and
+        // eval-time enforcement covers them. The shadow report is a matcher-path
+        // courtesy.
+        guard guardrail.enabled, !guardrail.authored, let node = guardrail.node else { return [] }
         let organizationID = try await IAMResourceTree.ancestors(of: node, on: db)
             .first(where: { $0.type == .organization })?.id
 

@@ -12,17 +12,17 @@ import SQLKit
 ///
 /// Scoping mirrors `ResourceQuota.calculateActualUsage` exactly — a workload is
 /// reserved against precisely the quotas that measured usage would later count
-/// it against (its project, its *direct* organizational unit, and its root
-/// organization) — so reserved and actual figures cannot drift apart by
-/// construction.
+/// it against (its project, its organizational unit and every ancestor OU up to
+/// the root, and its root organization) — so reserved and actual figures cannot
+/// drift apart by construction.
 struct QuotaEnforcementService {
 
     /// All quotas that govern a workload created in `project` under `environment`.
     ///
     /// A quota applies when it is scoped to the workload's project, the project's
-    /// direct organizational unit, or the project's root organization, AND its
-    /// environment is unset (applies to every environment) or equal to the
-    /// workload's environment.
+    /// organizational unit *or any ancestor OU up to the root*, or the project's
+    /// root organization, AND its environment is unset (applies to every
+    /// environment) or equal to the workload's environment.
     static func applicableQuotas(
         for project: Project,
         environment: String,
@@ -32,11 +32,24 @@ struct QuotaEnforcementService {
         let ouID = project.$organizationalUnit.id
         let orgID = try await project.getRootOrganizationId(on: db)
 
+        // Resolve the project's direct OU and every ancestor OU up to the root, so
+        // a quota on any intermediate folder is enforced — not just the direct OU
+        // (issue #645). Kept symmetric with `ResourceQuota.scopedProjectIDs`, which
+        // measures an OU quota over that OU and all descendants.
+        var ouIDs: [UUID] = []
+        if let ouID {
+            if let ou = try await OrganizationalUnit.find(ouID, on: db) {
+                ouIDs = ou.ancestorAndSelfOUIDs()
+            } else {
+                ouIDs = [ouID]
+            }
+        }
+
         return try await ResourceQuota.query(on: db)
             .group(.or) { scope in
                 scope.filter(\.$project.$id == projectID)
-                if let ouID {
-                    scope.filter(\.$organizationalUnit.$id == ouID)
+                if !ouIDs.isEmpty {
+                    scope.filter(\.$organizationalUnit.$id ~~ ouIDs)
                 }
                 if let orgID {
                     scope.filter(\.$organization.$id == orgID)

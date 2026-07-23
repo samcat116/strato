@@ -68,12 +68,18 @@ struct GuardrailController: RouteCollection {
         let resourceMatch: ResourceMatchDTO
         /// Which side carries the constraint — derived, see `Guardrail.shape`.
         let shape: String
-        /// The generated Cedar `forbid` this guardrail compiles to, read-only,
-        /// for the UI to display (issue #606). Nil when the row cannot be
-        /// rendered (an unknown node type, or an external-principal ceiling
-        /// whose attach node resolves to no organization) — the same rows the
-        /// compiled set skips.
+        /// The Cedar `forbid` this guardrail compiles to (issue #606, stored as
+        /// the source of truth since #610). For a matcher-built row it is
+        /// generated from the matchers; for an authored row it is what the admin
+        /// wrote. Nil only for a row that cannot be rendered (an unknown node
+        /// type, or an external-principal ceiling whose attach node resolves to
+        /// no organization) — the same rows the compiled set skips.
         let cedarText: String?
+        /// Whether the forbid was hand-authored (`true`) or assembled from the
+        /// matchers (`false`, #610). On an authored row the matcher fields above
+        /// are placeholders; a builder UI reads this to decide which editor to
+        /// show.
+        let authored: Bool
         let enabled: Bool
         let createdBy: UUID?
         let createdAt: Date?
@@ -93,6 +99,7 @@ struct GuardrailController: RouteCollection {
             self.resourceMatch = ResourceMatchDTO.from(try guardrail.resourceMatch())
             self.shape = guardrail.shape
             self.cedarText = cedarText
+            self.authored = guardrail.authored
             self.enabled = guardrail.enabled
             self.createdBy = guardrail.createdBy
             self.createdAt = guardrail.createdAt
@@ -112,6 +119,11 @@ struct GuardrailController: RouteCollection {
         let actions: [String]?
         let principalMatch: PrincipalMatchDTO?
         let resourceMatch: ResourceMatchDTO?
+        /// Advanced (#610): a hand-written Cedar `forbid`, held to the guardrail
+        /// shape (forbid-only, contained to the attach node, not self-locking).
+        /// Sent *instead of* the matchers, not alongside — the two together are
+        /// a `400`.
+        let cedarText: String?
         let enabled: Bool?
     }
 
@@ -120,6 +132,9 @@ struct GuardrailController: RouteCollection {
         let actions: [String]?
         let principalMatch: PrincipalMatchDTO?
         let resourceMatch: ResourceMatchDTO?
+        /// Advanced (#610): edit an authored guardrail's Cedar text. Rejected on
+        /// a matcher-built guardrail — edit its matchers instead.
+        let cedarText: String?
         let enabled: Bool?
     }
 
@@ -204,6 +219,15 @@ struct GuardrailController: RouteCollection {
         let node = try IAMPolicyGate.node(resourceType: payload.nodeType, resourceId: payload.nodeId)
         try await requirePolicyAdmin(on: node, write: true, req: req)
 
+        // Two input modes, mirroring roles (#605): the structured matchers (the
+        // builder assembles the forbid) or a hand-written `cedarText`. Both at
+        // once is ambiguous.
+        let hasMatchers =
+            payload.actions != nil || payload.principalMatch != nil || payload.resourceMatch != nil
+        if hasMatchers, payload.cedarText != nil {
+            throw GuardrailError.ambiguousInput
+        }
+
         let principalMatch = try payload.principalMatch?.toMatch() ?? .any
         let resourceMatch = try payload.resourceMatch?.toMatch() ?? .any
 
@@ -211,18 +235,32 @@ struct GuardrailController: RouteCollection {
         // exists under a version nobody bumped is a ceiling the replicas never
         // recompile against.
         let guardrail = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            let guardrail = try await GuardrailStore.create(
-                name: payload.name,
-                description: payload.description,
-                effect: payload.effect,
-                node: node,
-                actions: payload.actions ?? [],
-                principalMatch: principalMatch,
-                resourceMatch: resourceMatch,
-                enabled: payload.enabled ?? true,
-                createdBy: user.id,
-                on: db
-            )
+            let guardrail: Guardrail
+            if let cedarText = payload.cedarText {
+                guardrail = try await GuardrailStore.createAuthored(
+                    name: payload.name,
+                    description: payload.description,
+                    node: node,
+                    cedarText: cedarText,
+                    enabled: payload.enabled ?? true,
+                    createdBy: user.id,
+                    engine: req.application.cedarEngine,
+                    on: db
+                )
+            } else {
+                guardrail = try await GuardrailStore.create(
+                    name: payload.name,
+                    description: payload.description,
+                    effect: payload.effect,
+                    node: node,
+                    actions: payload.actions ?? [],
+                    principalMatch: principalMatch,
+                    resourceMatch: resourceMatch,
+                    enabled: payload.enabled ?? true,
+                    createdBy: user.id,
+                    on: db
+                )
+            }
             try await PolicySetVersionService.bump(
                 reason: "guardrail created: \(payload.name)", changedBy: user.id, on: db)
             return guardrail
@@ -265,7 +303,9 @@ struct GuardrailController: RouteCollection {
                 actions: payload.actions,
                 principalMatch: principalMatch,
                 resourceMatch: resourceMatch,
+                cedarText: payload.cedarText,
                 enabled: payload.enabled,
+                engine: req.application.cedarEngine,
                 on: db
             )
             try await PolicySetVersionService.bump(
@@ -398,23 +438,14 @@ struct GuardrailController: RouteCollection {
         return result
     }
 
-    /// The Cedar `forbid` a guardrail compiles to, for read-only UI display
-    /// (issue #606). Produced by the same assembler the compiled set uses, so
-    /// what the UI shows is what the evaluator enforces. An external-principal
-    /// ceiling needs its attach node's organization resolved — the one input
-    /// the assembler cannot derive on its own — so this walks the tree for it.
+    /// The Cedar `forbid` a guardrail compiles to, for display. The stored
+    /// column is the source of truth since #610 (matcher-generated or authored);
+    /// a null column — a row predating the migration — is regenerated from the
+    /// matchers on the fly, the same generation the write path and the boot
+    /// backfill use, so what the UI shows is what the evaluator enforces.
     private func cedarText(for guardrail: Guardrail, on db: any Database) async throws -> String? {
-        guard let id = guardrail.id, let node = guardrail.node else { return nil }
-        var organizationIDsByGuardrail: [UUID: UUID] = [:]
-        if guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
-            let chain = try await IAMResourceTree.ancestors(of: node, on: db)
-            if let organization = chain.first(where: { $0.type == .organization }) {
-                organizationIDsByGuardrail[id] = organization.id
-            }
-        }
-        let compiled = CedarPolicyAssembler.guardrailPolicyText(
-            [guardrail], organizationIDsByGuardrail: organizationIDsByGuardrail)
-        return compiled.policies.first?.text
+        if let stored = guardrail.cedarText, !stored.isEmpty { return stored }
+        return try await GuardrailStore.generateCedarText(for: guardrail, on: db)
     }
 
     /// Reading a node's guardrails is `iam:readPolicy`; changing them is

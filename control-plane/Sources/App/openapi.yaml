@@ -11460,11 +11460,50 @@ components:
             with no membership there, or a group owned by another org.
             Cross-org access is reported and marked, never filtered; it is
             exactly what most needs to be visible.
+        ceilinged:
+          type: boolean
+          description: >-
+            The grant is real but a ceiling (a guardrail or authored forbid)
+            denies it, so this principal cannot actually act here and the
+            enforcer agrees (#610). Marked, not filtered — a neutralised grant
+            is exactly what an audit needs to see. Absent/false when no ceiling
+            applies.
+        ceilingPolicyIDs:
+          type: array
+          description: >-
+            The ceiling policy ids that deny this grant (`guardrail-<id>` /
+            `policy-<id>`), when `ceilinged`. May be empty even when `ceilinged`
+            is true if the denial is structural — a fail-closed on an
+            inconsistent/truncated ancestor chain — rather than a named ceiling.
+          items:
+            type: string
+
+    IAMWhoCanCeiling:
+      type: object
+      description: >-
+        A ceiling in force on the queried resource — a guardrail inherited down
+        the tree, or an authored forbid policy scoped to it (#610). Which grants
+        it neutralises is on the entries (`ceilinged`); this is the summary of
+        what constrains the resource.
+      required: [kind, id, name, node]
+      properties:
+        kind:
+          type: string
+          enum: [guardrail, policy]
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        node:
+          allOf:
+            - $ref: "#/components/schemas/IAMNode"
+          description: The container a guardrail hangs on, or the owner of a policy.
 
     IAMWhoCanResponse:
       type: object
       required:
-        [resource, action, ancestors, principals, openToAllAuthenticatedUsers, authoredPolicies, authoredPolicyCaveat]
+        [resource, action, ancestors, principals, openToAllAuthenticatedUsers, authoredPolicies, authoredPolicyCaveat, ceilings]
       properties:
         resource:
           $ref: "#/components/schemas/IAMNode"
@@ -11487,16 +11526,25 @@ components:
         authoredPolicies:
           type: array
           description: >-
-            Authored policies (issue #606) in force on this resource that may
-            bear on the action, matched best-effort on action scope and
-            containment. Their principals are not in `principals`.
+            Authored **permit** policies (issue #606) in force on this resource
+            that may bear on the action, matched best-effort on action scope and
+            containment. Their principals are not in `principals`. Authored
+            forbids are reflected exactly in `ceilings` instead (#610).
           items:
             $ref: "#/components/schemas/IAMWhoCanPolicyMatch"
         authoredPolicyCaveat:
           type: boolean
           description: >-
-            When true, an authored policy above bears on this query and its
+            When true, an authored permit above bears on this query and its
             principals could not be enumerated — `principals` is again partial.
+        ceilings:
+          type: array
+          description: >-
+            The ceilings in force on this resource — guardrails inherited down
+            the tree plus authored forbid policies scoped to it (#610). Which
+            grants each neutralises is on the entries (`ceilinged`).
+          items:
+            $ref: "#/components/schemas/IAMWhoCanCeiling"
 
     IAMWhoCanPolicyMatch:
       type: object
@@ -11929,7 +11977,7 @@ components:
       description: >-
         A tier-2 ceiling on what grants beneath a node can reach. Guardrails
         only ever forbid; they intersect rather than override one another.
-      required: [id, name, node, effect, actions, principalMatch, resourceMatch, shape, enabled]
+      required: [id, name, node, effect, actions, principalMatch, resourceMatch, shape, authored, enabled]
       properties:
         id:
           type: string
@@ -11948,7 +11996,7 @@ components:
           type: array
           description: >-
             Exact actions, `service:*` wildcards, or `*`. An empty list means
-            every action.
+            every action. Placeholder (`["*"]`) on an authored guardrail.
           items:
             type: string
         principalMatch:
@@ -11961,10 +12009,17 @@ components:
         cedarText:
           type: string
           description: >-
-            The generated Cedar `forbid` this guardrail compiles to, read-only,
-            for UI display (issue #606). Absent when the row cannot be rendered
-            (an unknown node type, or an external-principal ceiling whose attach
-            node resolves to no organization).
+            The Cedar `forbid` this guardrail compiles to — the stored source of
+            truth since #610 (matcher-generated or hand-authored). Absent only
+            when the row cannot be rendered (an unknown node type, or an
+            external-principal ceiling whose attach node resolves to no
+            organization).
+        authored:
+          type: boolean
+          description: >-
+            Whether the forbid was hand-authored (`true`) or assembled from the
+            matchers (`false`, #610). On an authored row the matcher fields are
+            placeholders; a builder UI reads this to choose the editor.
         enabled:
           type: boolean
         createdBy:
@@ -12044,13 +12099,23 @@ components:
           allOf:
             - $ref: "#/components/schemas/IAMGuardrailResourceMatch"
           description: Defaults to `any`.
+        cedarText:
+          type: string
+          description: >-
+            Advanced (#610): a hand-written Cedar `forbid`, held to the guardrail
+            shape (forbid-only, contained to the attach node, not self-locking).
+            Sent instead of the matchers — the two together are a `400`.
         enabled:
           type: boolean
           default: true
 
     IAMGuardrailUpdateRequest:
       type: object
-      description: Partial update; omitted fields are left unchanged.
+      description: >-
+        Partial update; omitted fields are left unchanged. A guardrail's input
+        mode is fixed at creation: send matcher fields for a matcher-built
+        guardrail, `cedarText` for an authored one — the wrong mode's fields are
+        a `400`.
       properties:
         description:
           type: string
@@ -12062,6 +12127,11 @@ components:
           $ref: "#/components/schemas/IAMGuardrailPrincipalMatch"
         resourceMatch:
           $ref: "#/components/schemas/IAMGuardrailResourceMatch"
+        cedarText:
+          type: string
+          description: >-
+            Advanced (#610): edit an authored guardrail's Cedar text. Rejected
+            on a matcher-built guardrail.
         enabled:
           type: boolean
 

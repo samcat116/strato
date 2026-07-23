@@ -20,7 +20,6 @@ export { oidcProvidersApi } from "./oidc-providers";
 export { ssfStreamsApi } from "./ssf-streams";
 export { groupsApi } from "./groups";
 export { iamApi } from "./iam";
-export { foldersApi } from "./folders";
 export { quotasApi } from "./quotas";
 export { hierarchyApi } from "./hierarchy";
 export { networksApi } from "./networks";

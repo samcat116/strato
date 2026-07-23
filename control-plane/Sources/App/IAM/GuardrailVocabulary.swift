@@ -184,6 +184,16 @@ enum GuardrailError: Error, AbortError, Equatable {
     case missingMatchValue(String)
     case locksOutPolicyAdministration
     case duplicateName(String)
+    // Authored (hand-written forbid Cedar) input, #610.
+    case ambiguousInput
+    case missingInput
+    case emptyCedarText
+    case authoredMustForbid(String)
+    case authoredUnscopedResource
+    case authoredPrincipalResourceScope(String)
+    case authoredOutOfScope(attach: String, resource: String)
+    case rejectedByCedar(String)
+    case modeMismatch(String)
 
     var status: HTTPResponseStatus { .badRequest }
 
@@ -208,6 +218,30 @@ enum GuardrailError: Error, AbortError, Equatable {
                 "A guardrail that forbids 'iam:setPolicy' for every principal on every resource would outlaw its own removal, locking the subtree's policy administration irrecoverably. Narrow the principals or the resources it applies to, or exclude 'iam:setPolicy' from its actions."
         case .duplicateName(let name):
             return "A guardrail named '\(name)' is already attached to this node."
+        case .ambiguousInput:
+            return
+                "Send either the structured matchers ('actions'/'principalMatch'/'resourceMatch') or 'cedarText', not both — matchers assemble the forbid, and hand-written text supersedes them."
+        case .missingInput:
+            return
+                "A guardrail needs either the structured matchers (the builder assembles the forbid) or 'cedarText' (advanced: a hand-written Cedar forbid)."
+        case .emptyCedarText:
+            return "'cedarText' is empty — it must be a single Cedar forbid."
+        case .authoredMustForbid(let effect):
+            return
+                "Guardrails are forbid-only; the authored policy's effect is '\(effect)'. A ceiling can only subtract from what grants reach."
+        case .authoredUnscopedResource:
+            return
+                "An authored guardrail's resource scope must name the attach node (or a resource inside it) — `resource in <Type>::\"<id>\"`. An unscoped `resource` would reach every resource across every organization, which a ceiling anchored to one subtree must not."
+        case .authoredPrincipalResourceScope(let type):
+            return
+                "The authored guardrail's resource scope names '\(type)', which is a principal, not a resource. Scope it to the attach node or a resource inside it."
+        case .authoredOutOfScope(let attach, let resource):
+            return
+                "The authored guardrail's resource scope (\(resource)) is not inside its attach node (\(attach)). A ceiling can only reach the subtree it hangs on."
+        case .rejectedByCedar(let detail):
+            return "Cedar rejected the guardrail: \(detail)"
+        case .modeMismatch(let detail):
+            return detail
         }
     }
 }

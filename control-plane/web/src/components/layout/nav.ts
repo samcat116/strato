@@ -18,11 +18,14 @@ import {
   LayoutGrid,
   MapPin,
   Rows3,
+  Scale,
   ScrollText,
   Server,
   Settings,
   Shield,
+  ShieldCheck,
   Users,
+  UsersRound,
 } from "lucide-react";
 
 export interface NavItem {
@@ -74,6 +77,9 @@ export const navTree: NavItem[] = [
       { label: "Projects", href: "/projects", icon: FolderKanban },
       { label: "Quotas", href: "/quotas", icon: Gauge },
       { label: "Users", href: "/admin/users", icon: Users, adminOnly: true },
+      { label: "Groups", href: "/access/groups", icon: UsersRound },
+      { label: "Roles", href: "/access/roles", icon: ShieldCheck },
+      { label: "Policies", href: "/access/policies", icon: Scale },
       { label: "API Keys", href: "/settings/api-keys", icon: Key },
       { label: "CLI Sessions", href: "/settings/cli-sessions", icon: TerminalSquare },
       {
