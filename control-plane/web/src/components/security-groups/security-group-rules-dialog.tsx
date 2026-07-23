@@ -150,7 +150,15 @@ function SecurityGroupRules({
     }
 
     const portMin = form.portMin.trim();
-    const portMax = form.portMax.trim();
+    // tcp/udp require both bounds or neither; a single filled field means a
+    // single port, so mirror it rather than send a request the API rejects.
+    // ICMP is different: a type without a code is legal (code stays empty).
+    let portMax = form.portMax.trim();
+    if (!isIcmp && portMin && !portMax) portMax = portMin;
+    if (!isIcmp && portMax && !portMin) {
+      toast.error("Enter the first port of the range (or leave both empty)");
+      return;
+    }
     const data: CreateSecurityGroupRuleRequest = {
       direction: form.direction,
       ethertype: form.ethertype,
@@ -320,6 +328,7 @@ function SecurityGroupRules({
                   id="rulePortMin"
                   type="number"
                   min="0"
+                  max={isIcmp ? 255 : 65535}
                   placeholder={isIcmp ? "8" : "443"}
                   value={form.portMin}
                   onChange={(e) => setForm({ ...form, portMin: e.target.value })}
@@ -335,6 +344,7 @@ function SecurityGroupRules({
                   id="rulePortMax"
                   type="number"
                   min="0"
+                  max={isIcmp ? 255 : 65535}
                   placeholder={isIcmp ? "0" : "443"}
                   value={form.portMax}
                   onChange={(e) => setForm({ ...form, portMax: e.target.value })}
@@ -345,7 +355,7 @@ function SecurityGroupRules({
               <p className="col-span-2 text-xs text-muted-foreground -mt-2">
                 {isIcmp
                   ? "Leave empty to match all ICMP types."
-                  : "Leave empty to match all ports; equal values match one port."}
+                  : "Leave empty to match all ports; a single value matches one port."}
               </p>
             </div>
           )}

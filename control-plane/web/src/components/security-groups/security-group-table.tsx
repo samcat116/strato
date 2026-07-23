@@ -149,7 +149,8 @@ export function SecurityGroupTable({
                   className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
                   onClick={() => handleDelete(group)}
                   disabled={!deletable || busyId === group.id}
-                  title={disabledReason}
+                  title={disabledReason ?? "Delete security group"}
+                  aria-label="Delete security group"
                 >
                   {busyId === group.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

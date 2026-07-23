@@ -1504,6 +1504,9 @@ export interface UpdateNetworkRequest {
 export type SecurityGroupRuleDirection = "ingress" | "egress";
 export type Ethertype = "ipv4" | "ipv6";
 
+/** Server-enforced cap (SecurityGroup.maxGroupsPerNIC in the control plane). */
+export const MAX_SECURITY_GROUPS_PER_NIC = 5;
+
 export interface SecurityGroupRule {
   id: string;
   direction: SecurityGroupRuleDirection;

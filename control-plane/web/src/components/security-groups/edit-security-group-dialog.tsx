@@ -73,14 +73,18 @@ function EditSecurityGroupForm({
     setIsLoading(true);
     try {
       await securityGroupsApi.update(group.id, {
-        // The default group cannot be renamed; only send changed fields.
+        // The default group cannot be renamed; only send a changed name.
         name:
           !group.isDefault && trimmedName !== group.name
             ? trimmedName
             : undefined,
-        description: description.trim() || undefined,
+        // Always sent: an empty string clears the description server-side
+        // (omitting the field would mean "leave unchanged").
+        description: description.trim(),
       });
-      toast.success(`Security group "${group.name}" updated`);
+      toast.success(
+        `Security group "${group.isDefault ? group.name : trimmedName}" updated`
+      );
       onOpenChange(false);
       onUpdated?.();
     } catch (error) {

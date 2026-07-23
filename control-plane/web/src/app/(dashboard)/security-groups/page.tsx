@@ -21,9 +21,11 @@ export default function SecurityGroupsPage() {
   // up immediately from the refreshed query data.
   const [rulesGroupId, setRulesGroupId] = useState<string | null>(null);
   const { currentProject } = useProjectContext();
-  const { data: groups = [], isLoading } = useSecurityGroups(
-    currentProject?.id
-  );
+  const {
+    data: groups = [],
+    isLoading,
+    isError,
+  } = useSecurityGroups(currentProject?.id);
   const invalidateSecurityGroups = useInvalidateSecurityGroups();
 
   const rulesGroup = groups.find((group) => group.id === rulesGroupId) ?? null;
@@ -61,13 +63,20 @@ export default function SecurityGroupsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <SecurityGroupTable
-            groups={groups}
-            isLoading={isLoading}
-            onRefresh={invalidateSecurityGroups}
-            onEdit={setEditing}
-            onManageRules={(group) => setRulesGroupId(group.id)}
-          />
+          {isError ? (
+            // A failed fetch must not read as "no groups exist".
+            <p className="text-sm text-red-600 py-4">
+              Failed to load security groups. Refresh to try again.
+            </p>
+          ) : (
+            <SecurityGroupTable
+              groups={groups}
+              isLoading={isLoading}
+              onRefresh={invalidateSecurityGroups}
+              onEdit={setEditing}
+              onManageRules={(group) => setRulesGroupId(group.id)}
+            />
+          )}
         </CardContent>
       </Card>
 

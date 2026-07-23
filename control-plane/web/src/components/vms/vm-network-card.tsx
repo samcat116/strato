@@ -149,7 +149,10 @@ function NicSecurityGroupMenu({
 
 export function VMNetworkCard({ vm }: { vm: VM }) {
   const interfaces = vm.networkInterfaces ?? [];
-  const { data: securityGroups = [] } = useSecurityGroups(vm.projectId);
+  const {
+    data: securityGroups = [],
+    isError: securityGroupsFailed,
+  } = useSecurityGroups(vm.projectId);
   const showSecurityGroups = securityGroups.length > 0;
 
   return (
@@ -274,6 +277,14 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
               Security Groups
             </Link>{" "}
             page.
+          </p>
+        )}
+        {securityGroupsFailed && (
+          // A failed fetch must not silently hide the security-group UI as if
+          // no groups existed.
+          <p className="mt-3 text-xs text-red-600">
+            Failed to load security groups; attach/detach is unavailable until
+            the page is refreshed.
           </p>
         )}
       </CardContent>
