@@ -251,6 +251,168 @@ export interface UpdateGroupRequest {
   description?: string;
 }
 
+// IAM — roles, authored policies, and the action catalog. Roles and policies
+// are owned by an organization or project; the four seeded defaults are
+// `platform`-owned rows, immutable through the API.
+export type IAMRoleOwnerType = "platform" | "organization" | "project";
+
+// The tree nodes a role binding or guardrail can attach to (the org hierarchy
+// plus any individual resource).
+export type IAMNodeType =
+  | "organization"
+  | "organizational_unit"
+  | "project"
+  | "virtual_machine"
+  | "sandbox"
+  | "image"
+  | "network"
+  | "floating_ip"
+  | "volume"
+  | "volume_snapshot"
+  | "sandbox_snapshot"
+  | "site"
+  | "agent";
+
+export interface IAMNode {
+  type: IAMNodeType;
+  id: string;
+}
+
+export interface IAMRole {
+  id: string;
+  name: string;
+  description?: string;
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  cedarText: string;
+  actions: string[];
+  managed: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface IAMRoleListResponse {
+  roles: IAMRole[];
+}
+
+// A role as the grant flow needs it: enough to choose one and know what it
+// confers, without the (more sensitive) policy text.
+export interface IAMBindableRole {
+  id: string;
+  name: string;
+  description?: string;
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  actions: string[];
+  managed: boolean;
+}
+
+export interface IAMBindableRolesResponse {
+  node: IAMNode;
+  ancestors: IAMNode[];
+  roles: IAMBindableRole[];
+}
+
+// Send exactly one of `actions` (server generates the canonical permit) or
+// `cedarText` (advanced). Cedar text needs the role `id` it is conditioned on.
+export interface IAMRoleCreateRequest {
+  name: string;
+  description?: string;
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  actions?: string[];
+  cedarText?: string;
+  id?: string;
+}
+
+export interface IAMRoleUpdateRequest {
+  name?: string;
+  description?: string;
+  actions?: string[];
+  cedarText?: string;
+}
+
+export interface IAMRoleValidateRequest {
+  actions?: string[];
+  cedarText?: string;
+  id?: string;
+}
+
+export interface IAMRoleValidateResponse {
+  id: string;
+  cedarText: string;
+  actions: string[];
+}
+
+export type IAMPolicyEffect = "permit" | "forbid";
+
+export interface IAMPolicy {
+  id: string;
+  name: string;
+  description?: string;
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  cedarText: string;
+  effect: IAMPolicyEffect;
+  enabled: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface IAMPolicyListResponse {
+  policies: IAMPolicy[];
+}
+
+export interface IAMPolicyCreateRequest {
+  name: string;
+  description?: string;
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  cedarText: string;
+  enabled?: boolean;
+  id?: string;
+}
+
+export interface IAMPolicyUpdateRequest {
+  name?: string;
+  description?: string;
+  cedarText?: string;
+  enabled?: boolean;
+}
+
+export interface IAMPolicyValidateRequest {
+  ownerType: IAMRoleOwnerType;
+  ownerId: string;
+  cedarText: string;
+  id?: string;
+}
+
+export interface IAMPolicyValidateResponse {
+  id: string;
+  cedarText: string;
+  effect: IAMPolicyEffect;
+}
+
+// The action vocabulary a role can be built from, grouped by service.
+export interface IAMActionCatalogEntry {
+  action: string;
+  service: string;
+  resourceTypes: IAMNodeType[];
+  roles: string[];
+  membershipDerived: boolean;
+}
+
+export interface IAMActionCatalogService {
+  service: string;
+  actions: IAMActionCatalogEntry[];
+}
+
+export interface IAMActionCatalogResponse {
+  services: IAMActionCatalogService[];
+}
+
 // Folders (named "organizational unit" on the wire; fields keep their `ou`
 // spellings until the Cedar cutover renames the API).
 export interface Folder {

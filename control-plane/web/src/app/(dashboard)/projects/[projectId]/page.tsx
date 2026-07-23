@@ -6,7 +6,8 @@ import { ArrowLeft, FolderKanban } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProjectMembersSection } from "@/components/project-members";
-import { useProject } from "@/lib/hooks";
+import { RolesSection, PoliciesSection } from "@/components/iam";
+import { useProject, usePermissions } from "@/lib/hooks";
 import { useOrganization } from "@/providers";
 
 export default function ProjectDetailPage() {
@@ -16,6 +17,16 @@ export default function ProjectDetailPage() {
 
   const { data: project, isLoading } = useProject(projectId);
   const organizationId = project?.organizationId ?? currentOrg?.id ?? "";
+
+  const { permissions } = usePermissions([
+    {
+      key: "manage_project",
+      resourceType: "project",
+      resourceId: projectId,
+      permission: "manage_project",
+    },
+  ]);
+  const canManage = permissions.manage_project;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -50,10 +61,22 @@ export default function ProjectDetailPage() {
           </CardContent>
         </Card>
       ) : (
-        <ProjectMembersSection
-          projectId={projectId}
-          organizationId={organizationId}
-        />
+        <>
+          <ProjectMembersSection
+            projectId={projectId}
+            organizationId={organizationId}
+          />
+          <RolesSection
+            ownerType="project"
+            ownerId={projectId}
+            canManage={canManage}
+          />
+          <PoliciesSection
+            ownerType="project"
+            ownerId={projectId}
+            canManage={canManage}
+          />
+        </>
       )}
     </div>
   );
