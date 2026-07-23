@@ -100,6 +100,51 @@ function RoleForm({
   const [cedarActions, setCedarActions] = useState<string[] | null>(null);
   const [cedarError, setCedarError] = useState<string | null>(null);
 
+  // Whether the role being edited carries Cedar conditions the action picker
+  // can't represent (e.g. a `when { resource.environment == "staging" }`
+  // clause). If so, a picker-mode save would regenerate the canonical permit
+  // and silently drop those conditions — widening the grant. Detected on open
+  // by comparing the stored text against the canonical permit for its actions.
+  const [customCedar, setCustomCedar] = useState(false);
+
+  useEffect(() => {
+    if (!role || role.managed) return;
+    let cancelled = false;
+    const openAdvanced = () => {
+      if (cancelled) return;
+      setCustomCedar(true);
+      setAdvanced(true);
+      setCedarActions(role.actions);
+      setTab("cedar");
+    };
+    // A stored role always has a non-empty derived action set; if it somehow
+    // doesn't, we can't reconstruct a canonical permit to compare against, so
+    // fail safe into advanced mode.
+    if (role.actions.length === 0) {
+      openAdvanced();
+      return;
+    }
+    const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
+    iamApi
+      .validateRole({ actions: role.actions, id: role.id })
+      .then((res) => {
+        if (cancelled) return;
+        if (normalize(res.cedarText) !== normalize(role.cedarText)) {
+          openAdvanced();
+        }
+      })
+      .catch(() => {
+        // Couldn't verify — fail safe so we never overwrite authored Cedar
+        // without the user explicitly choosing the picker.
+        openAdvanced();
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Runs once: the form is keyed by role id, so `role` is fixed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const actionsKey = useMemo(
     () => [...selectedActions].sort().join(","),
     [selectedActions]
@@ -214,6 +259,18 @@ function RoleForm({
     if (!advanced && selectedActions.size === 0) {
       toast.error("Select at least one action, or edit the policy as Cedar.");
       return;
+    }
+    // Backstop for the escalation footgun: if this role had custom Cedar and the
+    // user has switched back to the picker, saving replaces the authored policy
+    // with the canonical permit for the selected actions — confirm first.
+    if (isEdit && !advanced && customCedar) {
+      if (
+        !window.confirm(
+          "This role has custom Cedar conditions the action picker can't represent. Saving from the picker replaces them with the canonical permit for the selected actions, which may widen access. Continue?"
+        )
+      ) {
+        return;
+      }
     }
 
     try {
