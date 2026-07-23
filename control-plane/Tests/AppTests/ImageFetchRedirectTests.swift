@@ -54,7 +54,7 @@ struct ImageFetchRedirectTests {
 
         try await origin.server.start(address: .hostname("127.0.0.1", port: 0))
         guard let port = origin.http.server.shared.localAddress?.port else {
-            try? await origin.server.shutdown()
+            await origin.server.shutdown()
             try await origin.asyncShutdown()
             throw ImageError.downloadFailed("origin server did not report a bound port")
         }
@@ -74,7 +74,7 @@ struct ImageFetchRedirectTests {
             atPath: storagePath, withIntermediateDirectories: true)
 
         func teardown() async {
-            try? await origin.server.shutdown()
+            await origin.server.shutdown()
             try? await origin.asyncShutdown()
             try? await app.asyncShutdown()
             try? FileManager.default.removeItem(atPath: storagePath)

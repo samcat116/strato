@@ -170,7 +170,7 @@ enum IAMAuthorizer {
 
         let decision: CedarCheckDecision
         do {
-            decision = try await built.artifact.authorize(
+            decision = try built.artifact.authorize(
                 principal: slice.principal,
                 action: action,
                 resource: slice.resource,

@@ -86,16 +86,22 @@ public enum SPIFFEWebSocketConnector {
         // NIOSSL custom verification callbacks replace BoringSSL's
         // verification entirely: the verifier chain-walks against the trust
         // bundle AND requires the pinned SPIFFE ID as a URI SAN on the leaf.
-        let verification: NIOSSLCustomVerificationCallbackWithMetadata = { certificates, promise in
-            SPIFFEPeerVerifier.verifyPeerChain(
-                certificates,
-                roots: pinning.trustRoots,
-                expectedSPIFFEID: pinning.expectedSPIFFEID,
-                peerDescription: "control plane",
-                logger: logger,
-                promise: promise
-            )
-        }
+        // Marked @Sendable so the channel initializer (itself a @Sendable
+        // closure) can capture it; it closes over only Sendable values
+        // (`pinning`, `logger`). A @Sendable closure still satisfies the
+        // non-Sendable `NIOSSLCustomVerificationCallbackWithMetadata` parameter.
+        let verification:
+            @Sendable ([NIOSSLCertificate], EventLoopPromise<NIOSSLVerificationResultWithMetadata>) -> Void = {
+                certificates, promise in
+                SPIFFEPeerVerifier.verifyPeerChain(
+                    certificates,
+                    roots: pinning.trustRoots,
+                    expectedSPIFFEID: pinning.expectedSPIFFEID,
+                    peerDescription: "control plane",
+                    logger: logger,
+                    promise: promise
+                )
+            }
 
         let upgradePromise = eventLoop.makePromise(of: Void.self)
         let bootstrap = ClientBootstrap(group: eventLoopGroup)

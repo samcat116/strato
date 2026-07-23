@@ -27,7 +27,7 @@ struct GroupController: RouteCollection {
     // MARK: - Group CRUD Operations
 
     func index(req: Request) async throws -> [GroupResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -56,7 +56,7 @@ struct GroupController: RouteCollection {
     }
 
     func show(req: Request) async throws -> GroupResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -83,7 +83,7 @@ struct GroupController: RouteCollection {
     }
 
     func create(req: Request) async throws -> GroupResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -119,7 +119,7 @@ struct GroupController: RouteCollection {
     }
 
     func update(req: Request) async throws -> GroupResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -170,7 +170,7 @@ struct GroupController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -206,7 +206,7 @@ struct GroupController: RouteCollection {
     // MARK: - Group Membership Operations
 
     func getMembers(req: Request) async throws -> [GroupMemberResponse] {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -232,7 +232,7 @@ struct GroupController: RouteCollection {
     }
 
     func addMembers(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -277,7 +277,7 @@ struct GroupController: RouteCollection {
     }
 
     func removeMembers(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -310,7 +310,7 @@ struct GroupController: RouteCollection {
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 

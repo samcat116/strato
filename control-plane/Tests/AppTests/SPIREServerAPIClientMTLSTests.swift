@@ -530,7 +530,7 @@ private struct FakeWorkloadAPIService: RegistrableRPCService {
             let hasHeader = request.metadata[stringValues: "workload.spiffe.io"]
                 .contains("true")
             await self.state.recordFetch(securityHeader: hasHeader)
-            let response = await self.state.response
+            let response = self.state.response
             return StreamingServerResponse { writer in
                 try await writer.write(response)
                 return [:]

@@ -33,7 +33,7 @@ struct HierarchyController: RouteCollection {
     // MARK: - Hierarchy Navigation
 
     func getFullHierarchy(req: Request) async throws -> OrganizationHierarchyResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -55,7 +55,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getAllResources(req: Request) async throws -> OrganizationResourcesResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -126,7 +126,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getResourceSummary(req: Request) async throws -> ResourceSummaryResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -160,7 +160,7 @@ struct HierarchyController: RouteCollection {
     // MARK: - Search and Navigation
 
     func searchHierarchy(req: Request) async throws -> HierarchySearchResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -232,7 +232,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getEntityPath(req: Request) async throws -> EntityPathResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -264,7 +264,7 @@ struct HierarchyController: RouteCollection {
     // MARK: - Bulk Operations
 
     func mergeOrganizations(req: Request) async throws -> MergeOrganizationsResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 
@@ -294,7 +294,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func bulkTransferResources(req: Request) async throws -> BulkTransferResponse {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
 

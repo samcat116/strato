@@ -122,7 +122,7 @@ final class HierarchyIntegrationTests {
             )
 
             // Create quotas at different levels
-            let orgQuota = try await builder.createResourceQuota(
+            _ = try await builder.createResourceQuota(
                 name: "Org Quota",
                 maxVCPUs: 100,
                 maxMemoryGB: 200.0,
@@ -131,7 +131,7 @@ final class HierarchyIntegrationTests {
                 organization: testOrganization
             )
 
-            let ouQuota = try await builder.createResourceQuota(
+            _ = try await builder.createResourceQuota(
                 name: "OU Quota",
                 maxVCPUs: 50,
                 maxMemoryGB: 100.0,
@@ -140,7 +140,7 @@ final class HierarchyIntegrationTests {
                 ou: engineering
             )
 
-            let projectQuota = try await builder.createResourceQuota(
+            _ = try await builder.createResourceQuota(
                 name: "Project Quota",
                 maxVCPUs: 20,
                 maxMemoryGB: 40.0,
@@ -162,7 +162,7 @@ final class HierarchyIntegrationTests {
     func testGroupBasedProjectAccess() async throws {
         try await withHierarchyTestApp { app, builder, testUser, testOrganization, authToken in
             // Create project
-            let project = try await builder.createProject(
+            _ = try await builder.createProject(
                 name: "Group Access Project",
                 description: "Test project for group access",
                 organization: testOrganization
@@ -222,7 +222,7 @@ final class HierarchyIntegrationTests {
                 parentOU: engineering
             )
 
-            let apiProject = try await builder.createProject(
+            _ = try await builder.createProject(
                 name: "API Backend Service",
                 description: "Core API service",
                 ou: backend
