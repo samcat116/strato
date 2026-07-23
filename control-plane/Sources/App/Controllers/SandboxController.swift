@@ -288,57 +288,15 @@ struct SandboxController: RouteCollection {
             }
         }
 
-        // Resolve the project context, mirroring VM creation: an explicit
-        // project must belong to the caller's current organization; otherwise
-        // fall back to the organization's default project.
-        let projectId: UUID
-        if let requestedProjectId = createRequest.projectId {
-            guard let project = try await Project.find(requestedProjectId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Project not found")
-            }
-
-            let rootOrgId = try await project.getRootOrganizationId(on: req.db)
-            guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
-                throw Abort(.forbidden, reason: "Access denied to project")
-            }
-
-            projectId = requestedProjectId
-        } else {
-            guard let currentOrgId = user.currentOrganizationId else {
-                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
-            }
-
-            let defaultProject = try await Project.query(on: req.db)
-                .filter(\Project.$organization.$id, .equal, currentOrgId)
-                .filter(\Project.$name, .equal, "Default Project")
-                .first()
-
-            guard let project = defaultProject else {
-                throw Abort(.badRequest, reason: "No default project found. Please specify a project.")
-            }
-            projectId = project.id!
-        }
-
-        guard let project = try await Project.find(projectId, on: req.db) else {
-            throw Abort(.internalServerError, reason: "Project not found")
-        }
-
-        // Require create permission on the target project. Org membership
-        // alone is not enough: `sandbox.create` resolves to
-        // `project->create_resources`, same as VMs.
-        let canCreate = try await req.can("create_resources", on: "project", id: projectId.uuidString)
-        guard canCreate else {
-            throw Abort(.forbidden, reason: "You don't have permission to create sandboxes in this project")
-        }
-
-        let environment = createRequest.environment ?? project.defaultEnvironment
-        if !project.hasEnvironment(environment) {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))"
-            )
-        }
+        // Resolve the target project and environment, mirroring VM creation via
+        // the shared `req.resolveProjectForCreate` helper (issue #675).
+        let (project, environment) = try await req.resolveProjectForCreate(
+            requestedProjectId: createRequest.projectId,
+            requestedEnvironment: createRequest.environment,
+            user: user,
+            resourceKind: "sandboxes"
+        )
+        let projectId = try project.requireID()
 
         let imageRef =
             restoreSource?.image
