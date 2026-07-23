@@ -213,6 +213,24 @@ final class SiteTests {
         }
     }
 
+    @Test("Label keys and values are trimmed on the way in")
+    func siteLabelsAreTrimmed() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let orgId = project.$organization.id
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "labels-trim", organizationId: orgId,
+                        labels: ["  tier  ": "  production  "]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let site = try res.content.decode(SiteResponse.self)
+                #expect(site.labels == ["tier": "production"])
+            }
+        }
+    }
+
     @Test("Invalid site metadata is rejected")
     func siteMetadataValidation() async throws {
         try await withSiteTestApp { app, _, project, token in

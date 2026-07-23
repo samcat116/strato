@@ -275,7 +275,11 @@ export default function SitesPage() {
                           onValueChange={(next) =>
                             updateStatus.mutate({ site, next: next as SiteStatus })
                           }
-                          disabled={updateStatus.isPending}
+                          // Disable only the row being updated, not every row.
+                          disabled={
+                            updateStatus.isPending &&
+                            updateStatus.variables?.site.id === site.id
+                          }
                         >
                           <SelectTrigger className="h-8 w-[150px] border-border bg-background">
                             <SelectValue>

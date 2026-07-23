@@ -97,6 +97,19 @@ struct SiteController: RouteCollection {
         return trimmed
     }
 
+    /// Trim label keys and values so a stored key never carries surrounding
+    /// whitespace (consistent with how `locationLabel`/`regionCode` normalize).
+    /// A key that trims to empty is left empty here and rejected by validation.
+    private static func normalizedLabels(_ labels: [String: String]?) -> [String: String]? {
+        guard let labels else { return nil }
+        var out: [String: String] = [:]
+        for (key, value) in labels {
+            out[key.trimmingCharacters(in: .whitespacesAndNewlines)] =
+                value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return out
+    }
+
     /// Validates the descriptive metadata shared by create and update. Cheap,
     /// range-and-length only — location is advisory, so the bar is "not
     /// obviously garbage", not canonical correctness.
@@ -203,9 +216,10 @@ struct SiteController: RouteCollection {
             throw Abort(.badRequest, reason: "Site name must be 1-100 characters")
         }
 
+        let labels = Self.normalizedLabels(create.labels)
         try Self.validateMetadata(
             latitude: create.latitude, longitude: create.longitude,
-            locationLabel: create.locationLabel, regionCode: create.regionCode, labels: create.labels)
+            locationLabel: create.locationLabel, regionCode: create.regionCode, labels: labels)
 
         let site = Site(
             name: name,
@@ -215,7 +229,7 @@ struct SiteController: RouteCollection {
             longitude: create.longitude,
             locationLabel: Self.normalized(create.locationLabel),
             regionCode: Self.normalized(create.regionCode),
-            labels: create.labels ?? [:],
+            labels: labels ?? [:],
             organizationScope: scope)
         do {
             try await site.save(on: req.db)
@@ -280,9 +294,10 @@ struct SiteController: RouteCollection {
             }
         }
 
+        let labels = Self.normalizedLabels(update.labels)
         try Self.validateMetadata(
             latitude: update.latitude, longitude: update.longitude,
-            locationLabel: update.locationLabel, regionCode: update.regionCode, labels: update.labels)
+            locationLabel: update.locationLabel, regionCode: update.regionCode, labels: labels)
 
         site.description = update.description
         site.$networkControllerAgent.id = update.networkControllerAgentId
@@ -294,7 +309,7 @@ struct SiteController: RouteCollection {
         site.longitude = update.longitude
         site.locationLabel = Self.normalized(update.locationLabel)
         site.regionCode = Self.normalized(update.regionCode)
-        site.labels = update.labels ?? [:]
+        site.labels = labels ?? [:]
         try await site.save(on: req.db)
 
         // Topology authority may have moved: the old controller must stop

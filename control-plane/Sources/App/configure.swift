@@ -574,6 +574,9 @@ public func configure(_ app: Application) async throws {
 
     // Site metadata: lifecycle status, advisory location, and free-form labels.
     app.migrations.add(AddSiteMetadata())
+    // CHECK-guard the new status column (EnforcePersistedEnumValues had already
+    // run when the column was added).
+    app.migrations.add(EnforceSiteStatusEnum())
 
     try await app.autoMigrate()
 
