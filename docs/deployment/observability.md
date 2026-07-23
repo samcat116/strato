@@ -274,30 +274,44 @@ span. If Valkey or outbound-HTTP spans disappear from the backend while
 `fluent.query` and the request spans keep arriving, suspect that something was
 constructed ahead of `bootstrapObservability()`.
 
-### Most `fluent.query` spans are roots, and that's expected
+### Why spans nest: the task-local context, and where it breaks
 
-In a trace backend you will see far more `fluent.query` spans standing alone as
-their own root than nested under a request — on the dev cluster, 95 of 100
-sampled traces containing a `fluent.query` were rooted at `fluent.query` itself,
-and the other 5 nested under `agent.desired_state_sync`.
+Every tracer involved — our own `withSpan` call sites, FluentKit, valkey-swift,
+async-http-client — finds its parent by reading the task-local
+`ServiceContext.current`. Vapor's `TracingMiddleware` binds it when it opens the
+server span, and it then flows down the responder chain by task inheritance.
 
-This is not broken context propagation. FluentKit captures whatever
-`ServiceContext` is current when the query is *built*, and most of the control
-plane's query volume comes from timer-driven background loops — the periodic
-desired-state sync, the agent heartbeat monitor, the audit-retention sweep,
-webhook delivery, SSF poll delivery — which run outside any request and so have
-no enclosing span to attach to. Queries issued while serving a request do nest:
-Vapor's `TracingMiddleware` opens the server span with `withSpan`, which sets
-the task-local `ServiceContext` for the rest of the responder chain. Orphan
-`fluent.query` roots are background work, not a lost `traceparent`.
+It does not survive a future-based middleware. Vapor 4 still ships several
+(`SessionsMiddleware`, `RequestAuthenticator`, `SessionAuthenticator`), and each
+chains downstream from inside an `EventLoopFuture` callback:
 
-Valkey command spans may be a different story. Verified locally against a
-collector: an `EVAL` issued by the session middleware **inside** a `GET /api/vms`
-request came out as its own root, where the reasoning above says it should have
-nested. One observation on one local run is not a diagnosis — it may be that
-valkey-swift resolves the span on a connection-pool-owned task that did not
-inherit the caller's `ServiceContext`. Worth confirming against a real trace
-backend before treating unparented Valkey spans as normal.
+```swift
+return future.flatMap { _ in next.respond(to: request) }
+```
+
+That callback runs on the event loop, outside any Swift task, so task-local
+storage is gone; the `AsyncMiddleware` bridge below it then starts a fresh
+`Task` with nothing to inherit from. Until this was fixed, `ServiceContext`
+read back `nil` for the entire remainder of every request — `iam.authorize`, the
+rate limiter's Valkey `EVAL`, and every controller's `fluent.query` each opened
+a root span in a trace of its own, which is why a dev-cluster sample found 95 of
+100 traces containing a `fluent.query` rooted at `fluent.query` itself.
+
+`ServiceContextRestoringMiddleware` closes it: `request.serviceContext` lives on
+the `Request` object and is untouched by the event-loop hop, so re-binding the
+task-local from it restores parenting for everything below. It is registered
+right after the session authenticator, and **any future-based middleware added
+after that point needs another one behind it**.
+
+This is what the locally-observed orphan `EVAL` turned out to be — an `EVAL`
+issued **inside** a `GET /api/vms` landing in its own trace. Nothing about
+valkey-swift's connection pool was involved: it resolves the parent from
+`ServiceContext.current` like everything else, and there was no parent to find.
+
+Spans genuinely started outside a request still appear as roots, and should:
+the periodic desired-state sync, the agent heartbeat monitor, the audit-retention
+sweep, webhook delivery, and SSF poll delivery are all timer-driven, with no
+enclosing span to attach to.
 
 ### Correlating traces with logs
 
