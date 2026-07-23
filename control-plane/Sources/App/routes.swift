@@ -54,6 +54,9 @@ func routes(_ app: Application) throws {
     // Shared Signals Framework receiver (issue #38)
     try app.register(collection: SSFStreamController())
 
+    // User-managed webhook notifications (issue #559)
+    try app.register(collection: WebhookSubscriptionController())
+
     // Image management controller
     try app.register(collection: ImageController())
 
@@ -65,6 +68,7 @@ func routes(_ app: Application) throws {
 
     // Floating IPs: external address pools + VM NIC attachments (issue #344)
     try app.register(collection: FloatingIPController())
+    try app.register(collection: SecurityGroupController())
 
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())

@@ -52,6 +52,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case image
     case network
     case floatingIP = "floating_ip"
+    case securityGroup = "security_group"
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
@@ -101,6 +102,7 @@ enum IAMRoleRegistry {
             "image:read", "image:list", "image:download",
             "network:read", "network:list",
             "floatingip:read", "floatingip:list",
+            "securitygroup:read", "securitygroup:list",
             "serviceaccount:read", "serviceaccount:list",
             "project:read",
             "folder:read",
@@ -126,6 +128,8 @@ enum IAMRoleRegistry {
             "network:create", "network:update", "network:delete",
             "floatingip:create", "floatingip:release",
             "floatingip:attach", "floatingip:detach",
+            "securitygroup:create", "securitygroup:update", "securitygroup:delete",
+            "securitygroup:attach", "securitygroup:detach",
             "serviceaccount:create", "serviceaccount:update", "serviceaccount:delete",
             "project:update",
         ],

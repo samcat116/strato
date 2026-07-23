@@ -79,13 +79,22 @@ struct VMSpecBuilder {
     /// `networks` maps logical-network name → its model, supplying the DHCP/DNS
     /// configuration agents program into OVN. It defaults empty (DHCP disabled)
     /// so callers that don't care about DHCP — and tests — need not fetch it.
+    /// `securityGroupsByInterface` maps NIC id → its security-group ids;
+    /// missing entries emit nil (unmanaged), which is also the default so
+    /// callers that predate security groups — and tests — need not fetch it.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
-        networks: [String: LogicalNetwork] = [:]
+        networks: [String: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:]
     ) -> [NetworkSpec] {
         interfaces
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
-            .map { NetworkSpec.build(interface: $0, network: networks[$0.network]) }
+            .map {
+                NetworkSpec.build(
+                    interface: $0,
+                    network: networks[$0.network],
+                    securityGroupIds: $0.id.flatMap { id in securityGroupsByInterface[id] })
+            }
     }
 
     /// Legacy single-disk volume list from `vm.diskPath`.
@@ -142,7 +151,8 @@ struct VMSpecBuilder {
     ///   - networkInterfaces: The VM's network interfaces
     static func buildVMSpecWithVolumes(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
-        networks: [String: LogicalNetwork] = [:]
+        networks: [String: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:]
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -169,7 +179,9 @@ struct VMSpecBuilder {
             ),
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: volumes,
-            networks: networkSpecs(from: networkInterfaces, networks: networks),
+            networks: networkSpecs(
+                from: networkInterfaces, networks: networks,
+                securityGroupsByInterface: securityGroupsByInterface),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData

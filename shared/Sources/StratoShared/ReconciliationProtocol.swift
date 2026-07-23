@@ -207,6 +207,16 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// not reached yet. Never an instruction to downgrade or tear anything
     /// down, so absence is always safe.
     public let desiredAgentUpdate: DesiredAgentUpdate?
+    /// The security groups the receiving agent needs realized as OVN port
+    /// groups + ACLs: every group attached to a NIC of a VM in this sync's
+    /// scope, plus the transitive closure of groups referenced by their rules
+    /// (so `$pg_…` address-set references always resolve). Only the topology
+    /// authority acts on this list; other agents consume just the per-NIC
+    /// `NetworkSpec.securityGroupIds` for port membership. Nil from control
+    /// planes that predate security groups — never "tear down all port
+    /// groups": the authority skips security-group reconciliation entirely
+    /// when the field is absent, exactly like the `networks` list before it.
+    public let securityGroups: [DesiredSecurityGroup]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -216,7 +226,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         sandboxes: [DesiredSandboxState] = [],
         networks: [DesiredNetworkState] = [],
         networksAuthoritative: Bool = true,
-        desiredAgentUpdate: DesiredAgentUpdate? = nil
+        desiredAgentUpdate: DesiredAgentUpdate? = nil,
+        securityGroups: [DesiredSecurityGroup]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -226,6 +237,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.networks = networks
         self.networksAuthoritative = networksAuthoritative
         self.desiredAgentUpdate = desiredAgentUpdate
+        self.securityGroups = securityGroups
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -245,6 +257,77 @@ public struct DesiredStateMessage: WebSocketMessage {
         networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
         networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
         desiredAgentUpdate = try c.decodeIfPresent(DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
+        securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
+    }
+}
+
+// MARK: - Desired Security Groups
+
+/// One rule of a security group, realized by the topology-authority agent as
+/// a single OVN ACL on the group's port group (issue: security groups).
+///
+/// The peer is at most one of `remoteCIDR` / `remoteGroupId`; both nil means
+/// "any". A group peer is carried as the group's id — the agent derives the
+/// port-group name (and thus the OVN-generated `$<pg>_ip4`/`_ip6` address-set
+/// reference) itself via `OVNNaming`, so naming stays a single-owner concern
+/// exactly like floating-IP port names.
+public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
+    /// The control-plane rule row's id, stamped into the ACL's `external_ids`
+    /// so operators can trace an OVN ACL back to the rule that produced it.
+    public let id: UUID
+    /// "ingress" (traffic to the VM, `to-lport`) or "egress" (traffic from
+    /// the VM, `from-lport`).
+    public let direction: String
+    /// "ipv4" or "ipv6" — which address family the rule matches.
+    public let ethertype: String
+    /// "tcp", "udp", or "icmp"; nil matches any protocol of the ethertype.
+    public let protocolName: String?
+    /// For tcp/udp: the destination port range (min == max for one port).
+    /// For icmp: `portRangeMin` is the ICMP type and `portRangeMax` the code.
+    /// Nil means all ports/types.
+    public let portRangeMin: Int?
+    public let portRangeMax: Int?
+    /// CIDR peer (source for ingress, destination for egress).
+    public let remoteCIDR: String?
+    /// Security-group peer: matches the addresses of the referenced group's
+    /// member ports via its auto-generated address set.
+    public let remoteGroupId: UUID?
+
+    public init(
+        id: UUID,
+        direction: String,
+        ethertype: String,
+        protocolName: String? = nil,
+        portRangeMin: Int? = nil,
+        portRangeMax: Int? = nil,
+        remoteCIDR: String? = nil,
+        remoteGroupId: UUID? = nil
+    ) {
+        self.id = id
+        self.direction = direction
+        self.ethertype = ethertype
+        self.protocolName = protocolName
+        self.portRangeMin = portRangeMin
+        self.portRangeMax = portRangeMax
+        self.remoteCIDR = remoteCIDR
+        self.remoteGroupId = remoteGroupId
+    }
+}
+
+/// The state the control plane wants one security group to be in: an OVN port
+/// group carrying one ACL per rule. `generation` is bumped on every rule
+/// mutation; the agent replaces the port group's ACL set only when the stored
+/// generation differs, so replayed or reordered syncs can never resurrect old
+/// rules (the `LogicalNetwork.generation` pattern).
+public struct DesiredSecurityGroup: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let generation: Int64
+    public let rules: [DesiredSecurityGroupRule]
+
+    public init(id: UUID, generation: Int64, rules: [DesiredSecurityGroupRule]) {
+        self.id = id
+        self.generation = generation
+        self.rules = rules
     }
 }
 

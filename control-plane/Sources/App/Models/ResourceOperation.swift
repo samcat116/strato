@@ -135,6 +135,20 @@ final class ResourceOperation: Model, @unchecked Sendable {
     @OptionalField(key: "completed_at")
     var completedAt: Date?
 
+    /// Webhook delivery context, captured by `begin` while the resource row
+    /// still exists (PR #668 review). Like `resource_id`, deliberately
+    /// FK-free: a delete operation's completion event must be deliverable
+    /// after the resource — and its name — are gone. Nil on rows that predate
+    /// the column or bypassed `begin`; those resolve from the live resource.
+    @OptionalField(key: "organization_id")
+    var organizationID: UUID?
+
+    @OptionalField(key: "project_id")
+    var projectID: UUID?
+
+    @OptionalField(key: "resource_name")
+    var resourceName: String?
+
     init() {}
 
     init(resourceKind: OperationResourceKind, resourceID: UUID, userID: UUID, kind: VMOperationKind) {
@@ -168,12 +182,21 @@ extension ResourceOperation {
     /// Marks the operation terminal if — and only if — it is still pending, so
     /// the two completion paths (agent response and stuck-operation sweep)
     /// cannot overwrite each other's verdict. Returns whether this call won.
+    ///
+    /// The winning flip also enqueues `operation.completed`/`operation.failed`
+    /// webhook deliveries (issue #559), in the same transaction as the status
+    /// write: because every completion path funnels through here, this is the
+    /// one place the outbox rows commit atomically with the verdict — and the
+    /// "only the winner" guard means the event is enqueued exactly once.
     func completeIfPending(as status: VMOperationStatus, error: String?, on db: Database) async throws -> Bool {
         guard self.status == .pending else { return false }
         self.status = status
         self.error = error
         self.completedAt = Date()
-        try await self.save(on: db)
+        try await db.transaction { db in
+            try await self.save(on: db)
+            try await WebhookEvents.enqueueOperationCompletion(for: self, on: db)
+        }
         return true
     }
 
@@ -220,6 +243,16 @@ extension ResourceOperation {
 
             let operation = ResourceOperation(
                 resourceKind: resourceKind, resourceID: resourceID, userID: userID, kind: kind)
+            // Capture the webhook delivery context while the resource row
+            // still exists — a delete's completion event has nothing left to
+            // resolve against once the row is removed (PR #668 review).
+            if let context = try await WebhookEvents.resourceContext(
+                kind: resourceKind, id: resourceID, on: db)
+            {
+                operation.organizationID = context.organizationID
+                operation.projectID = context.projectID
+                operation.resourceName = context.resourceName
+            }
             do {
                 try await operation.save(on: db)
             } catch let error as any DatabaseError where error.isConstraintFailure {
