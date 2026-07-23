@@ -303,6 +303,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 dhcpOptionsUUID: dhcpOptionsUUID, dhcpV6OptionsUUID: dhcpV6OptionsUUID)
         }
 
+        // Join the NIC's security groups (plus the drop group) before the TAP
+        // goes live, so a fresh VM is never even briefly unfiltered. A port
+        // group the topology authority hasn't realized yet parks the create
+        // on DependencyPendingError (the missing-switch semantics above); the
+        // per-sync membership pass keeps the port converged afterwards.
+        if let groupIds = config.securityGroupIds {
+            try await joinSecurityGroups(portName: portName, portUUID: portUUID, groupIds: groupIds)
+        }
+
         // Create TAP interface and connect to OVS bridge
         let tapInterface = try await createTAPInterface(vmId: vmId, nicIndex: nicIndex)
         try await attachTAPToBridge(tapInterface: tapInterface, portName: portName)
@@ -756,6 +765,44 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return try await ovnManager?.createLogicalSwitchPort(logicalPort, onSwitch: switchName)
     }
 
+    /// Adds a freshly created/reused LSP to its security groups' port groups
+    /// plus the drop group. Throws `DependencyPendingError` when a group's
+    /// port group doesn't exist — or exists without its generation stamp,
+    /// i.e. its ACLs aren't realized yet (rows and ACLs commit in separate
+    /// transactions) — the authority's sync realizes it and the VM create
+    /// retries, so a managed NIC can never come up filtered by nothing. The
+    /// drop group joins first: if a later add fails, the port is already
+    /// default-deny rather than allow-only.
+    private func joinSecurityGroups(portName: String, portUUID: String?, groupIds: [UUID]) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let groups =
+            [OVNNaming.dropPortGroupName] + groupIds.map { OVNNaming.portGroupName(securityGroupId: $0) }.sorted()
+        for group in groups {
+            guard let portGroup = try await ovnManager.getPortGroup(named: group) else {
+                throw DependencyPendingError(
+                    "port group \(group) does not exist yet; waiting for the site's network controller to realize it"
+                )
+            }
+            guard portGroup.external_ids?[Self.generationKey] != nil else {
+                throw DependencyPendingError(
+                    "port group \(group) exists but its ACLs are not realized yet; waiting for the site's network controller"
+                )
+            }
+            guard let portUUID else { continue }
+            if !(portGroup.ports ?? []).contains(portUUID) {
+                try await ovnManager.addPorts([portUUID], toPortGroup: group)
+            }
+        }
+        logger.debug(
+            "VM port joined security groups",
+            metadata: [
+                "portName": .string(portName),
+                "groups": .stringConvertible(groups.count),
+            ])
+    }
+
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {
         guard let ovnManager = ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
@@ -1069,12 +1116,11 @@ extension NetworkServiceLinux {
     /// controller) authors the shared NB this agent writes its ports to
     /// (issue #343): topology is left entirely alone — reconciling here, even
     /// with an empty list, would tear down the controller's objects.
-    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async {
+    func reconcileNetworks(
+        _ networks: [DesiredNetworkState], authoritative: Bool,
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+    ) async {
         topologyAuthority = authoritative
-        guard authoritative else {
-            logger.debug("Not the site's network topology authority; skipping network reconciliation")
-            return
-        }
 
         #if os(Linux)
         guard isConnected else {
@@ -1082,6 +1128,16 @@ extension NetworkServiceLinux {
             return
         }
         #endif
+
+        guard authoritative else {
+            logger.debug("Not the site's network topology authority; skipping network reconciliation")
+            // Membership is per-VM state this host owns even without topology
+            // authority — its ports join the port groups the site's
+            // controller authors (the LSP-binding pattern, issue #343).
+            await SecurityGroupReconciler.reconcileMembership(
+                memberships: portMemberships, actuator: self, logger: logger)
+            return
+        }
 
         // Generation guard: apply only entries at least as new as what we last
         // applied for each network, so a reordered stale sync can't re-address
@@ -1132,6 +1188,25 @@ extension NetworkServiceLinux {
             guard let dhcpEnabled = network.dhcpEnabled else { continue }
             await attemptDHCPConvergence(for: network, dhcpEnabled: dhcpEnabled)
         }
+
+        // Security groups (authority side): converge port groups + ACLs, then
+        // this host's own ports' membership. Nil means the control plane has
+        // no security-group opinion (predates the feature, or omits the field
+        // for this pre-v20-registered agent — impossible here, but the
+        // contract stands): touch nothing, exactly like the `networks` list's
+        // absence semantics.
+        if let securityGroups {
+            do {
+                try await SecurityGroupReconciler.reconcile(
+                    securityGroups: securityGroups, actuator: self, logger: logger)
+            } catch {
+                logger.error(
+                    "Security-group reconciliation could not complete",
+                    metadata: ["error": .string(error.localizedDescription)])
+            }
+        }
+        await SecurityGroupReconciler.reconcileMembership(
+            memberships: portMemberships, actuator: self, logger: logger)
     }
 
     /// Best-effort per-network DHCP row convergence; a failing network is
@@ -2036,5 +2111,185 @@ extension NetworkError: ClassifiableError {
             // so these stay retryable.
             return .transient
         }
+    }
+}
+
+// MARK: - Security-group actuation (OVN port groups + ACLs)
+
+extension NetworkServiceLinux: SecurityGroupActuator {
+    /// External-id key carrying the generation a port group's ACL set was
+    /// built from; absence forces a rewrite (see `needsACLRewrite`) and marks
+    /// the group not-yet-enforcing for the membership paths — the row can
+    /// exist committed transactions before its ACLs do.
+    static let generationKey = "strato-generation"
+    /// External-id key carrying the `aclSchemaRevision` that wrote the ACLs,
+    /// so builder fixes roll out on agent upgrade without waiting for rule
+    /// edits to bump each group's generation.
+    static let builderRevisionKey = "strato-builder-rev"
+
+    func observeSecurityGroups() async throws -> [ObservedPortGroup] {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        return try await ovnManager.getPortGroups()
+            .filter { Self.isManaged($0.external_ids) }
+            .map {
+                ObservedPortGroup(
+                    name: $0.name,
+                    generation: $0.external_ids?[Self.generationKey].flatMap(Int64.init),
+                    builderRevision: $0.external_ids?[Self.builderRevisionKey].flatMap(Int64.init))
+            }
+        #else
+        return []
+        #endif
+    }
+
+    func ensurePortGroup(_ plan: PortGroupPlan) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+
+        let pgUUID: String
+        var supersededACLs: [String] = []
+        if let existing = try await ovnManager.getPortGroup(named: plan.name) {
+            guard
+                SecurityGroupReconciler.needsACLRewrite(
+                    planned: plan.generation,
+                    observed: existing.external_ids?[Self.generationKey].flatMap(Int64.init),
+                    observedBuilderRevision: existing.external_ids?[Self.builderRevisionKey]
+                        .flatMap(Int64.init))
+            else { return }
+            guard let uuid = existing.uuid else {
+                throw NetworkError.ovnError("Port group \(plan.name) has no UUID")
+            }
+            pgUUID = uuid
+            supersededACLs = existing.acls ?? []
+        } else {
+            // Created without the generation stamp: the membership paths read
+            // a stamp-less group as not-yet-enforcing and refuse to join it,
+            // so a port can never go live behind a group whose ACLs aren't
+            // written yet. `ports` stays untouched here and always
+            // (membership belongs to each VM's hosting agent).
+            pgUUID = try await ovnManager.createPortGroup(
+                OVNPortGroup(name: plan.name, external_ids: [Self.managedKey: Self.managedValue]))
+        }
+
+        // Full replace, NEW SET FIRST: OVN ACL rows have no natural key to
+        // diff on, and each write is its own OVSDB transaction. Creating
+        // before deleting means the group never has *fewer* ACLs than it
+        // started with — with both sets present the drops still drop and the
+        // allows still allow, so live members (the drop group holds every
+        // managed port on the site) never lose their default-deny, and a rule
+        // edit never blacks out the group's allows. Deleting first would open
+        // exactly those windows. Duplicates during the overlap are harmless.
+        for acl in plan.acls {
+            _ = try await ovnManager.createACL(
+                OVNACL(
+                    priority: acl.priority,
+                    direction: acl.direction,
+                    match: acl.match,
+                    action: acl.action,
+                    external_ids: acl.externalIDs),
+                onPortGroup: plan.name)
+        }
+        for aclUUID in supersededACLs {
+            try await ovnManager.deleteACL(uuid: aclUUID)
+        }
+
+        // Stamps last: a crash anywhere above leaves them absent/stale and
+        // the next sync redoes the whole rewrite.
+        try await ovnManager.updatePortGroup(
+            uuid: pgUUID,
+            OVNPortGroup(
+                name: plan.name,
+                external_ids: [
+                    Self.managedKey: Self.managedValue,
+                    Self.generationKey: String(plan.generation),
+                    Self.builderRevisionKey: String(SecurityGroupACLBuilder.aclSchemaRevision),
+                ]))
+        logger.info(
+            "Security-group port group converged",
+            metadata: [
+                "portGroup": .string(plan.name),
+                "generation": .stringConvertible(plan.generation),
+                "acls": .stringConvertible(plan.acls.count),
+            ])
+        #endif
+    }
+
+    func removePortGroup(named name: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        // Only ever called for managed groups (observeSecurityGroups filters),
+        // and deletion drops its ACL rows with it; member-port references are
+        // weak, so no port cleanup is needed.
+        try await ovnManager.deletePortGroup(named: name)
+        logger.info(
+            "Security-group port group removed", metadata: ["portGroup": .string(name)])
+        #endif
+    }
+
+    func observeMembership(ofPorts portNames: [String]) async throws -> [String: Set<String>] {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let groups = try await ovnManager.getPortGroups().filter { Self.isManaged($0.external_ids) }
+        var membership: [String: Set<String>] = [:]
+        for portName in portNames {
+            guard let portUUID = try await ovnManager.getLogicalSwitchPort(named: portName)?.uuid
+            else { continue }
+            for group in groups where (group.ports ?? []).contains(portUUID) {
+                membership[portName, default: []].insert(group.name)
+            }
+        }
+        return membership
+        #else
+        return [:]
+        #endif
+    }
+
+    func addPort(named portName: String, toGroup group: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let portGroup = try await ovnManager.getPortGroup(named: group) else {
+            throw DependencyPendingError(
+                "port group \(group) does not exist yet; waiting for the site's network controller to realize it"
+            )
+        }
+        // Existence is not enforcement: the authority realizes a group as
+        // separate transactions (row, then ACLs, then the generation stamp),
+        // so a stamp-less row is a group whose ACLs are not written yet —
+        // joining it would put the port behind a drop group with no drops.
+        guard portGroup.external_ids?[Self.generationKey] != nil else {
+            throw DependencyPendingError(
+                "port group \(group) exists but its ACLs are not realized yet; waiting for the site's network controller"
+            )
+        }
+        guard let portUUID = try await ovnManager.getLogicalSwitchPort(named: portName)?.uuid else {
+            // The VM's own reconcile lane creates the port; membership catches
+            // up on the next sync.
+            throw DependencyPendingError("logical switch port \(portName) does not exist yet")
+        }
+        try await ovnManager.addPorts([portUUID], toPortGroup: group)
+        #endif
+    }
+
+    func removePort(named portName: String, fromGroup group: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let portUUID = try await ovnManager.getLogicalSwitchPort(named: portName)?.uuid else {
+            return
+        }
+        try await ovnManager.removePorts([portUUID], fromPortGroup: group)
+        #endif
     }
 }

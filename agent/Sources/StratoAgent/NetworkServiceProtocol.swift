@@ -32,8 +32,16 @@ protocol NetworkServiceProtocol: Sendable {
     /// a network omitted from `networks` has its owned L3 objects torn down.
     /// `authoritative: false` (issue #343) means another agent authors the
     /// shared site NB — topology must be left entirely alone, teardown included.
+    ///
+    /// `securityGroups` is the authority's port-group + ACL desired state (nil
+    /// from control planes without an opinion — never "tear down all port
+    /// groups"); `portMemberships` is this host's own VM ports' desired group
+    /// membership, converged on *every* agent regardless of authority.
     /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
-    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async
+    func reconcileNetworks(
+        _ networks: [DesiredNetworkState], authoritative: Bool,
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+    ) async
 }
 
 extension NetworkServiceProtocol {
@@ -43,7 +51,10 @@ extension NetworkServiceProtocol {
     }
 
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
-    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async {}
+    func reconcileNetworks(
+        _ networks: [DesiredNetworkState], authoritative: Bool,
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+    ) async {}
 }
 
 // MARK: - Network Configuration Models
@@ -75,12 +86,18 @@ struct VMNetworkConfig: Sendable {
     let domainName: String?
     /// DHCP lease time in seconds; a default is applied when nil.
     let leaseTime: Int?
+    /// Security groups this NIC belongs to: the port joins each group's OVN
+    /// port group (plus the global drop group) at creation, so a fresh VM is
+    /// never briefly unfiltered. Nil means unmanaged (specs from control
+    /// planes without security groups, and sandbox NICs) — the port joins no
+    /// groups at all.
+    let securityGroupIds: [UUID]?
 
     init(
         networkName: String, networkId: UUID? = nil, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
-        domainName: String? = nil, leaseTime: Int? = nil
+        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil
     ) {
         self.networkName = networkName
         self.networkId = networkId
@@ -96,6 +113,7 @@ struct VMNetworkConfig: Sendable {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.securityGroupIds = securityGroupIds
     }
 }
 

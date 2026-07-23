@@ -241,28 +241,30 @@ public enum WireProtocol {
     /// "restart to apply" remedy to offer, because the target only exists on
     /// a running guest in the first place.
     ///
-    /// Version 20 (planned; agents do not enforce yet): security groups
-    /// (stateful NIC-level filtering as OVN ACLs on port groups).
-    /// `DesiredStateMessage` gains an optional `securityGroups` list realized
-    /// by the topology-authority agent, and `NetworkSpec` gains optional
-    /// `securityGroupIds` so every agent adds its own VMs' logical switch
-    /// ports to the right port groups (plus the global drop group). Both
-    /// fields are additive and nil-tolerant, which is exactly the floating-IP
-    /// hazard from v12: a pre-v20 agent decodes the sync, ignores the fields,
-    /// and the API would report filtering that no ACL ever enforces. The gate
-    /// is load-bearing on the control-plane side — attach/detach on a VM
-    /// whose realizing agent registered pre-v20 is refused, and sync assembly
-    /// omits both fields for such agents (see `supportsSecurityGroups(_:)`).
-    /// VM *create* is deliberately NOT gated: every NIC must join at least
-    /// the project default group, so gating creates would make a pre-v20
-    /// fleet unable to create VMs at all. On such a fleet the NIC's port
-    /// simply joins no groups — pre-security-group behavior — which the
-    /// migration posture is designed around (migrated default groups carry an
-    /// allow-all-ingress rule, so enforcement arriving with the agent upgrade
-    /// changes nothing until an operator tightens rules). The constant ships
-    /// ahead of the version bump so the control plane can gate truthfully
-    /// while `currentVersion` stays 19; agent enforcement bumps it to 20.
-    public static let currentVersion = 19
+    /// Version 20: security groups (stateful NIC-level filtering as OVN ACLs
+    /// on port groups). `DesiredStateMessage` gains an optional
+    /// `securityGroups` list realized by the topology-authority agent as port
+    /// groups + ACLs, and `NetworkSpec` gains optional `securityGroupIds` so
+    /// every agent adds its own VMs' logical switch ports to the right port
+    /// groups (plus the global drop group). Both fields are additive and
+    /// nil-tolerant, which is exactly the floating-IP hazard from v12: a
+    /// pre-v20 agent decodes the sync, ignores the fields, and the API would
+    /// report filtering that no ACL ever enforces. The gate is load-bearing
+    /// on the control-plane side — attach/detach on VMs whose realizing agent
+    /// registered pre-v20 is refused, and sync assembly omits both fields for
+    /// such agents (see `supportsSecurityGroups(_:)`). VM *create* is
+    /// deliberately NOT gated: every NIC must join at least the project
+    /// default group, so gating creates would make a pre-v20 fleet unable to
+    /// create VMs at all. On such a fleet the NIC's port simply joins no
+    /// groups — pre-security-group behavior — which the migration posture is
+    /// designed around (migrated default groups carry an allow-all-ingress
+    /// rule, so enforcement arriving with the agent upgrade changes nothing
+    /// until an operator tightens rules). In the other direction, nil
+    /// `securityGroups` (an older control plane) is "no opinion" — never
+    /// "tear down all port groups" — and a nil per-NIC list marks the port
+    /// unmanaged: it joins no groups, drop group included, so legacy traffic
+    /// keeps flowing during a mixed-version rollout.
+    public static let currentVersion = 20
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
