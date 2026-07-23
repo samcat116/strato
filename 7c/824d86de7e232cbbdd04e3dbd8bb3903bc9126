@@ -1,0 +1,22 @@
+control-plane/web/src/types/openapi.ts
+  s_c9a8dbace3b7c5::t_934ccf68595a6a 6404,6421
+control-plane/Sources/App/openapi.yaml
+  s_c9a8dbace3b7c5::t_d95a21aedf093c 11110
+  s_c9a8dbace3b7c5::t_e74cab8269fd2b 11072
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "7c824d86de7e232cbbdd04e3dbd8bb3903bc9126",
+  "prompts": {},
+  "sessions": {
+    "s_c9a8dbace3b7c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08c093c7-2158-4f88-82af-5ecdd04e6e38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
