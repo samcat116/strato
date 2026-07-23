@@ -1,0 +1,26 @@
+helm/strato-control-plane/templates/otel-collector-configmap.yaml
+  s_a7fdc8e50034fe::t_a98cb8fc09bcba 2-9,67-83,96-99
+control-plane/Sources/App/entrypoint.swift
+  s_a7fdc8e50034fe::t_a98cb8fc09bcba 4-7,13-39
+helm/strato-control-plane/values.yaml
+  s_a7fdc8e50034fe::t_a98cb8fc09bcba 536-569
+docs/deployment/observability.md
+  s_a7fdc8e50034fe::t_a98cb8fc09bcba 76-78,90-127,217-219,263-280
+  s_a7fdc8e50034fe::t_b5d7926c4c12c3 281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5950ff2385c72d34a8f5df8c92d82e64158949ff",
+  "prompts": {},
+  "sessions": {
+    "s_a7fdc8e50034fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94f5a929-5dd5-4341-8f65-657311343ef7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
