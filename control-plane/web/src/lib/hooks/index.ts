@@ -111,6 +111,21 @@ export {
   groupErrorMessage,
 } from "./use-groups";
 export {
+  useRoles,
+  useCreateRole,
+  useUpdateRole,
+  useDeleteRole,
+  useValidateRole,
+  useBindableRoles,
+  useActionCatalog,
+  usePolicies,
+  useCreatePolicy,
+  useUpdatePolicy,
+  useDeletePolicy,
+  useValidatePolicy,
+  iamErrorMessage,
+} from "./use-iam";
+export {
   useFolders,
   useFolderTree,
   useCreateFolder,

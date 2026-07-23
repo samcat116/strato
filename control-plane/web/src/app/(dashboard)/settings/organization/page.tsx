@@ -15,6 +15,7 @@ import { organizationsApi } from "@/lib/api/organizations";
 import { useOrganizationMembers, usePermissions } from "@/lib/hooks";
 import { MembersTable, AddMemberDialog } from "@/components/organization-members";
 import { GroupsSection } from "@/components/organization-groups";
+import { RolesSection, PoliciesSection } from "@/components/iam";
 import { FoldersSection } from "@/components/folders";
 import { SCIMTokensSection } from "@/components/scim-tokens";
 import { OIDCProvidersSection } from "@/components/oidc-providers";
@@ -152,6 +153,18 @@ export default function OrganizationSettingsPage() {
             Groups
           </TabsTrigger>
           <TabsTrigger
+            value="roles"
+            className="data-[state=active]:bg-muted"
+          >
+            Roles
+          </TabsTrigger>
+          <TabsTrigger
+            value="policies"
+            className="data-[state=active]:bg-muted"
+          >
+            Policies
+          </TabsTrigger>
+          <TabsTrigger
             value="folders"
             className="data-[state=active]:bg-muted"
           >
@@ -278,6 +291,24 @@ export default function OrganizationSettingsPage() {
         {/* Groups Tab */}
         <TabsContent value="groups">
           <GroupsSection orgId={id} canManage={canManageMembers} />
+        </TabsContent>
+
+        {/* Roles Tab */}
+        <TabsContent value="roles">
+          <RolesSection
+            ownerType="organization"
+            ownerId={id}
+            canManage={canManageMembers}
+          />
+        </TabsContent>
+
+        {/* Policies Tab */}
+        <TabsContent value="policies">
+          <PoliciesSection
+            ownerType="organization"
+            ownerId={id}
+            canManage={canManageMembers}
+          />
         </TabsContent>
 
         {/* Folders Tab */}
