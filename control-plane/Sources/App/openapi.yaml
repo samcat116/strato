@@ -11069,10 +11069,9 @@ components:
           format: uuid
           nullable: true
         status:
+          description: Lifecycle at creation; defaults to `active` when omitted.
           allOf:
             - $ref: '#/components/schemas/SiteStatus'
-          nullable: true
-          description: Lifecycle at creation; defaults to `active` when omitted.
         latitude:
           type: number
           format: double
@@ -11108,10 +11107,9 @@ components:
           format: uuid
           nullable: true
         status:
+          description: When omitted, the current status is left unchanged.
           allOf:
             - $ref: '#/components/schemas/SiteStatus'
-          nullable: true
-          description: When omitted, the current status is left unchanged.
         latitude:
           type: number
           format: double

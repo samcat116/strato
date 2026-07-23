@@ -6401,7 +6401,7 @@ export interface components {
             /** Format: uuid */
             organizationalUnitId?: string | null;
             /** @description Lifecycle at creation; defaults to `active` when omitted. */
-            status?: components["schemas"]["SiteStatus"] | null;
+            status?: components["schemas"]["SiteStatus"];
             /** Format: double */
             latitude?: number | null;
             /** Format: double */
@@ -6418,7 +6418,7 @@ export interface components {
             /** Format: uuid */
             networkControllerAgentId?: string | null;
             /** @description When omitted, the current status is left unchanged. */
-            status?: components["schemas"]["SiteStatus"] | null;
+            status?: components["schemas"]["SiteStatus"];
             /** Format: double */
             latitude?: number | null;
             /** Format: double */
