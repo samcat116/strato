@@ -1,0 +1,49 @@
+docs/architecture/control-plane.md
+  s_fdf77544788847::t_768fb3b9833e7b 212-215,219-221
+  s_fdf77544788847::t_fe8d3af1737466 73-74,77-86
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 750,767
+control-plane/Tests/AppTests/AgentAutoUpdateTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 39,257,280,308,318,325
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 244,254,278,327,337,368
+control-plane/Tests/AppTests/ImageDownloadScopingTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 81,88,108
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_fdf77544788847::t_e757f1b871a376 36-85
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_fdf77544788847::t_d15dbd1a8c70f1 1-532
+control-plane/Tests/AppTests/SiteTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 749,757,773,796,810
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_fdf77544788847::t_fda1cc11619987 1-696
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_fdf77544788847::t_1fd5d29ef2ec3b 456,474,491,508,535,562
+  s_fdf77544788847::t_b9431f21ae7ab8 66
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_fdf77544788847::t_b9431f21ae7ab8 852,982
+  s_fdf77544788847::t_1fd5d29ef2ec3b 346,860,1001,1039
+control-plane/Sources/App/Services/AgentService.swift
+  s_fdf77544788847::t_e02b7db9c941d9 1474
+  s_fdf77544788847::t_94502041a38bdb 1688-1691
+  s_fdf77544788847::t_bab3bf61ebeda3 1741
+  s_fdf77544788847::t_6e9db64457154b 1610
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_fdf77544788847::t_b9431f21ae7ab8 371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "836a4c4fb1909317ca60b18db5632cb980f58379",
+  "prompts": {},
+  "sessions": {
+    "s_fdf77544788847": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17e14c62-ccaf-4cbb-8a1e-32b63c6c1a5e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
