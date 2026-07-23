@@ -237,11 +237,42 @@ Note that enabling the pillar only gets spans as far as the collector — see
   table), `fluent.query.namespace`, and a combined `fluent.query.summary`. No
   call site in this repo opens it: FluentKit emits it itself (fluent-kit 1.57.0,
   the version we resolve), so it appears the moment a real tracer is installed.
+- **Valkey commands** — likewise emitted by the client library rather than by
+  any call site here: valkey-swift opens a client span per command, named after
+  the command (`GET`, `SETEX`, `PUBLISH`, …) plus `Pipeline` and `MULTI` for
+  batched and transactional execution, with `db.system.name`, `db.operation.name`,
+  and `server.address`/`server.port`.
+- **Outbound HTTP** — one client span per request through the shared `HTTPClient`
+  (OIDC discovery/token/userinfo/JWKS, OCI registry manifests, webhook
+  deliveries, audit export), from AsyncHTTPClient's own instrumentation, named
+  after the HTTP method and carrying `http.request.method` and
+  `http.status_code`.
 
 Spans go through the swift-distributed-tracing facade, which installs a no-op
 tracer unless OpenTelemetry bootstraps a real one — so the `withSpan` call sites
 cost nothing when tracing is disabled, and are safe under `.testing` (where OTel
 is never bootstrapped).
+
+### Bootstrap ordering (why client spans can silently vanish)
+
+`configure(_:)` bootstraps OpenTelemetry **first**, ahead of every client it
+configures. This is load-bearing, not stylistic. Fluent resolves the tracer per
+query, but the Valkey and HTTP clients resolve it once, when their
+*configuration value* is constructed:
+
+- `HTTPClient.Configuration.TracingConfiguration.init()` stores
+  `InstrumentationSystem.tracer`. Vapor's `app.http.client.configuration` is a
+  get-modify-set property, so even reading it to set an unrelated option
+  materializes a config that has already captured a tracer.
+- `ValkeyTracingConfiguration.tracer` defaults the same way, captured when
+  `ValkeyClientConfiguration` is built in `configureValkey`.
+
+Whatever tracer is installed at that moment is the one those clients use for the
+life of the process. Bootstrapping afterwards left both holding the `NoOpTracer`
+— both libraries were instrumented and enabled, and neither emitted a single
+span. If Valkey or outbound-HTTP spans disappear from the backend while
+`fluent.query` and the request spans keep arriving, suspect that something was
+constructed ahead of `bootstrapObservability()`.
 
 ### Most `fluent.query` spans are roots, and that's expected
 
@@ -259,6 +290,14 @@ no enclosing span to attach to. Queries issued while serving a request do nest:
 Vapor's `TracingMiddleware` opens the server span with `withSpan`, which sets
 the task-local `ServiceContext` for the rest of the responder chain. Orphan
 `fluent.query` roots are background work, not a lost `traceparent`.
+
+Valkey command spans may be a different story. Verified locally against a
+collector: an `EVAL` issued by the session middleware **inside** a `GET /api/vms`
+request came out as its own root, where the reasoning above says it should have
+nested. One observation on one local run is not a diagnosis — it may be that
+valkey-swift resolves the span on a connection-pool-owned task that did not
+inherit the caller's `ServiceContext`. Worth confirming against a real trace
+backend before treating unparented Valkey spans as normal.
 
 ### Correlating traces with logs
 
@@ -281,20 +320,11 @@ before OTel bootstraps and every deployment running with tracing off.
 
 ### Not yet traced
 
-Outbound client edges — Valkey commands and outbound HTTP — still produce no
-spans, so coordination and outbound-call time shows up only as unattributed gaps
-under the parent span.
-
-The gap is no longer a missing-instrumentation problem: valkey-swift emits a
-client span per command (its `DistributedTracingSupport` trait is on by default)
-and AsyncHTTPClient emits one per request. Both, however, resolve
-`InstrumentationSystem.tracer` **eagerly**, when their configuration value is
-constructed — and `configure(_:)` builds both the Valkey client and Vapor's
-shared HTTP client configuration hundreds of lines before it calls
-`OTel.bootstrap`. Each therefore latches the no-op tracer for the lifetime of
-the process. Lighting these edges up is a matter of bootstrapping OpenTelemetry
-earlier in `configure(_:)`, ahead of the clients that capture the tracer — not
-of adding `withSpan` call sites.
+The agent side of the WebSocket is not instrumented: a desired-state sync's
+`agent.desired_state_sync` producer span ends at the send, and the agent does not
+continue the trace through reconciliation. Cross-replica RPC and nudges
+forwarded over Valkey pub/sub likewise do not propagate trace context, so a
+mutation handled by another replica starts a new trace there.
 
 ## Alert runbook
 
