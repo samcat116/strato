@@ -348,7 +348,7 @@ final class WorkloadPrincipalTests {
             let tree = try await buildTree(app, prefix: "sa-ceiling")
             let orgID = try tree.org.requireID()
             for principalType in [IAMPrincipalType.serviceAccount, .workload] {
-                let covered = try await GuardrailStore.principalMatches(
+                let covered = try await GuardrailRendering.covers(
                     .externalToOrganization,
                     principalType: principalType,
                     principalID: UUID(),

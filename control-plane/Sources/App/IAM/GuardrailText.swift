@@ -32,13 +32,6 @@ enum GuardrailText {
         let cedarText: String
     }
 
-    /// The compiled-set id an authored guardrail's stored text is parsed under —
-    /// `guardrail-<row uuid>`, the same id the matcher path embeds, so a denial
-    /// names the ceiling and the cache can pre-screen the row.
-    static func policyID(_ guardrailID: UUID) -> String {
-        "guardrail-\(guardrailID.uuidString.lowercased())"
-    }
-
     /// Validate `cedarText` as a guardrail forbid contained inside `attachNode`.
     static func prepare(
         cedarText: String,
@@ -50,7 +43,10 @@ enum GuardrailText {
         let trimmed = cedarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw GuardrailError.emptyCedarText }
 
-        let id = policyID(guardrailID)
+        // Parsed under the compiled-set id every rendering of a guardrail row
+        // travels under, so a denial names the ceiling and the cache can
+        // pre-screen the row.
+        let id = GuardrailRendering.policyID(guardrailID)
         let shape = try CedarAuthoredPolicyInspector.describe(cedarText: trimmed, policyID: id)
 
         guard shape.effect == .forbid else {

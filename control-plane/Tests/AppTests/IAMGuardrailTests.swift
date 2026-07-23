@@ -220,15 +220,8 @@ final class IAMGuardrailTests {
         #expect(deduped == ["vm:*"])
     }
 
-    @Test("A service wildcard covers actions in that service, including ones not shipped yet")
-    func serviceWildcardMatches() {
-        #expect(GuardrailActions.matches(["vm:*"], action: "vm:delete"))
-        #expect(GuardrailActions.matches(["vm:*"], action: "vm:migrate"))
-        #expect(!GuardrailActions.matches(["vm:*"], action: "volume:delete"))
-        #expect(GuardrailActions.matches(["*"], action: "anything:at:all"))
-        #expect(GuardrailActions.matches(["vm:delete"], action: "vm:delete"))
-        #expect(!GuardrailActions.matches(["vm:delete"], action: "vm:deleteSnapshot"))
-    }
+    // Pattern *interpretation* (which actions a stored set covers) is the
+    // rendering's action projection — pinned in `GuardrailRenderingTests`.
 
     // MARK: - Inheritance and intersection
 
@@ -684,14 +677,14 @@ final class IAMGuardrailTests {
             guardrail.cedarText = nil
             try await guardrail.save(on: app.db)
 
-            let filled = try await GuardrailCedarTextBackfill.backfill(
+            let filled = try await GuardrailStore.backfillCedarText(
                 on: app.db, logger: app.logger)
             #expect(filled == 1)
             let reloaded = try await Guardrail.find(guardrail.id!, on: app.db)
             #expect(reloaded?.cedarText?.contains("forbid") == true)
 
             // Idempotent: a second run finds nothing to fill.
-            let again = try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+            let again = try await GuardrailStore.backfillCedarText(on: app.db, logger: app.logger)
             #expect(again == 0)
         }
     }

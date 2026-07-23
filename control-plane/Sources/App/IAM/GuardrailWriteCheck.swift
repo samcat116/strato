@@ -161,13 +161,19 @@ enum GuardrailWriteCheck {
 
         var violations: [GuardrailViolation] = []
         for guardrail in candidates {
+            // An unrenderable row breaches nothing here: it matches nobody in
+            // the compiled set either, and the cache logs it loudly on every
+            // rebuild. (`GuardrailStore.forbidding` makes the opposite,
+            // fail-closed choice — see `GuardrailRendering` for why each
+            // surface chooses.)
+            guard let rendering = try? GuardrailRendering(guardrail) else { continue }
             guard
                 try await applies(
-                    guardrail, to: binding, organizationID: organizationID, on: db)
+                    rendering, to: binding, organizationID: organizationID, on: db)
             else { continue }
             guard
                 let overlap = try await overlap(
-                    between: binding, and: guardrail, analyzer: analyzer, logger: logger)
+                    between: binding, and: rendering, analyzer: analyzer, logger: logger)
             else { continue }
             violations.append(
                 try await describe(guardrail, binding: binding, counterexample: overlap, on: db))
@@ -195,9 +201,11 @@ enum GuardrailWriteCheck {
         // same reason they are skipped on binding writes (`violations`): their
         // free-form principal side cannot be resolved against the database, and
         // eval-time enforcement covers them. The shadow report is a matcher-path
-        // courtesy.
-        guard guardrail.enabled, !guardrail.authored, let node = guardrail.node else { return [] }
-        let organizationID = try await IAMResourceTree.ancestors(of: node, on: db)
+        // courtesy — which is also why an unrenderable row reports nothing.
+        guard guardrail.enabled, !guardrail.authored,
+            let rendering = try? GuardrailRendering(guardrail)
+        else { return [] }
+        let organizationID = try await IAMResourceTree.ancestors(of: rendering.node, on: db)
             .first(where: { $0.type == .organization })?.id
 
         // Bindings beneath the attach node, found by walking each binding's
@@ -218,7 +226,7 @@ enum GuardrailWriteCheck {
             else { continue }
             let bindingNode = IAMNode(type: nodeType, id: candidate.nodeID)
             let chain = try await IAMResourceTree.ancestors(of: bindingNode, on: db)
-            guard chain.contains(node) else { continue }
+            guard chain.contains(rendering.node) else { continue }
 
             let binding = ProposedBinding(
                 principalType: principalType,
@@ -226,11 +234,11 @@ enum GuardrailWriteCheck {
                 role: role,
                 node: bindingNode
             )
-            guard try await applies(guardrail, to: binding, organizationID: organizationID, on: db)
+            guard try await applies(rendering, to: binding, organizationID: organizationID, on: db)
             else { continue }
             guard
                 try await overlap(
-                    between: binding, and: guardrail, analyzer: analyzer, logger: logger) != nil
+                    between: binding, and: rendering, analyzer: analyzer, logger: logger) != nil
             else { continue }
             shadowed.append(
                 ShadowedBinding(
@@ -253,34 +261,28 @@ enum GuardrailWriteCheck {
 
     // MARK: - The principal side, resolved concretely
 
-    /// Whether `guardrail` reaches the principal `binding` grants to.
+    /// Whether the ceiling reaches the principal `binding` grants to.
     ///
-    /// Resolved from the database rather than symbolically. Group and org
-    /// membership are facts; a solver told nothing about them would assume
-    /// every principal might be in every group and report a violation for
-    /// grants no ceiling touches. What stays symbolic is what is genuinely
-    /// open at write time — which resource beneath the node, which action in
-    /// the role, which environment.
+    /// Resolved from the database rather than symbolically — the rendering's
+    /// structural principal projection. Group and org membership are facts; a
+    /// solver told nothing about them would assume every principal might be in
+    /// every group and report a violation for grants no ceiling touches. What
+    /// stays symbolic is what is genuinely open at write time — which resource
+    /// beneath the node, which action in the role, which environment.
+    ///
+    /// The group-binding cases are this check's own question, wider than the
+    /// rendering's "does this principal match": a group binding reaches the
+    /// group's members, so the ceiling reaches the grant if it covers the
+    /// group itself *or anyone in it*.
     private static func applies(
-        _ guardrail: Guardrail,
+        _ rendering: GuardrailRendering,
         to binding: ProposedBinding,
         organizationID: UUID?,
         on db: any Database
     ) async throws -> Bool {
-        let match: GuardrailPrincipalMatch
-        do {
-            match = try guardrail.principalMatch()
-        } catch {
-            // An unreadable row matches nobody, exactly as it does in
-            // `GuardrailStore` and in the compiled policy set. The cache
-            // already logs these loudly on every rebuild.
-            return false
-        }
-
         switch binding.principalType {
         case .user:
-            return try await GuardrailStore.principalMatches(
-                match,
+            return try await rendering.covers(
                 principalType: .user,
                 principalID: binding.principalID,
                 organizationID: organizationID,
@@ -288,10 +290,7 @@ enum GuardrailWriteCheck {
             )
 
         case .group:
-            // A group binding reaches the group's members, so the ceiling
-            // reaches this grant if it covers the group itself or anyone in
-            // it.
-            switch match {
+            switch rendering.principalMatch {
             case .any:
                 return true
             case .group(let ceilingGroupID):
@@ -314,7 +313,7 @@ enum GuardrailWriteCheck {
             // a user- or group-scoped ceiling never reaches it, and an
             // external-principal ceiling always does (matching the compiled
             // forbid, whose membership test is `is User`-guarded).
-            switch match {
+            switch rendering.principalMatch {
             case .any, .externalToOrganization:
                 return true
             case .user, .group:
@@ -355,23 +354,14 @@ enum GuardrailWriteCheck {
     /// cannot. A `nil` here is a proof, not an absence of evidence.
     private static func overlap(
         between binding: ProposedBinding,
-        and guardrail: Guardrail,
+        and rendering: GuardrailRendering,
         analyzer: any GuardrailAnalyzer,
         logger: Logger
     ) async throws -> String? {
-        guard let node = guardrail.node else { return nil }
-        let resourceMatch: GuardrailResourceMatch
-        do {
-            resourceMatch = try guardrail.resourceMatch()
-        } catch {
-            return nil
-        }
-
         // The action side is decided here, over the finite registry: a role's
         // action set and a ceiling's patterns are both enumerable, so asking a
         // solver would be paying for an answer we already have.
-        let roleActions = binding.roleActions
-        let overlapping = roleActions.filter { GuardrailActions.matches(guardrail.actions, action: $0) }
+        let overlapping = binding.roleActions.filter { rendering.covers(action: $0) }
         guard !overlapping.isEmpty else { return nil }
 
         // What is left genuinely needs the solver: can a resource exist that
@@ -399,7 +389,10 @@ enum GuardrailWriteCheck {
         // grant is written as the permit it amounts to. Building from the
         // registry keeps the check off the database and deterministic.
         let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
-        let ceiling = ceilingPolicy(guardrail, node: node, resourceMatch: resourceMatch)
+        // The ceiling as the permit it scopes to — the rendering's
+        // solver-facing projection, carrying the same action and resource
+        // clauses as the compiled forbid by construction.
+        let ceiling = rendering.permit()
 
         // The environment's principal type mirrors the binding's: a group
         // grant is exercised by its member users, and machine principals form
@@ -422,7 +415,7 @@ enum GuardrailWriteCheck {
                 logger.error(
                     "Write-time guardrail analysis failed",
                     metadata: [
-                        "guardrail": .string(guardrail.name),
+                        "guardrail": .string(rendering.name),
                         "action": .string(action),
                         "resource_type": .string(resourceType.rawValue),
                         "error": .string("\(error)"),
@@ -467,31 +460,6 @@ enum GuardrailWriteCheck {
                 );
                 """
         )
-    }
-
-    /// The guardrail as a `permit`, so "can the grant reach what the ceiling
-    /// forbids" becomes "can one request be allowed by both".
-    ///
-    /// Flipping the effect is sound because disjointness is asked of the two
-    /// *scopes*: a `forbid` and a `permit` with the same head match the same
-    /// requests. The action and resource clauses come from the same builders
-    /// the compiled forbid uses, so the two renderings cannot drift.
-    private static func ceilingPolicy(
-        _ guardrail: Guardrail, node: IAMNode, resourceMatch: GuardrailResourceMatch
-    ) -> CedarPolicySource {
-        var text = """
-            @id("ceiling")
-            permit (
-                principal,
-                \(CedarPolicyAssembler.actionClause(for: guardrail.actions)),
-                resource in \(node.cedarUID.cedarLiteral)
-            )
-            """
-        if let condition = CedarPolicyAssembler.environmentCondition(for: resourceMatch) {
-            text += "\nwhen { \(condition) }"
-        }
-        text += ";"
-        return CedarPolicySource(id: "ceiling", text: text)
     }
 
     // MARK: - Rendering

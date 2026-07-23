@@ -133,14 +133,9 @@ enum GuardrailActions {
     /// Matches every action, present and future.
     static let wildcard = "*"
 
-    /// Whether any pattern in the set covers `action`.
-    static func matches(_ patterns: [String], action: String) -> Bool {
-        patterns.contains { pattern in
-            if pattern == wildcard { return true }
-            guard pattern.hasSuffix(":*") else { return pattern == action }
-            return action.hasPrefix(String(pattern.dropLast(1)))
-        }
-    }
+    // Pattern *interpretation* — which actions a stored pattern set covers —
+    // lives in `GuardrailRendering.patternsCover`, beside the Cedar clause it
+    // must agree with. This vocabulary owns which patterns are legal to store.
 
     /// Validate and canonicalize a pattern list.
     ///
