@@ -81,68 +81,6 @@ struct AgentController: RouteCollection {
         }
     }
 
-    /// Until the scheduler and volume placement enforce org-scoped placement
-    /// (phase 2 of the hierarchy overhaul), an agent may host VMs — and store
-    /// volumes, which place on any online QEMU agent — whose projects belong
-    /// to a different organization: cross-org placements from before scoping,
-    /// or new ones the still-unscoped placement paths make. A delegated org
-    /// admin must not be able to take down another tenant's workloads or
-    /// strand its detached volumes, so destructive agent actions
-    /// (force-offline, deregister, update) fall back to system-admin only
-    /// while any foreign-org VM or volume lives here.
-    private func requireNoForeignWorkloads(_ req: Request, agent: Agent) async throws {
-        let user = try requireUser(req)
-        if user.isSystemAdmin { return }
-
-        let agentOrg = try await agent.rootOrganizationID(on: req.db)
-        let agentIDString = try agent.requireID().uuidString
-
-        let hostedVMs = try await VM.query(on: req.db)
-            .filter(\.$hypervisorId == agentIDString)
-            .with(\.$project)
-            .all()
-        for vm in hostedVMs {
-            let vmOrg = try await vm.project.getRootOrganizationId(on: req.db)
-            guard vmOrg == agentOrg else {
-                throw Abort(
-                    .forbidden,
-                    reason:
-                        "Agent hosts VMs belonging to another organization; only a system administrator can perform this action until they are migrated"
-                )
-            }
-        }
-
-        let hostedSandboxes = try await Sandbox.query(on: req.db)
-            .filter(\.$hypervisorId == agentIDString)
-            .with(\.$project)
-            .all()
-        for sandbox in hostedSandboxes {
-            let sandboxOrg = try await sandbox.project.getRootOrganizationId(on: req.db)
-            guard sandboxOrg == agentOrg else {
-                throw Abort(
-                    .forbidden,
-                    reason:
-                        "Agent hosts sandboxes belonging to another organization; only a system administrator can perform this action until they are migrated"
-                )
-            }
-        }
-
-        let storedVolumes = try await Volume.query(on: req.db)
-            .filter(\.$hypervisorId == agentIDString)
-            .with(\.$project)
-            .all()
-        for volume in storedVolumes {
-            let volumeOrg = try await volume.project.getRootOrganizationId(on: req.db)
-            guard volumeOrg == agentOrg else {
-                throw Abort(
-                    .forbidden,
-                    reason:
-                        "Agent stores volumes belonging to another organization; only a system administrator can perform this action until they are migrated"
-                )
-            }
-        }
-    }
-
     /// Whether SPIRE mTLS authentication is enabled but the registration API
     /// is not configured — the state in which agents may hold SPIRE-issued
     /// identities that this control plane cannot revoke. Revocation paths must
@@ -392,7 +330,7 @@ struct AgentController: RouteCollection {
     /// GET /api/agent-enrollments
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
-        let user = try requireUser(req)
+        _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         // Unlike Site and Agent, an enrollment stores its scope as plain columns
@@ -408,21 +346,21 @@ struct AgentController: RouteCollection {
         }
         let enrollments = try await query.all()
 
-        // System admins see everything; org admins see the enrollments scoped to
-        // orgs/OUs they hold manage_agents on. Scopeless rows stay
-        // system-admin only.
-        let visible: [AgentEnrollment]
-        if user.isSystemAdmin {
-            visible = enrollments
-        } else {
-            var allowed: [AgentEnrollment] = []
-            for enrollment in enrollments {
-                guard let scope = enrollment.organizationScope else { continue }
-                let resource = scope.checkResource
-                let ok = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
-                if ok { allowed.append(enrollment) }
+        // Every caller is filtered the same way: a scoped enrollment is a
+        // `manage_agents` check on its org/OU, which the tier-1
+        // `platform-system-admin` policy answers for admins — so their
+        // fleet-wide view is an evaluator decision, logged and guardrail-bound,
+        // not a skipped check. A scopeless row has no node to check and stays
+        // system-admin only, matching the item endpoints' `requireSystemAdmin`.
+        var visible: [AgentEnrollment] = []
+        for enrollment in enrollments {
+            guard let scope = enrollment.organizationScope else {
+                if req.allowsScopelessPlatformRow() { visible.append(enrollment) }
+                continue
             }
-            visible = allowed
+            let resource = scope.checkResource
+            let ok = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
+            if ok { visible.append(enrollment) }
         }
 
         // Never echo the SPIRE join token in a list response — it is shown
@@ -517,7 +455,7 @@ struct AgentController: RouteCollection {
     /// GET /api/agents
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listAgents(req: Request) async throws -> [AgentResponse] {
-        let user = try requireUser(req)
+        _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         var query = Agent.query(on: req.db).sort(\.$createdAt, .descending)
@@ -531,20 +469,22 @@ struct AgentController: RouteCollection {
         }
         let agents = try await query.all()
 
-        // System admins see the whole fleet; everyone else sees the agents
-        // they can view through agent#parent (their orgs'/OUs' capacity). An
-        // organization_id filter narrows both branches — see listSites.
-        let visible: [Agent]
-        if user.isSystemAdmin {
-            visible = agents
-        } else {
-            var allowed: [Agent] = []
-            for agent in agents {
-                guard let agentId = agent.id else { continue }
-                let ok = try await req.can("view", on: "agent", id: agentId.uuidString)
-                if ok { allowed.append(agent) }
+        // Everyone is filtered the same way: `view` on the agent, resolved
+        // through agent#parent (their orgs'/OUs' capacity). An admin's
+        // fleet-wide view comes from the tier-1 `platform-system-admin` policy
+        // inside the evaluator, so it is logged and a guardrail can narrow it.
+        // A pre-scoping agent has no ancestor chain to evaluate against and
+        // stays system-admin only, as in `requireAgentPermission`. An
+        // organization_id filter narrows the query first — see listSites.
+        var visible: [Agent] = []
+        for agent in agents {
+            guard let agentId = agent.id else { continue }
+            guard agent.organizationScope != nil else {
+                if req.allowsScopelessPlatformRow() { visible.append(agent) }
+                continue
             }
-            visible = allowed
+            let ok = try await req.can("view", on: "agent", id: agentId.uuidString)
+            if ok { visible.append(agent) }
         }
 
         // Update status based on heartbeat before returning
@@ -586,7 +526,6 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
-        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Never delete a site's designated network controller: the controller
         // reference deliberately has no FK (see CreateSite), so the site would
@@ -670,7 +609,6 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
-        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.identity)
@@ -739,11 +677,11 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
         // Restarting the agent briefly disconnects it and puts every hosted
-        // workload through re-adoption, so this is disruptive enough to fall
-        // under the same cross-tenant guard as force-offline/deregister.
-        try await requireNoForeignWorkloads(req, agent: agent)
+        // workload through re-adoption, so this falls under the same
+        // `agent:manage` check — and the same tier-1 foreign-workload forbid —
+        // as force-offline and deregister.
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
 
         let request: AgentUpdateRequest
         if req.headers.contentType != nil {
@@ -792,12 +730,14 @@ struct AgentController: RouteCollection {
         let targetVersion: String
         let artifact: ResolvedAgentArtifact
         if let explicitURL = request.artifactUrl {
-            // An explicit artifact is arbitrary code the agent will install
-            // and run as itself on the hypervisor host. Delegated org/OU
-            // admins with agent#manage may only update along the trusted
-            // release/manifest path; overriding the artifact is system-admin
-            // only.
-            guard try requireUser(req).isSystemAdmin else {
+            // An explicit artifact is arbitrary code the agent will install and
+            // run as itself on the hypervisor host — a strictly larger power
+            // than `agent:manage`, so it is a distinct action rather than an
+            // inline admin check. No seeded role carries it, which leaves the
+            // tier-1 `platform-system-admin` policy as the only thing that
+            // grants it today; a custom role can grant it deliberately, and a
+            // guardrail can take it away.
+            guard try await req.can("agent:updateArtifact", on: IAMNode(type: .agent, id: agentId)) else {
                 throw Abort(
                     .forbidden,
                     reason:

@@ -28,12 +28,7 @@ struct AuditEventController: RouteCollection {
     }
 
     func listAll(req: Request) async throws -> AuditEventListResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System administrator access required")
-        }
+        _ = try req.requireSystemAdmin()
         let query = try req.query.decode(ListQuery.self)
         return try await list(query: query, organizationID: query.organizationID, on: req)
     }

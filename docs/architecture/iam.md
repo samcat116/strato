@@ -756,17 +756,106 @@ per-object decision — admin or not — flows through the evaluator, and the
 middleware's handler-evaluated assertion covers all users. What legitimately
 remains admin-conditional in controllers:
 
-- **Query-level list widenings** (the "list twins" of `platform-system-admin`):
-  list endpoints skip per-row checks for admins at query level. Same rule the
-  evaluator would apply per row, expressed as a filter.
+The query-level list widenings that survived cutover — the "list twins" of
+`platform-system-admin`, where a list endpoint skipped per-row checks for
+admins — are gone as well. They returned the same rows the evaluator would
+have allowed, but they returned them *without asking*: no decision-log row,
+and, more seriously, no tier-2 guardrail. A guardrail forbidding `site:view`
+in an organization bound an admin on `GET /api/sites/:id` and not on
+`GET /api/sites`. Every list endpoint now filters per row through `req.can`
+for every caller, admins included.
+
+What legitimately remains admin-conditional in controllers, in exactly two
+shapes:
+
 - **Admin-only platform surfaces** (hierarchy validate/repair, audit events,
-  decision logs, workload identity, scopeless quota/pool/enrollment rows,
-  agent org reassignment, explicit agent-artifact overrides): these gate
-  through `req.requireSystemAdmin()` — or a plain admin guard on read-only
-  routes — which can only deny, never widen.
-- **Business-rule admin exemptions** that gate no evaluator check, e.g.
-  destructive agent actions fall back to admin-only while foreign-org
-  workloads live on the agent (`requireNoForeignWorkloads`).
+  decision logs, workload identity, the policy-set version, org listing, user
+  invites, scopeless quota/pool/enrollment/agent rows): these have no node in
+  the IAM tree to attach a policy to. They gate through
+  `req.requireSystemAdmin()`, which can only deny, never widen, and which
+  marks the decision so the admin audit trail and the default-deny handler
+  assertion both see it. Its list-side companion,
+  `req.allowsScopelessPlatformRow()`, returns the same verdict as a Bool for
+  the one-row-at-a-time case.
+- **Rows scoped to their initiator**: `GET /api/operations/:id` after the
+  underlying resource is deleted, and `/api/api-keys`. Row scoping, declared
+  with `req.markRowScopedAuthorization()`.
+
+Nothing else reads `User.isSystemAdmin`. The two business-rule exemptions that
+used to — an agent hosting another tenant's workloads, and explicit
+agent-artifact overrides — are policy now (see below), and the identity plane
+is an ordinary resource type.
+
+### The identity plane is a resource type
+
+A user record is `IAMNodeType.user`, a Cedar resource as well as a principal.
+`UserController` used to spell its rule as
+`currentUser.isSystemAdmin || currentUser.id == userID` — a decision the
+evaluator never saw. Both halves are tier-1 policies now:
+
+- `platform-user-self` — `permit (principal is User, action in [user:read,
+  user:update, user:delete], resource is User) when { principal == resource }`.
+- `platform-system-admin` covers anyone else's record, as it does everywhere.
+
+Consequences worth knowing:
+
+- A user node is **parentless**. Users belong to organizations as a set
+  (`memberOfOrgs` on the principal entity), which the tree's one-parent
+  invariant cannot express, so nothing inherits down to a user record and
+  `IAMResourceTree.ancestors` returns a one-element chain that counts as
+  complete. `iam:*` actions exclude `User` for the same reason: a binding or
+  guardrail attached to a user record could never grant or deny anything.
+- **Known gap:** guardrails therefore cannot ceiling `user:*`. A guardrail
+  attaches to a node and compiles to `resource in <node>`, and nothing is ever
+  `in` a user record, so an org-scoped forbid on `user:delete` does not fire.
+  Pinned by `AdminExceptionPathTests` so the gap stays a decision on record.
+  Closing it means giving users a place in the tree, which multi-org
+  membership rules out today; the alternative is a guardrail shape whose
+  resource side is a type rather than a container.
+- `GET /api/users` filters per row on `user:read` like every other list
+  endpoint, so a non-admin gets a 200 listing themselves rather than a 403.
+- `POST /api/users` (invite) stays on `requireSystemAdmin()`: the record does
+  not exist yet and a user has no container to check instead.
+- In the entity slice a self-check merges principal and resource into one
+  entity. Two entries under one UID would shadow `systemAdmin` and
+  `memberOfOrgs` and silently break both tier-1 policies. Conversely, a user
+  standing as the resource must carry those required attributes too, or the
+  whole entity store fails schema validation and the check fails closed.
+
+### Agent restrictions as policy
+
+Two agent rules used to live in `AgentController` as admin-only escalations.
+Both are policy now, so they show up in the decision log and a custom role or
+guardrail can move them:
+
+- **`platform-agent-foreign-workloads`** — a `forbid` on `agent:manage` when
+  the agent hosts a VM, sandbox, or volume belonging to another organization
+  and the principal is not a system admin. This replaces
+  `requireNoForeignWorkloads`. Until placement is org-scoped (phase 2 of the
+  hierarchy overhaul), a delegated org admin must not force-offline,
+  deregister, or restart an agent carrying another tenant's workloads. Being a
+  `forbid`, it beats every `permit` — `platform-system-admin` included, which
+  is why it names `!principal.systemAdmin` explicitly.
+
+  `Agent.hostsForeignWorkloads` costs a workload inventory, so the entity-slice
+  loader fills the attribute in only for the actions
+  `IAMRoleRegistry.agentForeignWorkloadGuardedActions` names — the same
+  constant the policy's action list is built from, so the two cannot drift into
+  a silently detached ceiling. The attribute is optional and the forbid guards
+  its read with `has`, so fleet listing never pays for it. This is the only
+  place an action reaches the slice loader.
+
+  **Tradeoff:** the controller version returned a specific reason ("Agent hosts
+  VMs belonging to another organization…"). A policy denial is a generic 403,
+  so an org admin refused here has no inline explanation. The decision log
+  names `platform-agent-foreign-workloads` as the determining policy, which is
+  where to look — worth surfacing in the UI if operators trip over it.
+- **`agent:updateArtifact`** — a distinct action for overriding an agent
+  update's artifact URL. That binary is installed and run as the agent on the
+  hypervisor host, which is a strictly larger power than `agent:manage`, so it
+  gets its own name rather than riding along inside it. No seeded role carries
+  it (`IAMRoleRegistry.systemAdminOnlyActions`), leaving `platform-system-admin`
+  as the only thing that grants it today.
 
 ### Pre-cutover audit of handler-level allows (gate on phase 5)
 
@@ -804,7 +893,9 @@ the default-deny allowlist keeps these login-only):
 - `/api/api-keys` — self-scoped by construction (phase-0 decision: API keys
   unchanged for now); another user's key is a 404. Pinned by
   `APIKeyOwnershipTests`.
-- `/api/users/:id` — self-or-system-admin. Pinned by `UserControllerTests`.
+- `/api/users/:id` — was self-or-system-admin here; since the identity plane
+  became a resource type it is an ordinary evaluator check and the route is
+  `handlerChecked`, not login-only. Still pinned by `UserControllerTests`.
 - `/api/operations/:id` — falls back to "initiator may read" when the
   operation's resource is gone (delete operations outlive their resource);
   non-initiators get 404. Pinned by `VMOperationTests`.

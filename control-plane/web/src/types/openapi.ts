@@ -1253,8 +1253,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List all users
-         * @description System-admin only; enumerates every account in the deployment.
+         * List users
+         * @description Filtered per row on `user:read`: a system admin gets every account in the deployment, anyone else gets only their own. Not an error for a non-admin — a one-element list, not a 403.
          */
         get: operations["listUsers"];
         put?: never;

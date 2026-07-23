@@ -196,11 +196,8 @@ struct IAMDecisionLogController: RouteCollection {
     }
 
     private func requireSystemAdmin(_ req: Request) throws {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "Decision logs require system administrator access")
-        }
+        // The shared decision-marking gate, so these admin-only reads are
+        // flagged for the admin audit trail like every other admin surface.
+        _ = try req.requireSystemAdmin("Decision logs require system administrator access")
     }
 }

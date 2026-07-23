@@ -41,8 +41,11 @@ struct CedarPolicyAssemblyTests {
             #expect(text.contains("context.grants[\"\(role.grantsGroupsField)\"]"))
         }
 
-        // Tier separation: nothing in the static set forbids.
-        #expect(!text.contains("forbid"))
+        // Tier separation: the only forbid in the static set is the tier-1
+        // cross-tenant agent interlock. Guardrail forbids stay tier 2 — a
+        // second `forbid` appearing here means one leaked into the static set.
+        #expect(text.components(separatedBy: "forbid").count - 1 == 1)
+        #expect(text.contains("@id(\"platform-agent-foreign-workloads\")"))
     }
 
     @Test("Role rows compile verbatim under their policy id; empty text compiles to no permit")

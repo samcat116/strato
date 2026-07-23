@@ -75,6 +75,16 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     /// impersonated — bindings and guardrails attach to it under its project)
     /// and a principal (`IAMPrincipalType.serviceAccount`).
     case serviceAccount = "service_account"
+    /// A user record, as the *target* of a `user:*` action. Like
+    /// `serviceAccount` this type is both principal and resource, but unlike
+    /// every other node it is parentless: a user belongs to organizations
+    /// (a set, via `memberOfOrgs`), not to one place in the tree. Nothing
+    /// inherits down to it and no binding meaningfully attaches to it — access
+    /// comes from the two tier-1 policies, `platform-user-self` and
+    /// `platform-system-admin`. It is a node type so that identity-plane
+    /// checks go through the one evaluator path rather than a controller-local
+    /// `isSystemAdmin` read.
+    case user
 }
 
 /// The global roles. Each role is a curated action group that implies the one
@@ -168,12 +178,47 @@ enum IAMRoleRegistry {
     /// lookups must add these, or they under-report every org member.
     static let membershipDerivedActions: Set<String> = ["org:read", "project:create"]
 
+    /// Identity-plane actions on a `User` record. No role carries them, by
+    /// design: a caller reaches their *own* record through the tier-1
+    /// `platform-user-self` policy, and reaching anyone else's is the
+    /// `platform-system-admin` policy's business. They are in the vocabulary
+    /// so the schema declares them and the decision log can name them. Note
+    /// that a guardrail cannot currently ceiling them: guardrails compile to
+    /// `resource in <node>` and a user record is parentless, so nothing is
+    /// ever `in` one (docs/architecture/iam.md).
+    ///
+    /// There is deliberately no `user:list` or `user:create`. Listing filters
+    /// per row on `user:read` like every other list endpoint, and creating an
+    /// invite has no existing record to name as its resource — it stays a
+    /// `requireSystemAdmin()` surface, with the other node-less platform
+    /// plumbing.
+    static let identityActions: Set<String> = ["user:read", "user:update", "user:delete"]
+
+    /// Actions no seeded role carries and only the tier-1
+    /// `platform-system-admin` policy reaches. `agent:updateArtifact` overrides
+    /// the agent's update artifact with an arbitrary URL — that binary is
+    /// installed and run as the agent on the hypervisor host, so it is a
+    /// strictly larger power than `agent:manage` and gets a name of its own
+    /// rather than riding along inside it. A custom role can grant it
+    /// deliberately; nothing grants it by accident.
+    static let systemAdminOnlyActions: Set<String> = ["agent:updateArtifact"]
+
+    /// The actions the tier-1 `platform-agent-foreign-workloads` forbid
+    /// covers. Read by the policy text *and* by the entity-slice loader, which
+    /// only pays for the workload-inventory attribute on these actions — one
+    /// constant, so the two can never drift into a silently detached ceiling.
+    static let agentForeignWorkloadGuardedActions: Set<String> = ["agent:manage"]
+
     /// Every action the registry knows, including the membership-derived ones
     /// that no role carries. This is the action *vocabulary*: guardrails
     /// validate exact action names against it so a typo can't create a ceiling
     /// that silently protects nothing.
     static let allActions: Set<String> =
-        IAMRole.allCases.reduce(into: membershipDerivedActions) { $0.formUnion(actions(for: $1)) }
+        IAMRole.allCases.reduce(
+            into: membershipDerivedActions.union(identityActions).union(systemAdminOnlyActions)
+        ) {
+            $0.formUnion(actions(for: $1))
+        }
 
     /// The service prefixes appearing in `allActions` (`vm`, `volume`, `iam`,
     /// …) — the valid left-hand sides of a `service:*` guardrail pattern.

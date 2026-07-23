@@ -143,7 +143,13 @@ enum EntitySliceLoader {
     /// covering machine principals (issue #491). A service-account or
     /// workload principal has no group or org memberships to expand: its
     /// grants are exactly its own bindings along the chain.
-    static func load(principal: IAMPrincipal, node: IAMNode, on db: any Database) async throws -> CedarEntitySlice {
+    /// - Parameter action: the action being checked, when the caller knows it.
+    ///   Only used to decide whether to compute attributes expensive enough to
+    ///   be worth skipping when no policy could read them (today: the agent
+    ///   foreign-workload inventory). Passing nil simply omits those.
+    static func load(
+        principal: IAMPrincipal, node: IAMNode, action: String? = nil, on db: any Database
+    ) async throws -> CedarEntitySlice {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
 
         let user = principal.type == .user ? try await User.find(principal.id, on: db) : nil
@@ -225,22 +231,39 @@ enum EntitySliceLoader {
                 chainComplete = network.$project.id == nil && network.$site.id == nil
             }
         }
+        // A user record is the third rootless-by-design shape: it has no
+        // parent at all (see `IAMNodeType.user`), so its one-element chain is
+        // as complete as it will ever be. Leaving it incomplete would make the
+        // authorizer deny every identity-plane check outright.
+        if !chainComplete, node.type == .user {
+            chainComplete = chain.count == 1
+        }
 
         var entities: [CedarEntity] = []
 
         let principalUID = principal.cedarUID
+        // A *user* reading their own record is principal and resource at once.
+        // The two roles must merge into one entity: a second entry under the
+        // same UID would shadow `systemAdmin` and `memberOfOrgs`, silently
+        // breaking both tier-1 policies.
+        //
+        // Scoped to user principals deliberately. A service account checked
+        // against its own node is also principal-and-resource, but there the
+        // opposite arrangement holds — the branch below emits no separate
+        // principal entity and lets the chain supply it — so skipping the
+        // chain entry would leave the store with none at all.
+        let principalIsResource = principal.type == .user && node.cedarUID == principalUID
         if principal.type == .user {
+            var attrs = userAttrs(organizationIDs: organizationIDs, isSystemAdmin: user?.isSystemAdmin ?? false)
+            if principalIsResource,
+                let environment = try await GuardrailStore.resourceEnvironment(of: node, on: db)
+            {
+                attrs["environment"] = .string(environment)
+            }
             entities.append(
                 CedarEntity(
                     uid: principalUID,
-                    attrs: [
-                        "memberOfOrgs": .set(
-                            organizationIDs
-                                .map { CedarEntityUID(type: .organization, id: $0) }
-                                .sorted { $0.id < $1.id }
-                                .map { .entity($0) }),
-                        "systemAdmin": .bool(user?.isSystemAdmin ?? false),
-                    ],
+                    attrs: attrs,
                     parents: groupIDs.map { CedarEntityUID(type: .group, id: $0) }.sorted { $0.id < $1.id }
                 ))
         } else if !chain.contains(where: { $0.cedarUID == principalUID }) {
@@ -257,7 +280,23 @@ enum EntitySliceLoader {
         }
 
         for (index, chainNode) in chain.enumerated() {
+            // Already emitted above, attributes and all, by the self-check merge.
+            if principalIsResource, chainNode.cedarUID == principalUID { continue }
             var attrs: [String: CedarValue] = [:]
+            if chainNode.type == .user {
+                // `User`'s schema attributes are required, so a user standing
+                // as the *resource* — an admin reading somebody else's record —
+                // must carry them too, or the whole entity store fails schema
+                // validation and the check fails closed. (The self-check case
+                // never reaches here: it merged into the principal above.)
+                let target = try await User.find(chainNode.id, on: db)
+                let targetOrgIDs = try await UserOrganization.query(on: db)
+                    .filter(\.$user.$id == chainNode.id)
+                    .all()
+                    .map { $0.$organization.id }
+                attrs = userAttrs(
+                    organizationIDs: targetOrgIDs, isSystemAdmin: target?.isSystemAdmin ?? false)
+            }
             if chainNode == node {
                 if let environment = try await GuardrailStore.resourceEnvironment(of: node, on: db) {
                     attrs["environment"] = .string(environment)
@@ -267,6 +306,18 @@ enum EntitySliceLoader {
                     // become world-readable.
                     let network = try await LogicalNetwork.find(node.id, on: db)
                     attrs["openToAllUsers"] = .bool(network.map { $0.$project.id == nil } ?? false)
+                }
+                if node.type == .agent, let action,
+                    IAMRoleRegistry.agentForeignWorkloadGuardedActions.contains(action)
+                {
+                    // Gated on the same constant the forbid's action list is
+                    // built from, so the attribute is present exactly when a
+                    // policy can read it. Missing row → true: an agent we
+                    // cannot inventory is not one to let a delegated admin
+                    // take down.
+                    let agent = try await Agent.find(node.id, on: db)
+                    let foreign = try await agent?.hostsForeignWorkloads(on: db) ?? true
+                    attrs["hostsForeignWorkloads"] = .bool(foreign)
                 }
             }
             let parents = index + 1 < chain.count ? [chain[index + 1].cedarUID] : []
@@ -286,5 +337,21 @@ enum EntitySliceLoader {
             skippedConditionedBindings: skippedConditionedBindings,
             chainComplete: chainComplete
         )
+    }
+
+    /// The schema-required attributes of a `User` entity. Both roles a user can
+    /// play in a check need them: as principal (the tier-1 policies read
+    /// `principal.systemAdmin` and `principal.memberOfOrgs`) and, since
+    /// `IAMNodeType.user`, as resource — the schema declares them required, so
+    /// an entity missing either one fails validation for the entire store.
+    private static func userAttrs(organizationIDs: [UUID], isSystemAdmin: Bool) -> [String: CedarValue] {
+        [
+            "memberOfOrgs": .set(
+                organizationIDs
+                    .map { CedarEntityUID(type: .organization, id: $0) }
+                    .sorted { $0.id < $1.id }
+                    .map { .entity($0) }),
+            "systemAdmin": .bool(isSystemAdmin),
+        ]
     }
 }

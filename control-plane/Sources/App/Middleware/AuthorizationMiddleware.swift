@@ -69,7 +69,10 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     /// audit in docs/architecture/iam.md for why each is here).
     private static let loginOnlyPrefixes = [
         "/api/api-keys",  // self-scoped by construction; others' keys are 404
-        "/api/users",  // self-or-system-admin (register is public, matched earlier)
+        // The caller's own passkeys. Self-scoped by construction — the path
+        // says `me`, so there is no other user's record to reach — and matched
+        // before the `/api/users` handler-checked prefix below.
+        "/api/users/me",
         "/api/operations",  // initiator-may-read fallback; non-initiators 404
         "/api/oauth",  // the caller's own device approvals and CLI sessions
         "/api/authorization",  // can-i / who-can gate per queried resource internally
@@ -79,6 +82,13 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     /// (`req.can` / `req.authorize` in either vocabulary, or
     /// `req.requireSystemAdmin()` for the deliberately admin-only surfaces).
     private static let handlerCheckedPrefixes = [
+        // Identity plane. A user record is a Cedar resource (`IAMNodeType.user`),
+        // so reading, updating and deleting one is an ordinary evaluator check:
+        // `platform-user-self` for your own record, `platform-system-admin` for
+        // anyone else's. Only `POST /api/users` (invite) stays on the admin gate,
+        // having no record yet to name. `/api/users/register` is public and is
+        // matched earlier.
+        "/api/users",
         "/api/organizations",
         "/api/projects",
         "/api/volumes",

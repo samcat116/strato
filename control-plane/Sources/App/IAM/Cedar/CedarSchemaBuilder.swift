@@ -85,7 +85,15 @@ enum CedarSchemaBuilder {
         case "quota": return projectContainers
         case "site": return [.site, .folder, .organization]
         case "agent": return [.agent, .folder, .organization]
-        case "iam": return CedarEntityType.nodeTypes
+        // Identity plane: a `user:*` action always targets a user record, and
+        // never a container — there is no "list the users under this org"
+        // check, so no container type belongs here.
+        case "user": return [.user]
+        // Policy is written *on* tree nodes. `User` is excluded: it is a node
+        // type only so `user:*` has somewhere to land, and it inherits
+        // nothing, so a binding or guardrail attached to a user record could
+        // never grant or deny anything.
+        case "iam": return CedarEntityType.nodeTypes.filter { $0 != .user }
         default:
             // A new service nobody mapped yet: the broadest valid answer, so
             // its actions validate everywhere rather than nowhere.
@@ -132,9 +140,17 @@ enum CedarSchemaBuilder {
         lines.append("")
 
         lines.append("entity Group;")
+        // `User` is declared once, here, even though it is also a node type
+        // (the target of the `user:*` identity-plane actions): the node loop
+        // below skips it rather than emit a second, conflicting declaration.
+        // `environment` rides along for the same reason it does on every node
+        // type — an environment-conditioned guardrail compiles to
+        // `resource has environment && …`, and the strict validator rejects a
+        // `has` that can never be true.
         lines.append("entity User in [Group] {")
         lines.append("    \(CedarText.stringLiteral("memberOfOrgs")): Set<Organization>,")
         lines.append("    \(CedarText.stringLiteral("systemAdmin")): Bool,")
+        lines.append("    \(CedarText.stringLiteral("environment"))?: String,")
         lines.append("};")
         // A directly registered SPIFFE workload identity (issue #491).
         // Principal-only and deliberately attribute-free: a workload is not a
@@ -150,7 +166,7 @@ enum CedarSchemaBuilder {
         // compiles to `resource has environment && …`, and the strict
         // validator rejects a `has` that can never be true. Container types
         // simply never carry the attribute at evaluation time.
-        for entity in CedarEntityType.nodeTypes {
+        for entity in CedarEntityType.nodeTypes where entity != .user {
             let parents = parentTypes(for: entity)
             let head =
                 parents.isEmpty
@@ -162,6 +178,14 @@ enum CedarSchemaBuilder {
                 // authenticated user — the tier-1 open-network policy keys on
                 // this attribute.
                 attrs.append("\(CedarText.stringLiteral("openToAllUsers")): Bool")
+            }
+            if entity == .agent {
+                // Optional, unlike `openToAllUsers`: it costs a workload
+                // inventory to compute, so the loader only fills it in for the
+                // actions the tier-1 foreign-workload forbid names, and that
+                // forbid guards its read with `has`. Fleet listing does not pay
+                // for it.
+                attrs.append("\(CedarText.stringLiteral("hostsForeignWorkloads"))?: Bool")
             }
             lines.append("\(head) {")
             for attr in attrs {
