@@ -702,7 +702,7 @@ extension Application {
 
     /// Install the scheduler service during application configuration.
     func useScheduler(_ scheduler: SchedulerService) {
-        self.storage[SchedulerServiceKey.self] = scheduler
+        self.setStorageValue(SchedulerServiceKey.self, to: scheduler)
     }
 }
 

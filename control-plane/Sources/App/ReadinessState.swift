@@ -66,18 +66,16 @@ final class ReadinessState: Sendable {
 // MARK: - Application Extension
 
 extension Application {
-    private struct ReadinessStateKey: StorageKey {
+    private struct ReadinessStateKey: StorageKey, LockKey {
         typealias Value = ReadinessState
     }
 
     /// The readiness gates for this process. Created on first access so tests
     /// that never boot the full lifecycle still get a usable (not-yet-migrated,
-    /// not-draining) state.
+    /// not-draining) state. Through `lazyService` so that two first accesses
+    /// racing can't end up reading and writing different gates.
     var readiness: ReadinessState {
-        if let existing = storage[ReadinessStateKey.self] { return existing }
-        let created = ReadinessState()
-        storage[ReadinessStateKey.self] = created
-        return created
+        lazyService(ReadinessStateKey.self) { ReadinessState() }
     }
 }
 

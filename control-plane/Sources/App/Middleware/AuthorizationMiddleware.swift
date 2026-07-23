@@ -356,7 +356,7 @@ extension Application {
     /// under `.testing`; a no-op everywhere else.
     var testOnlyLoginRoutePrefixes: [String] {
         get { storage[TestOnlyLoginRoutePrefixesKey.self] ?? [] }
-        set { storage[TestOnlyLoginRoutePrefixesKey.self] = newValue }
+        set { setStorageValue(TestOnlyLoginRoutePrefixesKey.self, to: newValue) }
     }
 
     /// Fail boot if any registered route escapes `AuthorizationMiddleware`'s

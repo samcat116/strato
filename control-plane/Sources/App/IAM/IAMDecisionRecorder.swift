@@ -335,7 +335,7 @@ extension Application {
     /// (off by default under `.testing`) before the recorder is first built.
     var iamDecisionLogConfig: IAMDecisionLogConfig {
         get { storage[IAMDecisionLogConfigKey.self] ?? .fromEnvironment(environment) }
-        set { storage[IAMDecisionLogConfigKey.self] = newValue }
+        set { setStorageValue(IAMDecisionLogConfigKey.self, to: newValue) }
     }
 
     private struct IAMDecisionRecorderKey: StorageKey, LockKey {

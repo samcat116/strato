@@ -675,7 +675,7 @@ extension Application {
 
     public var spireService: SPIREService? {
         get { storage[SPIREServiceKey.self] }
-        set { storage[SPIREServiceKey.self] = newValue }
+        set { setStorageValue(SPIREServiceKey.self, to: newValue) }
     }
 
     /// Configure SPIRE service

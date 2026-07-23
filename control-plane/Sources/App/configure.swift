@@ -153,6 +153,17 @@ public func configure(_ app: Application) async throws {
         ? NoopRegistryClient()
         : DistributionRegistryClient(app: app)
 
+    // Release-artifact resolution for agent updates (issue #432). Tests get a
+    // resolver that refuses rather than one that dials the release host, so no
+    // suite can depend on github.com being reachable — and a test whose stub
+    // never took says so instead of failing as a 404, which is what made the
+    // AgentAutoUpdateTests.staleTargetIsReset flake so hard to read. Tests that
+    // exercise the flow install a stub of their own.
+    app.agentArtifactResolver =
+        app.environment == .testing
+        ? .refusing("The test environment resolves no release artifacts; install a stub resolver in the test.")
+        : .releaseHost(app: app)
+
     // Where image bytes live. Filesystem by default so existing deployments
     // upgrade untouched; IMAGE_STORAGE_BACKEND=s3 moves them to object storage
     // (required on Kubernetes, where the control plane has no persistent

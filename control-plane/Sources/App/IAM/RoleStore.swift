@@ -274,7 +274,7 @@ extension Application {
             let lock = locks.lock(for: CedarEngineKey.self)
             lock.lock()
             defer { lock.unlock() }
-            storage[CedarEngineKey.self] = newValue
+            setStorageValue(CedarEngineKey.self, to: newValue)
         }
     }
 }

@@ -612,7 +612,7 @@ extension Application {
             lazyService(VolumeServiceKey.self) { VolumeService(app: self) }
         }
         set {
-            storage[VolumeServiceKey.self] = newValue
+            setStorageValue(VolumeServiceKey.self, to: newValue)
         }
     }
 }

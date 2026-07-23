@@ -156,7 +156,7 @@ extension Application {
             }
         }
         set {
-            storage[ImageObjectStoreKey.self] = newValue
+            setStorageValue(ImageObjectStoreKey.self, to: newValue)
         }
     }
 }

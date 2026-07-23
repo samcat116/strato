@@ -348,6 +348,6 @@ extension Application {
     /// registry I/O before configuration.
     var registryClient: any RegistryClientProtocol {
         get { storage[RegistryClientKey.self] ?? NoopRegistryClient() }
-        set { storage[RegistryClientKey.self] = newValue }
+        set { setStorageValue(RegistryClientKey.self, to: newValue) }
     }
 }

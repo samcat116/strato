@@ -246,7 +246,7 @@ extension Application {
     /// when no metrics store is configured (the panel then reports unavailable).
     public var spireIssuanceMetrics: (any SPIREIssuanceMetricsProvider)? {
         get { storage[SPIREIssuanceMetricsKey.self] }
-        set { storage[SPIREIssuanceMetricsKey.self] = newValue }
+        set { setStorageValue(SPIREIssuanceMetricsKey.self, to: newValue) }
     }
 
     /// Configure SVID issuance telemetry for the Workload Identity view. No-op

@@ -177,6 +177,29 @@ struct AgentUpdateArtifactsTests {
         #expect(AgentUpdateArtifacts.parseChecksum(String(repeating: "zz", count: 32)) == nil)
     }
 
+    // MARK: - The resolver seam
+
+    /// A resolver that quietly fell back to fetching from the real release host
+    /// turned a stub that never took into a live 404 from github.com, which the
+    /// sweep swallowed as "artifact unresolvable, retry next sweep" — the
+    /// `AgentAutoUpdateTests.staleTargetIsReset` CI flake. Unconfigured now
+    /// means refused, so no test can reach the network by accident and a
+    /// missing stub says what it is.
+    @Test("an app with no installed resolver refuses rather than fetching from the release host")
+    func unsetResolverRefuses() async throws {
+        let app = try await Application.make(.testing)
+        do {
+            await #expect(throws: (any Error).self) {
+                try await app.agentArtifactResolver.resolve(
+                    version: "1.4.0", operatingSystem: .linux, architecture: .x86_64)
+            }
+        } catch {
+            try await app.asyncShutdown()
+            throw error
+        }
+        try await app.asyncShutdown()
+    }
+
     // MARK: - Redirect following
 
     /// The shared HTTP client has redirect-following disabled so tenant-

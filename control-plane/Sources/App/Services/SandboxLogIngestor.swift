@@ -153,7 +153,7 @@ extension Application {
             }
         }
         set {
-            storage[SandboxLogIngestorKey.self] = newValue
+            setStorageValue(SandboxLogIngestorKey.self, to: newValue)
         }
     }
 }

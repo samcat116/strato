@@ -824,7 +824,7 @@ extension Application {
             }
         }
         set {
-            storage[CoordinationServiceKey.self] = newValue
+            setStorageValue(CoordinationServiceKey.self, to: newValue)
         }
     }
 }

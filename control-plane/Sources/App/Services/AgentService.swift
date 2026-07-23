@@ -2436,7 +2436,7 @@ extension Application {
             lazyService(WebSocketManagerKey.self) { WebSocketManager() }
         }
         set {
-            storage[WebSocketManagerKey.self] = newValue
+            setStorageValue(WebSocketManagerKey.self, to: newValue)
         }
     }
 
@@ -2449,7 +2449,7 @@ extension Application {
             lazyService(AgentServiceKey.self) { AgentService(app: self) }
         }
         set {
-            storage[AgentServiceKey.self] = newValue
+            setStorageValue(AgentServiceKey.self, to: newValue)
         }
     }
 

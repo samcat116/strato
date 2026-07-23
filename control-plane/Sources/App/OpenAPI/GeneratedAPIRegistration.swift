@@ -32,7 +32,7 @@ func registerGeneratedAPIHandlers(on app: Application) throws {
     try ProjectsAPIService().registerHandlers(on: transport)
 
     let after = Set(app.routes.all.map(generatedRouteKey))
-    app.storage[GeneratedAPIRouteKeys.self] = after.subtracting(before)
+    app.setStorageValue(GeneratedAPIRouteKeys.self, to: after.subtracting(before))
 }
 
 /// `METHOD /path` with every path parameter collapsed to `{}`, so Vapor's

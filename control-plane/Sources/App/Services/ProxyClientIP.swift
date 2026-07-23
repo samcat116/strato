@@ -73,7 +73,7 @@ extension Application {
     /// constructed in tests without a full `configure` still resolve sanely.
     var proxyTrust: ProxyTrustConfig {
         get { storage[ProxyTrustConfigKey.self] ?? .fromEnvironment() }
-        set { storage[ProxyTrustConfigKey.self] = newValue }
+        set { setStorageValue(ProxyTrustConfigKey.self, to: newValue) }
     }
 }
 

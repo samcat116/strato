@@ -402,11 +402,13 @@ extension Application {
         relyingPartyName: String,
         relyingPartyOrigin: String
     ) {
-        self.storage[WebAuthnServiceKey.self] = WebAuthnService(
-            relyingPartyID: relyingPartyID,
-            relyingPartyName: relyingPartyName,
-            relyingPartyOrigin: relyingPartyOrigin
-        )
+        self.setStorageValue(
+            WebAuthnServiceKey.self,
+            to: WebAuthnService(
+                relyingPartyID: relyingPartyID,
+                relyingPartyName: relyingPartyName,
+                relyingPartyOrigin: relyingPartyOrigin
+            ))
     }
 }
 

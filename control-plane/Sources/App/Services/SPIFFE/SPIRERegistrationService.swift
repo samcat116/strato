@@ -354,7 +354,7 @@ extension Application {
 
     public var spireRegistrationService: SPIRERegistrationService? {
         get { storage[SPIRERegistrationServiceKey.self] }
-        set { storage[SPIRERegistrationServiceKey.self] = newValue }
+        set { setStorageValue(SPIRERegistrationServiceKey.self, to: newValue) }
     }
 
     /// Configure SPIRE join-token provisioning for the agent registration

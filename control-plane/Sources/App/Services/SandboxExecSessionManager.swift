@@ -508,7 +508,7 @@ extension Application {
             lazyService(SandboxExecSessionManagerKey.self) { SandboxExecSessionManager(app: self) }
         }
         set {
-            storage[SandboxExecSessionManagerKey.self] = newValue
+            setStorageValue(SandboxExecSessionManagerKey.self, to: newValue)
         }
     }
 }

@@ -346,7 +346,7 @@ extension Application {
             lazyService(ConsoleSessionManagerKey.self) { ConsoleSessionManager(app: self) }
         }
         set {
-            storage[ConsoleSessionManagerKey.self] = newValue
+            setStorageValue(ConsoleSessionManagerKey.self, to: newValue)
         }
     }
 }
