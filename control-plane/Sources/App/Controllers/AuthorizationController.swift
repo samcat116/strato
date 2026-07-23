@@ -155,6 +155,12 @@ struct AuthorizationController: RouteCollection {
         /// authenticated user can perform this action here. See
         /// `WhoCanResult`.
         let openToAllAuthenticatedUsers: Bool
+        /// Authored policies (issue #606) that may bear on this action, matched
+        /// best-effort. Their principals are not in `principals`.
+        let authoredPolicies: [WhoCanPolicyMatch]
+        /// When true, an authored policy above bears on this query and its
+        /// principals could not be enumerated — `principals` is again partial.
+        let authoredPolicyCaveat: Bool
     }
 
     /// POST /api/authorization/who-can
@@ -182,7 +188,9 @@ struct AuthorizationController: RouteCollection {
             action: payload.action,
             ancestors: ancestors,
             principals: result.principals,
-            openToAllAuthenticatedUsers: result.openToAllAuthenticatedUsers
+            openToAllAuthenticatedUsers: result.openToAllAuthenticatedUsers,
+            authoredPolicies: result.authoredPolicies,
+            authoredPolicyCaveat: result.authoredPolicyCaveat
         )
     }
 

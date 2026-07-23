@@ -100,6 +100,25 @@ enum CedarPolicyAssembler {
         return policies
     }
 
+    // MARK: - Authored policies (issue #606)
+
+    /// One `CedarPolicySource` per authored-policy row, compiled from the row's
+    /// Cedar text verbatim under the id `policy-<row id>`. Empty text is
+    /// dropped — an authored policy has no schema fields to keep declared, so a
+    /// row that compiles to nothing simply is not in the set. Ordered by id for
+    /// a deterministic set.
+    static func authoredPolicySources(_ policies: [PolicyDescriptor]) -> [CedarPolicySource] {
+        policies.sorted { $0.id.uuidString < $1.id.uuidString }
+            .filter { !$0.cedarText.isEmpty }
+            .map { CedarPolicySource(id: $0.policyID, text: $0.cedarText) }
+    }
+
+    /// The joined authored-policy text, for display and tests.
+    static func authoredPolicyText(_ policies: [PolicyDescriptor]) -> String {
+        let sources = authoredPolicySources(policies)
+        return sources.isEmpty ? "" : sources.map(\.text).joined(separator: "\n\n") + "\n"
+    }
+
     // MARK: - Guardrail forbids (tier 2)
 
     /// A guardrail the compiler had to leave out of the policy set, with the

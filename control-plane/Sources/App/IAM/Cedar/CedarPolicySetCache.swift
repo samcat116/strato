@@ -53,15 +53,23 @@ struct CedarCheckDecision: Equatable, Sendable {
     /// guardrail in the determining set names tier 2 regardless of what else
     /// matched; an allow names the tier of its permit; a deny nothing decided
     /// is the default deny.
+    ///
+    /// Authored policies (issue #606) name their own tier, `policy`, on either
+    /// side of the decision: an authored forbid that denied, or an authored
+    /// permit that allowed. A guardrail forbid still outranks an authored one
+    /// in attribution — the guardrail check above runs first — because a
+    /// tier-2 ceiling is the stronger statement about why the request failed.
     var tier: String {
         if determiningPolicyIDs.contains(where: { $0.hasPrefix("guardrail-") }) { return "guardrail" }
         if allowed {
             if determiningPolicyIDs.contains(where: { $0.hasPrefix("platform-") || $0 == "org-membership" }) {
                 return "platform"
             }
+            if determiningPolicyIDs.contains(where: { $0.hasPrefix("policy-") }) { return "policy" }
             if determiningPolicyIDs.contains(where: { $0.hasPrefix("role-") }) { return "grant" }
             return "unknown"
         }
+        if determiningPolicyIDs.contains(where: { $0.hasPrefix("policy-") }) { return "policy" }
         return "default-deny"
     }
 }
@@ -104,12 +112,25 @@ actor CedarPolicySetCache {
         /// permits nothing). Loud in logs — a role granting nothing is the
         /// safe failure, not a fine one.
         let skippedRolePolicies: [SkippedRolePolicy]
+        /// How many enabled authored policies (issue #606) made it into the set.
+        let authoredPolicyCount: Int
+        /// Authored-policy rows whose stored Cedar text failed to parse or
+        /// validate and were left out entirely. Loud in logs — an authored
+        /// policy that permits or forbids nothing is the safe failure.
+        let skippedAuthoredPolicies: [SkippedAuthoredPolicy]
         let artifact: any CedarCompiledPolicySet
         let builtAt: Date
     }
 
     /// A role row left out of the compiled set, with the reason.
     struct SkippedRolePolicy: Equatable, Sendable {
+        let id: UUID
+        let name: String
+        let reason: String
+    }
+
+    /// An authored-policy row left out of the compiled set, with the reason.
+    struct SkippedAuthoredPolicy: Equatable, Sendable {
         let id: UUID
         let name: String
         let reason: String
@@ -198,7 +219,46 @@ actor CedarPolicySetCache {
                     ])
             }
 
+            // Authored policies (issue #606): enabled permit/forbid rows,
+            // sorted by id so two replicas building the same version produce
+            // identical text.
+            let policyRows = try await IAMPolicy.query(on: db)
+                .filter(\.$enabled == true)
+                .all()
+            let authoredPolicies = policyRows.compactMap(PolicyDescriptor.init(row:))
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+
+            // Pre-screen each authored policy the way role text is screened:
+            // Cedar validates per-policy, so one bad row (a policy naming an
+            // action or attribute a later schema no longer declares) can be
+            // dropped alone instead of failing the full-set compile and pinning
+            // every replica to its stale previous build. Unlike a role, a
+            // dropped authored policy leaves nothing behind — it has no schema
+            // fields — so it is simply omitted.
+            var skippedAuthoredPolicies: [SkippedAuthoredPolicy] = []
+            let compilablePolicies = authoredPolicies.filter { policy in
+                let source = CedarPolicySource(id: policy.policyID, text: policy.cedarText)
+                guard let issue = engine.policyIssue(schemaText: schemaText, policy: source) else {
+                    return true
+                }
+                skippedAuthoredPolicies.append(
+                    SkippedAuthoredPolicy(id: policy.id, name: policy.name, reason: issue))
+                return false
+            }
+
+            for skipped in skippedAuthoredPolicies {
+                logger.error(
+                    "Authored policy left out of the compiled Cedar policy set",
+                    metadata: [
+                        "policy_id": .string(skipped.id.uuidString),
+                        "policy_name": .string(skipped.name),
+                        "reason": .string(skipped.reason),
+                    ])
+            }
+
             let staticText = CedarPolicyAssembler.staticPolicyText(roles: compilableRoles)
+            let authoredText = CedarPolicyAssembler.authoredPolicyText(compilablePolicies)
+            let authoredSources = CedarPolicyAssembler.authoredPolicySources(compilablePolicies)
             let compiledGuardrails = CedarPolicyAssembler.guardrailPolicyText(
                 guardrails, organizationIDsByGuardrail: organizationIDsByGuardrail)
 
@@ -216,13 +276,17 @@ actor CedarPolicySetCache {
                     ])
             }
 
-            let policyText =
-                compiledGuardrails.policyText.isEmpty
-                ? staticText
-                : staticText + "\n" + compiledGuardrails.policyText
+            // Order for display: permits first (platform + roles, then
+            // authored), forbids last (guardrails). Cedar semantics do not
+            // depend on order — a forbid wins wherever it sits — so this is a
+            // readability choice for the assembled-set text.
+            let policyText = [staticText, authoredText, compiledGuardrails.policyText]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
             let artifact = try engine.compile(
                 schemaText: schemaText,
-                policies: CedarPolicyAssembler.staticPolicies(roles: compilableRoles) + compiledGuardrails.policies)
+                policies: CedarPolicyAssembler.staticPolicies(roles: compilableRoles)
+                    + authoredSources + compiledGuardrails.policies)
 
             current = Built(
                 version: version,
@@ -232,6 +296,8 @@ actor CedarPolicySetCache {
                 guardrailCount: compiledGuardrails.compiledGuardrailIDs.count,
                 skippedGuardrails: compiledGuardrails.skipped,
                 skippedRolePolicies: skippedRolePolicies,
+                authoredPolicyCount: authoredSources.count,
+                skippedAuthoredPolicies: skippedAuthoredPolicies,
                 artifact: artifact,
                 builtAt: Date()
             )
@@ -240,6 +306,7 @@ actor CedarPolicySetCache {
                 metadata: [
                     "version": .stringConvertible(version),
                     "roles": .stringConvertible(roles.count),
+                    "policies": .stringConvertible(authoredSources.count),
                     "guardrails": .stringConvertible(compiledGuardrails.compiledGuardrailIDs.count),
                 ])
         } catch {

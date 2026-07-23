@@ -17,6 +17,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: GuardrailController())
     // IAM role definitions + the action catalog (issue #605)
     try app.register(collection: RoleController())
+    // IAM authored Cedar policies (issue #606)
+    try app.register(collection: PolicyController())
     // IAM authorization decision logs (issue #481)
     try app.register(collection: IAMDecisionLogController())
     try app.register(collection: APIKeyController())

@@ -89,11 +89,37 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     }
 }
 
+/// Whether an authored policy's action scope covers the queried action, as far
+/// as its text can be read.
+enum WhoCanPolicyActionMatch: String, Content, Sendable {
+    /// The action is in the policy's scope (`action`, or an explicit list that
+    /// contains it).
+    case matches
+    /// The scope cannot be enumerated from the text (an action-group
+    /// reference), so the policy might or might not cover the action.
+    case unknown
+}
+
+/// An authored policy (issue #606) that may bear on the queried action and
+/// resource. Best-effort: which principals it actually permits or forbids —
+/// and any `when`/`unless` conditions — cannot be enumerated from a reverse
+/// lookup, which is why the whole `WhoCanResult.principals` list carries a
+/// caveat whenever any of these are present.
+struct WhoCanPolicyMatch: Content, Hashable, Sendable {
+    let policyID: UUID
+    let name: String
+    let effect: IAMPolicyEffect
+    /// The org or project that owns the policy.
+    let owner: IAMNode
+    let actionMatch: WhoCanPolicyActionMatch
+}
+
 /// The answer to a reverse lookup.
 ///
 /// Not a bare list, because a list cannot express "everyone" — see
-/// `openToAllAuthenticatedUsers`. Bundling the two makes the caveat impossible
-/// to read past.
+/// `openToAllAuthenticatedUsers` — nor the reach of authored policies, whose
+/// principals a reverse lookup cannot enumerate (`authoredPolicyCaveat`).
+/// Bundling the caveats with the list makes them impossible to read past.
 struct WhoCanResult: Content, Sendable {
     let principals: [WhoCanEntry]
     /// When true, the action needs no grant on this resource at all: every
@@ -103,6 +129,13 @@ struct WhoCanResult: Content, Sendable {
     /// Reported as a flag rather than by enumerating every user, which would
     /// be unbounded and would go stale at the next signup.
     let openToAllAuthenticatedUsers: Bool
+    /// Authored policies in force on this resource that may bear on the action
+    /// (issue #606) — best-effort, matched on action scope and containment.
+    let authoredPolicies: [WhoCanPolicyMatch]
+    /// When true, at least one authored policy above bears on this query and
+    /// its principals cannot be enumerated here, so `principals` is again not
+    /// the whole answer. Exact enumeration waits on #484.
+    let authoredPolicyCaveat: Bool
 }
 
 /// The reverse index: "who can do action A on resource R?" (issue #478).
@@ -136,11 +169,64 @@ enum WhoCanService {
         var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db)
         principals = try await markingExternalPrincipals(principals, chain: chain, on: db)
 
+        let authoredPolicies = try await authoredPolicyMatches(action: action, chain: chain, on: db)
+
         return WhoCanResult(
             principals: principals,
             openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
-                action: action, node: node, on: db)
+                action: action, node: node, on: db),
+            authoredPolicies: authoredPolicies,
+            // Any applicable authored policy makes the principal list partial:
+            // its own principals are outside what a reverse lookup can see.
+            authoredPolicyCaveat: !authoredPolicies.isEmpty
         )
+    }
+
+    /// The authored policies in force on the queried node that may bear on the
+    /// action (issue #606).
+    ///
+    /// Best-effort by construction, and honestly so: a policy is included when
+    /// its resource scope is on the queried node's ancestor chain (so it
+    /// reaches this resource) *and* its action scope could cover the action.
+    /// Neither its principal scope nor its `when`/`unless` conditions are read
+    /// — those are exactly what a reverse lookup cannot invert, and what the
+    /// caveat flag warns about. Formal enumeration waits on #484.
+    private static func authoredPolicyMatches(
+        action: String, chain: [IAMNode], on db: any Database
+    ) async throws -> [WhoCanPolicyMatch] {
+        let inScope = try await PolicyStore.inScope(along: chain, on: db)
+        guard !inScope.isEmpty else { return [] }
+        let chainNodes = Set(chain)
+
+        var matches: [WhoCanPolicyMatch] = []
+        for policy in inScope {
+            guard let id = policy.id, let owner = policy.owner, let effect = policy.policyEffect,
+                let ownerNodeType = owner.nodeType
+            else { continue }
+            guard
+                let shape = try? CedarAuthoredPolicyInspector.describe(
+                    cedarText: policy.cedarText, policyID: PolicyDescriptor.policyID(id))
+            else { continue }
+
+            // Containment-node-on-chain: the resource the policy is scoped to
+            // has to sit on this node's chain, or the policy governs a
+            // different subtree and does not bear on this resource.
+            guard let scope = shape.resourceScope, let scopeNodeType = scope.type.nodeType,
+                chainNodes.contains(IAMNode(type: scopeNodeType, id: scope.id))
+            else { continue }
+
+            guard shape.actionScope.couldMatch(action) else { continue }
+
+            matches.append(
+                WhoCanPolicyMatch(
+                    policyID: id,
+                    name: policy.name,
+                    effect: effect,
+                    owner: IAMNode(type: ownerNodeType, id: policy.ownerID),
+                    actionMatch: shape.actionScope == .unknown ? .unknown : .matches
+                ))
+        }
+        return matches.sorted { $0.name < $1.name }
     }
 
     /// Flag entries whose holder lives outside the chain's organization —

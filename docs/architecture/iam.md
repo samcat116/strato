@@ -350,6 +350,43 @@ live bindings cannot be deleted (`409` with the count) — dropping it would
 silently revoke whatever those bindings grant, with nothing in the bindings
 list to show it happened.
 
+### Authored policies (shipped with #606)
+
+Where a role is a permit whose principal side is decided by its bindings, an
+**authored policy** is freeform Cedar an org or project admin writes directly:
+a permit or a forbid, any principal, any conditions, stored in `iam_policies`
+(`PolicyStore`, `POST/GET/PATCH/DELETE /api/iam/policies`). It compiles into
+the policy set verbatim under the id `policy-<row uuid>`, beside the role
+permits and guardrail forbids, and its `effect` column is *derived* from the
+text (`CedarAuthoredPolicyInspector` reads it off the EST) rather than sent by
+the client. Decision logs attribute an authored policy to the `policy` tier on
+either side of a verdict — an authored forbid that denied, or an authored
+permit that allowed — though a guardrail forbid still outranks it in
+attribution.
+
+**Containment is the one structural rule (v1).** The policy's resource scope
+must name a concrete entity — `resource == X` or `resource in X` — that sits
+inside the owner's subtree: the named resource's ancestor chain has to include
+the owner node. So a project admin can hand out (or fence off) access within
+their project and nowhere else, and an unscoped `resource` — which would reach
+every resource of a type across every org — is refused. The principal scope is
+unrestricted; who a grant reaches is the admin's call within their subtree,
+cross-org included. This applies equally to forbids. The candidate is compiled
+at write time against the live schema, so Cedar's own errors surface as a `400`
+instead of the row being dropped at the next boot; formal (symcc-based)
+containment analysis is #484's follow-up. `POST /api/iam/policies/validate`
+runs the same preparation without saving. Deleting an org or project removes
+the policies it owns.
+
+Because a reverse lookup cannot invert an authored policy's principal scope or
+conditions, `who-can` reports authored policies **best-effort**: a `policies`
+section lists every enabled policy whose resource scope is on the queried
+node's chain and whose action scope could cover the action (matched off the
+EST), and an `authoredPolicyCaveat` flag warns that `principals` is not the
+whole answer wherever such a policy is in force. Exact enumeration waits on
+#484. For symmetry, guardrail DTOs now also carry their generated `forbid` text
+read-only, so the UI can show the Cedar a ceiling compiles to.
+
 ### Membership and visibility
 
 - **Bare org membership grants `org:read` and `project:create` — nothing

@@ -277,7 +277,7 @@ struct OrganizationController: RouteCollection {
         // nowhere, while still contributing a grants-field pair to the Cedar
         // schema. That makes this a policy-set change, so it runs inside
         // `withPolicySetChange` and bumps the version when roles actually went.
-        let removedRoles = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             try await organization.delete(on: db)
             // The trust domain row deliberately outlives the organization: it
             // is the instruction to destroy the org's CA, and the reconciler
@@ -288,18 +288,24 @@ struct OrganizationController: RouteCollection {
                 nodeType: .organization, nodeID: organizationID, on: db)
             var removedRoles = try await RoleStore.deleteOwned(
                 by: .organization, ownerID: organizationID, on: db)
+            var removedPolicies = try await PolicyStore.deleteOwned(
+                by: .organization, ownerID: organizationID, on: db)
             for projectID in cascadedProjectIDs {
                 try await RoleBindingService.revokeAll(
                     nodeType: .project, nodeID: projectID, on: db)
                 removedRoles += try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
+                removedPolicies += try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             }
-            if removedRoles > 0 {
+            let removed = removedRoles + removedPolicies
+            if removed > 0 {
                 try await PolicySetVersionService.bump(
-                    reason: "organization deleted: \(removedRoles) owned role(s) removed", on: db)
+                    reason:
+                        "organization deleted: \(removedRoles) owned role(s), \(removedPolicies) owned policy(ies) removed",
+                    on: db)
             }
-            return removedRoles
+            return removed
         }
-        if removedRoles > 0 {
+        if removed > 0 {
             await req.application.announcePolicySetChange()
         }
 
