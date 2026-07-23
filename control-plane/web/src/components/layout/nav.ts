@@ -62,6 +62,7 @@ export const navTree: NavItem[] = [
     ],
   },
   { label: "Networking", href: "/networks", icon: Globe },
+  { label: "Security Groups", href: "/security-groups", icon: Shield },
   {
     label: "Storage",
     icon: HardDrive,

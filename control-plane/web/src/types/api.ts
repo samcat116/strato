@@ -281,7 +281,8 @@ export type IAMNodeType =
   | "volume_snapshot"
   | "sandbox_snapshot"
   | "site"
-  | "agent";
+  | "agent"
+  | "security_group";
 
 export interface IAMNode {
   type: IAMNodeType;
@@ -851,6 +852,11 @@ export interface CreateVMRequest {
    * agent whose `tpmCapable` is true.
    */
   tpm?: boolean;
+  /**
+   * Security groups for the VM's NIC (max 5, same project as the VM).
+   * Omitted → the project's default group.
+   */
+  securityGroupIds?: string[];
 }
 
 export interface UpdateVMRequest {
@@ -1491,6 +1497,73 @@ export interface UpdateNetworkRequest {
   dnsServers?: string[];
   domainName?: string;
   leaseTime?: number;
+}
+
+// Security groups (stateful NIC-level firewalls, realized as OVN ACLs)
+
+export type SecurityGroupRuleDirection = "ingress" | "egress";
+export type Ethertype = "ipv4" | "ipv6";
+
+export interface SecurityGroupRule {
+  id: string;
+  direction: SecurityGroupRuleDirection;
+  ethertype: Ethertype;
+  /** "tcp", "udp", or "icmp"; absent matches any protocol. */
+  protocolName?: string;
+  /**
+   * tcp/udp: destination port range (min == max for one port).
+   * icmp: min is the ICMP type, max the code. Absent means all.
+   */
+  portRangeMin?: number;
+  portRangeMax?: number;
+  /** At most one of remoteCIDR/remoteGroupId; both absent means "any peer". */
+  remoteCIDR?: string;
+  remoteGroupId?: string;
+  description?: string;
+  createdAt?: string;
+}
+
+export interface SecurityGroup {
+  id: string;
+  name: string;
+  description?: string;
+  projectId: string;
+  /** The project's auto-created fallback group: undeletable and un-renamable. */
+  isDefault: boolean;
+  rules: SecurityGroupRule[];
+  /** How many NICs currently attach this group; a group in use cannot be deleted. */
+  attachmentCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateSecurityGroupRequest {
+  name: string;
+  description?: string;
+  /** Defaults to the caller's default project when omitted. */
+  projectId?: string;
+}
+
+export interface UpdateSecurityGroupRequest {
+  name?: string;
+  description?: string;
+}
+
+export interface CreateSecurityGroupRuleRequest {
+  direction: SecurityGroupRuleDirection;
+  ethertype: Ethertype;
+  protocolName?: string;
+  portRangeMin?: number;
+  portRangeMax?: number;
+  remoteCIDR?: string;
+  remoteGroupId?: string;
+  description?: string;
+}
+
+export interface AttachSecurityGroupRequest {
+  vmId: string;
+  /** The VM NIC to attach to; defaults to the VM's first interface. */
+  interfaceId?: string;
 }
 
 // Audit events (system-admin / org-admin trail)

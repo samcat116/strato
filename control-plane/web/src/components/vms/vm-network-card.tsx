@@ -1,6 +1,19 @@
 "use client";
 
+import Link from "next/link";
+import { Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -9,7 +22,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { VM, VMNetworkInterface } from "@/types/api";
+import {
+  useAttachSecurityGroup,
+  useDetachSecurityGroup,
+  useSecurityGroups,
+} from "@/lib/hooks/use-security-groups";
+import { toast } from "sonner";
+import type { SecurityGroup, VM, VMNetworkInterface } from "@/types/api";
 
 /** All addresses of a NIC as `address/prefix`. */
 function nicAddresses(nic: VMNetworkInterface): string[] {
@@ -30,8 +49,108 @@ function nicGateways(nic: VMNetworkInterface): string[] {
   return (nic.addresses ?? []).flatMap((a) => (a.gateway ? [a.gateway] : []));
 }
 
+/**
+ * Attach/detach a security group on one NIC. The API doesn't expose which
+ * groups a NIC currently attaches (only per-group attachment counts), so the
+ * menu deliberately offers both actions for every group rather than
+ * pretending to know membership; the server rejects no-op or invalid
+ * combinations with a clear error.
+ */
+function NicSecurityGroupMenu({
+  vm,
+  nic,
+  groups,
+}: {
+  vm: VM;
+  nic: VMNetworkInterface;
+  groups: SecurityGroup[];
+}) {
+  const attach = useAttachSecurityGroup();
+  const detach = useDetachSecurityGroup();
+  const busy = attach.isPending || detach.isPending;
+
+  const handleAttach = (group: SecurityGroup) => {
+    attach.mutate(
+      { id: group.id, data: { vmId: vm.id, interfaceId: nic.id } },
+      {
+        onSuccess: () =>
+          toast.success(`Attached "${group.name}" to ${nic.deviceName}`),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Failed to attach security group",
+          ),
+      },
+    );
+  };
+
+  const handleDetach = (group: SecurityGroup) => {
+    detach.mutate(
+      { id: group.id, data: { vmId: vm.id, interfaceId: nic.id } },
+      {
+        onSuccess: () =>
+          toast.success(`Detached "${group.name}" from ${nic.deviceName}`),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Failed to detach security group",
+          ),
+      },
+    );
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-foreground/80 hover:text-foreground hover:bg-accent"
+          disabled={busy}
+          title="Security groups"
+        >
+          <Shield className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Security groups</DropdownMenuLabel>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Attach group</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {groups.map((group) => (
+              <DropdownMenuItem
+                key={group.id}
+                onSelect={() => handleAttach(group)}
+              >
+                {group.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Detach group</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {groups.map((group) => (
+              <DropdownMenuItem
+                key={group.id}
+                onSelect={() => handleDetach(group)}
+              >
+                {group.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function VMNetworkCard({ vm }: { vm: VM }) {
   const interfaces = vm.networkInterfaces ?? [];
+  const { data: securityGroups = [] } = useSecurityGroups(vm.projectId);
+  const showSecurityGroups = securityGroups.length > 0;
 
   return (
     <Card className="bg-card border-border">
@@ -84,6 +203,11 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                 <TableHead className="text-muted-foreground font-medium">
                   MTU
                 </TableHead>
+                {showSecurityGroups && (
+                  <TableHead className="text-muted-foreground font-medium text-right">
+                    Actions
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody className="divide-y divide-border">
@@ -123,10 +247,34 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                   <TableCell className="text-foreground/80">
                     {nic.mtu ?? "—"}
                   </TableCell>
+                  {showSecurityGroups && (
+                    <TableCell className="text-right">
+                      {nic.id ? (
+                        <NicSecurityGroupMenu
+                          vm={vm}
+                          nic={nic}
+                          groups={securityGroups}
+                        />
+                      ) : null}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+        )}
+        {showSecurityGroups && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Every NIC belongs to at least one security group. Rules are managed
+            on the{" "}
+            <Link
+              href="/security-groups"
+              className="text-blue-600 hover:underline"
+            >
+              Security Groups
+            </Link>{" "}
+            page.
+          </p>
         )}
       </CardContent>
     </Card>

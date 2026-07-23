@@ -203,6 +203,80 @@ that **multi-PoP anycast is a genuine CDN build**, not a single-edge feature.
   L3; build L2 stretch only for a concrete same-tenant need (legacy same-subnet
   app, cross-site live migration).
 
+## Security groups
+
+Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
+on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
+
+### Model (control plane)
+
+- **`SecurityGroup`** rows are project-scoped with per-project unique names;
+  **`SecurityGroupRule`** rows are immutable (edit = delete + recreate) and
+  carry direction (`ingress`/`egress`), ethertype (`ipv4`/`ipv6`), optional
+  protocol (`tcp`/`udp`/`icmp`) with a destination port range (ICMP: type and
+  code), and a peer that is a CIDR **or a reference to another security
+  group** in the same project. Every rule mutation bumps the group's
+  `generation` (the `LogicalNetwork.generation` replay-safety pattern).
+- **Mandatory default group**: every project has an auto-created, undeletable,
+  un-renamable `default` group (rules editable) seeded with AWS semantics —
+  allow all ingress from the group itself, allow all egress. Every VM NIC
+  belongs to at least one group (`vm_interface_security_groups`); VM create
+  attaches the default group when the caller picks none, and detach refuses to
+  empty a NIC's set. `SeedDefaultSecurityGroups` backfilled pre-existing
+  projects, adding a **deletable allow-all-ingress rule** to projects that
+  already had workloads so agent upgrades could never cut live inbound
+  traffic — deleting that rule is how an operator opts a project into real
+  ingress filtering.
+- Groups referenced by another group's rules, attached groups, and the default
+  group refuse deletion (409, schema-backstopped). Sandbox NICs do not
+  participate yet (their specs carry a nil group list = unmanaged).
+
+### Wire and rollout
+
+- `DesiredStateMessage.securityGroups` carries the groups the receiving
+  agent's *authored topology* needs — groups attached to in-scope VMs plus the
+  transitive closure of rule references, so every address-set reference
+  resolves. `NetworkSpec.securityGroupIds` carries each NIC's membership.
+- Both fields are additive and nil-tolerant. Nil `securityGroups` is "no
+  opinion", never "tear down all port groups"; a nil per-NIC list marks the
+  port unmanaged (it joins no groups, drop group included), which is what
+  keeps legacy traffic flowing during a mixed-version rollout. The control
+  plane refuses attach/detach for VMs placed on pre-v20 agents and omits both
+  fields from their syncs (`WireProtocol.supportsSecurityGroups`).
+
+### Enforcement (agent)
+
+- One OVN **Port_Group per group** (`pg_<uuid-hex>` — identifier-safe, since
+  the name appears in match expressions and in OVN's auto-generated
+  `$pg_…_ip4`/`_ip6` address sets, which is also what makes group-reference
+  peers work with zero IP bookkeeping). One `allow-related` ACL per rule at
+  priority 1002, built by the pure `SecurityGroupACLBuilder`
+  (`agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift`).
+- The site-singleton **`pg_strato_drop`** group holds every managed port and
+  provides the default deny: both-direction `ip` drops at priority 1001 (ARP
+  is not `ip`, so address resolution survives) plus DHCPv4/v6 and IPv6
+  ND/RS/RA carve-outs at 1002.
+- **Ownership follows the topology-authority split**: port groups and ACLs are
+  authored only by the site's network-controller agent (generation-stamped
+  full replace of a group's ACL set; teardown = observed managed groups −
+  desired), while **membership** is converged by every agent for its own VMs'
+  ports — level-triggered each sync (attach/detach on a running VM applies on
+  the next nudge, no restart) and at LSP creation, where a not-yet-realized
+  port group parks the create on `DependencyPendingError` so a managed NIC
+  never boots unfiltered.
+- Floating IPs compose without special casing: DNAT'd traffic still traverses
+  the LSP, so `to-lport` ACLs see the post-DNAT destination and the external
+  source — a FIP'd service is opened with an ordinary CIDR ingress rule.
+
+### Known limitations / follow-ups
+
+- Group-reference peers match only addresses OVN knows from LSP `addresses`.
+- Network-level stateless ACLs (NACLs, switch-attached), sandbox NIC
+  participation, MLD allowance in the drop group, and per-rule logging/stats
+  (OVN ACL `log`) are follow-ups.
+- Dataplane verification on real multi-node hardware is pending (same status
+  as geneve/FIP verification above).
+
 ## OVN dynamic routing (native, 25.03+)
 
 OVN gained native dynamic routing in **25.03** (experimental; latest docs
