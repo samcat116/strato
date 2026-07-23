@@ -1,0 +1,45 @@
+control-plane/web/src/lib/api/sites.ts
+  s_c9a8dbace3b7c5::t_a6a820c10b302c 4,22-26
+  s_c9a8dbace3b7c5::t_400d5b585fa71d 27-28
+control-plane/Sources/App/Migrations/AddSiteMetadata.swift
+  s_c9a8dbace3b7c5::t_4e771517ddf181 1-61
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c9a8dbace3b7c5::t_b467f159316a9c 158-241
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c9a8dbace3b7c5::t_04d95fe5022148 283-286,289-297
+  s_c9a8dbace3b7c5::t_be7c2367bd16b3 91-137
+  s_c9a8dbace3b7c5::t_d572469c6f2e3c 206-219
+control-plane/web/src/types/openapi.ts
+  s_c9a8dbace3b7c5::t_fc5798f266f7f4 6357-6375,6387-6388,6390-6394,6403-6413,6415,6420-6430
+control-plane/Sources/App/configure.swift
+  s_c9a8dbace3b7c5::t_b588edfea12d7e 570-572
+control-plane/Sources/App/Models/Site.swift
+  s_c9a8dbace3b7c5::t_36a82260c56d6f 236-259
+  s_c9a8dbace3b7c5::t_5c82be4418a8ba 44-85
+  s_c9a8dbace3b7c5::t_d72bf3894f43c0 193-198,203,209-214,219,229-235,262-270,274-279
+  s_c9a8dbace3b7c5::t_46334aad060434 280-299
+  s_c9a8dbace3b7c5::t_dbfbfef3f7fbcd 4-16
+  s_c9a8dbace3b7c5::t_d2510f85945ccf 116-121,128-133
+control-plane/Sources/App/openapi.yaml
+  s_c9a8dbace3b7c5::t_b113b017fb792b 10982,10992-11016,11036-11048,11071-11094,11099-11101,11110-11133
+control-plane/web/src/types/api.ts
+  s_c9a8dbace3b7c5::t_7af13ed635882d 609-610,615-620,625,633-653
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_c9a8dbace3b7c5::t_1f2e89e722f195 7,19-25,38,41-75,86-91,95-105,111,118-139,155-166,177-190,195-200,245-247,256-344,390-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "de5d5fcda0e276017bdf49a6ed94e5de401741b6",
+  "prompts": {},
+  "sessions": {
+    "s_c9a8dbace3b7c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08c093c7-2158-4f88-82af-5ecdd04e6e38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
