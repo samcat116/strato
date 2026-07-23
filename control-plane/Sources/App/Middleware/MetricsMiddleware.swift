@@ -24,14 +24,17 @@ struct MetricsMiddleware: AsyncMiddleware {
         let start = clock.now
 
         func record(statusCode: UInt) {
-            // Each argument is hoisted into an explicitly-typed local: solving
-            // them independently sidesteps a type-checker diagnostic-engine
-            // failure ("failed to produce diagnostic for expression") on the
-            // combined call.
-            let method: String = request.method.rawValue
-            let route: String = Self.routeLabel(forPath: request.route?.path)
-            let statusClass: String = "\(statusCode / 100)xx"
-            let durationSeconds: Double = (clock.now - start).asSeconds
+            // Each value is computed into its own explicitly-typed local so the
+            // type-checker solves them independently. In particular the matched
+            // path is resolved into a local *before* the helper call: passing
+            // `request.route?.path` (an optional chain) directly into the static
+            // call tripped a type-checker diagnostic-engine failure ("failed to
+            // produce diagnostic for expression").
+            let method = request.method.rawValue
+            let statusClass = "\(statusCode / 100)xx"
+            let durationSeconds = (clock.now - start).asSeconds
+            let routePath: [PathComponent]? = request.route?.path
+            let route = MetricsMiddleware.routeLabel(forPath: routePath)
             Telemetry.recordHTTPRequest(
                 method: method,
                 route: route,
