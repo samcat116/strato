@@ -17,8 +17,10 @@ import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
+import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useOperationsStore } from "@/lib/stores/operations-store";
 import { useProjectContext } from "@/providers";
+import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 import { toast } from "sonner";
 
 interface CreateVMDialogProps {
@@ -50,6 +52,9 @@ export function CreateVMDialog({
   // firmware build and an swtpm process, and only Windows-class guests need them.
   const [secureBoot, setSecureBoot] = useState(false);
   const [tpm, setTpm] = useState(false);
+  // Security groups for the VM's NIC (max 5). Empty → the server falls back
+  // to the project's default group.
+  const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
 
   // The VM is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
@@ -58,6 +63,16 @@ export function CreateVMDialog({
   // The list always includes the global "default" network, so it is present
   // even when scoped to a project.
   const { data: networks = [] } = useNetworks(projectId);
+  const {
+    data: securityGroups = [],
+    isError: securityGroupsFailed,
+  } = useSecurityGroups(projectId);
+
+  const toggleSecurityGroup = (id: string) => {
+    setSecurityGroupIds((prev) =>
+      prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]
+    );
+  };
 
   // Filter to only show ready images with valid IDs (memoized to prevent dependency changes on every render)
   const readyImages = useMemo(
@@ -130,6 +145,9 @@ export function CreateVMDialog({
         // Never sent for Firecracker, which the API rejects outright.
         secureBoot: !isFirecracker && secureBoot ? true : undefined,
         tpm: !isFirecracker && tpm ? true : undefined,
+        // Omitted when empty → the server uses the project's default group.
+        securityGroupIds:
+          securityGroupIds.length > 0 ? securityGroupIds : undefined,
       });
       watch(operation, formData.name);
       toast.success(`Creating VM "${formData.name}"`);
@@ -149,6 +167,7 @@ export function CreateVMDialog({
       });
       setSecureBoot(false);
       setTpm(false);
+      setSecurityGroupIds([]);
       setQuotaError(null);
     } catch (error) {
       const message =
@@ -364,6 +383,54 @@ export function CreateVMDialog({
                 network.
               </p>
             </div>
+
+            {securityGroups.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-foreground">Security Groups</Label>
+                <div className="space-y-1 rounded-md border border-border p-3 max-h-36 overflow-y-auto">
+                  {securityGroups.map((group) => {
+                    const checked = securityGroupIds.includes(group.id);
+                    // Block checking one past the server-enforced per-NIC cap.
+                    const atLimit =
+                      !checked &&
+                      securityGroupIds.length >= MAX_SECURITY_GROUPS_PER_NIC;
+                    return (
+                      <label
+                        key={group.id}
+                        className="flex items-center gap-2 text-sm text-foreground"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSecurityGroup(group.id)}
+                          disabled={isLoading || atLimit}
+                          className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                        />
+                        {group.name}
+                        {group.description && (
+                          <span className="text-xs text-muted-foreground truncate">
+                            {group.description}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Default group is used when none selected. A NIC can attach up
+                  to {MAX_SECURITY_GROUPS_PER_NIC} groups.
+                </p>
+              </div>
+            )}
+            {securityGroupsFailed && (
+              // A failed fetch must not read as "this project has no groups":
+              // the VM would silently land on the default group only.
+              <p className="text-xs text-red-600">
+                Failed to load security groups — the VM will use the
+                project&apos;s default group. Retry from the Security Groups
+                page.
+              </p>
+            )}
 
             <div className="space-y-3 rounded-md border border-border p-3">
               <div className="space-y-1">

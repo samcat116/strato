@@ -159,6 +159,18 @@ export {
   projectMemberErrorMessage,
 } from "./use-project-members";
 export { useNetworks, useNetwork, useInvalidateNetworks } from "./use-networks";
+export {
+  useSecurityGroups,
+  useSecurityGroup,
+  useInvalidateSecurityGroups,
+  useCreateSecurityGroup,
+  useUpdateSecurityGroup,
+  useDeleteSecurityGroup,
+  useCreateSecurityGroupRule,
+  useDeleteSecurityGroupRule,
+  useAttachSecurityGroup,
+  useDetachSecurityGroup,
+} from "./use-security-groups";
 export { useAuditEvents, auditErrorMessage } from "./use-audit-events";
 export {
   useWorkloadIdentity,
