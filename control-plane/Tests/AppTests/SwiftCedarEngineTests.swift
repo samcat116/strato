@@ -181,8 +181,8 @@ struct SwiftCedarEngineTests {
             principalMatch: .any,
             resourceMatch: .any
         )
-        let compiledGuardrails = CedarPolicyAssembler.guardrailPolicyText(
-            [guardrail], organizationIDsByGuardrail: [:])
+        let compiledGuardrails = GuardrailRendering.forbids(
+            for: [guardrail], organizationIDsByGuardrail: [:])
         #expect(compiledGuardrails.skipped.isEmpty)
 
         let compiled = try SwiftCedarEngine().compile(

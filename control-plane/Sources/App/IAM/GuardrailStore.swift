@@ -4,8 +4,6 @@ import Vapor
 
 /// Reads, writes, and evaluates tier-2 guardrails (issue #479).
 ///
-/// Two responsibilities that belong together because they must not drift:
-///
 /// - **The write path** is where "forbid-only" and the fixed vocabulary are
 ///   enforced. Every rejection here is a `400` — a malformed ceiling is a bad
 ///   request, the same way illegal parentage is (docs/architecture/iam.md,
@@ -13,6 +11,13 @@ import Vapor
 /// - **The evaluation path** answers "which ceilings forbid this?" by
 ///   collecting every guardrail along the resource's ancestry chain. They
 ///   intersect: the answer is a *list*, and any non-empty list is a denial.
+///
+/// What a single guardrail row *means* — its Cedar forbid, and whether it
+/// covers a given principal/action/resource — is not decided here: every
+/// consumer projects the row through `GuardrailRendering`, so the store's
+/// answers, the compiled set, and the write-time check cannot drift. This
+/// store owns the row lifecycle and the tree-walking orchestration around
+/// those projections.
 ///
 /// Shipped ahead of the evaluator (#480/#482) as the store and the semantics,
 /// so the Cedar integration and the symcc write-time check (#484) build on
@@ -42,68 +47,6 @@ enum GuardrailStore {
         guard effect.lowercased() == GuardrailEffect.forbid.rawValue else {
             throw GuardrailError.permitRejected(effect)
         }
-    }
-
-    /// The Cedar `forbid` a matcher-built guardrail compiles to, resolving the
-    /// attach node's organization for an external-principal ceiling (the one
-    /// input the assembler cannot derive on its own).
-    ///
-    /// This is the single generation path since #610 — the write path stores
-    /// its result, the boot backfill fills a null column with it, and the
-    /// controller's DTO renders it — so what is stored, shown, and enforced
-    /// cannot drift. Nil for a row the assembler skips (an unknown node type, or
-    /// an external ceiling whose attach node resolves to no organization): the
-    /// same rows the compiled set leaves out.
-    static func generateCedarText(for guardrail: Guardrail, on db: any Database) async throws -> String? {
-        guard let id = guardrail.id, let node = guardrail.node else { return nil }
-        var organizationIDsByGuardrail: [UUID: UUID] = [:]
-        if guardrail.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
-            let chain = try await IAMResourceTree.ancestors(of: node, on: db)
-            if let organization = chain.first(where: { $0.type == .organization }) {
-                organizationIDsByGuardrail[id] = organization.id
-            }
-        }
-        let compiled = CedarPolicyAssembler.guardrailPolicyText(
-            [guardrail], organizationIDsByGuardrail: organizationIDsByGuardrail)
-        return compiled.policies.first?.text
-    }
-
-    /// Boot-time backfill: populate `cedar_text` on rows written before #610
-    /// (the migration only adds the column, leaving it NULL on rows that
-    /// pre-date it) from each row's matchers, so the column becomes dense.
-    /// Returns how many rows were populated.
-    ///
-    /// Idempotent — it only touches NULL rows — and it needs **no** policy-set
-    /// version bump: regenerating from unchanged matchers is byte-identical to
-    /// what the cache's null-fallback already compiles, so the compiled output
-    /// does not change. That equivalence is exactly why the fallback is safe in
-    /// the window before this runs, and why the fallback must stay: this
-    /// densifies the column, it does not replace the fallback.
-    ///
-    /// Only matcher-built rows can be NULL here — an authored row always
-    /// carries the text it was written with.
-    @discardableResult
-    static func backfillCedarText(on db: any Database, logger: Logger) async throws -> Int {
-        let rows = try await Guardrail.query(on: db).filter(\.$cedarText == nil).all()
-        guard !rows.isEmpty else { return 0 }
-
-        var filled = 0
-        for row in rows {
-            // A row the assembler skips (an unknown node type, or an external
-            // ceiling whose attach node resolves to no organization) stays NULL
-            // — the same row the compiled set leaves out either way — rather than
-            // being written a text the generator refused to produce.
-            guard let text = try await generateCedarText(for: row, on: db) else { continue }
-            row.cedarText = text
-            try await row.save(on: db)
-            filled += 1
-        }
-        if filled > 0 {
-            logger.info(
-                "Backfilled guardrail cedar_text from matchers",
-                metadata: ["count": .stringConvertible(filled)])
-        }
-        return filled
     }
 
     /// Create a matcher-built guardrail, validating the whole shape first and
@@ -148,7 +91,7 @@ enum GuardrailStore {
             enabled: enabled,
             createdBy: createdBy
         )
-        guardrail.cedarText = try await generateCedarText(for: guardrail, on: db)
+        guardrail.cedarText = try await GuardrailRendering.cedarText(for: guardrail, on: db)
         do {
             try await guardrail.create(on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -226,7 +169,7 @@ enum GuardrailStore {
         resourceMatch: GuardrailResourceMatch
     ) throws {
         guard principalMatch == .any, resourceMatch == .any else { return }
-        guard GuardrailActions.matches(actions, action: policyWriteAction) else { return }
+        guard GuardrailRendering.patternsCover(actions, action: policyWriteAction) else { return }
         throw GuardrailError.locksOutPolicyAdministration
     }
 
@@ -290,11 +233,51 @@ enum GuardrailStore {
             )
             // Regenerate the stored forbid from the (possibly changed) matchers,
             // so the source of truth tracks them.
-            guardrail.cedarText = try await generateCedarText(for: guardrail, on: db)
+            guardrail.cedarText = try await GuardrailRendering.cedarText(for: guardrail, on: db)
         }
 
         try await guardrail.save(on: db)
         return guardrail
+    }
+
+    /// Boot-time backfill that populates `iam_guardrails.cedar_text` for rows
+    /// written before #610 (IAM guardrails onto authored Cedar): the migration
+    /// only adds the column, leaving `cedar_text` NULL on rows that pre-date
+    /// it. This regenerates the text from each such row's matchers — the same
+    /// rendering the write path stores — so the column becomes dense. Returns
+    /// how many rows were populated.
+    ///
+    /// Idempotent — it only touches NULL rows — and it needs **no** policy-set
+    /// version bump: regenerating from unchanged matchers is byte-identical to
+    /// what the cache's null-fallback already compiles, so the compiled output
+    /// does not change. That equivalence is exactly why the fallback is safe in
+    /// the window before this runs, and why the fallback must stay: this
+    /// densifies the column, it does not replace the fallback.
+    ///
+    /// Only matcher-built rows can be NULL here — an authored row always
+    /// carries the text it was written with.
+    @discardableResult
+    static func backfillCedarText(on db: any Database, logger: Logger) async throws -> Int {
+        let rows = try await Guardrail.query(on: db).filter(\.$cedarText == nil).all()
+        guard !rows.isEmpty else { return 0 }
+
+        var filled = 0
+        for row in rows {
+            // A row the rendering skips (an unknown node type, or an external
+            // ceiling whose attach node resolves to no organization) stays NULL
+            // — the same row the compiled set leaves out either way — rather than
+            // being written a text the generator refused to produce.
+            guard let text = try await GuardrailRendering.cedarText(for: row, on: db) else { continue }
+            row.cedarText = text
+            try await row.save(on: db)
+            filled += 1
+        }
+        if filled > 0 {
+            logger.info(
+                "Backfilled guardrail cedar_text from matchers",
+                metadata: ["count": .stringConvertible(filled)])
+        }
+        return filled
     }
 
     // MARK: - Read path
@@ -366,11 +349,14 @@ enum GuardrailStore {
             // instead (`IAMDecisionEngine`), so skip them rather than match on
             // a meaningless `.any`.
             guard !guardrail.authored else { continue }
-            guard GuardrailActions.matches(guardrail.actions, action: action) else { continue }
-            guard try matches(try guardrail.resourceMatch(), environment: environment) else { continue }
+            // A row we cannot parse must not quietly evaluate as "matches
+            // nobody" — that would drop a ceiling on the floor — so the parse
+            // error propagates and fails the whole check closed.
+            let rendering = try GuardrailRendering(guardrail)
+            guard rendering.covers(action: action) else { continue }
+            guard rendering.covers(environment: environment) else { continue }
             guard
-                try await matches(
-                    try guardrail.principalMatch(),
+                try await rendering.covers(
                     principalType: principalType,
                     principalID: principalID,
                     organizationID: organizationID,
@@ -380,85 +366,6 @@ enum GuardrailStore {
             matched.append(guardrail)
         }
         return matched
-    }
-
-    private static func matches(_ match: GuardrailResourceMatch, environment: String?) throws -> Bool {
-        switch match {
-        case .any:
-            return true
-        case .environment(let wanted):
-            // A resource with no environment attribute is not in any
-            // environment, so an environment ceiling does not reach it.
-            return environment == wanted
-        }
-    }
-
-    /// Whether a guardrail's principal side covers this principal.
-    ///
-    /// Shared with the write-time ceiling check (#484), which resolves the
-    /// principal side here rather than symbolically: group membership and org
-    /// membership are facts in the database, and a symbolic solver told
-    /// nothing about them would have to assume every principal *might* be in
-    /// every group — reporting a violation for grants no ceiling touches. The
-    /// symbolic part is what is genuinely open: which resource, which action,
-    /// which environment.
-    static func principalMatches(
-        _ match: GuardrailPrincipalMatch,
-        principalType: IAMPrincipalType,
-        principalID: UUID,
-        organizationID: UUID?,
-        on db: any Database
-    ) async throws -> Bool {
-        try await matches(
-            match, principalType: principalType, principalID: principalID,
-            organizationID: organizationID, on: db)
-    }
-
-    private static func matches(
-        _ match: GuardrailPrincipalMatch,
-        principalType: IAMPrincipalType,
-        principalID: UUID,
-        organizationID: UUID?,
-        on db: any Database
-    ) async throws -> Bool {
-        switch match {
-        case .any:
-            return true
-
-        case .user(let id):
-            return principalType == .user && principalID == id
-
-        case .group(let id):
-            if principalType == .group { return principalID == id }
-            // A ceiling on a group covers its members: the group is how the
-            // grant reaches the user, so it has to be how the ceiling does too.
-            let memberships = try await UserGroup.query(on: db)
-                .filter(\.$user.$id == principalID)
-                .filter(\.$group.$id == id)
-                .count()
-            return memberships > 0
-
-        case .externalToOrganization:
-            // Without a resolvable organization there is no "outside" to be
-            // on, and guessing would mean forbidding on a truncated tree walk.
-            guard let organizationID else { return false }
-            switch principalType {
-            case .user:
-                let memberships = try await UserOrganization.query(on: db)
-                    .filter(\.$user.$id == principalID)
-                    .filter(\.$organization.$id == organizationID)
-                    .count()
-                return memberships == 0
-            case .group:
-                guard let group = try await Group.find(principalID, on: db) else { return false }
-                return group.$organization.id != organizationID
-            case .serviceAccount, .workload:
-                // Machine principals are members of nothing (issue #491), so
-                // an external-principal ceiling always covers them — matching
-                // the compiled forbid's `is User`-guarded membership test.
-                return true
-            }
-        }
     }
 
     /// The `environment` attribute of a resource, for resource-side matching.

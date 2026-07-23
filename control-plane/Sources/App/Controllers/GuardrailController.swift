@@ -445,7 +445,7 @@ struct GuardrailController: RouteCollection {
     /// backfill use, so what the UI shows is what the evaluator enforces.
     private func cedarText(for guardrail: Guardrail, on db: any Database) async throws -> String? {
         if let stored = guardrail.cedarText, !stored.isEmpty { return stored }
-        return try await GuardrailStore.generateCedarText(for: guardrail, on: db)
+        return try await GuardrailRendering.cedarText(for: guardrail, on: db)
     }
 
     /// Reading a node's guardrails is `iam:readPolicy`; changing them is

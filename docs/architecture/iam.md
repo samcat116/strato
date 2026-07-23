@@ -216,10 +216,11 @@ latency-tolerant — never on the request path.
 **What is asked, and of whom.** Bindings are not policies here — they arrive as
 `context.grants` (see the Cedar encoding below) — so `GuardrailWriteCheck`
 first writes the proposed binding as the `permit` it amounts to, then asks
-symcc whether that permit and the guardrail (re-emitted as a `permit` from the
-same clause builders, so the two renderings cannot drift) can both allow one
-request. Non-disjoint means a breach, and the counterexample is a concrete
-request that would be granted and forbidden at once.
+symcc whether that permit and the guardrail (re-emitted as a `permit` — the
+solver-facing projection of `GuardrailRendering`, which carries the same
+action and resource clauses as the compiled forbid by construction) can both
+allow one request. Non-disjoint means a breach, and the counterexample is a
+concrete request that would be granted and forbidden at once.
 
 The question is split deliberately:
 
@@ -603,11 +604,15 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   group sets); the static role policies test membership in those sets. This is
   what keeps grant/revoke free of cache invalidation. Conditioned bindings are
   skipped and counted, never flattened — flattening one would widen it.
-- **Guardrails compile to `forbid` policies** (`CedarPolicyAssembler`), one
+- **Guardrails compile to `forbid` policies** (`GuardrailRendering`), one
   per row, id `guardrail-<row id>` so a denial names its ceiling. The attach
   node becomes `resource in <node>` over the chain's parent edges;
   `external_to_organization` compiles against the attach node's resolved org.
-  The compiler can emit forbids and nothing else.
+  The compiler can emit forbids and nothing else. `GuardrailRendering` owns
+  *every* rendering of a guardrail row — this compiled forbid, the write-time
+  check's solver-facing permit, and the structural match the store and
+  who-can use — as projections of one parsed representation, so the three
+  cannot drift.
 - **`CedarPolicySetCache`** holds the per-replica compiled set, reconciled on
   every `PolicySetVersionCache` refresh — the Valkey broadcast and the 30s
   re-read both funnel through it, so the cache adds no invalidation machinery.

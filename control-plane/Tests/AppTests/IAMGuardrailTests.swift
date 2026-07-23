@@ -220,15 +220,8 @@ final class IAMGuardrailTests {
         #expect(deduped == ["vm:*"])
     }
 
-    @Test("A service wildcard covers actions in that service, including ones not shipped yet")
-    func serviceWildcardMatches() {
-        #expect(GuardrailActions.matches(["vm:*"], action: "vm:delete"))
-        #expect(GuardrailActions.matches(["vm:*"], action: "vm:migrate"))
-        #expect(!GuardrailActions.matches(["vm:*"], action: "volume:delete"))
-        #expect(GuardrailActions.matches(["*"], action: "anything:at:all"))
-        #expect(GuardrailActions.matches(["vm:delete"], action: "vm:delete"))
-        #expect(!GuardrailActions.matches(["vm:delete"], action: "vm:deleteSnapshot"))
-    }
+    // Pattern *interpretation* (which actions a stored set covers) is the
+    // rendering's action projection — pinned in `GuardrailRenderingTests`.
 
     // MARK: - Inheritance and intersection
 
