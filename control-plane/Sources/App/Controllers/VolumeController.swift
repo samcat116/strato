@@ -142,8 +142,21 @@ struct VolumeController: RouteCollection {
             sourceImage = image
         }
 
-        // Calculate size in bytes
-        let sizeBytes = Double(request.sizeGB).gbToBytes
+        // Validate the requested size before converting, mirroring the VM and
+        // sandbox create paths: a non-positive or oversized value must return
+        // 400, never reach the (now non-trapping) GiB→bytes conversion as an
+        // out-of-range operand.
+        guard request.sizeGB > 0 else {
+            throw Abort(.badRequest, reason: "'sizeGB' must be positive")
+        }
+        guard request.sizeGB <= Volume.maxSizeGB else {
+            throw Abort(
+                .badRequest,
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+        }
+        guard let sizeBytes = request.sizeGB.gbToBytes else {
+            throw Abort(.badRequest, reason: "'sizeGB' is too large")
+        }
 
         // Every volume lives in a pool; without a pool-selection API yet,
         // that's the default local pool seeded by migration.
@@ -523,8 +536,21 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        // Calculate new size in bytes
-        let newSizeBytes = Double(request.sizeGB).gbToBytes
+        // Validate the requested size before converting, so an oversized value
+        // returns 400 rather than reaching the GiB→bytes conversion as an
+        // out-of-range operand. (The "must be larger" guard below only fires
+        // after conversion, so it cannot be relied on to catch overflow.)
+        guard request.sizeGB > 0 else {
+            throw Abort(.badRequest, reason: "'sizeGB' must be positive")
+        }
+        guard request.sizeGB <= Volume.maxSizeGB else {
+            throw Abort(
+                .badRequest,
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+        }
+        guard let newSizeBytes = request.sizeGB.gbToBytes else {
+            throw Abort(.badRequest, reason: "'sizeGB' is too large")
+        }
 
         // Validate new size is larger
         guard newSizeBytes > volume.size else {

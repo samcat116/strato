@@ -31,6 +31,12 @@ public enum VolumeStatus: String, Codable, CaseIterable, Sendable {
 final class Volume: Model, @unchecked Sendable {
     static let schema = "volumes"
 
+    /// Upper bound on a caller-requested volume size, in whole gibibytes.
+    /// Requests above this are rejected with `400 Bad Request`; the ceiling is
+    /// generous (256 TiB) but far below the point where the GiB→bytes
+    /// conversion would overflow `Int64`.
+    static let maxSizeGB = 262_144
+
     @ID(key: .id)
     var id: UUID?
 

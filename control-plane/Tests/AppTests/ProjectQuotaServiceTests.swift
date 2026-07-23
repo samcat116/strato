@@ -23,6 +23,28 @@ struct ByteConversionTests {
         let bytes = Int64(16) * 1024 * 1024 * 1024
         #expect(bytes.bytesToGB.gbToBytes == bytes)
     }
+
+    @Test("Int gbToBytes computes whole-GiB values exactly")
+    func testIntGBToBytes() {
+        #expect(8.gbToBytes == Int64(8) * 1024 * 1024 * 1024)
+        #expect(0.gbToBytes == 0)
+    }
+
+    @Test("Int gbToBytes returns nil instead of trapping on overflow (issue #676)")
+    func testIntGBToBytesOverflow() {
+        // Any value above ~8.59e9 GiB overflows Int64 when multiplied by 1024^3.
+        #expect(9_000_000_000.gbToBytes == nil)
+        #expect(Int.max.gbToBytes == nil)
+    }
+
+    @Test("Double gbToBytes saturates instead of trapping on out-of-range input (issue #676)")
+    func testDoubleGBToBytesSaturates() {
+        // Before the fix `Int64(_:Double)` trapped on an out-of-range operand.
+        #expect(1e30.gbToBytes == Int64.max)
+        #expect((-1e30).gbToBytes == Int64.min)
+        #expect(Double.infinity.gbToBytes == Int64.max)
+        #expect(Double.nan.gbToBytes == 0)
+    }
 }
 
 @Suite("ProjectStatsService Tests")
