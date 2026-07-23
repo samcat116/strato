@@ -269,7 +269,7 @@ final class CrossOrgBindingTests {
                 nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
 
             let result = try await WhoCanService.whoCan(
-                action: "vm:read", node: IAMNode(type: .project, id: fx.project.id!), on: app.db)
+                action: "vm:read", node: IAMNode(type: .project, id: fx.project.id!), app: app, on: app.db)
 
             func entry(_ type: IAMPrincipalType, _ id: UUID) -> WhoCanEntry? {
                 result.principals.first { $0.principal.type == type && $0.principal.id == id && $0.via == nil }

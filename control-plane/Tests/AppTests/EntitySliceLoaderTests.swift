@@ -15,10 +15,12 @@ extension CedarRoleGrants {
 
 /// IAM phase 3 (issue #480): the entity-slice loader — the security-critical
 /// component of the Cedar integration, so this is where the test investment
-/// goes. Beyond the per-edge cases, `sliceCrossCheck*` compares what the
-/// slice would let Cedar decide against `WhoCanService.can` for a whole grid
-/// of principals × actions × nodes: the two models are built from the same
-/// tables and must agree.
+/// goes. Beyond the per-edge cases, `sliceCrossCheck*` compares the real
+/// evaluator's answers (`WhoCanService.can`, which decides through
+/// `IAMDecisionEngine`) against an independent hand-simulation of the static
+/// policies over the raw slice, for a whole grid of principals × actions ×
+/// nodes: a slice edge the loader dropped would surface as the two
+/// disagreeing.
 @Suite("Entity Slice Loader Tests", .serialized)
 final class EntitySliceLoaderTests {
 
@@ -455,13 +457,17 @@ final class EntitySliceLoaderTests {
         }
     }
 
-    // MARK: - Cross-check against the bindings-model evaluator
+    // MARK: - Cross-check against the real evaluator
 
-    /// What Cedar would decide from this slice for an unconditioned check —
-    /// the static policies from `CedarPolicyAssembler.staticPolicyText()`
+    /// What the engine would decide from this slice for an unconditioned check
+    /// — the static policies from `CedarPolicyAssembler.staticPolicyText()`
     /// simulated over the slice's data. Kept deliberately dumb: any cleverness
     /// here would be testing itself.
     private func sliceAllows(action: String, slice: CedarEntitySlice, user: User, chainOrgID: UUID?) -> Bool {
+        // The engine's applicability gate: an action the schema does not apply
+        // to the resource's type is denied without evaluation.
+        guard CedarSchemaBuilder.resourceTypes(for: action).map(\.rawValue).contains(slice.resource.type)
+        else { return false }
         // @id("platform-system-admin")
         if user.isSystemAdmin { return true }
         // @id("org-membership"): resource in principal.memberOfOrgs, via the
@@ -486,7 +492,7 @@ final class EntitySliceLoaderTests {
         return false
     }
 
-    @Test("Slice-derived decisions agree with WhoCanService.can across a grid of principals and actions")
+    @Test("Evaluator decisions agree with a hand-simulation of the static policies across a grid")
     func sliceCrossCheckAgainstWhoCan() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
@@ -528,11 +534,12 @@ final class EntitySliceLoaderTests {
                     let chainOrgID = chain.first(where: { $0.type == .organization })?.id
                     for action in actions {
                         let expected = try await WhoCanService.can(
-                            principalType: .user, principalID: user.id!, action: action, node: node, on: app.db)
+                            principalType: .user, principalID: user.id!, action: action, node: node, app: app,
+                            on: app.db)
                         let actual = sliceAllows(action: action, slice: slice, user: user, chainOrgID: chainOrgID)
                         #expect(
                             actual == expected,
-                            "\(user.username) / \(action) on \(node.type.rawValue): slice says \(actual), bindings model says \(expected)"
+                            "\(user.username) / \(action) on \(node.type.rawValue): hand-simulation says \(actual), evaluator says \(expected)"
                         )
                     }
                 }

@@ -55,17 +55,22 @@ struct AuthorizationController: RouteCollection {
     ///          "principal": { "type", "id" }? }`
     /// Returns: `{ "results": { "<key>": true/false, ... } }`
     ///
-    /// Since cutover (#482) both forms answer in one vocabulary:
+    /// Both forms are decided by the same evaluator (`IAMDecisionEngine`) over
+    /// the same compiled policy set, so every answer is the answer enforcement
+    /// would give — guardrails, authored policies, and platform permits
+    /// included:
     ///
-    /// - **No `principal`** (the caller asks about themselves): evaluated by
-    ///   the authoritative Cedar policy set — exactly what gates requests, so
-    ///   the answer here is the answer enforcement would give, guardrails
-    ///   included. `permission` accepts an IAM action name (`vm:start`) or,
-    ///   for callers not yet migrated, a legacy permission name
-    ///   (`manage_project`), translated the same way `req.can` translates.
-    /// - **With `principal`**: answered from the `role_bindings` table + the
-    ///   resource tree, so it agrees with `who-can`. `permission` is an IAM
-    ///   action name.
+    /// - **No `principal`** (the caller asks about themselves): the
+    ///   authoritative enforcement path (`req.can`), which records a decision
+    ///   log row. `permission` accepts an IAM action name (`vm:start`) or, for
+    ///   callers not yet migrated, a legacy permission name (`manage_project`),
+    ///   translated the same way `req.can` translates.
+    /// - **With `principal`**: admin-gated reporting (`WhoCanService.can`) —
+    ///   same decision, no decision-log row, plus the reachability gates a
+    ///   real request would have hit first (disabled or nonexistent principals
+    ///   answer false). `permission` is an IAM action name. A *group*
+    ///   principal is answered from its bindings — a group never reaches the
+    ///   evaluator itself.
     ///
     /// There is no admin fast path: guardrail forbids bind system admins, so
     /// short-circuiting to "true" could report an allow the evaluator would

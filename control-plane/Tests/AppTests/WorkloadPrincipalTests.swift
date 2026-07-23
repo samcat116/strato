@@ -244,7 +244,7 @@ final class WorkloadPrincipalTests {
             )
 
             let vmNode = IAMNode(type: .virtualMachine, id: try tree.vm.requireID())
-            let result = try await WhoCanService.whoCan(action: "vm:read", node: vmNode, on: app.db)
+            let result = try await WhoCanService.whoCan(action: "vm:read", node: vmNode, app: app, on: app.db)
             let entry = try #require(
                 result.principals.first {
                     $0.principal == WhoCanPrincipalRef(type: .serviceAccount, id: accountID)
@@ -255,11 +255,11 @@ final class WorkloadPrincipalTests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:read", node: vmNode, on: app.db))
+                    action: "vm:read", node: vmNode, app: app, on: app.db))
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:start", node: vmNode, on: app.db) == false)
+                    action: "vm:start", node: vmNode, app: app, on: app.db) == false)
         }
     }
 
