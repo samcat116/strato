@@ -230,7 +230,12 @@ struct AgentWebSocketController: RouteCollection {
         // bare name. `identity.name` is for display and the register response.
         let agentKey = agent.identity.key
         let agentName = agent.name
-        req.logger.info(
+        // Routine per-message receipt is a debugging aid, not an operator
+        // signal, and it is the one log line whose rate scales with fleet size
+        // on a single host: every agent's heartbeat and observed-state report
+        // lands here (issue #705). The raw-frame dump is noisier still, so it
+        // sits a level below the decoded envelope.
+        req.logger.trace(
             "Processing WebSocket message",
             metadata: [
                 "agentName": .string(agentName),
@@ -245,7 +250,7 @@ struct AgentWebSocketController: RouteCollection {
 
         do {
             let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-            req.logger.info(
+            req.logger.debug(
                 "Decoded message envelope",
                 metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
 
