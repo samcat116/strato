@@ -162,6 +162,35 @@ struct RoleController: RouteCollection {
         let roles: [BindableRoleDTO]
     }
 
+    /// One action of the catalog, with everything the role editor needs to
+    /// place it (issue #605).
+    struct ActionCatalogEntry: Content, Equatable, Sendable {
+        let action: String
+        let service: String
+        /// The tree-node types this action can be requested against, in wire
+        /// naming (`virtual_machine`, `organizational_unit`, …). Container
+        /// types appear because `create`/`list` checks target the container.
+        let resourceTypes: [String]
+        /// The seeded roles whose action group carries this action. Empty for
+        /// an action no default role grants — which is a fine thing for a
+        /// custom role to grant, and worth showing as such.
+        let roles: [String]
+        /// Granted by bare organization membership, with no binding behind it
+        /// (`IAMRoleRegistry.membershipDerivedActions`). Including such an
+        /// action in a custom role is legal but buys nothing inside the org.
+        let membershipDerived: Bool
+    }
+
+    /// The actions of one service, the grouping the editor renders.
+    struct ActionServiceGroup: Content, Equatable, Sendable {
+        let service: String
+        let actions: [ActionCatalogEntry]
+    }
+
+    struct ActionCatalogResponse: Content, Equatable, Sendable {
+        let services: [ActionServiceGroup]
+    }
+
     // MARK: - Routes
 
     /// GET /api/iam/roles?ownerType=&ownerId=
@@ -338,7 +367,7 @@ struct RoleController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "nodeType and nodeId query parameters are required")
         }
-        let node = try IAMPolicyGate.node(resourceType: nodeType, resourceId: nodeId)
+        let node = try IAMNode(resourceType: nodeType, resourceId: nodeId)
         try await requireNodeRead(node, req: req)
 
         let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
@@ -351,12 +380,41 @@ struct RoleController: RouteCollection {
     ///
     /// The action vocabulary, generated from the registry. Authenticated only:
     /// it describes the software, not any deployment's policy.
-    func actions(req: Request) async throws -> IAMActionCatalog.Response {
+    func actions(req: Request) async throws -> ActionCatalogResponse {
         _ = try requireUser(req)
-        return IAMActionCatalog.catalog()
+        return Self.actionCatalog()
     }
 
     // MARK: - Helpers
+
+    /// The whole action catalog, sorted so two calls — and two deployments —
+    /// agree. Static: it is generated from `IAMRoleRegistry` and
+    /// `CedarSchemaBuilder`, the same two places the Cedar schema comes from,
+    /// so the picker in the UI can never offer an action the write path would
+    /// reject — or omit one it would accept.
+    private static func actionCatalog() -> ActionCatalogResponse {
+        let entries = IAMRoleRegistry.allActions.sorted().map(catalogEntry(for:))
+        let grouped = Dictionary(grouping: entries, by: \.service)
+        return ActionCatalogResponse(
+            services: grouped.keys.sorted().map { service in
+                ActionServiceGroup(service: service, actions: grouped[service] ?? [])
+            })
+    }
+
+    private static func catalogEntry(for action: String) -> ActionCatalogEntry {
+        let service = action.split(separator: ":", maxSplits: 1).first.map(String.init) ?? action
+        let cedarTypes = Set(CedarSchemaBuilder.resourceTypes(for: action).map(\.rawValue))
+        return ActionCatalogEntry(
+            action: action,
+            service: service,
+            resourceTypes: IAMNodeType.allCases
+                .filter { cedarTypes.contains($0.cedarEntityType.rawValue) }
+                .map(\.rawValue)
+                .sorted(),
+            roles: IAMRoleRegistry.roles(granting: action).map(\.rawValue).sorted(),
+            membershipDerived: IAMRoleRegistry.membershipDerivedActions.contains(action)
+        )
+    }
 
     /// A role's owner as both halves it is used as: the store's
     /// `(ownerType, ownerID)` pair and the tree node the gates run on.
@@ -450,11 +508,8 @@ struct RoleController: RouteCollection {
     /// Reading and writing a role is `iam:readPolicy` / `iam:setPolicy` on its
     /// owner — the same gate guardrails use, for the same reason.
     private func requirePolicyAdmin(on node: IAMNode, write: Bool, req: Request) async throws {
-        let reason = "Managing roles requires admin on the role's owner or a container above it"
-        if write {
-            try await IAMPolicyGate.requirePolicyWrite(on: node, deniedReason: reason, req: req)
-        } else {
-            try await IAMPolicyGate.requirePolicyRead(on: node, deniedReason: reason, req: req)
+        guard try await req.can(write ? "iam:setPolicy" : "iam:readPolicy", on: node) else {
+            throw Abort(.forbidden, reason: "Managing roles requires admin on the role's owner or a container above it")
         }
     }
 

@@ -684,7 +684,7 @@ final class RoleEndpointTests {
                 },
                 afterResponse: { res in
                     #expect(res.status == .ok)
-                    let catalog = try res.content.decode(IAMActionCatalog.Response.self)
+                    let catalog = try res.content.decode(RoleController.ActionCatalogResponse.self)
                     let all = catalog.services.flatMap(\.actions)
                     #expect(Set(all.map(\.action)) == IAMRoleRegistry.allActions)
                     #expect(catalog.services.map(\.service) == catalog.services.map(\.service).sorted())

@@ -342,11 +342,9 @@ struct PolicyController: RouteCollection {
     /// Reading and writing a policy is `iam:readPolicy` / `iam:setPolicy` on
     /// its owner — the same gate roles and guardrails use.
     private func requirePolicyAdmin(on node: IAMNode, write: Bool, req: Request) async throws {
-        let reason = "Managing policies requires admin on the policy's owner or a container above it"
-        if write {
-            try await IAMPolicyGate.requirePolicyWrite(on: node, deniedReason: reason, req: req)
-        } else {
-            try await IAMPolicyGate.requirePolicyRead(on: node, deniedReason: reason, req: req)
+        guard try await req.can(write ? "iam:setPolicy" : "iam:readPolicy", on: node) else {
+            throw Abort(
+                .forbidden, reason: "Managing policies requires admin on the policy's owner or a container above it")
         }
     }
 }

@@ -684,14 +684,14 @@ final class IAMGuardrailTests {
             guardrail.cedarText = nil
             try await guardrail.save(on: app.db)
 
-            let filled = try await GuardrailCedarTextBackfill.backfill(
+            let filled = try await GuardrailStore.backfillCedarText(
                 on: app.db, logger: app.logger)
             #expect(filled == 1)
             let reloaded = try await Guardrail.find(guardrail.id!, on: app.db)
             #expect(reloaded?.cedarText?.contains("forbid") == true)
 
             // Idempotent: a second run finds nothing to fill.
-            let again = try await GuardrailCedarTextBackfill.backfill(on: app.db, logger: app.logger)
+            let again = try await GuardrailStore.backfillCedarText(on: app.db, logger: app.logger)
             #expect(again == 0)
         }
     }
