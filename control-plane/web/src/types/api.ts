@@ -423,43 +423,6 @@ export interface IAMActionCatalogResponse {
   services: IAMActionCatalogService[];
 }
 
-// Folders (named "organizational unit" on the wire; fields keep their `ou`
-// spellings until the Cedar cutover renames the API).
-export interface Folder {
-  id: string;
-  name: string;
-  description: string;
-  organizationId: string;
-  parentOuId?: string | null;
-  path: string;
-  depth: number;
-  createdAt?: string;
-  childOuCount?: number;
-  projectCount?: number;
-}
-
-/** Recursive tree node returned by the folder `tree` endpoint. */
-export interface FolderTreeNode {
-  id: string;
-  name: string;
-  description: string;
-  path: string;
-  depth: number;
-  projectCount: number;
-  children: FolderTreeNode[];
-}
-
-export interface CreateFolderRequest {
-  name: string;
-  description: string;
-  parentOuId?: string;
-}
-
-export interface UpdateFolderRequest {
-  name?: string;
-  description?: string;
-}
-
 export type AgentStatus = "online" | "offline" | "connecting" | "error";
 
 export interface AgentResources {
