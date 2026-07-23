@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { agentsApi } from "@/lib/api/agents";
+import { useSites } from "@/lib/hooks/use-sites";
 import { useOrganization } from "@/providers";
 import { toast } from "sonner";
 import type { AgentEnrollment } from "@/types/api";
@@ -32,11 +40,23 @@ export function CreateEnrollmentDialog({
   // The agent becomes dedicated capacity for the org selected in the sidebar
   // switcher.
   const { currentOrg } = useOrganization();
+  // Every enrollment must join a site (availability zone) in the current org.
+  const { data: sites, isLoading: sitesLoading } = useSites();
   const [isLoading, setIsLoading] = useState(false);
   const [agentName, setAgentName] = useState("");
+  const [siteId, setSiteId] = useState("");
   const [expirationHours, setExpirationHours] = useState("24");
   const [enrollment, setEnrollment] = useState<AgentEnrollment | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Every org has at least a default site, so the common case is a single
+  // option — preselect it so the operator only has to name the agent. With
+  // multiple sites, leave the choice to them.
+  useEffect(() => {
+    if (!siteId && sites?.length === 1) {
+      setSiteId(sites[0].id);
+    }
+  }, [sites, siteId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,12 +71,18 @@ export function CreateEnrollmentDialog({
       return;
     }
 
+    if (!siteId) {
+      toast.error("Select a site for the agent to join");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const created = await agentsApi.createEnrollment({
         agentName,
         expirationHours: parseInt(expirationHours) || 24,
         organizationId: currentOrg.id,
+        siteId,
       });
       setEnrollment(created);
       onCreated?.();
@@ -82,6 +108,7 @@ export function CreateEnrollmentDialog({
     // Reset state after close animation
     setTimeout(() => {
       setAgentName("");
+      setSiteId("");
       setExpirationHours("24");
       setEnrollment(null);
       setCopied(false);
@@ -188,6 +215,46 @@ export function CreateEnrollmentDialog({
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="site" className="text-foreground">
+                  Site
+                </Label>
+                {!sitesLoading && sites && sites.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No sites exist in {currentOrg?.name ?? "this organization"}.
+                    Create a site before enrolling an agent — every agent must
+                    join an availability zone.
+                  </p>
+                ) : (
+                  <Select
+                    value={siteId}
+                    onValueChange={setSiteId}
+                    disabled={isLoading || sitesLoading}
+                  >
+                    <SelectTrigger
+                      id="site"
+                      className="bg-background border-border text-foreground"
+                    >
+                      <SelectValue
+                        placeholder={
+                          sitesLoading ? "Loading sites…" : "Select a site"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border">
+                      {sites?.map((site) => (
+                        <SelectItem
+                          key={site.id}
+                          value={site.id}
+                          className="text-foreground focus:bg-accent focus:text-accent-foreground"
+                        >
+                          {site.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="expiration" className="text-foreground">
                   Enrollment Expiration (hours)
                 </Label>
@@ -216,7 +283,7 @@ export function CreateEnrollmentDialog({
               <Button
                 type="submit"
                 className="bg-primary hover:bg-primary/90"
-                disabled={isLoading}
+                disabled={isLoading || !siteId}
               >
                 {isLoading ? (
                   <>

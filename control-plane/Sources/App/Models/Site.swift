@@ -88,6 +88,35 @@ final class Site: Model, Content, @unchecked Sendable {
     }
 }
 
+// MARK: - Default site
+
+extension Site {
+    /// Name of the availability zone auto-created for each organization so a
+    /// brand-new org can enroll agents immediately — enrollment requires a
+    /// site. Site names are globally unique and organization names are too, so
+    /// composing them yields a unique, human-readable default.
+    static func defaultName(forOrganizationNamed orgName: String) -> String {
+        "\(orgName) Default Site"
+    }
+
+    /// Creates the organization's default site. Called when an org is created
+    /// (API and bootstrap); pre-existing orgs are covered by the
+    /// `BackfillDefaultSites` migration. Org-scoped and controller-less: the
+    /// operator designates a network controller once nodes are enrolled.
+    @discardableResult
+    static func createDefault(
+        forOrganization organizationID: UUID, named orgName: String, on db: Database
+    ) async throws -> Site {
+        let site = Site(
+            name: defaultName(forOrganizationNamed: orgName),
+            description: "Default availability zone for \(orgName)",
+            organizationScope: .organization(organizationID)
+        )
+        try await site.save(on: db)
+        return site
+    }
+}
+
 // MARK: - DTOs
 
 struct SiteResponse: Content {

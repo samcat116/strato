@@ -17,7 +17,7 @@ Enrollment is one API call — or **Agents → Enroll node** in the web UI:
 ```bash
 curl -X POST https://strato.example.com/api/agent-enrollments \
   -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' \
-  -d '{"agentName": "hv-01", "organizationId": "<uuid>"}'
+  -d '{"agentName": "hv-01", "organizationId": "<uuid>", "siteId": "<uuid>"}'
 ```
 
 The control plane provisions the node in SPIRE — a one-time **join token**
@@ -30,8 +30,11 @@ entitling the node's `strato-agent` to its SPIFFE ID — and returns a
 - Every enrollment names the organization (or folder) whose
   dedicated capacity the agent becomes, via
   `organizationId`/`organizationalUnitId`; an enrollment with no
-  organization is rejected. `siteId` pins the node to a
-  [site](../architecture/networking.md).
+  organization is rejected. `siteId` is also required — it places the node
+  in a [site](../architecture/networking.md) (availability zone) so its
+  networking has a single owning OVN deployment. Every organization is
+  created with a default site (`<org> Default Site`), so one always exists to
+  choose; create additional sites to split capacity across availability zones.
 - The join token is a one-time secret shown **once**, at creation time. It
   is redeemed the first time `spire-agent` attests and is inert afterwards.
 - Enrollment fails if the control plane has no SPIRE server configured.

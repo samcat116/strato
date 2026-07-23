@@ -223,6 +223,15 @@ final class IAMRoleBindingTests {
             #expect(projectBindings.count == 1)
             #expect(projectBindings.first?.principalID == creator.id)
             #expect(projectBindings.first?.role == IAMRole.admin.seededID.uuidString)
+
+            // The org also gets a default site so it can enroll agents right
+            // away (enrollment requires one).
+            let sites = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == createdOrgID)
+                .all()
+            #expect(sites.count == 1)
+            #expect(sites.first?.name == Site.defaultName(forOrganizationNamed: "IAM Org"))
+            #expect(sites.first?.$organizationalUnit.id == nil)
         }
     }
 

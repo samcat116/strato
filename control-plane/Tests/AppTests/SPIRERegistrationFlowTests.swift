@@ -50,6 +50,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         let agentName: String
         var expirationHours: Int? = nil
         var organizationId: UUID? = nil
+        var siteId: UUID? = nil
     }
 
     /// Enrollments must carry an owning organization; mint one per test app.
@@ -57,6 +58,15 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         let org = Organization(name: "SPIRE Org", description: "org for SPIRE tests")
         try await org.save(on: db)
         return try org.requireID()
+    }
+
+    /// A site for the org to enroll agents into. Enrollment now requires one,
+    /// so tests that drive `createEnrollment` to success need a real site whose
+    /// scope contains the enrollment's org.
+    private func makeSite(on db: Database, org: UUID, name: String = "spire-dc") async throws -> UUID {
+        let site = Site(name: name, organizationScope: .organization(org))
+        try await site.save(on: db)
+        return try site.requireID()
     }
 
     /// An enrollment row as `createEnrollment` would have left it, without
@@ -76,12 +86,14 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
+            let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(
-                    CreateEnrollmentBody(agentName: "node-a", expirationHours: 2, organizationId: orgId))
+                    CreateEnrollmentBody(
+                        agentName: "node-a", expirationHours: 2, organizationId: orgId, siteId: siteId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentEnrollmentResponse.self)
@@ -134,6 +146,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let row = try #require(
                 try await AgentEnrollment.query(on: app.db).filter(\.$agentName == "node-a").first())
             #expect(row.organizationID == orgId)
+            #expect(row.siteID == siteId)
             #expect(row.isUsed == false)
         }
     }
@@ -143,13 +156,15 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
+            let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = FakeSPIREServerAPI()
             await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
             installFakeSPIRE(on: app, fake: fake)
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", organizationId: orgId, siteId: siteId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentEnrollmentResponse.self)
@@ -163,13 +178,15 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
+            let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = FakeSPIREServerAPI()
             await fake.setFailJoinToken(true)
             installFakeSPIRE(on: app, fake: fake)
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", organizationId: orgId, siteId: siteId))
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
             }
@@ -205,10 +222,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let orgId = try await makeOrg(on: app.db)
 
             // No `spireRegistrationService`: mTLS is the only agent auth path,
-            // so without SPIRE there is no way to enroll a node at all.
+            // so without SPIRE there is no way to enroll a node at all. A
+            // siteId is supplied so the request clears validation and reaches
+            // the SPIRE-missing check; the site is never resolved on this path.
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", organizationId: orgId, siteId: UUID()))
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
                 let body = res.body.string
@@ -226,11 +246,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
+            let siteId = try await makeSite(on: app.db, org: orgId)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", organizationId: orgId, siteId: siteId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
@@ -240,13 +262,37 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // the same identity.
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", organizationId: orgId, siteId: siteId))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
 
             let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
             #expect(enrollmentCount == 1)
+        }
+    }
+
+    @Test("Enrolling an agent without a site is rejected with 400 and persists nothing")
+    func createEnrollmentRequiresSite() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            try await app.test(.POST, "/api/agent-enrollments") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("site"))
+            }
+
+            // Rejected before any SPIRE provisioning, so nothing is persisted.
+            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            #expect(enrollmentCount == 0)
+            let joinTokenRequests = await fake.joinTokenRequests
+            #expect(joinTokenRequests.isEmpty)
         }
     }
 

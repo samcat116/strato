@@ -212,9 +212,12 @@ struct AgentEnrollmentListItem: Content {
 struct CreateAgentEnrollmentRequest: Content {
     let agentName: String
     let expirationHours: Int?
-    /// Site the agent joins on registration; omitted keeps the agent site-less
-    /// (legacy single-node OVN model). The site must belong to the same
-    /// organization as the enrollment's scope.
+    /// Site the agent joins on registration. Required: every newly enrolled
+    /// agent must be placed in an availability zone so its networking has a
+    /// single owning OVN deployment — there is no longer a site-less enrollment
+    /// path. The site must belong to the same organization as the enrollment's
+    /// scope. (The column itself stays nullable for pre-existing rows and the
+    /// registration-time inheritance path.)
     let siteId: UUID?
     /// Owning scope the agent inherits at registration; exactly one of the two
     /// is required.
@@ -261,5 +264,12 @@ struct CreateAgentEnrollmentRequest: Content {
         }
 
         _ = try organizationScope()
+
+        // Every enrollment now joins a site: an agent's networking must have a
+        // single owning OVN deployment, so operators pick the availability zone
+        // up front rather than leaving the node site-less.
+        guard siteId != nil else {
+            throw Abort(.badRequest, reason: "A site is required to enroll an agent")
+        }
     }
 }

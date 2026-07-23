@@ -710,4 +710,40 @@ final class SiteTests {
             #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
         }
     }
+
+    @Test("BackfillDefaultSites gives site-less orgs a default and leaves others alone")
+    func backfillDefaultSites() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // One org with no site of its own, one that already manages a site.
+            let bareOrg = try await builder.createOrganization(name: "Backfill Bare Org")
+            let stockedOrg = try await builder.createOrganization(name: "Backfill Stocked Org")
+            let existingSite = Site(
+                name: "hand-made-dc", organizationScope: .organization(stockedOrg.id!))
+            try await existingSite.save(on: app.db)
+
+            try await BackfillDefaultSites().prepare(on: app.db)
+
+            // The bare org gained exactly one default site.
+            let bareSites = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == bareOrg.id!)
+                .all()
+            #expect(bareSites.count == 1)
+            #expect(bareSites.first?.name == Site.defaultName(forOrganizationNamed: "Backfill Bare Org"))
+
+            // The stocked org was untouched: still just its hand-made site.
+            let stockedSites = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == stockedOrg.id!)
+                .all()
+            #expect(stockedSites.count == 1)
+            #expect(stockedSites.first?.id == existingSite.id)
+
+            // Idempotent: a second run adds nothing (the default now exists).
+            try await BackfillDefaultSites().prepare(on: app.db)
+            let bareSitesAgain = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == bareOrg.id!)
+                .count()
+            #expect(bareSitesAgain == 1)
+        }
+    }
 }
