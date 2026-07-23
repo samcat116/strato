@@ -24,11 +24,10 @@ struct MetricsMiddleware: AsyncMiddleware {
         let start = clock.now
 
         func record(statusCode: UInt) {
-            let route = request.route.map { "/" + $0.path.map { "\($0)" }.joined(separator: "/") } ?? "unmatched"
             let statusClass = "\(statusCode / 100)xx"
             Telemetry.recordHTTPRequest(
                 method: request.method.rawValue,
-                route: route,
+                route: Self.routeLabel(forPath: request.route?.path),
                 statusClass: statusClass,
                 durationSeconds: (clock.now - start).asSeconds
             )
@@ -43,5 +42,14 @@ struct MetricsMiddleware: AsyncMiddleware {
             record(statusCode: status.code)
             throw error
         }
+    }
+
+    /// The low-cardinality `route` label: the matched route's *pattern*
+    /// (`/api/vms/:vmID`), or `unmatched` when routing found no route (a genuine
+    /// 404). Factored out so the derivation — including the parameterized-pattern
+    /// vs. fallback branch — is unit-testable without standing up a `Request`.
+    static func routeLabel(forPath path: [PathComponent]?) -> String {
+        guard let path else { return "unmatched" }
+        return "/" + path.map { "\($0)" }.joined(separator: "/")
     }
 }

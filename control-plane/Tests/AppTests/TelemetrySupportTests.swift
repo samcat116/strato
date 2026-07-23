@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Vapor
 
 @testable import App
 
@@ -33,5 +34,40 @@ struct TelemetrySupportTests {
         #expect(IPAMService.IPAMError.poolExhausted(network: "n", subnet: "s").metricReason == "pool_exhausted")
         #expect(IPAMService.IPAMError.invalidSubnet("s").metricReason == "invalid_subnet")
         #expect(IPAMService.IPAMError.invalidGateway("g").metricReason == "invalid_gateway")
+    }
+
+    // MARK: - MetricsMiddleware.routeLabel
+
+    @Test("a parameterized route collapses to its pattern, not the concrete path")
+    func routeLabelPattern() {
+        let path: [PathComponent] = ["api", "vms", ":vmID"]
+        #expect(MetricsMiddleware.routeLabel(forPath: path) == "/api/vms/:vmID")
+    }
+
+    @Test("a constant route keeps its literal segments")
+    func routeLabelConstant() {
+        let path: [PathComponent] = ["health", "ready"]
+        #expect(MetricsMiddleware.routeLabel(forPath: path) == "/health/ready")
+    }
+
+    @Test("an unmatched request falls back rather than leaking a path")
+    func routeLabelUnmatched() {
+        #expect(MetricsMiddleware.routeLabel(forPath: nil) == "unmatched")
+    }
+
+    // MARK: - SchedulerService.placementOutcome
+
+    @Test("scheduler errors classify as no_candidate")
+    func placementOutcomeNoCandidate() {
+        #expect(SchedulerService.placementOutcome(for: SchedulerError.noAvailableAgents) == "no_candidate")
+        #expect(
+            SchedulerService.placementOutcome(for: SchedulerError.architectureMismatch(required: .arm64))
+                == "no_candidate")
+    }
+
+    @Test("any other error classifies as error")
+    func placementOutcomeError() {
+        struct Unexpected: Error {}
+        #expect(SchedulerService.placementOutcome(for: Unexpected()) == "error")
     }
 }

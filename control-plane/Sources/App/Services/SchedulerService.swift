@@ -461,10 +461,7 @@ final class SchedulerService: @unchecked Sendable {
                     durationSeconds: (clock.now - start).asSeconds)
                 return selectedAgent.id
             } catch {
-                // Every `SchedulerError` is a "no eligible agent" outcome (a
-                // constraint or capacity shortfall), distinct from an
-                // unexpected fault.
-                let outcome = error is SchedulerError ? "no_candidate" : "error"
+                let outcome = Self.placementOutcome(for: error)
                 span.attributes["scheduler.outcome"] = outcome
                 span.recordError(error)
                 Telemetry.recordPlacement(
@@ -473,6 +470,14 @@ final class SchedulerService: @unchecked Sendable {
                 throw error
             }
         }
+    }
+
+    /// Classifies a placement failure for the `outcome` metric label and span
+    /// attribute. Every `SchedulerError` is a "no eligible agent" outcome (a
+    /// constraint or capacity shortfall); anything else is an unexpected fault.
+    /// Factored out so the classification is unit-testable.
+    static func placementOutcome(for error: any Error) -> String {
+        error is SchedulerError ? "no_candidate" : "error"
     }
 
     // MARK: - Private Scheduling Algorithms
