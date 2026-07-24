@@ -334,3 +334,46 @@ struct SchedulerReservationTests {
         #expect(second == "agent-a")
     }
 }
+
+/// The deadline that bounds `CoordinationService.probe()` (issue #731). Without
+/// it the readiness probe inherits valkey-swift's 30s `commandTimeout` and a
+/// probe issued during a connection drop stalls `/health/ready` for ~24s.
+@Suite("Coordination probe timeout")
+struct CoordinationProbeTimeoutTests {
+    private struct ProbeTestError: Error {}
+
+    @Test("A fast operation returns without waiting on the deadline")
+    func completesInsideDeadline() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        // A generous deadline that must not be waited on: the operation returns
+        // immediately, so the helper must too (it cancels the timer, not block
+        // on it).
+        try await withCoordinationProbeTimeout(.seconds(5)) {}
+        #expect(clock.now - start < .seconds(1))
+    }
+
+    @Test("An operation that outlives the deadline fails fast with a timeout")
+    func timesOut() async {
+        let clock = ContinuousClock()
+        let start = clock.now
+        await #expect(throws: CoordinationProbeTimeoutError.self) {
+            try await withCoordinationProbeTimeout(.milliseconds(50)) {
+                // Far longer than the deadline; the timeout must win the race.
+                try await Task.sleep(for: .seconds(30))
+            }
+        }
+        // Bounded by the deadline, not the operation: this is the whole point —
+        // the verdict arrives in ~50ms, not 30s.
+        #expect(clock.now - start < .seconds(1))
+    }
+
+    @Test("The operation's own error is surfaced, not swallowed by the timeout")
+    func propagatesOperationError() async {
+        await #expect(throws: ProbeTestError.self) {
+            try await withCoordinationProbeTimeout(.seconds(30)) {
+                throw ProbeTestError()
+            }
+        }
+    }
+}

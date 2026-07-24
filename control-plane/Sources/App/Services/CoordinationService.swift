@@ -662,14 +662,31 @@ actor CoordinationService {
         }
     }
 
+    /// Deadline for `probe()`. A same-cluster `EXISTS` round-trips in well under
+    /// a millisecond, so a probe still outstanding after this has hit a dropped
+    /// or stalling connection, not a slow-but-healthy one. Kept far below the
+    /// readiness probe's `timeoutSeconds: 5` so the whole `/health/ready` handler
+    /// returns inside the kubelet window even when coordination is unreachable.
+    static let probeDeadline: Duration = .seconds(2)
+
     /// Round-trip the store so `/health/ready` can report coordination
     /// reachability. Deliberately the one method here that **rethrows**: every
     /// other caller wants the fail-open degradation described above, but the
     /// health endpoint's whole job is to surface the failure rather than paper
     /// over it. Readiness grades the result as degraded, not fatal, so the
     /// fail-open policy still holds where it matters.
+    ///
+    /// Bounded by ``probeDeadline``: the underlying client's `commandTimeout`
+    /// defaults to 30s (valkey-swift), so a probe issued while the connection is
+    /// being torn down would otherwise block for 30s and stall `/health/ready`
+    /// long past `timeoutSeconds: 5` — the exact 30s-tail latency behind #731.
+    /// Reaching a fail-open verdict must be fast, so cap it here. The timeout
+    /// surfaces as the thrown error readiness grades as `degraded` (still 200).
     func probe() async throws {
-        _ = try await store.keyExists("health:probe")
+        let store = self.store
+        try await withCoordinationProbeTimeout(Self.probeDeadline) {
+            _ = try await store.keyExists("health:probe")
+        }
     }
 
     // MARK: Image download grants (issue #562)
@@ -1004,5 +1021,40 @@ struct CoordinationLifecycleHandler: LifecycleHandler {
             application.logger.critical("\(configError.description)")
             throw configError
         }
+    }
+}
+
+/// Thrown by `CoordinationService.probe()` when the coordination round-trip does
+/// not complete within its deadline. Readiness grades this as `degraded` (still
+/// 200) under the fail-open policy — the point is only that the verdict arrives
+/// fast rather than after the client's 30s `commandTimeout`.
+struct CoordinationProbeTimeoutError: Error, CustomStringConvertible {
+    let deadline: Duration
+    var description: String { "coordination probe exceeded its \(deadline) deadline" }
+}
+
+/// Run `operation`, throwing `CoordinationProbeTimeoutError` if it has not
+/// finished within `deadline`. Whichever child finishes first decides the
+/// result; the loser is cancelled. valkey-swift honors task cancellation, so a
+/// timed-out command stops awaiting the connection instead of running to the
+/// client's `commandTimeout`.
+///
+/// Internal rather than private so the timeout behavior is unit-testable without
+/// standing up a Valkey; `CoordinationService.probe()` is its only production
+/// caller.
+func withCoordinationProbeTimeout(
+    _ deadline: Duration,
+    _ operation: @escaping @Sendable () async throws -> Void
+) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(for: deadline)
+            throw CoordinationProbeTimeoutError(deadline: deadline)
+        }
+        // Propagate the first outcome (the operation's success/failure or the
+        // timeout), then cancel the loser on the way out.
+        defer { group.cancelAll() }
+        _ = try await group.next()
     }
 }
