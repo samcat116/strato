@@ -1,0 +1,123 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 108-117,126-132
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 32-33,35-42,49
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 35-36,38-45,92,798,800-801,808,811
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 101-110,117-118
+cli/Sources/StratoCLI/Commands/VolumeCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 21-23
+control-plane/Tests/AppTests/VMListScalingTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 71
+control-plane/web/src/lib/api/volumes.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 13,15,19-24,67-71
+cli/Sources/StratoCLI/Commands/NetworkCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 21-23
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 158-167,171
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 242-244,252,254
+control-plane/Tests/AppTests/ListPaginationTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 1-130
+control-plane/web/src/lib/api/quotas.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 8,10,17-22
+control-plane/web/src/lib/api/sites.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 4-10,14-19
+cli/Sources/StratoCLI/Commands/ImageCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 25-27
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 61,92
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 24-25,27-34,69-73
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 338
+control-plane/web/src/lib/api/agents.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 10,12,16-21,48-53
+control-plane/web/src/lib/api/users.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 8,12,27-29
+docs/architecture/control-plane.md
+  s_410b83026746bf::t_0cff81bcc9b6dd 189-200
+control-plane/web/src/lib/api/security-groups.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 11,13,17-22
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 101,103-110,112,285-286,288-295,302
+control-plane/Tests/AppTests/SiteTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 498,520,530,556
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 315,325
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 476,483
+cli/Sources/StratoCLI/Commands/ProjectCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 196-198
+cli/Sources/StratoCLICore/API/Models.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 9-21
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 94
+control-plane/Tests/AppTests/AdminExceptionPathTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 91,120
+control-plane/Sources/App/openapi.yaml
+  s_410b83026746bf::t_0cff81bcc9b6dd 240-242,246-247,250,254,475-476,479,483,641-643,646,650,782-784,787,791,1019-1020,1023,1027,1226-1228,1231,1235,1262-1263,1266,1270,1351-1353,1356,1360,1440-1441,1444,1448,1552-1553,1556,1560,1732-1734,1737,1741,3768-3769,3772,3776,4016-4017,4020,4024,4039-4040,4043,4047,4335-4336,4339,4343,7487-7505,12948-13175
+control-plane/Tests/AppTests/ProjectVisibilityTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 59,274
+control-plane/web/src/types/openapi.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 116,7386-7490,8228-8231,8393-8396,8404,8410,8712-8715,8723,8729,8953-8958,8968,8974,9138-9143,9153,9159,9446-9449,9457,9463,9733-9738,9748,9754,9789-9792,9800,9806,9922-9927,9934,9940,10057-10060,10068,10074,10221-10224,10232,10238,10455-10460,10467,10473,13038-13041,13049,13055,13350-13353,13361,13367,13379-13382,13390,13396,13702-13705,13713,13719
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 24-26
+cli/Sources/StratoCLI/Commands/AgentCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 21-23
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 346
+control-plane/web/src/lib/api/sandboxes.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 13,16,24-29,71-75
+control-plane/web/src/lib/api/vms.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 9,13,20-25
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 331-340,346-348,471-480,484-486
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 41-50,116
+control-plane/Tests/AppTests/ListCountBatchingTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 142,192
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 197,657
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 40-42,68,71
+control-plane/web/src/types/api.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 3-18
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 44,62
+control-plane/Sources/App/Extensions/ListPaging.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 1-54
+cli/Sources/StratoCLI/Commands/SandboxCommand.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 21-23
+control-plane/Sources/App/Controllers/UserController.swift
+  s_410b83026746bf::t_adafc28802d0b6 64-65
+  s_410b83026746bf::t_0cff81bcc9b6dd 42-49,57
+control-plane/Tests/AppTests/AgentControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 66
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_410b83026746bf::t_0cff81bcc9b6dd 539,561
+control-plane/Tests/AppTests/ListAuthorizationScalingTests.swift
+  s_410b83026746bf::t_bf4c45fc147b36 126,183,222,255
+  s_410b83026746bf::t_08497c738273d9 364-492
+control-plane/web/src/lib/api/images.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 10,12,16-20
+control-plane/web/src/lib/api/networks.ts
+  s_410b83026746bf::t_0cff81bcc9b6dd 8,10,14-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "64e006cc920c3ac390effcdd9005b9fc01fd5aa2",
+  "prompts": {},
+  "sessions": {
+    "s_410b83026746bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5486d294-0d5f-42d4-a0f5-7de3e33822f2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
