@@ -121,6 +121,14 @@ final class IAMBatchDecisionTests {
         try await RoleBindingService.grant(
             principalType: .user, principalID: member.id!, role: .editor,
             nodeType: .virtualMachine, nodeID: vms[0].id!, createdBy: nil, on: app.db)
+        // A conditioned binding, which the loader skips and *counts* — the count
+        // rides along on the decision into the log, so the batch has to carry it
+        // per target rather than smear one batch-wide number across the page.
+        try await RoleBinding(
+            principalType: .user, principalID: member.id!, role: .admin,
+            nodeType: .project, nodeID: folderProject.id!,
+            condition: #"{"mfa": true}"#
+        ).save(on: app.db)
 
         let version = try await PolicySetVersionService.current(on: app.db)
         await app.cedarPolicySet.rebuild(version: version, on: app.db)
@@ -158,6 +166,11 @@ final class IAMBatchDecisionTests {
             }
 
             let batched = try await EntitySliceLoader.load(targets, action: "vm:read", on: app.db)
+            // The fixture's conditioned binding has to actually reach somebody,
+            // or the skipped-count comparisons below are vacuous.
+            let skipsSomething = batched.values.contains { $0.skippedConditionedBindings > 0 }
+            #expect(skipsSomething, "fixture no longer exercises conditioned bindings")
+
             for target in targets {
                 let single = try await EntitySliceLoader.load(
                     principal: target.principal, node: target.node, action: "vm:read", on: app.db)
@@ -195,6 +208,16 @@ final class IAMBatchDecisionTests {
                     )
                     let sameCeilings = fromBatch?.denyingCeilingIDs == single.denyingCeilingIDs
                     #expect(sameCeilings, "ceiling marks diverged for \(action) on \(target.node.type.rawValue)")
+                    // Everything else the decision carries into the log row.
+                    let sameSkipped =
+                        fromBatch?.slice.skippedConditionedBindings == single.slice.skippedConditionedBindings
+                    #expect(
+                        sameSkipped,
+                        "skipped-conditioned-binding count diverged for \(action) on \(target.node.type.rawValue)")
+                    let sameOrg =
+                        fromBatch?.slice.chain.first(where: { $0.type == .organization })?.id
+                        == single.slice.chain.first(where: { $0.type == .organization })?.id
+                    #expect(sameOrg, "recorded organization diverged for \(action) on \(target.node.type.rawValue)")
                 }
             }
         }
@@ -289,6 +312,43 @@ final class IAMBatchDecisionTests {
 
             let actions = Set(try await IAMDecisionLog.query(on: app.db).all().compactMap(\.iamAction))
             #expect(actions == ["vm:read"])
+        }
+    }
+
+    @Test("Two legacy permissions on one resource each log their own phrasing")
+    func batchedLegacyChecksKeepTheirOwnPhrasing() async throws {
+        try await withApp { app in
+            let fixture = try await buildFixture(app, prefix: "phrase")
+            let token = try await fixture.admin.generateAPIKey(on: app.db)
+            let vmID = fixture.vms[0].id!.uuidString
+
+            // `read` and `start` on the *same* VM — what a UI rendering
+            // per-resource action buttons sends. They translate to different
+            // actions on one node, so a node-keyed phrasing map would log one of
+            // them under the other's verb.
+            try await app.test(.POST, "/api/authorization/check") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AuthorizationController.CheckRequest(checks: [
+                        .init(
+                            key: "read", resourceType: "virtual_machine",
+                            resourceId: vmID, permission: "read"),
+                        .init(
+                            key: "start", resourceType: "virtual_machine",
+                            resourceId: vmID, permission: "start"),
+                    ]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            try await Task.sleep(for: .milliseconds(500))
+            let rows = try await IAMDecisionLog.query(on: app.db)
+                .filter(\.$resourceID == vmID)
+                .all()
+            // The IAM action each row was decided under, paired with the legacy
+            // verb the caller actually typed. They must line up.
+            let phrasing = Set(rows.compactMap { row in row.iamAction.map { "\($0)=\(row.spicedbPermission)" } })
+            #expect(phrasing == ["vm:read=read", "vm:start=start"])
         }
     }
 }

@@ -102,7 +102,13 @@ struct AuthorizationController: RouteCollection {
         // endpoint exists to avoid.
         var asked: [(key: String, action: String, node: IAMNode)] = []
         var nodesByAction: [String: [IAMNode]] = [:]
-        var legacyEquivalents: [IAMNode: LegacyCheckEquivalent] = [:]
+        // Keyed by action *and* node, because one batch may ask two legacy
+        // permissions about the same resource — `read` and `start` on one VM is
+        // exactly what a UI rendering per-resource action buttons sends. They
+        // translate to different actions, so a node-keyed map would let the
+        // second phrasing overwrite the first and log one of the two decisions
+        // under the wrong verb.
+        var legacyEquivalents: [String: [IAMNode: LegacyCheckEquivalent]] = [:]
         var results: [String: Bool] = [:]
 
         for item in payload.checks {
@@ -141,7 +147,7 @@ struct AuthorizationController: RouteCollection {
             nodesByAction[translation.action, default: []].append(translation.node)
             // The decision log records what was literally asked at the check
             // site, not a back-translation.
-            legacyEquivalents[translation.node] = LegacyCheckEquivalent(
+            legacyEquivalents[translation.action, default: [:]][translation.node] = LegacyCheckEquivalent(
                 permission: item.permission, resourceType: item.resourceType, resourceID: item.resourceId)
         }
 
@@ -151,7 +157,7 @@ struct AuthorizationController: RouteCollection {
                 principal: .user(userID),
                 action: action,
                 nodes: nodes,
-                legacyEquivalents: legacyEquivalents,
+                legacyEquivalents: legacyEquivalents[action] ?? [:],
                 context: context,
                 state: req.iamAuthState,
                 cache: req.iamCache,
