@@ -1,0 +1,29 @@
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_e82123255806ea::t_63b3896d54257a 1041-1045
+  s_e82123255806ea::t_628d0ebeb04f55 1058
+  s_e82123255806ea::t_01cde3fc66dc2d 1026-1040,1046-1057,1059-1060
+  s_e82123255806ea::t_2353b6d25190a9 665-671,678-684,686-689
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_e82123255806ea::t_781957b05d7507 111-116,123
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_e82123255806ea::t_580feb8bb392a1 46-54,56
+  s_e82123255806ea::t_ebfc699e109508 55
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_e82123255806ea::t_fcf9fc9eb3c02c 337-379
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "7a8e89bfd4a65e8563920def6c00aefd4e114c6d",
+  "prompts": {},
+  "sessions": {
+    "s_e82123255806ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c763a9-5d59-4174-97a0-bd7a8126699b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
