@@ -139,7 +139,7 @@ final class ListCountBatchingTests {
                 try await measure(on: app, as: user, path: "/api/networks") { req in
                     // The seeded default network rides along in the page; the
                     // assertions are about the ones this test made.
-                    let networks = try await NetworkController().listNetworks(req: req)
+                    let networks = try await NetworkController().visibleNetworks(req: req)
                         .filter { $0.name.hasPrefix("net-") }
                     #expect(networks.count == expected)
                     #expect(networks.first(where: { $0.name == "net-000" })?.attachedInterfaceCount == 2)
@@ -189,7 +189,7 @@ final class ListCountBatchingTests {
 
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/floating-ip-pools") { req in
-                    let pools = try await FloatingIPController().listPools(req: req)
+                    let pools = try await FloatingIPController().visiblePools(req: req)
                     #expect(pools.count == expected)
                     #expect(pools.first(where: { $0.name == "pool-000" })?.allocatedCount == 2)
                     #expect(pools.filter { $0.allocatedCount == 0 }.count == expected - 1)
