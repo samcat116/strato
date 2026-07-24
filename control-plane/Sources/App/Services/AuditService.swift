@@ -334,6 +334,10 @@ actor AuditEventQueue {
     private var pending: [AuditRecord] = []
     private var draining = false
     private var shedTotal = 0
+    /// Batches handed out by `nextBatch` and not yet reported delivered. An
+    /// empty `pending` is not the same as "everything is written": the batch
+    /// in the air belongs to whoever claimed it.
+    private var inFlight = 0
 
     init(maxQueueDepth: Int, maxBatchSize: Int) {
         self.maxQueueDepth = max(1, maxQueueDepth)
@@ -351,7 +355,8 @@ actor AuditEventQueue {
         return .enqueued(startDrain: true)
     }
 
-    /// Take the next batch, or nil when the buffer is empty.
+    /// Take the next batch, or nil when the buffer is empty. The caller owns
+    /// the batch until it reports back through `finishBatch`.
     ///
     /// The drain task passes `endDrainWhenEmpty: true`, so running dry also
     /// clears the flag that says a drain is live. Both halves happen in one
@@ -366,7 +371,18 @@ actor AuditEventQueue {
         }
         let batch = Array(pending.prefix(maxBatchSize))
         pending.removeFirst(batch.count)
+        inFlight += 1
         return batch
+    }
+
+    /// Report a claimed batch delivered (or given up on).
+    func finishBatch() {
+        inFlight = max(0, inFlight - 1)
+    }
+
+    /// Nothing queued and nothing in the air — the condition `flush` waits for.
+    var isIdle: Bool {
+        pending.isEmpty && inFlight == 0
     }
 
     /// Retire the drain without emptying the buffer — for a drain task that
@@ -490,6 +506,7 @@ final class AuditService: @unchecked Sendable {
     private func drainQueue() async {
         while !Task.isCancelled, let batch = await queue.nextBatch() {
             await deliver(batch)
+            await queue.finishBatch()
         }
         // Cancelled (shutdown's grace period expired) rather than run dry:
         // retire the drain explicitly, so anything enqueued afterwards starts
@@ -512,12 +529,33 @@ final class AuditService: @unchecked Sendable {
         }
     }
 
-    /// Write everything currently queued and wait for it. The determinism hook
-    /// for tests that run with background delivery on, and the shutdown drain
-    /// that guarantees a graceful stop loses no events.
-    func flush() async {
-        while let batch = await queue.nextBatch(endDrainWhenEmpty: false) {
-            await deliver(batch)
+    /// Write everything queued and return once the queue is idle. The
+    /// determinism hook for tests that run with background delivery on, and the
+    /// shutdown drain that guarantees a graceful stop loses no events.
+    ///
+    /// "Idle" means more than an empty buffer: a drain task that already
+    /// claimed a batch is still delivering it, and returning while that batch
+    /// is in the air would hand callers the same false "everything is written"
+    /// an empty queue used to imply. So this writes what it can claim and then
+    /// waits out anyone else's batch, polling as `BackgroundTaskRegistry.drain`
+    /// does. Bounded by `timeout`, so a wedged backend cannot stall shutdown.
+    func flush(waitingUpTo timeout: Duration = .seconds(10)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if let batch = await queue.nextBatch(endDrainWhenEmpty: false) {
+                await deliver(batch)
+                await queue.finishBatch()
+                continue
+            }
+            if await queue.isIdle { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let remaining = await queue.stats
+        if remaining.queued > 0 {
+            logger.warning(
+                "Audit flush timed out with events still queued",
+                metadata: ["queued": .stringConvertible(remaining.queued)])
         }
     }
 
@@ -658,8 +696,11 @@ struct AuditRetentionLifecycleHandler: LifecycleHandler {
         // drain task is tracked by the background-task registry, but that
         // registry's own drain is bounded and runs from a different lifecycle
         // handler, so a graceful stop does not rely on the two orderings: an
-        // explicit flush here leaves nothing behind either way.
-        await audit.flush()
+        // explicit flush here leaves nothing behind either way. The budget is
+        // the external backends' own request timeout — long enough for one
+        // in-flight POST to land, short enough that a wedged SIEM cannot hold
+        // the process open.
+        await audit.flush(waitingUpTo: .seconds(5))
         audit.shutdown()
     }
 }
