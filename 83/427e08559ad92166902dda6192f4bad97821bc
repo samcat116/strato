@@ -1,0 +1,33 @@
+control-plane/Sources/App/IAM/IAMRequestCache.swift
+  s_eab50385d4bd8d::t_8a560cd0fcc82e 15-18
+  s_eab50385d4bd8d::t_0df3f68753621d 121-131,136
+  s_eab50385d4bd8d::t_d12a4b383be80c 171-178
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_eab50385d4bd8d::t_1281035a77a0ea 401,414-415,424-429
+  s_eab50385d4bd8d::t_0d19d6f7465009 80-91
+  s_eab50385d4bd8d::t_a22eff811685d9 255
+  s_eab50385d4bd8d::t_7d6bec332a17ac 243
+  s_eab50385d4bd8d::t_24ce2685350ba2 181-185
+  s_eab50385d4bd8d::t_7858031f09ea05 274-276,283-290,295,297-312,315-316,319,342-345,347-364,366
+control-plane/Tests/AppTests/EntitySliceLoaderTests.swift
+  s_eab50385d4bd8d::t_db150a7a29a97d 208-264
+docs/architecture/iam.md
+  s_eab50385d4bd8d::t_b4818bd33b6c9f 973,987-1003
+  s_eab50385d4bd8d::t_2506134be7b02c 1042-1045
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "83427e08559ad92166902dda6192f4bad97821bc",
+  "prompts": {},
+  "sessions": {
+    "s_eab50385d4bd8d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a8040ae-97ba-4814-97ad-a7227ee2a812",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
