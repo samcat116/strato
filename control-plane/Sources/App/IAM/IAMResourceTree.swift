@@ -90,12 +90,28 @@ enum IAMResourceTree {
         _ node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
     ) async throws -> Resolution {
         if let cached = cache?.chain(of: node) { return cached }
-        let resolution = try await walk(from: node, on: db)
+        let resolution = try await walk(from: node, cache: cache, on: db)
         cache?.store(chain: resolution, of: node)
+        // Cache each container above the leaf too, so the next sibling leaf in
+        // the same project reuses the shared project→org chain instead of
+        // re-walking it — the win for a list endpoint that checks one node per
+        // row. Every node above a leaf is a container (project/folder/org), and
+        // containers carry no leaf facts (environment and network attributes
+        // live only on leaves), so each one's resolution is exactly its suffix
+        // with empty facts.
+        if let cache {
+            let chain = resolution.chain
+            for index in chain.indices.dropFirst() where cache.chain(of: chain[index]) == nil {
+                cache.store(
+                    chain: Resolution(chain: Array(chain[index...]), leaf: IAMLeafFacts()), of: chain[index])
+            }
+        }
         return resolution
     }
 
-    private static func walk(from node: IAMNode, on db: any Database) async throws -> Resolution {
+    private static func walk(
+        from node: IAMNode, cache: IAMRequestCache?, on db: any Database
+    ) async throws -> Resolution {
         // A folder leaf resolves its whole chain in the batched walk below;
         // starting there costs one query for any depth.
         if node.type == .organizationalUnit {
@@ -112,6 +128,19 @@ enum IAMResourceTree {
             let step = try await self.step(from: cursor, on: db)
             if cursor == node { leaf = step.leaf }
             guard let next = step.parent else { break }
+            // A sibling already resolved the chain above this parent — splice
+            // its (cycle-free) suffix and stop, skipping the re-walk. Checked
+            // before the folder branch so a cached folder→org chain is reused
+            // too. A splice can leave the chain slightly past maxDepth, but
+            // only in a corrupt tree already deeper than the cap the real
+            // schema cannot produce — the cap is a runaway guard, not a
+            // correctness bound.
+            if let cachedParent = cache?.chain(of: next) {
+                for ancestor in cachedParent.chain where seen.insert(ancestor).inserted {
+                    chain.append(ancestor)
+                }
+                break
+            }
             // Everything above a folder is folders and then the organization,
             // so hand the rest of the walk to the batched resolver.
             if next.type == .organizationalUnit {
