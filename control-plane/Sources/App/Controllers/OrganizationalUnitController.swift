@@ -48,27 +48,7 @@ struct OrganizationalUnitController: RouteCollection {
             .sort(\.$name)
             .all()
 
-        var responses: [OrganizationalUnitResponse] = []
-
-        for ou in ous {
-            // Get counts for response
-            let childOuCount = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$parentOU.$id, .equal, ou.id)
-                .count()
-
-            let projectCount = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id, .equal, ou.id)
-                .count()
-
-            let response = OrganizationalUnitResponse(
-                from: ou,
-                childOuCount: Int(childOuCount),
-                projectCount: Int(projectCount)
-            )
-            responses.append(response)
-        }
-
-        return responses
+        return try await Self.responses(for: ous, on: req.db)
     }
 
     func show(req: Request) async throws -> OrganizationalUnitResponse {
@@ -421,26 +401,7 @@ struct OrganizationalUnitController: RouteCollection {
             .sort(\.$name)
             .all()
 
-        var responses: [OrganizationalUnitResponse] = []
-
-        for subOU in subOUs {
-            let childOuCount = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$parentOU.$id, .equal, subOU.id)
-                .count()
-
-            let projectCount = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id, .equal, subOU.id)
-                .count()
-
-            let response = OrganizationalUnitResponse(
-                from: subOU,
-                childOuCount: Int(childOuCount),
-                projectCount: Int(projectCount)
-            )
-            responses.append(response)
-        }
-
-        return responses
+        return try await Self.responses(for: subOUs, on: req.db)
     }
 
     func createSubOU(req: Request) async throws -> OrganizationalUnitResponse {
@@ -511,31 +472,59 @@ struct OrganizationalUnitController: RouteCollection {
         return 0
     }
 
-    private func buildOUTree(ou: OrganizationalUnit, on db: Database) async throws -> OrganizationalUnitTreeResponse {
-        let childOUs = try await OrganizationalUnit.query(on: db)
-            .filter(\.$parentOU.$id, .equal, ou.id)
-            .sort(\.$name)
-            .all()
+    /// The folder rows a list endpoint returns, each carrying its child and
+    /// project counts — both measured for the whole page in one grouped
+    /// aggregate rather than two queries per row.
+    private static func responses(
+        for ous: [OrganizationalUnit],
+        on db: Database
+    ) async throws -> [OrganizationalUnitResponse] {
+        let ouIDs = ous.compactMap { $0.id }
+        let childCounts = try await OrganizationalUnit.counts(groupedBy: \.$parentOU, in: ouIDs, on: db)
+        let projectCounts = try await Project.counts(groupedBy: \.$organizationalUnit, in: ouIDs, on: db)
 
-        var children: [OrganizationalUnitTreeResponse] = []
-        for childOU in childOUs {
-            let childTree = try await buildOUTree(ou: childOU, on: db)
-            children.append(childTree)
+        return ous.map { ou in
+            OrganizationalUnitResponse(
+                from: ou,
+                childOuCount: ou.id.flatMap { childCounts[$0] } ?? 0,
+                projectCount: ou.id.flatMap { projectCounts[$0] } ?? 0
+            )
+        }
+    }
+
+    /// The subtree rooted at `ou`, from one load of its descendants and one
+    /// grouped project count over them.
+    ///
+    /// The recursion this replaced cost two queries per folder, so a deep tree
+    /// paid for its own shape on every request. Descendants come from the
+    /// materialized `path` the folder already carries.
+    private func buildOUTree(ou: OrganizationalUnit, on db: Database) async throws
+        -> OrganizationalUnitTreeResponse
+    {
+        let descendants = try await ou.descendants(on: db)
+        let subtree = [ou] + descendants
+        let projectCounts = try await Project.counts(
+            groupedBy: \.$organizationalUnit, in: subtree.compactMap { $0.id }, on: db)
+
+        var childrenByParent: [UUID: [OrganizationalUnit]] = [:]
+        for descendant in descendants {
+            guard let parentID = descendant.$parentOU.id else { continue }
+            childrenByParent[parentID, default: []].append(descendant)
         }
 
-        let projectCount = try await Project.query(on: db)
-            .filter(\.$organizationalUnit.$id, .equal, ou.id)
-            .count()
-
-        return OrganizationalUnitTreeResponse(
-            id: ou.id,
-            name: ou.name,
-            description: ou.description,
-            path: ou.path,
-            depth: ou.depth,
-            projectCount: Int(projectCount),
-            children: children
-        )
+        func tree(_ node: OrganizationalUnit) -> OrganizationalUnitTreeResponse {
+            let children = node.id.map { childrenByParent[$0] ?? [] } ?? []
+            return OrganizationalUnitTreeResponse(
+                id: node.id,
+                name: node.name,
+                description: node.description,
+                path: node.path,
+                depth: node.depth,
+                projectCount: node.id.flatMap { projectCounts[$0] } ?? 0,
+                children: children.map(tree)
+            )
+        }
+        return tree(ou)
     }
 
     /// Rewrites the materialized `path` (and `depth`) of everything beneath a

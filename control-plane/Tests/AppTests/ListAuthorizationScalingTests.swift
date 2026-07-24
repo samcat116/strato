@@ -11,9 +11,18 @@ import VaporTesting
 ///
 /// Same shape, same assertion: the property under test is the *number of
 /// queries*, not wall-clock, and it is an equality rather than a budget — the
-/// same list at two sizes must cost the same number of queries. Any per-row
-/// authorization check or per-row `COUNT` that creeps back in fails it by a
-/// margin equal to the size difference.
+/// same list at two sizes must cost the same number of queries.
+///
+/// **What has to vary is the number of distinct nodes decided, not the number
+/// of rows.** The request memo (#686) already collapses a per-row loop to one
+/// evaluation per distinct node, so a hundred pools sharing one organization
+/// were never the expensive case and a test that grew only the row count would
+/// pass against the very loop it means to forbid. What batching buys is the
+/// step after that: the distinct nodes are decided *together*, over one
+/// entity-slice load, instead of one full evaluation apiece. So the pool and
+/// enrollment tests below grow the number of owning scopes, and the directory
+/// test grows the account count — a user record being its own node, that is the
+/// same thing there.
 ///
 /// Each endpoint is driven with a request the test owns, so Fluent's
 /// per-request query history (enabled on the request, not the application)
@@ -54,62 +63,60 @@ final class ListAuthorizationScalingTests {
         return req.fluent.history.queries.count
     }
 
-    /// Pools are scoped infrastructure, so the page costs one batched decision
-    /// per distinct scope action — `org:read` for an org-owned pool,
-    /// `folder:read` for a folder-owned one — plus one grouped `COUNT` for
-    /// every pool's allocated addresses. Both kinds of owner are present here,
-    /// so a regression that split the decisions back out per pool shows up as a
-    /// difference of 110.
+    /// A pool's read action follows the kind of scope owning it — `org:read`
+    /// for an org-owned pool, `folder:read` for a folder-owned one — so the
+    /// page costs two batched decisions here regardless of how many folders own
+    /// pools. The org-owned pool is present throughout so the second action is
+    /// always in play; what grows is the number of folders, which is what the
+    /// old loop paid a full evaluation for.
     ///
-    /// The grouped `COUNT` goes out as raw SQL, which Fluent's history does not
-    /// record — so what guards it here is the returned `allocatedCount` of
-    /// every pool, while the query equality guards the per-pool `COUNT` this
-    /// replaced (that one *was* a Fluent query, and would reappear in the
-    /// history if it came back).
-    @Test("GET /api/floating-ip-pools issues the same number of queries however many pools it returns")
+    /// One viewer binding on the organization covers every folder beneath it,
+    /// so growing the folder count adds nodes to decide without adding grants
+    /// to read — the decisions are the only thing that could scale.
+    @Test("GET /api/floating-ip-pools issues the same number of queries however many scopes own pools")
     func poolListQueryCountStaysBounded() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "pooluser", email: "pool@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Pool Org")
-            // Bare membership already grants `org:read`; the folder needs a
-            // binding, so viewer on the folder supplies `folder:read`.
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            let folder = try await builder.createOU(
-                name: "Pool Folder", description: "d", organization: org)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .organizationalUnit, nodeID: folder.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
 
             // Allocated addresses need a project and a creator to hang on.
             let project = try await builder.createProject(
                 name: "Pool Project", description: "d", organization: org)
 
-            /// Create `count` pools, alternating owner between the org and the
-            /// folder, each carrying one allocated address.
-            var created = 0
-            func addPools(_ count: Int) async throws {
+            /// One /30 per pool, walked through 203.0.0.0/23 so no two pools
+            /// overlap and every address stays a valid octet.
+            func addPool(_ index: Int, scope: OrganizationScope) async throws {
+                let base = index * 4
+                let prefix = "203.0.\(base / 256)"
+                let pool = FloatingIPPool(
+                    name: "pool-\(String(format: "%03d", index))",
+                    cidr: "\(prefix).\(base % 256)/30",
+                    organizationScope: scope)
+                try await pool.save(on: app.db)
+                try await FloatingIP(
+                    poolID: pool.id!,
+                    address: "\(prefix).\(base % 256 + 1)",
+                    projectID: project.id!,
+                    createdByID: user.id!
+                ).save(on: app.db)
+            }
+
+            // Pool 0 is org-owned; every later pool gets a folder of its own.
+            try await addPool(0, scope: .organization(org.id!))
+            var created = 1
+            func addFolderPools(_ count: Int) async throws {
                 for _ in 0..<count {
                     let index = created
                     created += 1
-                    let scope: OrganizationScope =
-                        index.isMultiple(of: 2) ? .organization(org.id!) : .organizationalUnit(folder.id!)
-                    // One /30 per pool, walked through 203.0.0.0/23 so no two
-                    // pools overlap and every address stays a valid octet.
-                    let base = index * 4
-                    let prefix = "203.0.\(base / 256)"
-                    let pool = FloatingIPPool(
-                        name: "pool-\(index)",
-                        cidr: "\(prefix).\(base % 256)/30",
-                        organizationScope: scope)
-                    try await pool.save(on: app.db)
-                    let floatingIP = FloatingIP(
-                        poolID: pool.id!,
-                        address: "\(prefix).\(base % 256 + 1)",
-                        projectID: project.id!,
-                        createdByID: user.id!)
-                    try await floatingIP.save(on: app.db)
+                    let folder = try await builder.createOU(
+                        name: "Pool Folder \(index)", description: "d", organization: org)
+                    try await addPool(index, scope: .organizationalUnit(folder.id!))
                 }
             }
 
@@ -122,22 +129,23 @@ final class ListAuthorizationScalingTests {
                     })
             }
 
-            try await addPools(10)
+            try await addFolderPools(9)
             let ten = try await queriesToList(expecting: 10)
-            try await addPools(110)
+            try await addFolderPools(110)
             let oneTwenty = try await queriesToList(expecting: 120)
 
             #expect(
                 oneTwenty == ten,
-                "GET /api/floating-ip-pools issued \(oneTwenty) queries for 120 pools but \(ten) for 10; authorization or the allocation counts are scaling with list size"
+                "GET /api/floating-ip-pools issued \(oneTwenty) queries for 120 pools across 120 scopes but \(ten) for 10; authorization is scaling with the number of scopes"
             )
         }
     }
 
     /// Enrollments carry their scope as plain columns rather than parent
     /// relations, and `manage_agents` translates to `agent:manage` for either
-    /// kind of owner — so org- and folder-owned rows share a single batch.
-    @Test("GET /api/agent-enrollments issues the same number of queries however many rows it returns")
+    /// kind of owner — so org- and folder-owned rows share a single batch
+    /// however many folders are involved.
+    @Test("GET /api/agent-enrollments issues the same number of queries however many scopes own rows")
     func enrollmentListQueryCountStaysBounded() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
@@ -145,23 +153,27 @@ final class ListAuthorizationScalingTests {
                 username: "enrolluser", email: "enroll@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Enroll Org")
             // `agent:manage` is an admin action, and the org admin binding
-            // covers the folder beneath it too.
+            // covers every folder beneath it.
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let folder = try await builder.createOU(
-                name: "Enroll Folder", description: "d", organization: org)
 
-            var created = 0
-            func addEnrollments(_ count: Int) async throws {
+            func addEnrollment(_ index: Int, scope: OrganizationScope) async throws {
+                try await AgentEnrollment(
+                    agentName: "enroll-node-\(index)",
+                    spiffeID: "spiffe://example.org/agent/enroll-node-\(index)",
+                    organizationScope: scope
+                ).save(on: app.db)
+            }
+
+            // Enrollment 0 is org-owned; every later one gets its own folder.
+            try await addEnrollment(0, scope: .organization(org.id!))
+            var created = 1
+            func addFolderEnrollments(_ count: Int) async throws {
                 for _ in 0..<count {
                     let index = created
                     created += 1
-                    let scope: OrganizationScope =
-                        index.isMultiple(of: 2) ? .organization(org.id!) : .organizationalUnit(folder.id!)
-                    let enrollment = AgentEnrollment(
-                        agentName: "enroll-node-\(index)",
-                        spiffeID: "spiffe://example.org/agent/enroll-node-\(index)",
-                        organizationScope: scope)
-                    try await enrollment.save(on: app.db)
+                    let folder = try await builder.createOU(
+                        name: "Enroll Folder \(index)", description: "d", organization: org)
+                    try await addEnrollment(index, scope: .organizationalUnit(folder.id!))
                 }
             }
 
@@ -172,14 +184,14 @@ final class ListAuthorizationScalingTests {
                     expecting: { $0.count == expected })
             }
 
-            try await addEnrollments(10)
+            try await addFolderEnrollments(9)
             let ten = try await queriesToList(expecting: 10)
-            try await addEnrollments(110)
+            try await addFolderEnrollments(110)
             let oneTwenty = try await queriesToList(expecting: 120)
 
             #expect(
                 oneTwenty == ten,
-                "GET /api/agent-enrollments issued \(oneTwenty) queries for 120 enrollments but \(ten) for 10; authorization is scaling with list size"
+                "GET /api/agent-enrollments issued \(oneTwenty) queries for 120 enrollments across 120 scopes but \(ten) for 10; authorization is scaling with the number of scopes"
             )
         }
     }

@@ -44,15 +44,13 @@ struct GroupController: RouteCollection {
             .sort(\.$name)
             .all()
 
-        var responses: [GroupResponse] = []
+        // One membership aggregate for the page instead of a COUNT per group.
+        let memberCounts = try await UserGroup.counts(
+            groupedBy: \.$group, in: groups.compactMap { $0.id }, on: req.db)
 
-        for group in groups {
-            let memberCount = try await group.getMemberCount(on: req.db)
-            let response = GroupResponse(from: group, memberCount: memberCount)
-            responses.append(response)
+        return groups.map { group in
+            GroupResponse(from: group, memberCount: group.id.flatMap { memberCounts[$0] } ?? 0)
         }
-
-        return responses
     }
 
     func show(req: Request) async throws -> GroupResponse {

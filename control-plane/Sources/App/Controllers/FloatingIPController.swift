@@ -1,5 +1,4 @@
 import Fluent
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -131,35 +130,11 @@ struct FloatingIPController: RouteCollection {
             return readable.contains(Self.poolScopeCheck(scope, manage: false).node)
         }
 
-        let counts = try await Self.allocatedCounts(forPools: visible.compactMap(\.id), on: req.db)
+        // One grouped count for the page rather than a COUNT per pool.
+        let counts = try await FloatingIP.counts(
+            groupedBy: \.$pool, in: try visible.map { try $0.requireID() }, on: req.db)
         return try visible.map { pool in
             try FloatingIPPoolResponse(from: pool, allocatedCount: counts[pool.requireID()] ?? 0)
-        }
-    }
-
-    /// How many addresses each of `poolIDs` has allocated, as one grouped
-    /// `COUNT` for the whole page rather than a `COUNT` per pool (#687).
-    ///
-    /// Pools with no allocations produce no row, so callers read a missing key
-    /// as zero — which is also why the caller maps over its own pool list
-    /// rather than over this result.
-    private static func allocatedCounts(
-        forPools poolIDs: [UUID], on db: any Database
-    ) async throws -> [UUID: Int] {
-        guard !poolIDs.isEmpty else { return [:] }
-        guard let sql = db as? any SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Unsupported database")
-        }
-        let rows = try await sql.select()
-            .column("pool_id")
-            .column(SQLFunction("count", args: SQLLiteral.all), as: "allocated")
-            .from(FloatingIP.schema)
-            .where(SQLColumn("pool_id"), .in, SQLBind.group(poolIDs))
-            .groupBy("pool_id")
-            .all()
-        return try rows.reduce(into: [:]) { counts, row in
-            counts[try row.decode(column: "pool_id", as: UUID.self)] =
-                try row.decode(column: "allocated", as: Int.self)
         }
     }
 

@@ -147,9 +147,13 @@ extension OrganizationalUnit {
     /// Descendants of the folder that had `path`. Split out for the move path,
     /// which must find the subtree by the path the folder carried *before* it
     /// moved — the descendants' own paths are only rewritten afterwards.
+    ///
+    /// Sorted by name so a caller assembling a tree from one flat load orders
+    /// each sibling group the way the per-level queries it replaced did.
     static func descendants(ofPath path: String, on db: Database) async throws -> [OrganizationalUnit] {
         try await OrganizationalUnit.query(on: db)
             .filter(\.$path, .contains(inverse: false, .prefix), "\(path)/")
+            .sort(\.$name)
             .all()
     }
 
