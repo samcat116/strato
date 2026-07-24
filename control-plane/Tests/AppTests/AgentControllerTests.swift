@@ -63,7 +63,7 @@ struct AgentControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let responses = try res.content.decode([AgentResponse].self)
+                let responses = try res.content.decode(PagedResponse<AgentResponse>.self).items
                 let statusByID = Dictionary(uniqueKeysWithValues: responses.map { ($0.id, $0.status) })
                 #expect(statusByID[freshOffline.id!] == .online)
                 #expect(statusByID[staleOnline.id!] == .offline)
