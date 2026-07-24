@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import StratoShared
 import VaporTesting
 @testable import App
 
@@ -11,6 +12,32 @@ import VaporTesting
 /// where CI runs long enough for the timer to fire mid-run against a shut-down app.
 @Suite("AgentService lifecycle", .serialized)
 final class AgentServiceLifecycleTests {
+
+    @Test("heartbeat monitor durably marks stale agents offline")
+    func heartbeatMonitorMarksStaleAgentsOffline() async throws {
+        try await withTestApp { app in
+            let agent = Agent(
+                name: "stale-agent",
+                hostname: "stale-agent.example",
+                version: "1.0.0",
+                capabilities: ["qemu"],
+                status: .online,
+                resources: AgentResources(
+                    totalCPU: 8,
+                    availableCPU: 8,
+                    totalMemory: 16_000_000_000,
+                    availableMemory: 16_000_000_000,
+                    totalDisk: 100_000_000_000,
+                    availableDisk: 100_000_000_000),
+                lastHeartbeat: Date().addingTimeInterval(-120))
+            try await agent.save(on: app.db)
+
+            await app.agentService.checkStaleAgents()
+
+            let persisted = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(persisted.status == .offline)
+        }
+    }
 
     @Test("app shutdown cancels the AgentService heartbeat loop")
     func shutdownCancelsHeartbeat() async throws {

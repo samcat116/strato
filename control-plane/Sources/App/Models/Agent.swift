@@ -311,13 +311,23 @@ extension Agent {
         return capabilities.contains("ovn_networking")
     }
 
-    /// Update agent status based on heartbeat age
-    func updateStatusBasedOnHeartbeat() {
+    /// The status clients should see after accounting for heartbeat age.
+    ///
+    /// This is deliberately non-mutating: GET endpoints use it when building
+    /// response DTOs, while registration/heartbeat handling and the stale-agent
+    /// monitor own durable status transitions.
+    var statusBasedOnHeartbeat: AgentStatus {
         if isOnline && status == .offline {
-            status = .online
+            return .online
         } else if !isOnline && status == .online {
-            status = .offline
+            return .offline
         }
+        return status
+    }
+
+    /// Update agent status based on heartbeat age.
+    func updateStatusBasedOnHeartbeat() {
+        status = statusBasedOnHeartbeat
     }
 
     /// The agent's org-or-OU owner; nil only for rows that predate mandatory
@@ -426,7 +436,7 @@ struct AgentResponse: Content {
         self.hostname = agent.hostname
         self.version = agent.version
         self.capabilities = agent.capabilities
-        self.status = agent.status
+        self.status = agent.statusBasedOnHeartbeat
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.operatingSystem = agent.hostOperatingSystem
