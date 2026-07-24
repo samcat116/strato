@@ -116,9 +116,29 @@ enum IAMResourceTree {
         }
         guard !pending.isEmpty else { return resolved }
 
-        for (node, resolution) in try await walk(from: pending, on: db) {
+        for (node, resolution) in try await walk(from: pending, cache: cache, on: db) {
             cache?.store(chain: resolution, of: node)
             resolved[node] = resolution
+            // Cache each container above the leaf too (#710), so a later check
+            // on a sibling leaf in the same project reuses the shared
+            // project→org chain instead of re-walking it. Every node above a
+            // leaf is a container (project/folder/org), and containers carry no
+            // leaf facts (environment and network attributes live only on
+            // leaves), so each one's resolution is exactly its suffix with
+            // empty facts.
+            //
+            // Within one batch this is redundant — the lockstep walk already
+            // resolves a shared container once for every path through it — but
+            // it is what carries the saving *across* calls: the middleware's
+            // single check, then the handler's batch, then a second batch for a
+            // different action.
+            if let cache {
+                let chain = resolution.chain
+                for index in chain.indices.dropFirst() where cache.chain(of: chain[index]) == nil {
+                    cache.store(
+                        chain: Resolution(chain: Array(chain[index...]), leaf: IAMLeafFacts()), of: chain[index])
+                }
+            }
         }
         return resolved
     }
@@ -143,7 +163,9 @@ enum IAMResourceTree {
     }
 
     /// Walk every path upward in lockstep, one batched query per (level, type).
-    private static func walk(from starts: [IAMNode], on db: any Database) async throws -> [IAMNode: Resolution] {
+    private static func walk(
+        from starts: [IAMNode], cache: IAMRequestCache?, on db: any Database
+    ) async throws -> [IAMNode: Resolution] {
         var paths: [IAMNode: Path] = [:]
         for start in starts {
             paths[start] = Path(chain: [start], seen: [start], leaf: IAMLeafFacts(), cursor: start)
@@ -182,9 +204,23 @@ enum IAMResourceTree {
                     continue
                 }
                 if cursor == start { path.leaf = step.leaf }
-                guard let next = step.parent, path.chain.count < maxDepth,
-                    path.seen.insert(next).inserted
-                else { continue }
+                guard let next = step.parent, path.chain.count < maxDepth else { continue }
+                // An earlier call already resolved the chain above this parent
+                // (#710) — splice its cycle-free suffix and stop, skipping the
+                // rest of the walk. Within a batch the lockstep walk already
+                // shares a container between siblings, so what this buys is
+                // reuse across calls: the middleware's single check leaves the
+                // project→org chain cached for the handler's batch. A splice can
+                // leave the chain slightly past maxDepth, but only in a corrupt
+                // tree already deeper than the cap the real schema cannot
+                // produce — the cap is a runaway guard, not a correctness bound.
+                if let cachedParent = cache?.chain(of: next) {
+                    for ancestor in cachedParent.chain where path.seen.insert(ancestor).inserted {
+                        path.chain.append(ancestor)
+                    }
+                    continue
+                }
+                guard path.seen.insert(next).inserted else { continue }
                 path.chain.append(next)
                 path.cursor = next
             }

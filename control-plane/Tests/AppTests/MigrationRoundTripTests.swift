@@ -56,4 +56,25 @@ struct MigrationRoundTripTests {
             #expect(addressRows.isEmpty)
         }
     }
+
+    @Test("Every hot-path index is present on the migrated schema")
+    func hotPathIndexesArePresent() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+
+            // The migration's raw SQL only fails loudly if it is malformed, so
+            // read the indexes back: a typo'd table or an unsupported partial
+            // predicate would otherwise land silently as a missing index and a
+            // sequential scan in production.
+            let rows = try await sql.raw(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
+            ).all()
+            let present = Set(try rows.map { try $0.decode(column: "indexname", as: String.self) })
+
+            for index in AddHotPathIndexes.indexes {
+                let exists = present.contains(index.name)
+                #expect(exists, "missing index \(index.name)")
+            }
+        }
+    }
 }

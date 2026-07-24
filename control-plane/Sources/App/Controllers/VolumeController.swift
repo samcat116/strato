@@ -35,12 +35,13 @@ struct VolumeController: RouteCollection {
     /// Query params: project_id (optional), status (optional)
     @Sendable
     func listVolumes(req: Request) async throws -> [VolumeResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
 
         // Build query
         var query = Volume.query(on: req.db)
 
         // Filter by project if specified
+        var visibility: ProjectVisibility?
         if let projectIdString = req.query[String.self, at: "project_id"],
             let projectId = UUID(uuidString: projectIdString)
         {
@@ -53,9 +54,14 @@ struct VolumeController: RouteCollection {
 
             query = query.filter(\.$project.$id == projectId)
         } else {
-            // Get all projects user has access to and filter
-            let accessibleProjects = try await getAccessibleProjects(for: user, on: req)
-            query = query.filter(\.$project.$id ~~ accessibleProjects)
+            // Narrow to the projects the caller could reach, then let the
+            // evaluator decide the ones that carry rows (`ProjectVisibility`).
+            let resolved = try await ProjectVisibility.resolve(on: req)
+            guard !resolved.reachesNoProject else { return [] }
+            if let candidates = resolved.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
+            visibility = resolved
         }
 
         // Filter by status if specified
@@ -72,10 +78,14 @@ struct VolumeController: RouteCollection {
             query = query.filter(\.$volumeType == volumeType)
         }
 
-        let volumes =
+        var volumes =
             try await query
             .sort(\.$createdAt, .descending)
             .all()
+
+        if let visibility {
+            volumes = try await visibility.readableRows(volumes, projectID: { $0.$project.id }, on: req)
+        }
 
         return volumes.map { VolumeResponse(from: $0) }
     }
@@ -887,22 +897,6 @@ struct VolumeController: RouteCollection {
         }
 
         return volume
-    }
-
-    /// Get all project IDs the user has access to
-    private func getAccessibleProjects(for user: User, on req: Request) async throws -> [UUID] {
-        // Get all projects and check access
-        let allProjects = try await Project.query(on: req.db).all()
-        var accessibleProjectIds: [UUID] = []
-
-        for project in allProjects {
-            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
-            if hasAccess {
-                accessibleProjectIds.append(project.id!)
-            }
-        }
-
-        return accessibleProjectIds
     }
 
     /// Generate a device name for a new volume attachment

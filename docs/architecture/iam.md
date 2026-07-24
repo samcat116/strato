@@ -781,6 +781,19 @@ shapes:
   underlying resource is deleted, and `/api/api-keys`. Row scoping, declared
   with `req.markRowScopedAuthorization()`.
 
+- **The list-scoping narrowing** in `ProjectVisibility` (issue #688). The
+  project-scoped list endpoints (`/api/volumes`, `/api/networks`,
+  `/api/security-groups`, `/api/floating-ips`) used to load every project in
+  the installation and evaluate each one; they now derive a *superset* of the
+  caller's reachable projects from their own grants and narrow the row query to
+  it, then decide each project the surviving rows land in through `req.can` as
+  before. An admin holds no bindings, so a bindings-derived superset would be
+  empty and would hide rows the evaluator allows — hence the one
+  `isSystemAdmin` read, which skips the narrowing entirely. It can only widen
+  what reaches the evaluator, never what the evaluator allows, so a guardrail
+  forbidding `project:read` narrows an admin's list exactly as it does anyone
+  else's.
+
 Nothing else reads `User.isSystemAdmin`. The two business-rule exemptions that
 used to — an agent hosting another tenant's workloads, and explicit
 agent-artifact overrides — are policy now (see below), and the identity plane

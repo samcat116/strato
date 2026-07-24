@@ -32,7 +32,7 @@ struct SecurityGroupController: RouteCollection {
     /// Query params: project_id (optional)
     @Sendable
     func listGroups(req: Request) async throws -> [SecurityGroupResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
         var query = SecurityGroup.query(on: req.db)
@@ -43,6 +43,7 @@ struct SecurityGroupController: RouteCollection {
         // fleet-wide view comes from the tier-1 `platform-system-admin` policy
         // answering each `view_project` check, so it lands in the decision log
         // and a tier-2 guardrail can narrow it.
+        var visibility: ProjectVisibility?
         if let requestedProjectId {
             let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
             guard hasAccess else {
@@ -50,11 +51,20 @@ struct SecurityGroupController: RouteCollection {
             }
             query = query.filter(\.$project.$id == requestedProjectId)
         } else {
-            let projectScope = try await getAccessibleProjects(for: user, on: req)
-            query = query.filter(\.$project.$id ~~ projectScope)
+            // Narrow to the projects the caller could reach, then let the
+            // evaluator decide the ones that carry rows (`ProjectVisibility`).
+            let resolved = try await ProjectVisibility.resolve(on: req)
+            guard !resolved.reachesNoProject else { return [] }
+            if let candidates = resolved.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
+            visibility = resolved
         }
 
-        let groups = try await query.all()
+        var groups = try await query.all()
+        if let visibility {
+            groups = try await visibility.readableRows(groups, projectID: { $0.$project.id }, on: req)
+        }
         // One membership query for the whole page instead of a COUNT per group.
         let groupIds = try groups.map { try $0.requireID() }
         var counts: [UUID: Int] = [:]
@@ -510,18 +520,5 @@ struct SecurityGroupController: RouteCollection {
     private func loadedEmpty(_ group: SecurityGroup) -> SecurityGroup {
         group.$rules.value = []
         return group
-    }
-
-    /// Get all project IDs the user has access to (same shape as networks).
-    private func getAccessibleProjects(for user: User, on req: Request) async throws -> [UUID] {
-        let allProjects = try await Project.query(on: req.db).all()
-        var accessibleProjectIds: [UUID] = []
-        for project in allProjects {
-            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
-            if hasAccess {
-                accessibleProjectIds.append(project.id!)
-            }
-        }
-        return accessibleProjectIds
     }
 }

@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import SQLKit
 import VaporTesting
 import StratoShared
 @testable import App
@@ -222,6 +223,56 @@ final class VMOperationTests {
 
             let freshVM = try await VM.find(vm.id, on: app.db)
             #expect(freshVM?.status == .starting)
+        }
+    }
+
+    @Test("A transitional VM with no status timestamp is aged off updatedAt")
+    func sweepAgesTransitionalVMOffUpdatedAtWhenStatusTimestampIsMissing() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            vm.setStatus(.starting)
+            try await vm.save(on: app.db)
+
+            // Rows written before `status_changed_at` existed carry NULL. The
+            // sweep's age predicate is evaluated in SQL now, so this fallback
+            // branch is the one that could silently stop matching.
+            let vmID = try vm.requireID()
+            let sql = try #require(app.db as? any SQLDatabase)
+            let past = Date().addingTimeInterval(-400)
+            try await sql.raw(
+                """
+                UPDATE vms SET status_changed_at = NULL, updated_at = \(bind: past)
+                WHERE id = \(bind: vmID)
+                """
+            ).run()
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try await VM.find(vm.id, on: app.db)
+            #expect(swept?.status == .error)
+        }
+    }
+
+    @Test("A transitional VM with no timestamps at all is left alone")
+    func sweepLeavesTimestamplessTransitionalVMAlone() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            vm.setStatus(.starting)
+            try await vm.save(on: app.db)
+
+            // No measurable age: the sweep has no evidence the VM is stuck, so
+            // it must not be errored on the strength of a NULL.
+            let vmID = try vm.requireID()
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw(
+                """
+                UPDATE vms SET status_changed_at = NULL, updated_at = NULL
+                WHERE id = \(bind: vmID)
+                """
+            ).run()
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try await VM.find(vm.id, on: app.db)
+            #expect(swept?.status == .starting)
         }
     }
 

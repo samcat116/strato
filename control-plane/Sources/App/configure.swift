@@ -632,6 +632,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSecurityGroup())
     app.migrations.add(SeedDefaultSecurityGroups())
 
+    // Index the remaining hot query paths found by the control-plane
+    // performance audit: background sweeps, quota accounting, in-use guards
+    // (issue #693).
+    app.migrations.add(AddHotPathIndexes())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

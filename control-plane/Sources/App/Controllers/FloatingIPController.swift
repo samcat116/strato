@@ -266,7 +266,7 @@ struct FloatingIPController: RouteCollection {
     /// Query params: project_id (optional)
     @Sendable
     func listFloatingIPs(req: Request) async throws -> [FloatingIPResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
         var query = FloatingIP.query(on: req.db)
@@ -274,10 +274,11 @@ struct FloatingIPController: RouteCollection {
             .sort(\.$createdAt, .descending)
 
         // Project scoping runs for every caller. An admin holds no per-project
-        // bindings, but `getAccessibleProjects` asks the evaluator about each
-        // project and the tier-1 `platform-system-admin` policy answers yes —
+        // bindings, but every project their rows land in is still put to the
+        // evaluator and the tier-1 `platform-system-admin` policy answers yes —
         // so an admin still sees every project's floating IPs, by a decision
         // that is logged and that a guardrail can narrow.
+        var visibility: ProjectVisibility?
         if let requestedProjectId {
             let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
             guard hasAccess else {
@@ -285,11 +286,21 @@ struct FloatingIPController: RouteCollection {
             }
             query = query.filter(\.$project.$id == requestedProjectId)
         } else {
-            let projectScope = try await getAccessibleProjects(for: user, on: req)
-            query = query.filter(\.$project.$id ~~ projectScope)
+            // Narrow to the projects the caller could reach, then let the
+            // evaluator decide the ones that carry rows (`ProjectVisibility`).
+            let resolved = try await ProjectVisibility.resolve(on: req)
+            guard !resolved.reachesNoProject else { return [] }
+            if let candidates = resolved.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
+            visibility = resolved
         }
 
-        let floatingIPs = try await query.all()
+        var floatingIPs = try await query.all()
+        if let visibility {
+            floatingIPs = try await visibility.readableRows(
+                floatingIPs, projectID: { $0.$project.id }, on: req)
+        }
         return try floatingIPs.map { try FloatingIPResponse(from: $0, interface: $0.interface) }
     }
 
@@ -674,18 +685,5 @@ struct FloatingIPController: RouteCollection {
             .filter(\.$id == interfaceId)
             .with(\.$addresses)
             .first()
-    }
-
-    /// Get all project IDs the user has access to (same shape as networks).
-    private func getAccessibleProjects(for user: User, on req: Request) async throws -> [UUID] {
-        let allProjects = try await Project.query(on: req.db).all()
-        var accessibleProjectIds: [UUID] = []
-        for project in allProjects {
-            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
-            if hasAccess {
-                accessibleProjectIds.append(project.id!)
-            }
-        }
-        return accessibleProjectIds
     }
 }
