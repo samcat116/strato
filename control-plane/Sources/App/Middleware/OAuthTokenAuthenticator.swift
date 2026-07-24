@@ -28,13 +28,7 @@ struct OAuthTokenAuthenticator: AsyncBearerAuthenticator {
             return  // Revoked session or expired access token; CLI must refresh
         }
 
-        let clientIP = request.trustedClientIP
-
-        Task {
-            session.lastUsedAt = Date()
-            session.lastUsedIP = clientIP
-            try? await session.save(on: request.db)
-        }
+        session.recordUsage(ip: request.trustedClientIP, on: request.application)
 
         request.auth.login(session.user)
         request.storage[CLISessionStorageKey.self] = session

@@ -86,11 +86,6 @@ final class APIKey: Model, @unchecked Sendable {
         return hashed.compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    func updateLastUsed(ip: String?) async throws {
-        self.lastUsedAt = Date()
-        self.lastUsedIP = ip
-    }
-
     var isExpired: Bool {
         guard let expiresAt = expiresAt else { return false }
         return Date() > expiresAt

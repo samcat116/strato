@@ -101,13 +101,11 @@ struct SCIMController: RouteCollection {
             return nil
         }
 
-        // Update last used (best effort, with error logging)
-        scimToken.updateLastUsed(ip: req.remoteAddress?.ipAddress)
-        do {
-            try await scimToken.save(on: req.db)
-        } catch {
-            req.logger.error("Failed to update SCIM token lastUsed fields: \(error.localizedDescription)")
-        }
+        // Record last used (debounced, in the background — the request does not
+        // wait on it). The address comes from the shared proxy-trust config, as
+        // it does for API keys and CLI sessions; the raw socket peer this used
+        // to record is the ingress proxy in every supported deployment.
+        scimToken.recordUsage(ip: req.trustedClientIP, on: req.application)
 
         return SCIMAuthContext(
             principal: "scim-token:\(scimToken.id?.uuidString ?? "unknown")",
