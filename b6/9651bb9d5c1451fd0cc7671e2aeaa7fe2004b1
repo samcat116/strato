@@ -1,0 +1,25 @@
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_1034a0a26ad83b::t_e66e76def42676 111,150,160
+  s_1034a0a26ad83b::t_1f7bbcf078ae04 105-110
+control-plane/Tests/AppTests/IAMBatchDecisionTests.swift
+  s_1034a0a26ad83b::t_67ef852e418c93 124-131
+  s_1034a0a26ad83b::t_96d07c2bcc4130 169-173
+  s_1034a0a26ad83b::t_21d81e1bd176bc 211-220
+  s_1034a0a26ad83b::t_ff8cdc407291bd 317-353
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b69651bb9d5c1451fd0cc7671e2aeaa7fe2004b1",
+  "prompts": {},
+  "sessions": {
+    "s_1034a0a26ad83b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc8d49e-cab6-4fad-9c6c-a4e1c8569c7e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
