@@ -89,97 +89,151 @@ enum IAMResourceTree {
     static func resolve(
         _ node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
     ) async throws -> Resolution {
-        if let cached = cache?.chain(of: node) { return cached }
-        let resolution = try await walk(from: node, on: db)
-        cache?.store(chain: resolution, of: node)
-        return resolution
+        let resolved = try await resolve([node], cache: cache, on: db)
+        // The batch is total over its inputs; the fallback is unreachable and
+        // exists only so the single-node form need not force-unwrap.
+        return resolved[node] ?? Resolution(chain: [node], leaf: IAMLeafFacts())
     }
 
-    private static func walk(from node: IAMNode, on db: any Database) async throws -> Resolution {
-        // A folder leaf resolves its whole chain in the batched walk below;
-        // starting there costs one query for any depth.
-        if node.type == .organizationalUnit {
-            return Resolution(
-                chain: try await folderChain(from: node.id, limit: maxDepth, on: db), leaf: IAMLeafFacts())
-        }
-
-        var chain: [IAMNode] = [node]
-        var seen: Set<IAMNode> = [node]
-        var cursor = node
-        var leaf = IAMLeafFacts()
-
-        while chain.count < maxDepth {
-            let step = try await self.step(from: cursor, on: db)
-            if cursor == node { leaf = step.leaf }
-            guard let next = step.parent else { break }
-            // Everything above a folder is folders and then the organization,
-            // so hand the rest of the walk to the batched resolver.
-            if next.type == .organizationalUnit {
-                chain += try await folderChain(from: next.id, limit: maxDepth - chain.count, on: db)
-                break
+    /// Resolve many nodes in one walk (#687).
+    ///
+    /// This is the only walk: the single-node form above is a batch of one, so
+    /// there is no second chain-building implementation to drift from this one.
+    /// Every level of the tree is one query *per node type in the frontier*,
+    /// for the whole batch at once — a hundred VMs in a list cost the same
+    /// three or four queries one VM does, instead of three or four each.
+    static func resolve(
+        _ nodes: [IAMNode], cache: IAMRequestCache? = nil, on db: any Database
+    ) async throws -> [IAMNode: Resolution] {
+        var resolved: [IAMNode: Resolution] = [:]
+        var pending: [IAMNode] = []
+        for node in Set(nodes) {
+            if let cached = cache?.chain(of: node) {
+                resolved[node] = cached
+            } else {
+                pending.append(node)
             }
-            guard seen.insert(next).inserted else { break }
-            chain.append(next)
-            cursor = next
         }
-        return Resolution(chain: chain, leaf: leaf)
+        guard !pending.isEmpty else { return resolved }
+
+        for (node, resolution) in try await walk(from: pending, on: db) {
+            cache?.store(chain: resolution, of: node)
+            resolved[node] = resolution
+        }
+        return resolved
     }
 
-    /// The chain from a folder up to its organization, folder first.
+    /// One node's walk in progress: the chain so far, the nodes it has already
+    /// visited (the cycle guard), the facts harvested from its own row, and the
+    /// node whose parent is wanted next — nil once the walk has terminated.
+    private struct Path {
+        var chain: [IAMNode]
+        var seen: Set<IAMNode>
+        var leaf: IAMLeafFacts
+        var cursor: IAMNode?
+    }
+
+    /// One step up the tree: the parent, and whatever the loaded row says about
+    /// the node itself. Callers walking past the first node ignore the facts;
+    /// the authorization path keeps the first step's, which is why the leaf row
+    /// is never read twice.
+    private struct Step {
+        let parent: IAMNode?
+        let leaf: IAMLeafFacts
+    }
+
+    /// Walk every path upward in lockstep, one batched query per (level, type).
+    private static func walk(from starts: [IAMNode], on db: any Database) async throws -> [IAMNode: Resolution] {
+        var paths: [IAMNode: Path] = [:]
+        for start in starts {
+            paths[start] = Path(chain: [start], seen: [start], leaf: IAMLeafFacts(), cursor: start)
+        }
+        // Folder rows are memoized across levels because their materialized
+        // paths let one query pull an entire remaining chain — see `step`.
+        var folders = FolderRows()
+
+        for _ in 0..<maxDepth {
+            var frontier: [IAMNodeType: Set<UUID>] = [:]
+            for path in paths.values {
+                guard let cursor = path.cursor else { continue }
+                frontier[cursor.type, default: []].insert(cursor.id)
+            }
+            if frontier.isEmpty { break }
+
+            var steps: [IAMNode: Step] = [:]
+            for type in frontier.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+                let level = try await step(ids: frontier[type]!, type: type, folders: &folders, on: db)
+                for (id, step) in level { steps[IAMNode(type: type, id: id)] = step }
+            }
+
+            for (start, var path) in paths {
+                guard let cursor = path.cursor else { continue }
+                defer { paths[start] = path }
+                path.cursor = nil
+
+                guard let step = steps[cursor] else {
+                    // No row behind the node. A dangling *folder* leaves the
+                    // chain entirely — folder chains have always been assembled
+                    // from rows that exist, so a binding on a deleted folder
+                    // must not start applying — while every other type stays in
+                    // the chain and simply ends it, which is what the walk has
+                    // always done for a dangling project or site.
+                    if cursor.type == .organizationalUnit { path.chain.removeLast() }
+                    continue
+                }
+                if cursor == start { path.leaf = step.leaf }
+                guard let next = step.parent, path.chain.count < maxDepth,
+                    path.seen.insert(next).inserted
+                else { continue }
+                path.chain.append(next)
+                path.cursor = next
+            }
+        }
+
+        return paths.mapValues { Resolution(chain: $0.chain, leaf: $0.leaf) }
+    }
+
+    /// Folder rows already loaded by this walk.
     ///
     /// The parent pointers stay authoritative: the materialized `path`
     /// (`/orgId/ouId/…/selfId`) is used only as a *prefetch hint*, pulling the
-    /// rows this walk is about to need in one query instead of one per level.
-    /// A stale or unparsable path therefore costs a query, never a wrong
-    /// chain — which matters because the chain decides which bindings and
-    /// which guardrails apply.
-    private static func folderChain(from ouID: UUID, limit: Int, on db: any Database) async throws -> [IAMNode] {
-        guard limit > 0, let first = try await OrganizationalUnit.find(ouID, on: db) else { return [] }
-
-        var prefetched: [UUID: OrganizationalUnit] = [:]
-        let hinted = first.ancestorAndSelfOUIDs().filter { $0 != ouID }
-        if !hinted.isEmpty {
-            for row in try await OrganizationalUnit.query(on: db).filter(\.$id ~~ hinted).all() {
-                if let id = row.id { prefetched[id] = row }
-            }
-        }
-
-        var chain: [IAMNode] = []
-        var seen: Set<UUID> = []
-        var cursor: OrganizationalUnit? = first
-        while let ou = cursor, let id = ou.id, chain.count < limit, seen.insert(id).inserted {
-            chain.append(IAMNode(type: .organizationalUnit, id: id))
-            guard let parentOUID = ou.$parentOU.id else {
-                if chain.count < limit {
-                    chain.append(IAMNode(type: .organization, id: ou.$organization.id))
-                }
-                break
-            }
-            if let hit = prefetched[parentOUID] {
-                cursor = hit
-            } else {
-                cursor = try await OrganizationalUnit.find(parentOUID, on: db)
-            }
-        }
-        return chain
+    /// rows the walk is about to need in one query instead of one per level. A
+    /// stale or unparsable path therefore costs a query, never a wrong chain —
+    /// which matters because the chain decides which bindings and which
+    /// guardrails apply.
+    private struct FolderRows {
+        var rows: [UUID: OrganizationalUnit] = [:]
+        /// Ids already queried for, so an id the hint named but the table does
+        /// not have is not re-queried at every level.
+        var attempted: Set<UUID> = []
     }
 
-    /// The single parent of a node, or nil at the root (or when the parent
-    /// cannot be resolved).
-    static func parent(of node: IAMNode, on db: any Database) async throws -> IAMNode? {
-        try await step(from: node, on: db).parent
-    }
-
-    /// One step up the tree, plus whatever the loaded row says about the node
-    /// itself. Callers walking past the first node ignore the facts; the
-    /// authorization path keeps the first step's, which is why the leaf row is
-    /// never read twice.
+    /// One step up the tree for a whole level of same-typed nodes.
+    ///
+    /// A node whose row is missing is simply absent from the result; callers
+    /// read that as "the chain ends here".
     private static func step(
-        from node: IAMNode, on db: any Database
-    ) async throws -> (parent: IAMNode?, leaf: IAMLeafFacts) {
-        switch node.type {
+        ids: Set<UUID>, type: IAMNodeType, folders: inout FolderRows, on db: any Database
+    ) async throws -> [UUID: Step] {
+        let idList = Array(ids)
+
+        /// The shape almost every resource shares: contained by its project.
+        func projectParents<M: Model>(
+            _ rows: [M], id: (M) -> UUID?, projectID: (M) -> UUID, environment: (M) -> String? = { _ in nil }
+        ) -> [UUID: Step] {
+            var steps: [UUID: Step] = [:]
+            for row in rows {
+                guard let rowID = id(row) else { continue }
+                steps[rowID] = Step(
+                    parent: IAMNode(type: .project, id: projectID(row)),
+                    leaf: IAMLeafFacts(environment: environment(row)))
+            }
+            return steps
+        }
+
+        switch type {
         case .organization:
-            return (nil, IAMLeafFacts())
+            return Dictionary(uniqueKeysWithValues: idList.map { ($0, Step(parent: nil, leaf: IAMLeafFacts())) })
 
         case .user:
             // A user record is parentless by construction: users belong to
@@ -187,86 +241,154 @@ enum IAMResourceTree {
             // entity), and the tree's one-parent invariant cannot express
             // that. Access to a user record comes from the two tier-1
             // policies instead of from anything inherited.
-            return (nil, IAMLeafFacts())
+            return Dictionary(uniqueKeysWithValues: idList.map { ($0, Step(parent: nil, leaf: IAMLeafFacts())) })
 
         case .organizationalUnit:
-            guard let ou = try await OrganizationalUnit.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            if let parentOUID = ou.$parentOU.id {
-                return (IAMNode(type: .organizationalUnit, id: parentOUID), IAMLeafFacts())
+            let unknown = ids.subtracting(folders.attempted)
+            if !unknown.isEmpty {
+                folders.attempted.formUnion(unknown)
+                for row in try await OrganizationalUnit.query(on: db).filter(\.$id ~~ Array(unknown)).all() {
+                    if let id = row.id { folders.rows[id] = row }
+                }
             }
-            return (IAMNode(type: .organization, id: ou.$organization.id), IAMLeafFacts())
+            // Pull the rest of every folder chain in this level in one query,
+            // hinted by the materialized paths, so depth costs a query rather
+            // than a query per level.
+            let hinted = Set(ids.compactMap { folders.rows[$0] }.flatMap { $0.ancestorAndSelfOUIDs() })
+                .subtracting(folders.attempted)
+            if !hinted.isEmpty {
+                folders.attempted.formUnion(hinted)
+                for row in try await OrganizationalUnit.query(on: db).filter(\.$id ~~ Array(hinted)).all() {
+                    if let id = row.id { folders.rows[id] = row }
+                }
+            }
+            var steps: [UUID: Step] = [:]
+            for id in ids {
+                guard let ou = folders.rows[id] else { continue }
+                if let parentOUID = ou.$parentOU.id {
+                    steps[id] = Step(
+                        parent: IAMNode(type: .organizationalUnit, id: parentOUID), leaf: IAMLeafFacts())
+                } else {
+                    steps[id] = Step(
+                        parent: IAMNode(type: .organization, id: ou.$organization.id), leaf: IAMLeafFacts())
+                }
+            }
+            return steps
 
         case .project:
-            guard let project = try await Project.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            if let ouID = project.$organizationalUnit.id {
-                return (IAMNode(type: .organizationalUnit, id: ouID), IAMLeafFacts())
+            var steps: [UUID: Step] = [:]
+            for project in try await Project.query(on: db).filter(\.$id ~~ idList).all() {
+                guard let id = project.id else { continue }
+                if let ouID = project.$organizationalUnit.id {
+                    steps[id] = Step(
+                        parent: IAMNode(type: .organizationalUnit, id: ouID), leaf: IAMLeafFacts())
+                } else if let orgID = project.$organization.id {
+                    steps[id] = Step(parent: IAMNode(type: .organization, id: orgID), leaf: IAMLeafFacts())
+                } else {
+                    steps[id] = Step(parent: nil, leaf: IAMLeafFacts())
+                }
             }
-            if let orgID = project.$organization.id {
-                return (IAMNode(type: .organization, id: orgID), IAMLeafFacts())
-            }
-            return (nil, IAMLeafFacts())
+            return steps
 
         case .virtualMachine:
-            guard let vm = try await VM.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: vm.$project.id), IAMLeafFacts(environment: vm.environment))
+            return projectParents(
+                try await VM.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
 
         case .sandbox:
-            guard let sandbox = try await Sandbox.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (
-                IAMNode(type: .project, id: sandbox.$project.id), IAMLeafFacts(environment: sandbox.environment)
-            )
+            return projectParents(
+                try await Sandbox.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
 
         case .image:
-            guard let image = try await Image.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: image.$project.id), IAMLeafFacts())
+            return projectParents(
+                try await Image.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .volume:
-            guard let volume = try await Volume.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: volume.$project.id), IAMLeafFacts())
+            return projectParents(
+                try await Volume.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .volumeSnapshot:
-            guard let snapshot = try await VolumeSnapshot.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
             // A snapshot references its volume by attribute, not as a parent
             // (docs/architecture/iam.md) — its container is the project.
-            return (IAMNode(type: .project, id: snapshot.$project.id), IAMLeafFacts())
+            return projectParents(
+                try await VolumeSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .sandboxSnapshot:
-            guard let snapshot = try await SandboxSnapshot.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (
-                IAMNode(type: .project, id: snapshot.$project.id), IAMLeafFacts(environment: snapshot.environment)
-            )
-
-        case .network:
-            guard let network = try await LogicalNetwork.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            let facts = IAMLeafFacts(
-                networkHasProject: network.$project.id != nil, networkHasSite: network.$site.id != nil)
-            if let projectID = network.$project.id {
-                return (IAMNode(type: .project, id: projectID), facts)
-            }
-            // A site-scoped network has no project; it inherits from whichever
-            // org or folder owns the site's capacity.
-            guard let siteID = network.$site.id else { return (nil, facts) }
-            return (try await parent(of: IAMNode(type: .site, id: siteID), on: db), facts)
+            return projectParents(
+                try await SandboxSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
 
         case .floatingIP:
-            guard let floatingIP = try await FloatingIP.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: floatingIP.$project.id), IAMLeafFacts())
+            return projectParents(
+                try await FloatingIP.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .securityGroup:
-            guard let group = try await SecurityGroup.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: group.$project.id), IAMLeafFacts())
-
-        case .site:
-            guard let site = try await Site.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id), IAMLeafFacts())
-
-        case .agent:
-            guard let agent = try await Agent.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (scopeNode(ouID: agent.$organizationalUnit.id, orgID: agent.$organization.id), IAMLeafFacts())
+            return projectParents(
+                try await SecurityGroup.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .serviceAccount:
-            guard let account = try await ServiceAccount.find(node.id, on: db) else { return (nil, IAMLeafFacts()) }
-            return (IAMNode(type: .project, id: account.$project.id), IAMLeafFacts())
+            return projectParents(
+                try await ServiceAccount.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
+
+        case .network:
+            var steps: [UUID: Step] = [:]
+            var siteScoped: [UUID: UUID] = [:]
+            for network in try await LogicalNetwork.query(on: db).filter(\.$id ~~ idList).all() {
+                guard let id = network.id else { continue }
+                let facts = IAMLeafFacts(
+                    networkHasProject: network.$project.id != nil, networkHasSite: network.$site.id != nil)
+                if let projectID = network.$project.id {
+                    steps[id] = Step(parent: IAMNode(type: .project, id: projectID), leaf: facts)
+                    continue
+                }
+                // A site-scoped network has no project; it inherits from
+                // whichever org or folder owns the site's capacity. The site
+                // itself is not part of the chain, so it is resolved here
+                // rather than walked through.
+                steps[id] = Step(parent: nil, leaf: facts)
+                if let siteID = network.$site.id { siteScoped[id] = siteID }
+            }
+            if !siteScoped.isEmpty {
+                var scopes: [UUID: IAMNode] = [:]
+                for site in try await Site.query(on: db).filter(\.$id ~~ Array(Set(siteScoped.values))).all() {
+                    guard let id = site.id,
+                        let scope = scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id)
+                    else { continue }
+                    scopes[id] = scope
+                }
+                for (networkID, siteID) in siteScoped {
+                    guard let leaf = steps[networkID]?.leaf else { continue }
+                    steps[networkID] = Step(parent: scopes[siteID], leaf: leaf)
+                }
+            }
+            return steps
+
+        case .site:
+            var steps: [UUID: Step] = [:]
+            for site in try await Site.query(on: db).filter(\.$id ~~ idList).all() {
+                guard let id = site.id else { continue }
+                steps[id] = Step(
+                    parent: scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id),
+                    leaf: IAMLeafFacts())
+            }
+            return steps
+
+        case .agent:
+            var steps: [UUID: Step] = [:]
+            for agent in try await Agent.query(on: db).filter(\.$id ~~ idList).all() {
+                guard let id = agent.id else { continue }
+                steps[id] = Step(
+                    parent: scopeNode(ouID: agent.$organizationalUnit.id, orgID: agent.$organization.id),
+                    leaf: IAMLeafFacts())
+            }
+            return steps
         }
     }
 

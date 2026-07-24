@@ -134,23 +134,103 @@ enum IAMAuthorizer {
                 markAuditState(memoized, state: state)
                 return memoized
             }
-            let decision = try await evaluate(
+            let decisions = try await evaluate(
                 principal: principal,
                 action: action,
-                node: node,
-                legacyEquivalent: legacyEquivalent,
+                nodes: [node],
+                legacyEquivalents: legacyEquivalent.map { [node: $0] } ?? [:],
                 context: context,
                 state: state,
                 cache: cache,
                 app: app,
                 db: db
             )
-            cache?.store(decision: decision, for: key)
+            guard let decision = decisions[node] else {
+                // Unreachable: the batch is total over its inputs. Failing
+                // closed beats a force-unwrap in the enforcement path.
+                throw Abort(.internalServerError, reason: "Authorization evaluation failed")
+            }
             span.attributes["iam.cache_hit"] = false
             span.attributes["iam.decision"] = decision.allowed ? "allow" : "deny"
             Telemetry.recordAuthzDecision(
                 allowed: decision.allowed, durationSeconds: (clock.now - start).asSeconds)
             return decision
+        }
+    }
+
+    /// Evaluate one action for one principal over many nodes (#687) — the
+    /// list-filtering primitive behind `Request.canFilter`.
+    ///
+    /// A list endpoint used to pay a full evaluation per row: a hundred VMs
+    /// meant ~700 queries and a hundred decision-log inserts to answer one
+    /// question a hundred times. Here the whole batch shares one entity-slice
+    /// load, and the decision rows go in as one insert.
+    ///
+    /// The decisions are the same decisions the per-node path makes — same
+    /// evaluator, same compiled set, same recording — so a filtered list agrees
+    /// with the object route it links to. Nodes already decided this request
+    /// are answered from `cache` and not re-recorded.
+    ///
+    /// - Parameter legacyEquivalents: the legacy-vocabulary question each node
+    ///   was asked in, for the callers that still speak it (the batch check
+    ///   endpoint). The decision log records what was literally asked at the
+    ///   check site, so a batched legacy check must carry its phrasing exactly
+    ///   as the per-check path does.
+    static func authorize(
+        principal: IAMPrincipal,
+        action: String,
+        nodes: [IAMNode],
+        legacyEquivalents: [IAMNode: LegacyCheckEquivalent] = [:],
+        context: IAMCheckContext,
+        state: IAMRequestAuthState?,
+        cache: IAMRequestCache? = nil,
+        app: Application,
+        db: any Database
+    ) async throws -> [IAMNode: CedarCheckDecision] {
+        guard !nodes.isEmpty else { return [:] }
+        let clock = ContinuousClock()
+        let start = clock.now
+        return try await withSpan("iam.authorize_batch", ofKind: .internal) { span in
+            span.attributes["iam.action"] = action
+            span.attributes["iam.principal"] = principal.subject
+            span.attributes["iam.batch_size"] = nodes.count
+
+            var decisions: [IAMNode: CedarCheckDecision] = [:]
+            var pending: [IAMNode] = []
+            for node in Set(nodes) {
+                let key = IAMRequestCache.DecisionKey(principal: principal, action: action, node: node)
+                if let memoized = cache?.decision(for: key) {
+                    markAuditState(memoized, state: state)
+                    decisions[node] = memoized
+                } else {
+                    pending.append(node)
+                }
+            }
+            span.attributes["iam.cache_hits"] = decisions.count
+            guard !pending.isEmpty else { return decisions }
+
+            let evaluated = try await evaluate(
+                principal: principal,
+                action: action,
+                nodes: pending,
+                legacyEquivalents: legacyEquivalents,
+                context: context,
+                state: state,
+                cache: cache,
+                app: app,
+                db: db
+            )
+            decisions.merge(evaluated) { _, new in new }
+
+            // One elapsed time covers the batch, so the per-decision timer gets
+            // the amortized share — the number an operator reads as "what a
+            // check costs", which is exactly what batching changed.
+            let perDecision = (clock.now - start).asSeconds / Double(evaluated.count)
+            for decision in evaluated.values {
+                Telemetry.recordAuthzDecision(allowed: decision.allowed, durationSeconds: perDecision)
+            }
+            span.attributes["iam.allowed"] = decisions.values.filter(\.allowed).count
+            return decisions
         }
     }
 
@@ -167,78 +247,103 @@ enum IAMAuthorizer {
 
     /// The uninstrumented check: `IAMDecisionEngine.decide` plus everything
     /// enforcement owes on top of a decision — the fail-closed error surface,
-    /// the audit-state flags, and the decision-log row. `authorize(principal:…)`
-    /// wraps this with the span and decision metrics.
+    /// the audit-state flags, the memoization, and the decision-log rows. Both
+    /// `authorize` entry points wrap this with their span and decision metrics,
+    /// so a batched list decision and a single object check are the same
+    /// decision made the same way.
     private static func evaluate(
         principal: IAMPrincipal,
         action: String,
-        node: IAMNode,
-        legacyEquivalent: LegacyCheckEquivalent?,
+        nodes: [IAMNode],
+        legacyEquivalents: [IAMNode: LegacyCheckEquivalent],
         context: IAMCheckContext,
         state: IAMRequestAuthState?,
         cache: IAMRequestCache?,
         app: Application,
         db: any Database
-    ) async throws -> CedarCheckDecision {
+    ) async throws -> [IAMNode: CedarCheckDecision] {
         let built = try await IAMDecisionEngine.compiledSet(app)
+        let targets = nodes.map { IAMCheckTarget(principal: principal, node: $0) }
 
-        let outcome: IAMDecisionEngine.Decision
+        let outcomes: [IAMCheckTarget: IAMDecisionEngine.Decision]
         do {
-            outcome = try await IAMDecisionEngine.decide(
-                principal: principal, action: action, node: node, built: built, cache: cache, on: db)
+            outcomes = try await IAMDecisionEngine.decide(
+                targets, action: action, built: built, cache: cache, on: db)
         } catch let failure as IAMDecisionEngine.EvaluationFailure {
             app.logger.error(
                 "Cedar evaluation failed; failing closed",
                 metadata: [
                     "action": .string(action),
-                    "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
+                    "resource": .string(resourceMetadata(nodes)),
                     "error": .string("\(failure.underlying)"),
                 ])
             throw Abort(.internalServerError, reason: "Authorization evaluation failed")
         }
 
-        if outcome.deniedForTruncatedChain {
-            app.logger.error(
-                "IAM check denied: ancestor chain does not reach an organization; a guardrail anchored above the break could not apply",
-                metadata: [
-                    "action": .string(action),
-                    "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
-                    "chain": .string(
-                        outcome.slice.chain.map { "\($0.type.rawValue):\($0.id.uuidString)" }
-                            .joined(separator: " -> ")),
-                ])
-        } else {
-            // Grants for roles the compiled schema doesn't declare are dropped
-            // (under-grant) — a role created or deleted since this replica's
-            // last rebuild. Transient by design (the version nudge or 30s
-            // re-read converges it), but worth a trace when it happens.
-            let droppedRoleIDs = outcome.slice.grants.roleIDs.subtracting(built.roleIDs)
-            if !droppedRoleIDs.isEmpty {
-                app.logger.info(
-                    "IAM check dropped grants for roles the compiled policy set does not know yet",
+        var decisions: [IAMNode: CedarCheckDecision] = [:]
+        decisions.reserveCapacity(outcomes.count)
+        var records: [IAMDecisionRecord] = []
+        records.reserveCapacity(outcomes.count)
+
+        for (target, outcome) in outcomes {
+            let node = target.node
+            if outcome.deniedForTruncatedChain {
+                app.logger.error(
+                    "IAM check denied: ancestor chain does not reach an organization; a guardrail anchored above the break could not apply",
                     metadata: [
-                        "role_ids": .string(droppedRoleIDs.map(\.uuidString).sorted().joined(separator: ",")),
-                        "policy_version": .stringConvertible(built.version),
+                        "action": .string(action),
+                        "resource": .string("\(node.type.rawValue):\(node.id.uuidString)"),
+                        "chain": .string(
+                            outcome.slice.chain.map { "\($0.type.rawValue):\($0.id.uuidString)" }
+                                .joined(separator: " -> ")),
                     ])
+            } else {
+                // Grants for roles the compiled schema doesn't declare are
+                // dropped (under-grant) — a role created or deleted since this
+                // replica's last rebuild. Transient by design (the version
+                // nudge or 30s re-read converges it), but worth a trace when it
+                // happens.
+                let droppedRoleIDs = outcome.slice.grants.roleIDs.subtracting(built.roleIDs)
+                if !droppedRoleIDs.isEmpty {
+                    app.logger.info(
+                        "IAM check dropped grants for roles the compiled policy set does not know yet",
+                        metadata: [
+                            "role_ids": .string(droppedRoleIDs.map(\.uuidString).sorted().joined(separator: ",")),
+                            "policy_version": .stringConvertible(built.version),
+                        ])
+                }
             }
+
+            markAuditState(outcome.verdict, state: state)
+            cache?.store(
+                decision: outcome.verdict,
+                for: IAMRequestCache.DecisionKey(principal: principal, action: action, node: node))
+            decisions[node] = outcome.verdict
+            records.append(
+                IAMDecisionRecord(
+                    subject: principal.subject,
+                    action: action,
+                    node: node,
+                    organizationID: outcome.slice.chain.first(where: { $0.type == .organization })?.id,
+                    skippedConditionedBindings: outcome.slice.skippedConditionedBindings,
+                    decision: outcome.verdict,
+                    policyVersion: built.version,
+                    legacyEquivalent: legacyEquivalents[node],
+                    context: context
+                ))
         }
 
-        markAuditState(outcome.verdict, state: state)
+        app.iamDecisionRecorder.recordInBackground(records)
+        return decisions
+    }
 
-        app.iamDecisionRecorder.recordInBackground(
-            IAMDecisionRecord(
-                subject: principal.subject,
-                action: action,
-                node: node,
-                organizationID: outcome.slice.chain.first(where: { $0.type == .organization })?.id,
-                skippedConditionedBindings: outcome.slice.skippedConditionedBindings,
-                decision: outcome.verdict,
-                policyVersion: built.version,
-                legacyEquivalent: legacyEquivalent,
-                context: context
-            ))
-
-        return outcome.verdict
+    /// The `resource` log field for a failed evaluation: the node for a single
+    /// check, a count for a batch (naming a hundred VMs would bury the error).
+    private static func resourceMetadata(_ nodes: [IAMNode]) -> String {
+        guard let first = nodes.first, nodes.count == 1 else {
+            return "\(nodes.count) nodes"
+        }
+        return "\(first.type.rawValue):\(first.id.uuidString)"
     }
 
     /// Evaluate a check still phrased in the legacy (pre-Cedar) permission
@@ -321,6 +426,36 @@ extension Request {
             db: db
         )
         return decision.allowed
+    }
+
+    /// Scope a list: the subset of `nodes` the current user may `action`,
+    /// decided in one batch (#687).
+    ///
+    /// The list-filtering counterpart to `can` — same evaluator, same compiled
+    /// set, same decision log — for handlers that would otherwise loop `can`
+    /// per row and turn a page of results into hundreds of queries. Callers
+    /// filter their own rows against the returned set, keeping their ordering
+    /// and their DTO mapping.
+    ///
+    /// - Throws: `.unauthorized` if unauthenticated; `.serviceUnavailable` /
+    ///   `.internalServerError` when the evaluator cannot answer (fail
+    ///   closed) — a list that cannot be scoped is an error, never a
+    ///   silently-empty page.
+    func canFilter(_ action: String, on nodes: [IAMNode]) async throws -> Set<IAMNode> {
+        guard let user = auth.get(User.self), let userID = user.id else {
+            throw Abort(.unauthorized)
+        }
+        let decisions = try await IAMAuthorizer.authorize(
+            principal: .user(userID),
+            action: action,
+            nodes: nodes,
+            context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id),
+            state: iamAuthState,
+            cache: iamCache,
+            app: application,
+            db: db
+        )
+        return Set(decisions.filter { $0.value.allowed }.keys)
     }
 
     /// Enforce `action` on `node`, throwing `.forbidden` when denied.

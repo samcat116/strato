@@ -476,6 +476,14 @@ struct AgentController: RouteCollection {
         // A pre-scoping agent has no ancestor chain to evaluate against and
         // stays system-admin only, as in `requireAgentPermission`. An
         // organization_id filter narrows the query first — see listSites.
+        // The scoped rows are decided in one batch (#687); a scopeless row has
+        // no node to batch and is answered without the evaluator.
+        let readable = try await req.canFilter(
+            "agent:read",
+            on: agents.compactMap { agent in
+                guard agent.organizationScope != nil, let id = agent.id else { return nil }
+                return IAMNode(type: .agent, id: id)
+            })
         var visible: [Agent] = []
         for agent in agents {
             guard let agentId = agent.id else { continue }
@@ -483,8 +491,7 @@ struct AgentController: RouteCollection {
                 if req.allowsScopelessPlatformRow() { visible.append(agent) }
                 continue
             }
-            let ok = try await req.can("view", on: "agent", id: agentId.uuidString)
-            if ok { visible.append(agent) }
+            if readable.contains(IAMNode(type: .agent, id: agentId)) { visible.append(agent) }
         }
 
         // Update status based on heartbeat before returning

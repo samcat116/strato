@@ -991,6 +991,49 @@ in at most two queries rather than one per level: the materialized
 while the parent pointers stay authoritative, so a stale path costs a query,
 never a wrong chain.
 
+#### Batch decisions (shipped with #687)
+
+The cache above makes a *repeated* question free, but a list endpoint asks a
+different question per row — `GET /api/vms` asks "may I read this VM?" once per
+VM — so a hundred rows meant a hundred full evaluations and a hundred
+decision-log inserts.
+
+`IAMDecisionEngine.decide(_ targets:action:built:cache:on:)` decides a whole
+batch of `(principal, node)` questions at once, and `Request.canFilter(_:on:)`
+is the list-scoping sugar over it: hand it the page's nodes, get back the
+subset the caller may act on. Cedar evaluation itself never needed batching —
+it is pure CPU over an entity store already in memory — so all of the work is
+in `EntitySliceLoader`, where every read became set-based:
+
+- Ancestor chains resolve in one **lockstep walk**: each level of the tree is
+  one query per node type in the frontier, for the whole batch at once.
+  `IAMResourceTree.resolve(_ nodes:)` is now the only walk, and the
+  single-node form is a batch of one — there is no second chain builder to
+  drift from it.
+- Principal memberships load in three queries however many principals the
+  batch names (which is what makes who-can's ceiling marking, N principals on
+  one node, cost what one principal costs).
+- Bindings along every chain come back in a **single query**, its predicate
+  grouped as `(type, id-set)` pairs so a hundred-VM page is a handful of OR
+  terms rather than a hundred.
+
+The number of queries therefore depends on the *shape* of a batch — tree depth
+and node types — not its size: scoping twenty-five VMs costs exactly what
+scoping one costs, which `IAMBatchDecisionTests` asserts by counting queries
+rather than by timing an endpoint.
+
+Decision rows are batched to match: a batched authorization enqueues one
+gated background task that writes the whole page as one multi-row insert.
+Spawning a row per item is what used to push a large list into the recording
+gate's shed ceiling — a hundred tasks each queueing for one of four slots.
+
+The single-question forms (`decide(principal:action:node:)`,
+`EntitySliceLoader.load(principal:node:)`, `IAMAuthorizer.authorize(…node:)`)
+are all batches of one. Agreement between a batched list decision and the
+per-object check it links to is therefore structural rather than a property
+two code paths have to maintain — and it is pinned by tests over a mixed grid
+of principals, actions, and node types all the same.
+
 ## Migration plan
 
 Phases; each landed independently:

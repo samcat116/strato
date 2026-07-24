@@ -93,27 +93,74 @@ struct AuthorizationController: RouteCollection {
             return try await checkForPrincipal(principal, payload.checks, req: req)
         }
 
+        let context = IAMCheckContext(
+            path: req.url.path, method: req.method.rawValue, requestID: req.id)
+
+        // Resolve every item to an (action, node) pair first, then decide one
+        // batch per distinct action (#687). Asking a batch endpoint's fifty
+        // questions one at a time was fifty full evaluations — the shape this
+        // endpoint exists to avoid.
+        var asked: [(key: String, action: String, node: IAMNode)] = []
+        var nodesByAction: [String: [IAMNode]] = [:]
+        var legacyEquivalents: [IAMNode: LegacyCheckEquivalent] = [:]
         var results: [String: Bool] = [:]
+
         for item in payload.checks {
             // Action names carry a `:`; anything else is the legacy
             // vocabulary and goes through the same translation as `req.can`.
             if item.permission.contains(":") {
                 let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
-                results[item.key] = try await req.can(item.permission, on: node)
-            } else {
+                asked.append((item.key, item.permission, node))
+                nodesByAction[item.permission, default: []].append(node)
+                continue
+            }
+            guard
+                let translation = IAMActionTranslator.translate(
+                    permission: item.permission,
+                    resourceType: item.resourceType,
+                    resourceID: item.resourceId,
+                    path: req.url.path)
+            else {
+                // Untranslatable fails closed — denied, logged, and recorded as
+                // `untranslated`. Routed through the per-check path so there is
+                // one place that decides what an unmapped pair means.
                 results[item.key] = try await IAMAuthorizer.checkLegacyVocabulary(
                     userID: userID,
                     permission: item.permission,
                     resourceType: item.resourceType,
                     resourceID: item.resourceId,
-                    context: IAMCheckContext(
-                        path: req.url.path, method: req.method.rawValue, requestID: req.id),
+                    context: context,
                     state: req.iamAuthState,
                     cache: req.iamCache,
                     app: req.application,
                     db: req.db
                 )
+                continue
             }
+            asked.append((item.key, translation.action, translation.node))
+            nodesByAction[translation.action, default: []].append(translation.node)
+            // The decision log records what was literally asked at the check
+            // site, not a back-translation.
+            legacyEquivalents[translation.node] = LegacyCheckEquivalent(
+                permission: item.permission, resourceType: item.resourceType, resourceID: item.resourceId)
+        }
+
+        var decisions: [String: [IAMNode: CedarCheckDecision]] = [:]
+        for (action, nodes) in nodesByAction {
+            decisions[action] = try await IAMAuthorizer.authorize(
+                principal: .user(userID),
+                action: action,
+                nodes: nodes,
+                legacyEquivalents: legacyEquivalents,
+                context: context,
+                state: req.iamAuthState,
+                cache: req.iamCache,
+                app: req.application,
+                db: req.db
+            )
+        }
+        for item in asked {
+            results[item.key] = decisions[item.action]?[item.node]?.allowed ?? false
         }
         return CheckResponse(results: results)
     }
@@ -125,20 +172,34 @@ struct AuthorizationController: RouteCollection {
         // Gate each distinct resource once: a batch may ask fifty questions
         // about the same VM, and the gate is a tree walk plus evaluator calls.
         var gated: Set<IAMNode> = []
-        var results: [String: Bool] = [:]
+        var asked: [(key: String, action: String, node: IAMNode)] = []
+        var nodesByAction: [String: [IAMNode]] = [:]
         for item in checks {
             let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
             if gated.insert(node).inserted {
                 try await Self.requirePolicyRead(on: node, req: req)
             }
-            results[item.key] = try await WhoCanService.can(
+            asked.append((item.key, item.permission, node))
+            nodesByAction[item.permission, default: []].append(node)
+        }
+
+        // One batch per distinct action, as in `check`.
+        var answers: [String: [IAMNode: Bool]] = [:]
+        for (action, nodes) in nodesByAction {
+            answers[action] = try await WhoCanService.can(
                 principalType: principal.type,
                 principalID: principal.id,
-                action: item.permission,
-                node: node,
+                action: action,
+                nodes: nodes,
                 app: req.application,
+                cache: req.iamCache,
                 on: req.db
             )
+        }
+
+        var results: [String: Bool] = [:]
+        for item in asked {
+            results[item.key] = answers[item.action]?[item.node] ?? false
         }
         return CheckResponse(results: results)
     }
