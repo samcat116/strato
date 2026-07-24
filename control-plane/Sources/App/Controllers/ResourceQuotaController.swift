@@ -476,10 +476,14 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has access to quota
         try await verifyQuotaAccess(quota: quota, on: req)
 
-        // Get actual usage based on quota scope
-        let (actualUsage, vms, _) = try await quota.calculateActualUsage(on: req.db)
+        // Measure actual usage over the quota's scope, resolved once and reused
+        // by both the totals and the per-VM breakdown.
+        let scope = try await QuotaUsageAggregator.scope(of: quota, on: req.db)
+        let usage = try await QuotaUsageAggregator.measure(scope, on: req.db)
+        let breakdown = try await QuotaUsageAggregator.vmBreakdown(in: scope, on: req.db)
 
-        return QuotaUsageService.usageResponse(for: quota, actualUsage: actualUsage, vms: vms)
+        return QuotaUsageService.usageResponse(
+            for: quota, actualUsage: usage.asQuotaUsage, breakdown: breakdown)
     }
 
     // MARK: - Helper Methods

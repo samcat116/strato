@@ -104,13 +104,6 @@ struct ProjectStatsServiceTests {
 struct QuotaUsageServiceTests {
     private func gib(_ n: Int64) -> Int64 { n * 1024 * 1024 * 1024 }
 
-    private func makeVM(env: String, status: VMStatus) -> VM {
-        VM(
-            name: "vm", description: "d", image: "img", projectID: UUID(),
-            environment: env, cpu: 1, memory: gib(1), disk: gib(1), status: status
-        )
-    }
-
     @Test("assembles limits, reservations, utilization, and VM breakdown")
     func testUsageResponse() {
         let quota = ResourceQuota(
@@ -119,13 +112,12 @@ struct QuotaUsageServiceTests {
             environment: "prod"
         )
         let actual = QuotaUsage(vcpus: 3, memoryGB: 2.0, storageGB: 20.0, vms: 3, sandboxes: 0, networks: 0)
-        let vms = [
-            makeVM(env: "dev", status: .running),
-            makeVM(env: "dev", status: .running),
-            makeVM(env: "prod", status: .shutdown),
-        ]
+        let breakdown = QuotaVMBreakdown(
+            byEnvironment: ["dev": 2, "prod": 1],
+            byStatus: [VMStatus.running.rawValue: 2, VMStatus.shutdown.rawValue: 1]
+        )
 
-        let response = QuotaUsageService.usageResponse(for: quota, actualUsage: actual, vms: vms)
+        let response = QuotaUsageService.usageResponse(for: quota, actualUsage: actual, breakdown: breakdown)
 
         #expect(response.quotaName == "Q")
         #expect(response.limits.maxMemoryGB == 8.0)

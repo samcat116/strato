@@ -366,6 +366,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Update OU
+        let previousPath = ou.path
         ou.$parentOU.id = moveRequest.newParentOuId
         ou.depth = try await calculateDepth(parentOU: newParent, on: req.db)
         ou.path = try await ou.buildPath(on: req.db)
@@ -373,7 +374,7 @@ struct OrganizationalUnitController: RouteCollection {
         try await ou.save(on: req.db)
 
         // Update paths for all descendants
-        try await updateDescendantPaths(ou: ou, on: req.db)
+        try await updateDescendantPaths(previousPath: previousPath, on: req.db)
 
         // Get counts for response
         let childOuCount = try await OrganizationalUnit.query(on: req.db)
@@ -537,13 +538,14 @@ struct OrganizationalUnitController: RouteCollection {
         )
     }
 
-    private func updateDescendantPaths(ou: OrganizationalUnit, on db: Database) async throws {
-        guard let ouId = ou.id else { return }
-
-        let descendants = try await OrganizationalUnit.query(on: db)
-            .filter(\.$path ~~ ouId.uuidString)
-            .filter(\.$id != ouId)
-            .all()
+    /// Rewrites the materialized `path` (and `depth`) of everything beneath a
+    /// folder that has just moved.
+    ///
+    /// Matched on the path the folder carried *before* the move: the moved row
+    /// is already saved with its new path, but its descendants still extend the
+    /// old one — that is exactly what this rewrites.
+    private func updateDescendantPaths(previousPath: String, on db: Database) async throws {
+        let descendants = try await OrganizationalUnit.descendants(ofPath: previousPath, on: db)
 
         for descendant in descendants {
             descendant.path = try await descendant.buildPath(on: db)

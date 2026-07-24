@@ -70,39 +70,28 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Get all resources
-        let allOUs = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$path)
-            .all()
-
-        let allProjects = try await organization.getAllProjects(on: req.db)
-        let allVMs = try await organization.getAllVMs(on: req.db)
-
-        let allQuotas = try await ResourceQuota.query(on: req.db)
-            .group(.or) { or in
-                or.filter(\.$organization.$id == organizationID)
-                if !allOUs.isEmpty {
-                    or.filter(\.$organizationalUnit.$id ~~ allOUs.compactMap { $0.id })
-                }
-                if !allProjects.isEmpty {
-                    or.filter(\.$project.$id ~~ allProjects.compactMap { $0.id })
-                }
-            }
-            .all()
+        // Every row the response reports on, in four flat queries.
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+        let allOUs = snapshot.folders.sorted { $0.path < $1.path }
+        let allProjects = snapshot.projects
+        let allVMs = snapshot.vms
+        let allQuotas = snapshot.quotas
 
         // Group VMs by environment and status
         var vmsByEnvironment: [String: Int] = [:]
         var vmsByStatus: [String: Int] = [:]
         var vmsByProject: [String: Int] = [:]
 
+        let projectNames = Dictionary(
+            allProjects.compactMap { project in project.id.map { ($0, project.name) } },
+            uniquingKeysWith: { first, _ in first })
+
         for vm in allVMs {
             vmsByEnvironment[vm.environment, default: 0] += 1
             vmsByStatus[vm.status.rawValue, default: 0] += 1
 
-            // Get project name for grouping
-            if let project = allProjects.first(where: { $0.id == vm.$project.id }) {
-                vmsByProject[project.name, default: 0] += 1
+            if let projectName = projectNames[vm.$project.id] {
+                vmsByProject[projectName, default: 0] += 1
             }
         }
 
@@ -141,19 +130,17 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Calculate resource usage
-        let resourceUsage = try await organization.getResourceUsage(on: req.db)
-
-        // Get quota information and calculate compliance
-        let quotas = try await QuotaComplianceService.organizationQuotas(organizationID: organizationID, on: req.db)
-        let quotaCompliance = try await QuotaComplianceService.complianceInfos(for: quotas, on: req.db)
+        // Usage totals, the organization's quotas and the hierarchy stats all
+        // come off one load instead of re-deriving the same rows three times.
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+        let quotaCompliance = try await QuotaComplianceService.complianceInfos(for: snapshot.quotas, on: req.db)
 
         return ResourceSummaryResponse(
             organizationId: organizationID,
             organizationName: organization.name,
-            resourceUsage: resourceUsage,
+            resourceUsage: snapshot.resourceUsage,
             quotaCompliance: quotaCompliance,
-            hierarchyStats: try await HierarchyTreeBuilder.hierarchyStats(organizationID: organizationID, on: req.db)
+            hierarchyStats: HierarchyTreeBuilder.stats(for: snapshot)
         )
     }
 

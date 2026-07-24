@@ -5,144 +5,72 @@ import Fluent
 /// Builds the nested organization → OU → project → VM tree and the aggregate
 /// statistics used by the hierarchy endpoints. Extracted from `HierarchyController`
 /// so the tree-walking logic can be tested and reused independently of routing.
+///
+/// Everything is assembled from a single ``HierarchySnapshot``: the queries all
+/// happen up front and the tree, its counts and its totals are pure functions of
+/// the rows already in hand (issue #692).
 struct HierarchyTreeBuilder {
     /// Builds the complete hierarchy response for an organization.
     static func buildCompleteHierarchy(organization: Organization, on db: Database) async throws
         -> OrganizationHierarchyResponse
     {
-        // Get all OUs for the organization
-        let allOUs = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organization.id!)
-            .sort(\.$depth)
-            .sort(\.$name)
-            .all()
-
-        // Get all projects
-        let allProjects = try await organization.getAllProjects(on: db)
-
-        // Get organization quotas
-        let orgQuotas = try await ResourceQuota.query(on: db)
-            .filter(\.$organization.$id == organization.id!)
-            .all()
-
-        // Build OU tree
-        let topLevelOUs = allOUs.filter { $0.$parentOU.id == nil }
-        var ouNodes: [OrganizationalUnitNode] = []
-
-        for ou in topLevelOUs {
-            let ouNode = try await buildOUNode(ou: ou, allOUs: allOUs, allProjects: allProjects, on: db)
-            ouNodes.append(ouNode)
-        }
-
-        // Get direct organization projects
-        let directProjects = allProjects.filter { $0.$organization.id == organization.id! }
-        var projectNodes: [ProjectNode] = []
-
-        for project in directProjects {
-            let projectNode = try await buildProjectNode(project: project, on: db)
-            projectNodes.append(projectNode)
-        }
+        let organizationID = try organization.requireID()
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: db)
 
         let orgNode = OrganizationNode(
-            id: organization.id!,
+            id: organizationID,
             name: organization.name,
             description: organization.description,
-            organizationalUnits: ouNodes,
-            projects: projectNodes,
-            quotas: orgQuotas.map { ResourceQuotaResponse(from: $0) }
+            organizationalUnits: snapshot.topLevelFolders.map { folderNode(for: $0, in: snapshot) },
+            projects: snapshot.directProjects.map { projectNode(for: $0, in: snapshot) },
+            quotas: snapshot.quotas(forOrganization: organizationID).map { ResourceQuotaResponse(from: $0) }
         )
-
-        let stats = try await hierarchyStats(organizationID: organization.id!, on: db)
 
         return OrganizationHierarchyResponse(
             organization: orgNode,
-            stats: stats
+            stats: stats(for: snapshot)
         )
     }
 
     /// Computes aggregate counts and resource utilization for an organization.
     static func hierarchyStats(organizationID: UUID, on db: Database) async throws -> HierarchyStats {
-        let ouCount = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .count()
+        stats(for: try await HierarchySnapshot.load(organizationID: organizationID, on: db))
+    }
 
-        guard let organization = try await Organization.find(organizationID, on: db) else {
-            throw Abort(.notFound, reason: "Organization not found")
-        }
-        let allProjects = try await organization.getAllProjects(on: db)
-        let allVMs = try await organization.getAllVMs(on: db)
-
-        let quotaCount = try await ResourceQuota.query(on: db)
-            .group(.or) { or in
-                or.filter(\.$organization.$id == organizationID)
-                if !allProjects.isEmpty {
-                    or.filter(\.$project.$id ~~ allProjects.compactMap { $0.id })
-                }
-            }
-            .count()
-
-        let maxDepth =
-            try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .max(\.$depth) ?? 0
-
-        let resourceUsage = try await organization.getResourceUsage(on: db)
-
-        return HierarchyStats(
-            totalOUs: Int(ouCount),
-            totalProjects: allProjects.count,
-            totalVMs: allVMs.count,
-            totalQuotas: Int(quotaCount),
-            maxDepth: maxDepth,
-            resourceUtilization: resourceUsage
+    /// Aggregate counts and resource utilization over an already-loaded snapshot.
+    static func stats(for snapshot: HierarchySnapshot) -> HierarchyStats {
+        HierarchyStats(
+            totalOUs: snapshot.folders.count,
+            totalProjects: snapshot.projects.count,
+            totalVMs: snapshot.vms.count,
+            // Every quota in the organization, folder-scoped ones included —
+            // they are shown in the tree, so leaving them out of the count
+            // (as the query-per-sub-computation version did) understated it.
+            totalQuotas: snapshot.quotas.count,
+            maxDepth: snapshot.maxDepth,
+            resourceUtilization: snapshot.resourceUsage
         )
     }
 
-    private static func buildOUNode(
-        ou: OrganizationalUnit, allOUs: [OrganizationalUnit], allProjects: [Project], on db: Database
-    ) async throws -> OrganizationalUnitNode {
-        // Get child OUs
-        let childOUs = allOUs.filter { $0.$parentOU.id == ou.id }
-        var childNodes: [OrganizationalUnitNode] = []
-
-        for childOU in childOUs {
-            let childNode = try await buildOUNode(ou: childOU, allOUs: allOUs, allProjects: allProjects, on: db)
-            childNodes.append(childNode)
-        }
-
-        // Get projects in this OU
-        let ouProjects = allProjects.filter { $0.$organizationalUnit.id == ou.id }
-        var projectNodes: [ProjectNode] = []
-
-        for project in ouProjects {
-            let projectNode = try await buildProjectNode(project: project, on: db)
-            projectNodes.append(projectNode)
-        }
-
-        // Get OU quotas
-        let ouQuotas = try await ResourceQuota.query(on: db)
-            .filter(\.$organizationalUnit.$id == ou.id!)
-            .all()
-
+    private static func folderNode(
+        for folder: OrganizationalUnit, in snapshot: HierarchySnapshot
+    ) -> OrganizationalUnitNode {
+        let folderID = folder.id!
         return OrganizationalUnitNode(
-            id: ou.id!,
-            name: ou.name,
-            description: ou.description,
-            path: ou.path,
-            depth: ou.depth,
-            childOUs: childNodes,
-            projects: projectNodes,
-            quotas: ouQuotas.map { ResourceQuotaResponse(from: $0) }
+            id: folderID,
+            name: folder.name,
+            description: folder.description,
+            path: folder.path,
+            depth: folder.depth,
+            childOUs: snapshot.childFolders(of: folderID).map { folderNode(for: $0, in: snapshot) },
+            projects: snapshot.projects(in: folderID).map { projectNode(for: $0, in: snapshot) },
+            quotas: snapshot.quotas(forFolder: folderID).map { ResourceQuotaResponse(from: $0) }
         )
     }
 
-    private static func buildProjectNode(project: Project, on db: Database) async throws -> ProjectNode {
-        // Get VMs in project
-        let vms = try await VM.query(on: db)
-            .filter(\.$project.$id == project.id!)
-            .all()
-
-        let vmSummaries = vms.map { vm in
+    private static func projectNode(for project: Project, in snapshot: HierarchySnapshot) -> ProjectNode {
+        let projectID = project.id!
+        let vmSummaries = snapshot.vms(in: projectID).map { vm in
             VMSummary(
                 id: vm.id!,
                 name: vm.name,
@@ -154,20 +82,15 @@ struct HierarchyTreeBuilder {
             )
         }
 
-        // Get project quotas
-        let projectQuotas = try await ResourceQuota.query(on: db)
-            .filter(\.$project.$id == project.id!)
-            .all()
-
         return ProjectNode(
-            id: project.id!,
+            id: projectID,
             name: project.name,
             description: project.description,
             path: project.path,
             environments: project.environments,
             defaultEnvironment: project.defaultEnvironment,
             vms: vmSummaries,
-            quotas: projectQuotas.map { ResourceQuotaResponse(from: $0) }
+            quotas: snapshot.quotas(forProject: projectID).map { ResourceQuotaResponse(from: $0) }
         )
     }
 }

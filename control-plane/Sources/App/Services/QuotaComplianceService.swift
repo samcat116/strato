@@ -4,8 +4,8 @@ import Fluent
 
 /// Computes quota scope classification and compliance figures for the hierarchy
 /// resource-summary endpoint. The per-quota math is a pure function of a quota and
-/// its measured usage, so it can be unit-tested without a database. Actual VM usage
-/// is delegated to `ResourceQuota.calculateActualUsage`.
+/// its measured usage, so it can be unit-tested without a database. Measuring the
+/// usage itself is delegated to ``QuotaUsageAggregator``.
 struct QuotaComplianceService {
     /// Classifies which entity a quota is scoped to.
     static func quotaScope(for quota: ResourceQuota) -> String {
@@ -54,35 +54,15 @@ struct QuotaComplianceService {
     }
 
     /// Fetches measured usage for each quota and assembles compliance info.
+    /// Each quota costs a handful of SQL aggregates (`QuotaUsageAggregator`),
+    /// so the cost scales with the number of quotas, not with the size of the
+    /// hierarchy beneath them.
     static func complianceInfos(for quotas: [ResourceQuota], on db: Database) async throws -> [QuotaComplianceInfo] {
         var result: [QuotaComplianceInfo] = []
         for quota in quotas {
-            let (actualUsage, _, _) = try await quota.calculateActualUsage(on: db)
+            let actualUsage = try await quota.calculateActualUsage(on: db)
             result.append(complianceInfo(for: quota, actualUsage: actualUsage))
         }
         return result
-    }
-
-    /// All quotas scoped to an organization (direct, via its OUs, and via its projects).
-    static func organizationQuotas(organizationID: UUID, on db: Database) async throws -> [ResourceQuota] {
-        guard let organization = try await Organization.find(organizationID, on: db) else {
-            throw Abort(.notFound, reason: "Organization not found")
-        }
-        let allProjects = try await organization.getAllProjects(on: db)
-        let allOUs = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-
-        return try await ResourceQuota.query(on: db)
-            .group(.or) { or in
-                or.filter(\.$organization.$id == organizationID)
-                if !allOUs.isEmpty {
-                    or.filter(\.$organizationalUnit.$id ~~ allOUs.compactMap { $0.id })
-                }
-                if !allProjects.isEmpty {
-                    or.filter(\.$project.$id ~~ allProjects.compactMap { $0.id })
-                }
-            }
-            .all()
     }
 }

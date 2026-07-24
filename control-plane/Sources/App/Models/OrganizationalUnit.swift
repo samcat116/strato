@@ -134,14 +134,31 @@ extension OrganizationalUnit {
         return depth
     }
 
-    /// Gets all descendant OUs (children, grandchildren, etc.)
+    /// Gets all descendant OUs (children, grandchildren, etc.).
+    ///
+    /// `path` is a true materialized path (`/orgId/ouId/…/selfId`), so a
+    /// descendant is exactly a row whose path extends this one. Matching that
+    /// prefix is indexable; the `LIKE '%<uuid>%'` contains-match it replaced
+    /// could only ever be a sequential scan (issue #692).
     func descendants(on db: Database) async throws -> [OrganizationalUnit] {
-        guard let selfId = self.id else { return [] }
+        try await OrganizationalUnit.descendants(ofPath: path, on: db)
+    }
 
-        return try await OrganizationalUnit.query(on: db)
-            .filter(\.$path ~~ selfId.uuidString)
-            .filter(\.$id != selfId)
+    /// Descendants of the folder that had `path`. Split out for the move path,
+    /// which must find the subtree by the path the folder carried *before* it
+    /// moved — the descendants' own paths are only rewritten afterwards.
+    static func descendants(ofPath path: String, on db: Database) async throws -> [OrganizationalUnit] {
+        try await OrganizationalUnit.query(on: db)
+            .filter(\.$path, .contains(inverse: false, .prefix), "\(path)/")
             .all()
+    }
+
+    /// This folder's id plus every descendant's — the folder ids a
+    /// folder-scoped quota or listing spans.
+    func selfAndDescendantIDs(on db: Database) async throws -> [UUID] {
+        guard let selfId = self.id else { return [] }
+        let descendantIDs = try await descendants(on: db).compactMap { $0.id }
+        return [selfId] + descendantIDs
     }
 
     /// The IDs of this OU and every ancestor OU up to (but excluding) the root

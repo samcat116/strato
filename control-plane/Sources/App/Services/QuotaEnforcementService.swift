@@ -10,11 +10,11 @@ import SQLKit
 /// workload kinds draw vCPUs and memory from the same pools (issue #415); only
 /// VMs consume storage, and each kind has its own count limit.
 ///
-/// Scoping mirrors `ResourceQuota.calculateActualUsage` exactly — a workload is
-/// reserved against precisely the quotas that measured usage would later count
-/// it against (its project, its organizational unit and every ancestor OU up to
-/// the root, and its root organization) — so reserved and actual figures cannot
-/// drift apart by construction.
+/// Scoping mirrors ``QuotaScope`` exactly — a workload is reserved against
+/// precisely the quotas that measured usage would later count it against (its
+/// project, its organizational unit and every ancestor OU up to the root, and
+/// its root organization) — so reserved and actual figures cannot drift apart
+/// by construction.
 struct QuotaEnforcementService {
 
     /// All quotas that govern a workload created in `project` under `environment`.
@@ -34,8 +34,8 @@ struct QuotaEnforcementService {
 
         // Resolve the project's direct OU and every ancestor OU up to the root, so
         // a quota on any intermediate folder is enforced — not just the direct OU
-        // (issue #645). Kept symmetric with `ResourceQuota.scopedProjectIDs`, which
-        // measures an OU quota over that OU and all descendants.
+        // (issue #645). Kept symmetric with `QuotaScope`, which measures a folder
+        // quota over that folder and all of its descendants.
         var ouIDs: [UUID] = []
         if let ouID {
             if let ou = try await OrganizationalUnit.find(ouID, on: db) {
@@ -305,17 +305,21 @@ struct QuotaEnforcementService {
     }
 
     /// Sets a quota's reservation counters to the exact usage of the VMs and
-    /// sandboxes currently in its scope. Sums the raw `Int64` byte fields (not the
+    /// sandboxes currently in its scope. Takes the raw `Int64` byte totals (not the
     /// lossy GB figures in `QuotaUsage`) so memory/storage stay byte-accurate. Does
     /// not persist — the caller saves.
+    ///
+    /// Three aggregate queries over an already-resolved scope: this runs under the
+    /// per-quota advisory lock, so every row it doesn't load is lock time every
+    /// other create in the organization doesn't wait for (issue #692).
     private static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
-        let (_, vms, sandboxes) = try await quota.calculateActualUsage(on: db)
-        quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
-        quota.reservedMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
+        let scope = try await QuotaUsageAggregator.scope(of: quota, on: db)
+        let usage = try await QuotaUsageAggregator.measure(scope, on: db)
+        quota.reservedVCPUs = usage.vcpus
+        quota.reservedMemory = usage.memoryBytes
         // Storage: VM disks plus sandbox snapshot artifacts (issue #426).
-        quota.reservedStorage =
-            vms.reduce(Int64(0)) { $0 + $1.disk } + (try await quota.sandboxSnapshotStorageInScope(on: db))
-        quota.vmCount = vms.count
-        quota.sandboxCount = sandboxes.count
+        quota.reservedStorage = usage.storageBytes
+        quota.vmCount = usage.vmCount
+        quota.sandboxCount = usage.sandboxCount
     }
 }

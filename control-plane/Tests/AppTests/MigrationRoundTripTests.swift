@@ -71,7 +71,7 @@ struct MigrationRoundTripTests {
             ).all()
             let present = Set(try rows.map { try $0.decode(column: "indexname", as: String.self) })
 
-            for index in AddHotPathIndexes.indexes {
+            for index in AddHotPathIndexes.indexes + AddFolderPathIndex.indexes {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")
             }
