@@ -44,23 +44,26 @@ struct OrganizationController: RouteCollection {
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
 
-        // Get user roles for each organization
-        var organizationResponses: [OrganizationResponse] = []
-
-        for organization in user.organizations {
-            let userOrg = try await UserOrganization.query(on: req.db)
+        // The roles come from the same pivot rows the load above walked, so
+        // read them once for the whole list rather than once per organization.
+        let organizationIDs = user.organizations.compactMap { $0.id }
+        var roles: [UUID: String] = [:]
+        if !organizationIDs.isEmpty {
+            let memberships = try await UserOrganization.query(on: req.db)
                 .filter(\.$user.$id == user.id!)
-                .filter(\.$organization.$id == organization.id!)
-                .first()
-
-            let response = OrganizationResponse(
-                from: organization,
-                userRole: userOrg?.role
-            )
-            organizationResponses.append(response)
+                .filter(\.$organization.$id ~~ organizationIDs)
+                .all()
+            for membership in memberships {
+                roles[membership.$organization.id] = membership.role
+            }
         }
 
-        return organizationResponses
+        return user.organizations.map { organization in
+            OrganizationResponse(
+                from: organization,
+                userRole: organization.id.flatMap { roles[$0] }
+            )
+        }
     }
 
     func show(req: Request) async throws -> OrganizationResponse {

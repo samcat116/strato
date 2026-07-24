@@ -70,12 +70,13 @@ struct NetworkController: RouteCollection {
             }
         }
 
-        var responses: [NetworkResponse] = []
-        for network in visible {
-            let count = try await attachedInterfaceCount(for: network, on: req.db)
-            responses.append(NetworkResponse(from: network, attachedInterfaceCount: count))
+        // NICs name their network rather than referencing it, so the page's
+        // attachment counts come from one grouped count over those names.
+        let counts = try await VMNetworkInterface.counts(
+            groupedBy: \.$network, in: visible.map(\.name), on: req.db)
+        return visible.map { network in
+            NetworkResponse(from: network, attachedInterfaceCount: counts[network.name] ?? 0)
         }
-        return responses
     }
 
     /// Whether a site's owning scope contains a project: an org-scoped site
@@ -481,17 +482,15 @@ struct NetworkController: RouteCollection {
     // MARK: - Helper Methods
 
     /// How many floating IPs are attached to NICs on the named network.
+    ///
+    /// Joined rather than intersected in Swift: the set this counts is a
+    /// handful of rows, but the reduction used to load every NIC on the
+    /// network and the whole `floating_ips` table to find them.
     static func attachedFloatingIPCount(networkName: String, on db: Database) async throws -> Int {
-        let nicIDs = Set(
-            try await VMNetworkInterface.query(on: db)
-                .filter(\.$network == networkName)
-                .all()
-                .compactMap(\.id))
-        guard !nicIDs.isEmpty else { return 0 }
-        return try await FloatingIP.query(on: db)
-            .all()
-            .filter { floatingIP in floatingIP.$interface.id.map(nicIDs.contains) ?? false }
-            .count
+        try await FloatingIP.query(on: db)
+            .join(parent: \.$interface)
+            .filter(VMNetworkInterface.self, \.$network == networkName)
+            .count()
     }
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one

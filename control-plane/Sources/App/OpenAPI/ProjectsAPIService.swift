@@ -537,14 +537,18 @@ struct ProjectsAPIService: APIProtocol {
 
     // MARK: - Helpers
 
+    /// `GET /api/projects` backs the frontend's project switcher, so its VM
+    /// counts come from one grouped aggregate rather than a `COUNT` per project.
     private func summaries(for projects: [Project], on db: any Database) async throws
         -> [Components.Schemas.ProjectSummary]
     {
+        let projectIDs = projects.compactMap { $0.id }
+        let vmCounts = try await VM.counts(groupedBy: \.$project, in: projectIDs, on: db)
+
         var summaries: [Components.Schemas.ProjectSummary] = []
         for project in projects {
             guard let projectID = project.id else { continue }
-            let vmCount = try await Self.vmCount(projectID, on: db)
-            summaries.append(try .init(project: project, vmCount: vmCount))
+            summaries.append(try .init(project: project, vmCount: vmCounts[projectID] ?? 0))
         }
         return summaries
     }
