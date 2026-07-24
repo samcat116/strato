@@ -140,6 +140,105 @@ struct AgentWebSocketIntegrationTests {
         }
     }
 
+    @Test("An unchanged agent is skipped by the periodic desired-state pass")
+    func unchangedAgentSkipsPeriodicSync() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "idle-agent"
+            let org = try await self.makeOrg(app: app)
+            try await AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID())
+            ).save(on: app.db)
+
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            client.send(try encodeRegister(agentName: agentName))
+            #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+            try await client.expectDesiredStateSync()
+
+            // Establish a known-clean revision through the same bounded
+            // worker the forced 10-minute backstop uses.
+            await app.agentService.syncDesiredStateToAllAgents(force: true)
+            try await client.expectDesiredStateSync()
+
+            // The minute-level pass should now do no assembly and emit no
+            // frame for this unchanged agent.
+            await app.agentService.syncDesiredStateToAllAgents()
+            try await client.expectNoEnvelope(for: .milliseconds(250))
+
+            try await client.close()
+        }
+    }
+
+    @Test("Periodic desired-state scheduling does not wait on a wedged registry")
+    func periodicSyncLeavesRegistryIOOffTick() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "registry-stall-agent"
+            let org = try await self.makeOrg(app: app)
+            try await AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID())
+            ).save(on: app.db)
+
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            client.send(try encodeRegister(agentName: agentName))
+            let registerResponse = try await client.nextEnvelope()
+            let registered = try registerResponse.decode(as: AgentRegisterResponseMessage.self)
+            try await client.expectDesiredStateSync()
+
+            let project = Project(
+                name: "Registry Stall Project",
+                description: "Exercises periodic registry isolation",
+                organizationID: try org.requireID(),
+                path: "/\(try org.requireID().uuidString)")
+            try await project.save(on: app.db)
+            let sandbox = Sandbox(
+                name: "registry-stall",
+                projectID: try project.requireID(),
+                environment: "development",
+                image: "ghcr.io/acme/stalled:v1",
+                cpus: 1,
+                memory: 256 * 1024 * 1024)
+            sandbox.hypervisorId = registered.agentId
+            try await sandbox.save(on: app.db)
+            try await RegistryPullSecret(
+                projectID: try project.requireID(),
+                registry: "ghcr.io",
+                username: "stall-user",
+                secret: "stall-secret"
+            ).save(on: app.db)
+
+            let slowRegistry = SlowRegistryClient(delay: .seconds(1))
+            app.registryClient = slowRegistry
+
+            let clock = ContinuousClock()
+            let start = clock.now
+            await app.agentService.scheduleDesiredStateSyncToAllAgents(force: true)
+            #expect(clock.now - start < .milliseconds(250))
+
+            // Prove the background pass actually reached the deliberately
+            // slow registry rather than returning quickly because it had no
+            // work.
+            for _ in 0..<100 where await slowRegistry.resolveCallCount == 0 {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await slowRegistry.resolveCallCount == 1)
+
+            try await client.close()
+        }
+    }
+
     // MARK: - (3) Registration still refuses agents that can't be reconciled
 
     @Test("A register frame below the state-sync protocol floor is refused with an error frame")
@@ -374,6 +473,15 @@ private final class AgentTestClient: Sendable {
         #expect(envelope.type == .desiredState)
     }
 
+    func expectNoEnvelope(for duration: Duration) async throws {
+        do {
+            let envelope = try await nextEnvelope(timeout: duration)
+            Issue.record("Unexpected WebSocket frame while agent was clean: \(envelope.type)")
+        } catch is TimeoutError {
+            // Expected: no periodic sync was emitted.
+        }
+    }
+
     func close() async throws {
         try await ws.close().get()
     }
@@ -442,6 +550,29 @@ private actor FrameCollector {
 }
 
 private struct TimeoutError: Error {}
+
+private actor SlowRegistryClient: RegistryClientProtocol {
+    private let delay: Duration
+    private(set) var resolveCallCount = 0
+
+    init(delay: Duration) {
+        self.delay = delay
+    }
+
+    func resolveDigest(
+        for ref: OCIImageReference, credential: RegistryBasicCredential?
+    ) async throws -> String? {
+        resolveCallCount += 1
+        try await Task.sleep(for: delay)
+        return nil
+    }
+
+    func mintPullToken(
+        for ref: OCIImageReference, credential: RegistryBasicCredential?
+    ) async throws -> RegistryPullToken? {
+        nil
+    }
+}
 
 /// Race an async operation against a deadline, throwing `TimeoutError` if the
 /// operation does not finish first. Keeps a hung handshake from stalling the

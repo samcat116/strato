@@ -138,6 +138,18 @@ actor AgentService {
     private static let databaseHeartbeatRefreshInterval =
         TimeInterval(CoordinationService.presenceTTLSeconds / 2)
 
+    /// Monotonic per-agent dirtiness generations. Mutation-triggered pushes
+    /// bump before routing; a successful send only clears the exact
+    /// generation it assembled, so a mutation racing an in-flight sync cannot
+    /// be accidentally marked clean.
+    private var desiredStateRevisions: [String: UInt64] = [:]
+    private var cleanDesiredStateRevisions: [String: UInt64] = [:]
+    private var periodicDesiredStateSyncTask: Task<Void, Never>?
+
+    /// Keep periodic fan-out bounded so a large replica does not stampede the
+    /// database while still allowing unrelated agents to make progress.
+    private static let desiredStateSyncConcurrency = 4
+
     /// The startup task that arms the replica pub/sub subscriptions. Tracked
     /// so `shutdown()` can wait for it — otherwise it can still be
     /// subscribing (touching `app` storage) while the application tears down.
@@ -224,6 +236,7 @@ actor AgentService {
         await app.replicaBridgeIfCreated?.shutdown()
         startupTask?.cancel()
         heartbeatTask?.cancel()
+        periodicDesiredStateSyncTask?.cancel()
         if let startupTask {
             await startupTask.value
         }
@@ -234,6 +247,10 @@ actor AgentService {
             await heartbeatTask.value
         }
         heartbeatTask = nil
+        if let periodicDesiredStateSyncTask {
+            await periodicDesiredStateSyncTask.value
+        }
+        periodicDesiredStateSyncTask = nil
     }
 
     // MARK: - Agent Registration
@@ -830,7 +847,11 @@ actor AgentService {
                     // purely a latency optimization (issue #260). Not a
                     // cluster singleton: syncs go over this process's sockets.
                     if tick.isMultiple(of: 2) {
-                        await syncDesiredStateToAllAgents()
+                        // Dirty agents are the minute-level fast path. Every
+                        // tenth such pass (10 minutes at the production
+                        // interval) is the level-triggered backstop for a lost
+                        // cross-replica nudge.
+                        scheduleDesiredStateSyncToAllAgents(force: tick.isMultiple(of: 20))
                     }
 
                     try self.checkTickPreconditions()
@@ -1516,11 +1537,57 @@ actor AgentService {
     /// socket this process holds. Called on the periodic timer; failures are
     /// logged and repaired by the next tick. Each replica syncs exactly its
     /// own sockets, so no cluster coordination is needed here.
-    func syncDesiredStateToAllAgents() async {
+    func syncDesiredStateToAllAgents(force: Bool = false) async {
         guard !isShutDown, !app.didShutdown else { return }
-        for (name, agentId) in app.websocketManager.registeredAgents() {
-            await syncDesiredStateLocally(agentId: agentId, agentKey: name)
+        let targets = app.websocketManager.registeredAgents().compactMap {
+            registered
+                -> DesiredStateSyncTarget? in
+            let revision = desiredStateRevisions[registered.agentId, default: 0]
+            guard force || cleanDesiredStateRevisions[registered.agentId] != revision else {
+                return nil
+            }
+            return DesiredStateSyncTarget(
+                agentKey: registered.key,
+                agentId: registered.agentId,
+                revision: revision)
         }
+        guard !targets.isEmpty else { return }
+
+        let app = self.app
+        await withTaskGroup(of: DesiredStateSyncResult.self) { group in
+            var iterator = targets.makeIterator()
+            for _ in 0..<min(Self.desiredStateSyncConcurrency, targets.count) {
+                guard let target = iterator.next() else { break }
+                group.addTask {
+                    await Self.performDesiredStateSync(app: app, target: target)
+                }
+            }
+
+            while let result = await group.next() {
+                recordDesiredStateSyncResult(result)
+                if let target = iterator.next() {
+                    group.addTask {
+                        await Self.performDesiredStateSync(app: app, target: target)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Start the periodic fan-out as tracked background work and return to the
+    /// heartbeat immediately. Registry and database latency therefore cannot
+    /// hold up the tick's operation/expiry/update sweeps. Only one periodic
+    /// pass runs at a time; explicit mutation pushes remain independent.
+    func scheduleDesiredStateSyncToAllAgents(force: Bool) {
+        guard periodicDesiredStateSyncTask == nil else { return }
+        periodicDesiredStateSyncTask = Task {
+            await self.syncDesiredStateToAllAgents(force: force)
+            self.periodicDesiredStateSyncDidFinish()
+        }
+    }
+
+    private func periodicDesiredStateSyncDidFinish() {
+        periodicDesiredStateSyncTask = nil
     }
 
     /// Trigger a desired-state sync for an agent from any replica. When this
@@ -1538,7 +1605,9 @@ actor AgentService {
     /// common case (first VM on a fresh network) converge on the peer's first
     /// attempt instead of waiting out a dependency-pending retry.
     func syncDesiredState(agentId: String) async {
+        markDesiredStateDirty(agentId)
         if let controllerId = await siteNetworkControllerID(forAgentId: agentId), controllerId != agentId {
+            markDesiredStateDirty(controllerId)
             await routeDesiredStateSync(agentId: controllerId)
         }
         await routeDesiredStateSync(agentId: agentId)
@@ -1596,13 +1665,61 @@ actor AgentService {
     /// socket. Safe to call redundantly: identical syncs diff to nothing on
     /// the agent.
     private func syncDesiredStateLocally(agentId: String, agentKey: String) async {
+        let target = DesiredStateSyncTarget(
+            agentKey: agentKey,
+            agentId: agentId,
+            revision: desiredStateRevisions[agentId, default: 0])
+        let result = await Self.performDesiredStateSync(app: app, target: target)
+        recordDesiredStateSyncResult(result)
+    }
+
+    private struct DesiredStateSyncTarget: Sendable {
+        let agentKey: String
+        let agentId: String
+        let revision: UInt64
+    }
+
+    private struct DesiredStateSyncResult: Sendable {
+        let target: DesiredStateSyncTarget
+        let sent: Bool
+    }
+
+    private func markDesiredStateDirty(_ agentId: String) {
+        desiredStateRevisions[agentId, default: 0] &+= 1
+    }
+
+    private func recordDesiredStateSyncResult(_ result: DesiredStateSyncResult) {
+        guard result.sent else { return }
+        // Only the revision actually assembled is clean. If another mutation
+        // arrived during the DB/network suspension, its higher generation
+        // remains dirty for the next push/backstop pass.
+        guard desiredStateRevisions[result.target.agentId, default: 0] == result.target.revision else {
+            return
+        }
+        cleanDesiredStateRevisions[result.target.agentId] = result.target.revision
+    }
+
+    /// The expensive DB assembly and socket write deliberately run outside
+    /// `AgentService` isolation. Structured task-group callers can therefore
+    /// fan out safely, and a slow agent does not serialize unrelated agents
+    /// through the service actor.
+    @concurrent
+    private static func performDesiredStateSync(
+        app: Application,
+        target: DesiredStateSyncTarget
+    ) async -> DesiredStateSyncResult {
         let clock = ContinuousClock()
         let start = clock.now
-        await withSpan("agent.desired_state_sync", ofKind: .producer) { span in
-            span.attributes["agent.id"] = agentId
+        return await withSpan("agent.desired_state_sync", ofKind: .producer) { span in
+            span.attributes["agent.id"] = target.agentId
             do {
-                let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-                try await sendMessageToLocalAgent(message, agentKey: agentKey)
+                let message = try await app.desiredStateAssembler.assemble(agentId: target.agentId)
+                guard let websocket = app.websocketManager.getConnection(agentKey: target.agentKey) else {
+                    throw AgentServiceError.agentNotFound(target.agentKey)
+                }
+                let envelope = try MessageEnvelope(message: message)
+                let data = try WireProtocol.makeEncoder().encode(envelope)
+                websocket.send(data)
                 span.attributes["sync.id"] = message.syncId
                 span.attributes["sync.vm_count"] = message.vms.count
                 Telemetry.recordDesiredStateSync(
@@ -1610,10 +1727,11 @@ actor AgentService {
                 app.logger.debug(
                     "Desired-state sync sent",
                     metadata: [
-                        "agentId": .string(agentId),
+                        "agentId": .string(target.agentId),
                         "syncId": .string(message.syncId),
                         "vmCount": .stringConvertible(message.vms.count),
                     ])
+                return DesiredStateSyncResult(target: target, sent: true)
             } catch {
                 // Dropped syncs are safe: the periodic timer re-sends the full
                 // state, so this is logged rather than retried inline.
@@ -1623,9 +1741,10 @@ actor AgentService {
                 app.logger.warning(
                     "Failed to send desired-state sync (periodic timer will retry)",
                     metadata: [
-                        "agentId": .string(agentId),
+                        "agentId": .string(target.agentId),
                         "error": .string(error.localizedDescription),
                     ])
+                return DesiredStateSyncResult(target: target, sent: false)
             }
         }
     }
@@ -1641,6 +1760,7 @@ actor AgentService {
                 metadata: ["agentKey": .string(agentKey)])
             return
         }
+        markDesiredStateDirty(agentId)
         await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
     }
 
