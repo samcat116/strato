@@ -124,6 +124,19 @@ actor AgentService {
 
     private var heartbeatTask: Task<Void, Never>?
 
+    /// Last successful paired presence/route refresh per local socket. The
+    /// wire sends both a heartbeat and an observed report every 20 seconds;
+    /// refreshing on every frame doubles Valkey traffic without extending
+    /// liveness. Half the TTL leaves a full retry window after a failed write.
+    private var livenessRefreshedAt: [String: ContinuousClock.Instant] = [:]
+    private static let livenessRefreshInterval: Duration =
+        .seconds(Int64(CoordinationService.presenceTTLSeconds / 2))
+
+    /// Keep the durable heartbeat comfortably inside the same 60-second
+    /// liveness window while coalescing identical heartbeat/report pairs.
+    private static let databaseHeartbeatRefreshInterval =
+        TimeInterval(CoordinationService.presenceTTLSeconds / 2)
+
     /// The startup task that arms the replica pub/sub subscriptions. Tracked
     /// so `shutdown()` can wait for it — otherwise it can still be
     /// subscribing (touching `app` storage) while the application tears down.
@@ -488,8 +501,7 @@ actor AgentService {
         // Publish liveness and socket location to the coordination store so
         // every control-plane process — not just the one holding this socket —
         // can see the agent and route mutations to it.
-        await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.replicaBridge.recordRoute(agentKey: agentKey)
+        await refreshAgentLivenessIfNeeded(agentKey: agentKey, force: true)
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
@@ -650,6 +662,8 @@ actor AgentService {
     /// replica: its route key then names that replica, and this (delayed)
     /// close must not mark the agent offline underneath a live connection.
     func removeAgent(_ agentKey: String) async {
+        livenessRefreshedAt.removeValue(forKey: agentKey)
+
         // Local pending requests die with the local socket regardless of
         // where the agent lives now.
         if let agentId = await agentId(forKey: agentKey) {
@@ -713,98 +727,60 @@ actor AgentService {
             return
         }
 
-        // The database row is the registry (issue #261): the scheduler and
-        // every other replica read resources and liveness from here, so the
-        // write is awaited, not fire-and-forget.
-        agent.updateResources(message.resources)
-        agent.status = .online
-        try await agent.save(on: db)
+        // The database row is the registry (issue #261), but the heartbeat
+        // and observed report carry the same snapshot on the same cadence.
+        // Persist only real resource/status changes or one heartbeat per half
+        // TTL so identical pairs do not churn the row.
+        if applyPeriodicAgentState(message.resources, to: agent) {
+            try await agent.save(on: db)
+        }
 
         // Refresh the agent's presence and socket-route keys so liveness and
         // routing stay visible cluster-wide. The heartbeat arrived over this
         // process's socket, so the route is ours to claim.
-        await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.replicaBridge.recordRoute(agentKey: agentKey)
-
-        // This heartbeat's resource report accounts for every VM the agent
-        // lists, so any placement reservation still held for one of them
-        // would double-count from now until its TTL — release them. This is
-        // the release path for successful creates (the dispatch is
-        // fire-and-forget, so no correlated response ever arrives).
-        await app.coordination.releaseReservations(agentId: message.agentId, vmIds: message.runningVMs)
-
-        // Reconcile the VMs the agent reports against what the database expects.
-        Task {
-            await self.reconcileVMs(forAgentId: message.agentId, reportedVMs: message.runningVMs)
-        }
+        await refreshAgentLivenessIfNeeded(agentKey: agentKey)
 
         app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
     }
 
-    /// Reconciles an agent's reported set of managed VMs against the database.
-    ///
-    /// An agent's heartbeat lists every VM it is managing (running, paused, or
-    /// shut-down-but-not-deleted). If the database believes a VM lives on this agent
-    /// but the agent no longer reports it — e.g. the agent crashed and lost the VM,
-    /// or the process died — the database's view is stale and we mark the VM `.error`
-    /// so it surfaces for operator attention instead of appearing healthy.
-    private func reconcileVMs(forAgentId agentId: String, reportedVMs: [String]) async {
-        let db = app.db
-        let managed = Set(reportedVMs)
+    /// Apply the mutable fields from a periodic agent report. A real state
+    /// change always persists and refreshes `lastHeartbeat`; otherwise the
+    /// timestamp advances at half the liveness TTL.
+    private func applyPeriodicAgentState(_ resources: AgentResources, to agent: Agent) -> Bool {
+        var changed = agent.updateAvailableResources(resources)
+        if agent.status != .online {
+            agent.status = .online
+            changed = true
+        }
 
-        do {
-            let dbVMs = try await VM.query(on: db)
-                .filter(\.$hypervisorId == agentId)
-                .all()
+        let now = Date()
+        let heartbeatDue =
+            agent.lastHeartbeat.map {
+                now.timeIntervalSince($0) >= Self.databaseHeartbeatRefreshInterval
+            } ?? true
+        if changed || heartbeatDue {
+            agent.lastHeartbeat = now
+            return true
+        }
+        return false
+    }
 
-            var divergent = 0
-            for vm in dbVMs {
-                guard let vmId = vm.id?.uuidString else { continue }
+    /// Refresh presence and route together at most once per half TTL. Failed
+    /// attempts are deliberately not recorded so the next incoming frame
+    /// retries instead of allowing a previously live key to expire.
+    private func refreshAgentLivenessIfNeeded(agentKey: String, force: Bool = false) async {
+        let now = ContinuousClock.now
+        if !force, let lastRefresh = livenessRefreshedAt[agentKey],
+            lastRefresh.duration(to: now) < Self.livenessRefreshInterval
+        {
+            return
+        }
 
-                // Only established states are safe to reconcile on absence:
-                //  - `.created` may still be mid-creation (image download / first boot)
-                //  - transitional and `.error`/`.unknown` states are handled by the sweep
-                // so an absent VM in those states is expected and left alone.
-                // `.shutdown` counts as established: agents keep shut-down-but-not-deleted
-                // VMs in their managed set, so one missing from the heartbeat was lost
-                // (e.g. agent restart) and a later start would fail with vmNotFound.
-                guard vm.status.assertsAgentPresence, !managed.contains(vmId) else { continue }
-
-                let previous = vm.status
-                vm.setStatus(.error)
-                try await vm.save(on: db)
-                divergent += 1
-                Telemetry.vmEnteredError(reason: "reconciliation")
-                await WebhookEvents.emitVMStateChanged(
-                    vm: vm, previous: previous, current: .error, on: db, logger: app.logger)
-
-                app.logger.warning(
-                    "VM missing from agent heartbeat; marking as error",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "agentId": .string(agentId),
-                        "previousStatus": .string(previous.rawValue),
-                    ])
-            }
-
-            // Orphans: VMs the agent reports that the database does not map to it.
-            let knownIds = Set(dbVMs.compactMap { $0.id?.uuidString })
-            let orphans = managed.subtracting(knownIds)
-            if !orphans.isEmpty {
-                app.logger.warning(
-                    "Agent reports VMs unknown to control plane",
-                    metadata: [
-                        "agentId": .string(agentId),
-                        "orphanVMs": .string(orphans.sorted().joined(separator: ",")),
-                    ])
-            }
-
-            if divergent > 0 {
-                app.logger.info(
-                    "Reconciliation marked \(divergent) VM(s) as error", metadata: ["agentId": .string(agentId)])
-            }
-        } catch {
-            app.logger.error("VM reconciliation failed for agent \(agentId): \(error)")
+        if await app.coordination.recordAgentLiveness(
+            agentKey: agentKey,
+            replicaId: app.replicaID
+        ) {
+            livenessRefreshedAt[agentKey] = now
         }
     }
 
@@ -1737,22 +1713,31 @@ actor AgentService {
         }
 
         // Reports carry the same resource snapshot as heartbeats; keep the
-        // scheduler's view fresh from whichever arrives.
-        agent.updateResources(report.resources)
-        agent.status = .online
+        // scheduler's view fresh from whichever arrives without re-saving an
+        // identical row a second time.
+        var agentChanged = applyPeriodicAgentState(report.resources, to: agent)
+        let previousBlockedReason = agent.updateBlockedReason
+        let previousFailureReason = agent.updateFailureReason
         applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
-        do {
-            try await agent.save(on: app.db)
-        } catch {
-            app.logger.warning(
-                "Failed to persist agent resources from observed-state report: \(error)",
-                metadata: ["agentId": .string(report.agentId)])
+        if agent.updateBlockedReason != previousBlockedReason
+            || agent.updateFailureReason != previousFailureReason
+        {
+            agentChanged = true
+            agent.lastHeartbeat = Date()
+        }
+        if agentChanged {
+            do {
+                try await agent.save(on: app.db)
+            } catch {
+                app.logger.warning(
+                    "Failed to persist agent resources from observed-state report: \(error)",
+                    metadata: ["agentId": .string(report.agentId)])
+            }
         }
 
         // The report arrived over this process's socket: refresh liveness and
         // routing alongside, mirroring the heartbeat path.
-        await app.coordination.recordAgentPresence(agentKey: agentKey)
-        await app.replicaBridge.recordRoute(agentKey: agentKey)
+        await refreshAgentLivenessIfNeeded(agentKey: agentKey)
 
         do {
             try await app.observedStateApplier.apply(report)

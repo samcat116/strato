@@ -5,8 +5,8 @@ import SQLKit
 /// Adds indexes on the hottest `vms` columns (issue #182).
 ///
 /// `status`, `hypervisor_id`, and `project_id` are full-table-scanned by the
-/// busiest control-plane background queries: `AgentService.reconcileVMs` (every
-/// heartbeat), `sweepStuckTransitionalVMs` (every 30s), `restoreVMToAgentMappings`,
+/// busiest control-plane background queries: observed-state reconciliation
+/// (every report), `sweepStuckTransitionalVMs` (every 30s), `restoreVMToAgentMappings`,
 /// and quota calculations. Neither the plain `.field(...)` columns nor the
 /// `.references(...)` foreign key created an index (PostgreSQL does not index the
 /// referencing column of a foreign key automatically), so these scans were O(n)
