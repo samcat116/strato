@@ -1,0 +1,162 @@
+control-plane/Tests/AppTests/SiteTests.swift
+  s_5167272097345f::t_10227ad0610970 498,520,530,556
+control-plane/web/src/lib/api/volumes.ts
+  s_5167272097345f::t_dd6aeb50162128 67-71
+  s_5167272097345f::t_331e742ad4cd66 13,15,19-24
+cli/Sources/StratoCLICore/API/Models.swift
+  s_5167272097345f::t_74e51be1a03edc 9-21
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_5167272097345f::t_10227ad0610970 315,325
+control-plane/web/src/lib/api/security-groups.ts
+  s_5167272097345f::t_e65ae06564a523 11,13,17-22
+control-plane/web/src/lib/api/agents.ts
+  s_5167272097345f::t_0d1540358aac0b 10,12,16-21
+  s_5167272097345f::t_8745ab8792e698 48-53
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_5167272097345f::t_18092c4be70f52 36,38,41
+  s_5167272097345f::t_4667c36987c103 92
+  s_5167272097345f::t_741bfd961f9b94 35,39-40,42-45
+  s_5167272097345f::t_d94296ca960b83 798,800,811
+  s_5167272097345f::t_92866b91e9e26e 801,808
+control-plane/Sources/App/openapi.yaml
+  s_5167272097345f::t_6018eafd56ecc1 240-242,246-247,250,254
+  s_5167272097345f::t_fd30ffa476f28a 475-476,479,483
+  s_5167272097345f::t_dcf55579e9e5af 782-784,787,791
+  s_5167272097345f::t_62cf50b945cd71 1226,1732-1734,1737,1741
+  s_5167272097345f::t_0b9cd58ff7b616 12948-13175
+  s_5167272097345f::t_7b71d2fa4c80dc 1227-1228,4335-4336,4339,4343
+  s_5167272097345f::t_b123a4ab22de19 641-643,646,650
+  s_5167272097345f::t_1a3d6042bace16 4016-4017,4020,4024
+  s_5167272097345f::t_94c806af36ecd9 4039-4040,4043,4047
+  s_5167272097345f::t_c2f169df618671 1552-1553,1556,1560
+  s_5167272097345f::t_c551d6be8bb297 7487-7505
+  s_5167272097345f::t_28a7a5489a739a 1019-1020,1023,1027
+  s_5167272097345f::t_bdc4ec4248b436 1262-1263,1266,1270
+  s_5167272097345f::t_9011ea6d7d3b80 1440-1441,1444,1448
+  s_5167272097345f::t_8739f4b74dddc5 3768-3769,3772,3776
+  s_5167272097345f::t_a29ab2f6150ec2 1351-1353,1356,1360
+  s_5167272097345f::t_cb5c4db0810adc 1231,1235
+control-plane/web/src/lib/api/quotas.ts
+  s_5167272097345f::t_0cdb63a454f8cf 8,10,17-22
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_5167272097345f::t_10227ad0610970 539,561
+cli/Sources/StratoCLI/Commands/AgentCommand.swift
+  s_5167272097345f::t_11e08a33f0db3c 21-23
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_5167272097345f::t_10227ad0610970 44,62
+control-plane/Tests/AppTests/VMListScalingTests.swift
+  s_5167272097345f::t_b0ffd960a9213c 71
+cli/Sources/StratoCLI/Commands/VolumeCommand.swift
+  s_5167272097345f::t_5287b230d79e3d 21-23
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_5167272097345f::t_ef9071c4e47de7 162,165-166,168-171,175
+  s_5167272097345f::t_88bebab65b37ff 163-164,167
+control-plane/Tests/AppTests/ProjectVisibilityTests.swift
+  s_5167272097345f::t_10227ad0610970 59,274
+control-plane/Sources/App/Extensions/ListPaging.swift
+  s_5167272097345f::t_199891a775c8a2 1-2,4,11-17,24-34,45-47,49-54
+  s_5167272097345f::t_56975383d49757 3,5-10,18-23,35-44,48
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_5167272097345f::t_5577fc949a183d 24-26
+control-plane/web/src/lib/api/sites.ts
+  s_5167272097345f::t_e1f3dae02ebd5c 4-10,14-19
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_5167272097345f::t_63b4b663eef567 332-333,336
+  s_5167272097345f::t_4c8a2755661aa7 467-468,471
+  s_5167272097345f::t_74352dce6331d4 466,469-470,472-475,479-481
+  s_5167272097345f::t_6f2fe720c3ad9e 331,334-335,337-340,346-348
+docs/architecture/control-plane.md
+  s_5167272097345f::t_17cd9998bca12d 186-197
+control-plane/Sources/App/Controllers/VMController.swift
+  s_5167272097345f::t_8ad30d7b07546d 109-110,113
+  s_5167272097345f::t_8367206a26ea65 108,111-112,114-117,126-132
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5167272097345f::t_c03f2a5e6e2748 24,28-29,31-34
+  s_5167272097345f::t_7d59e766f4d079 25,27,30
+  s_5167272097345f::t_2631c0ed673313 71-73
+  s_5167272097345f::t_ca6af01c68f9d6 69-70
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_5167272097345f::t_10227ad0610970 197,657
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_5167272097345f::t_fb77d399ca7ea1 101,103,106
+  s_5167272097345f::t_298971dc0f1322 104-105,107-110,112
+  s_5167272097345f::t_42bd548aed3a02 275,277,280
+  s_5167272097345f::t_3ba10441728064 274,278-279,281-284,291
+control-plane/Tests/AppTests/AdminExceptionPathTests.swift
+  s_5167272097345f::t_10227ad0610970 91,120
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_5167272097345f::t_a3355f1e968c9a 32,36-37,39-42,49
+  s_5167272097345f::t_3f2023465cac9f 33,35,38
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_5167272097345f::t_10227ad0610970 94
+control-plane/web/src/types/openapi.ts
+  s_5167272097345f::t_cb3bcc3337041f 116,7386-7490,8228-8231,8393-8396,8404,8410,8712-8715,8723,8729,8953-8958,8968,8974,9138-9143,9153,9159,9446-9449,9457,9463,9733-9738,9748,9754,9789-9792,9800,9806,9922-9927,9934,9940,10057-10060,10068,10074,10221-10224,10232,10238,10455-10460,10467,10473,13038-13041,13049,13055,13350-13353,13361,13367,13379-13382,13390,13396,13702-13705,13713,13719
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_5167272097345f::t_10227ad0610970 338
+control-plane/Tests/AppTests/ListPaginationTests.swift
+  s_5167272097345f::t_b436835faa73ae 1-130
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_5167272097345f::t_9780fa3943ef71 242-243,254
+  s_5167272097345f::t_38b2296d2b5a33 244,252
+cli/Sources/StratoCLI/Commands/SandboxCommand.swift
+  s_5167272097345f::t_63f6ed8f2560d6 21-23
+cli/Sources/StratoCLI/Commands/NetworkCommand.swift
+  s_5167272097345f::t_5391f213f0fadc 21-23
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_5167272097345f::t_c5e9c21d1c85dc 41,44-45,47-50
+  s_5167272097345f::t_7356e23b082481 42-43,46
+  s_5167272097345f::t_1225b07832bcf8 116
+control-plane/web/src/lib/api/vms.ts
+  s_5167272097345f::t_4f977f6237c0c9 20-25
+  s_5167272097345f::t_57ea7d1e3dfb42 9,13
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_5167272097345f::t_fc0c927b007b71 102-103,106
+  s_5167272097345f::t_51773ca4de4339 101,104-105,107-110,117-118
+control-plane/web/src/lib/api/images.ts
+  s_5167272097345f::t_c1a9c2c46615cb 10,12,16-20
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_5167272097345f::t_10227ad0610970 346
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_5167272097345f::t_10227ad0610970 476,483
+cli/Sources/StratoCLI/Commands/ProjectCommand.swift
+  s_5167272097345f::t_b2b99b3cb669e0 196-198
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_5167272097345f::t_10227ad0610970 61,92
+control-plane/web/src/lib/api/networks.ts
+  s_5167272097345f::t_28c98d2ae3a1ed 8,10,14-19
+control-plane/web/src/lib/api/sandboxes.ts
+  s_5167272097345f::t_38c549bac64c8e 24-29
+  s_5167272097345f::t_ca523bd8e8a6e4 13,16
+  s_5167272097345f::t_a7bd05b6c29299 71-75
+control-plane/web/src/lib/api/users.ts
+  s_5167272097345f::t_84b401ce3ff0fd 27-29
+  s_5167272097345f::t_bd1d24a1f5c86a 8,12
+cli/Sources/StratoCLI/Commands/ImageCommand.swift
+  s_5167272097345f::t_dcc2d5e514232f 25-27
+control-plane/web/src/types/api.ts
+  s_5167272097345f::t_5cc00ecfc62653 3-18
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_5167272097345f::t_61e6151792eb4d 42
+  s_5167272097345f::t_6218299ac73874 71
+  s_5167272097345f::t_10eb2c77dcdf05 40-41
+  s_5167272097345f::t_d764255703908f 68
+control-plane/Sources/App/Controllers/UserController.swift
+  s_5167272097345f::t_7d298c39a1b094 43-44,47
+  s_5167272097345f::t_47188f6ef230a9 45-46,48-51,56-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "d212299088aba72bf1cc48e9bae7f69bda2d9292",
+  "prompts": {},
+  "sessions": {
+    "s_5167272097345f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcab2644-b7db-4346-9fa6-b12515572b94",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
