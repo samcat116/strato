@@ -447,33 +447,11 @@ struct AgentWebSocketController: RouteCollection {
                     break
                 }
                 let message = try envelope.decode(as: VMLogMessage.self)
-                Task {
-                    // Only accept logs for a VM actually assigned to the reporting
-                    // agent. Without this a compromised agent could push fabricated
-                    // log lines tagged with another tenant's VM id, which would then
-                    // surface in that tenant's console/log view.
-                    guard await req.agentService.vmIsOwnedByAgent(vmId: message.vmId, agentKey: agentKey) else {
-                        req.logger.warning(
-                            "Dropping VM log for a VM not owned by the reporting agent",
-                            metadata: [
-                                "vmId": .string(message.vmId),
-                                "agentName": .string(agentName),
-                            ])
-                        return
-                    }
-                    do {
-                        try await req.lokiService.pushLog(message)
-                        req.logger.debug(
-                            "VM log pushed to Loki",
-                            metadata: [
-                                "vmId": .string(message.vmId),
-                                "level": .string(message.level.rawValue),
-                                "eventType": .string(message.eventType.rawValue),
-                            ])
-                    } catch {
-                        req.logger.error("Failed to push VM log to Loki: \(error)")
-                    }
-                }
+                // Enqueue only, same as the sandbox path above: the ingestor's
+                // single serial consumer keeps the agent's line order and
+                // caches the ownership check, so a chatty guest no longer
+                // costs one `VM.find` per line (issue #698).
+                req.application.vmLogIngestor.enqueue(message, fromAgentKey: agentKey)
 
             default:
                 req.logger.warning("Received unexpected message type from agent: \(envelope.type)")

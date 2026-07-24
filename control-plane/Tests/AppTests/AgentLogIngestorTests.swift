@@ -6,15 +6,15 @@ import Vapor
 
 @testable import App
 
-/// Unit tests for `SandboxLogIngestor`: the serial consumer must preserve
+/// Unit tests for `AgentLogIngestor`: the serial consumer must preserve
 /// enqueue order (Loki rejects out-of-order entries per stream) and must
 /// cache both positive and negative agent-ownership answers within the TTL
 /// instead of issuing one database query per log line.
 ///
 /// The ingestor's dependencies are injected closures, so these tests need no
 /// application, database, or Loki.
-@Suite("Sandbox Log Ingestor Tests")
-struct SandboxLogIngestorTests {
+@Suite("Agent Log Ingestor Tests")
+struct AgentLogIngestorTests {
 
     private func makeMessage(sandboxId: String, line: String) -> SandboxLogMessage {
         SandboxLogMessage(sandboxId: sandboxId, stream: "stdout", message: line)
@@ -124,6 +124,46 @@ struct SandboxLogIngestorTests {
         #expect(secondDrain == true)
         let checksAfterTTL = checkCount.withLockedValue { $0 }
         #expect(checksAfterTTL == 2)
+        ingestor.shutdown()
+    }
+
+    /// The VM console path (issue #698) used to issue one `VM.find` per log
+    /// line; it now shares the sandbox pipeline, so a chatty guest costs one
+    /// ownership query per (vm, agent) per TTL and spoofed lines still drop.
+    @Test("VM log lines share the cached ownership check")
+    func vmLogsCacheOwnership() async throws {
+        let checks = NIOLockedValueBox<[String]>([])
+        let pushed = NIOLockedValueBox<[String]>([])
+        let ingestor = VMLogIngestor(
+            logger: Logger(label: "test"),
+            checkOwnership: { vmId, _ in
+                checks.withLockedValue { $0.append(vmId) }
+                return vmId == "owned"
+            },
+            push: { message in
+                pushed.withLockedValue { $0.append(message.message) }
+            }
+        )
+
+        func makeVMMessage(vmId: String, line: String) -> VMLogMessage {
+            VMLogMessage(
+                vmId: vmId, level: .info, source: .qemu, eventType: .qemuOutput, message: line)
+        }
+
+        for index in 0..<50 {
+            ingestor.enqueue(makeVMMessage(vmId: "spoofed", line: "drop"), fromAgentKey: agentKey("agent-a"))
+            ingestor.enqueue(makeVMMessage(vmId: "owned", line: "line-\(index)"), fromAgentKey: agentKey("agent-a"))
+        }
+
+        let drained = await poll { pushed.withLockedValue { $0.count } == 50 }
+        #expect(drained == true)
+
+        // One query per (vm, agent) pair regardless of line rate, and the
+        // consumer preserved enqueue order for the owned VM's stream.
+        let consulted = checks.withLockedValue { $0 }
+        #expect(consulted == ["spoofed", "owned"])
+        let lines = pushed.withLockedValue { $0 }
+        #expect(lines == (0..<50).map { "line-\($0)" })
         ingestor.shutdown()
     }
 }
