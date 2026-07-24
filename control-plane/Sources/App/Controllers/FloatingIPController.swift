@@ -61,10 +61,10 @@ struct FloatingIPController: RouteCollection {
     /// org/folder node. The pool itself has no node in the IAM tree.
     private static func poolScopeCheck(_ scope: OrganizationScope, manage: Bool) -> (action: String, node: IAMNode) {
         switch scope {
-        case .organization(let id):
-            return (manage ? "org:update" : "org:read", IAMNode(type: .organization, id: id))
-        case .organizationalUnit(let id):
-            return (manage ? "folder:update" : "folder:read", IAMNode(type: .organizationalUnit, id: id))
+        case .organization:
+            return (manage ? "org:update" : "org:read", scope.checkNode)
+        case .organizationalUnit:
+            return (manage ? "folder:update" : "folder:read", scope.checkNode)
         }
     }
 
@@ -116,14 +116,27 @@ struct FloatingIPController: RouteCollection {
         // admins — so an admin's full view is a logged, guardrail-bound
         // decision rather than a skipped check. A scopeless pool has no node
         // and stays system-admin only, as in `requirePoolPermission`.
-        var visible: [FloatingIPPool] = []
+        //
+        // Which read action a pool stands for depends on the kind of scope
+        // owning it (`org:read` vs `folder:read`), so the page costs one
+        // batched decision per action (#687) instead of one evaluation per
+        // pool. Unioning the two verdict sets is unambiguous because the node
+        // type determines the action: an Organization node is only ever asked
+        // `org:read`, a folder node only ever `folder:read`.
+        var nodesByAction: [String: [IAMNode]] = [:]
         for pool in pools {
-            guard let scope = pool.organizationScope else {
-                if req.allowsScopelessPlatformRow() { visible.append(pool) }
-                continue
-            }
+            guard let scope = pool.organizationScope else { continue }
             let check = Self.poolScopeCheck(scope, manage: false)
-            if try await req.can(check.action, on: check.node) { visible.append(pool) }
+            nodesByAction[check.action, default: []].append(check.node)
+        }
+        var readable: Set<IAMNode> = []
+        // Sorted so the decision log records the two batches in a stable order.
+        for (action, nodes) in nodesByAction.sorted(by: { $0.key < $1.key }) {
+            readable.formUnion(try await req.canFilter(action, on: nodes))
+        }
+        let visible = pools.filter { pool in
+            guard let scope = pool.organizationScope else { return req.allowsScopelessPlatformRow() }
+            return readable.contains(Self.poolScopeCheck(scope, manage: false).node)
         }
 
         // One grouped count for the page rather than a COUNT per pool.
