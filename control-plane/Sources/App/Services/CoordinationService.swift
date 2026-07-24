@@ -48,6 +48,9 @@ protocol CoordinationStore: Sendable {
     /// Whether `key` currently exists (i.e. was written and has not expired).
     func keyExists(_ key: String) async throws -> Bool
 
+    /// Presence of every key, in input order, fetched in one store round trip.
+    func keysExist(_ keys: [String]) async throws -> [Bool]
+
     /// Acquire an expiring lock (`SET NX EX` semantics). Returns false when the
     /// lock is already held. There is deliberately no release: holders let the
     /// TTL expire so a lock outlives exactly one pass of the work it gates.
@@ -74,6 +77,9 @@ protocol CoordinationStore: Sendable {
 
     /// Sum of all unexpired reservations under `agentKey`.
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts
+
+    /// Sum reservations for every agent key in one pipelined store round trip.
+    func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts]
 
     /// Write `key` = `value` with a TTL (SET EX semantics), replacing any
     /// existing value and TTL.
@@ -122,6 +128,12 @@ protocol CoordinationStore: Sendable {
 /// hash tags to co-locate them).
 struct ValkeyCoordinationStore: CoordinationStore {
     let app: Application
+    private let scripts: ValkeyScriptExecutor
+
+    init(app: Application) {
+        self.app = app
+        self.scripts = ValkeyScriptExecutor(client: app.valkey)
+    }
 
     private static let setAgentLivenessScript = """
         local ttl = tonumber(ARGV[2])
@@ -199,6 +211,18 @@ struct ValkeyCoordinationStore: CoordinationStore {
         try await app.valkey.exists(keys: [ValkeyKey(key)]) == 1
     }
 
+    func keysExist(_ keys: [String]) async throws -> [Bool] {
+        guard !keys.isEmpty else { return [] }
+        let response = try await app.valkey.mget(keys: keys.map { ValkeyKey($0) })
+        guard response.count == keys.count else {
+            throw CoordinationStoreError.unexpectedResponse
+        }
+        return response.map {
+            if case .null = $0.value { return false }
+            return true
+        }
+    }
+
     func acquireLock(_ key: String, ttlSeconds: Int) async throws -> Bool {
         // SET ... NX replies +OK when the key was set and Null when it existed.
         let response = try await app.valkey.set(
@@ -213,7 +237,8 @@ struct ValkeyCoordinationStore: CoordinationStore {
         capacity: ReservationAmounts,
         ttlSeconds: Int
     ) async throws -> Bool {
-        let response = try await app.valkey.eval(
+        let response = try await scripts.execute(
+            name: "coordination.reserve",
             script: Self.reserveScript,
             keys: [ValkeyKey(Self.indexKey(agentKey))],
             args: [
@@ -242,17 +267,28 @@ struct ValkeyCoordinationStore: CoordinationStore {
     }
 
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts {
-        let response = try await app.valkey.eval(
+        let response = try await scripts.execute(
+            name: "coordination.reserved-total",
             script: Self.reservedTotalScript,
             keys: [ValkeyKey(Self.indexKey(agentKey))],
             args: [Self.vmKeyPrefix(agentKey)]
         )
 
-        guard let values = try? response.decode(as: [Int].self), values.count == 3 else {
-            throw CoordinationStoreError.unexpectedResponse
-        }
+        return try Self.decodeReservationTotal(response)
+    }
 
-        return ReservationAmounts(cpu: values[0], memory: Int64(values[1]), disk: Int64(values[2]))
+    func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts] {
+        let responses = try await scripts.execute(
+            name: "coordination.reserved-total",
+            script: Self.reservedTotalScript,
+            invocations: agentKeys.map {
+                ValkeyScriptExecutor.Invocation(
+                    keys: [ValkeyKey(Self.indexKey($0))],
+                    args: [Self.vmKeyPrefix($0)]
+                )
+            }
+        )
+        return try responses.map(Self.decodeReservationTotal)
     }
 
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
@@ -288,7 +324,8 @@ struct ValkeyCoordinationStore: CoordinationStore {
         """
 
     func deleteValue(_ key: String, ifEquals value: String) async throws {
-        _ = try await app.valkey.eval(
+        _ = try await scripts.execute(
+            name: "coordination.delete-if-equals",
             script: Self.deleteIfEqualsScript,
             keys: [ValkeyKey(key)],
             args: [value]
@@ -330,6 +367,13 @@ struct ValkeyCoordinationStore: CoordinationStore {
 
     private static func indexKey(_ agentKey: String) -> String { agentKey + ":index" }
     private static func vmKeyPrefix(_ agentKey: String) -> String { agentKey + ":vm:" }
+
+    private static func decodeReservationTotal(_ response: RESPToken) throws -> ReservationAmounts {
+        guard let values = try? response.decode(as: [Int].self), values.count == 3 else {
+            throw CoordinationStoreError.unexpectedResponse
+        }
+        return ReservationAmounts(cpu: values[0], memory: Int64(values[1]), disk: Int64(values[2]))
+    }
 }
 
 enum CoordinationStoreError: Error {
@@ -365,6 +409,10 @@ actor InMemoryCoordinationStore: CoordinationStore {
             return false
         }
         return true
+    }
+
+    func keysExist(_ keys: [String]) -> [Bool] {
+        keys.map(keyExists)
     }
 
     func acquireLock(_ key: String, ttlSeconds: Int) -> Bool {
@@ -420,6 +468,10 @@ actor InMemoryCoordinationStore: CoordinationStore {
             memory: active.values.reduce(Int64(0)) { $0 + $1.amounts.memory },
             disk: active.values.reduce(Int64(0)) { $0 + $1.amounts.disk }
         )
+    }
+
+    func reservedTotals(agentKeys: [String]) -> [ReservationAmounts] {
+        agentKeys.map(reservedTotal)
     }
 
     func setValue(_ key: String, value: String, ttlSeconds: Int) {
@@ -591,6 +643,21 @@ actor CoordinationService {
             logger.warning(
                 "Failed to read agent presence from coordination store",
                 metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return nil
+        }
+    }
+
+    /// Presence for every agent key, in input order, using one batched store
+    /// read. Returns nil when the store is unavailable so placement can keep
+    /// the database's online rows under the fail-open policy.
+    func agentPresence(agentKeys: [String]) async -> [Bool]? {
+        do {
+            return try await store.keysExist(
+                agentKeys.map { Self.presenceKey(agentKey: $0) })
+        } catch {
+            logger.warning(
+                "Failed to batch-read agent presence from coordination store",
+                metadata: ["agentCount": .stringConvertible(agentKeys.count), "error": .string("\(error)")])
             return nil
         }
     }
@@ -856,6 +923,27 @@ actor CoordinationService {
                 "Failed to read placement reservations; treating as none",
                 metadata: ["agentId": .string(agentId), "error": .string("\(error)")])
             return .zero
+        }
+    }
+
+    /// Reservation totals keyed by agent ID, fetched as a single pipeline.
+    /// Store failures preserve the existing fail-open behavior by returning
+    /// zero for every requested agent; the atomic reserve remains the final
+    /// capacity gate while the store is healthy.
+    func activeReservations(agentIds: [String]) async -> [String: ReservationAmounts] {
+        guard !agentIds.isEmpty else { return [:] }
+        do {
+            let totals = try await store.reservedTotals(
+                agentKeys: agentIds.map { Self.reservationKey(agentId: $0) })
+            guard totals.count == agentIds.count else {
+                throw CoordinationStoreError.unexpectedResponse
+            }
+            return Dictionary(uniqueKeysWithValues: zip(agentIds, totals))
+        } catch {
+            logger.warning(
+                "Failed to batch-read placement reservations; treating as none",
+                metadata: ["agentCount": .stringConvertible(agentIds.count), "error": .string("\(error)")])
+            return Dictionary(uniqueKeysWithValues: agentIds.map { ($0, .zero) })
         }
     }
 }

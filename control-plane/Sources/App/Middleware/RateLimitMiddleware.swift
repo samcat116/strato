@@ -91,6 +91,18 @@ struct RateLimitMiddleware: AsyncMiddleware {
     let config: RateLimitConfig
     /// Shared in-memory fallback, used when Valkey isn't configured.
     let fallbackStore: InMemoryRateLimitStore
+    /// Long-lived so its Lua digest cache is shared across requests.
+    private let valkeyStore: ValkeyRateLimitStore?
+
+    init(
+        config: RateLimitConfig,
+        fallbackStore: InMemoryRateLimitStore,
+        valkeyStore: ValkeyRateLimitStore? = nil
+    ) {
+        self.config = config
+        self.fallbackStore = fallbackStore
+        self.valkeyStore = valkeyStore
+    }
 
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
         guard config.enabled, let scope = scope(for: request) else {
@@ -257,8 +269,8 @@ struct RateLimitMiddleware: AsyncMiddleware {
     // MARK: - Store selection
 
     private func store(for request: Request) -> RateLimitStore {
-        if request.application.valkeyEnabled {
-            return ValkeyRateLimitStore(client: request.application.valkey)
+        if request.application.valkeyEnabled, let valkeyStore {
+            return valkeyStore
         }
         return fallbackStore
     }

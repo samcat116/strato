@@ -345,13 +345,13 @@ final class SchedulerService: @unchecked Sendable {
     /// This closes the read-decide-write placement race (issue #258): plain
     /// `selectAgent` decides on resource numbers that may already be claimed
     /// by a concurrent placement the agent's resource reports don't reflect
-    /// yet. Here, each attempt subtracts the coordination store's active
-    /// reservations from every agent's availability before selection, then
-    /// atomically reserves the candidate's capacity. If the reservation loses
-    /// a race (another placement consumed the capacity between the read and
-    /// the reserve), selection re-runs with fresh reservation data — the
-    /// now-full agent drops out in the resource filter — until placement
-    /// succeeds or no agent fits.
+    /// yet. Here, hard constraints first narrow the fleet; each attempt then
+    /// subtracts a batched read of the coordination store's active reservations
+    /// from eligible agents before selection and atomically reserves the
+    /// candidate's capacity. If the reservation loses a race (another placement
+    /// consumed the capacity between the read and the reserve), selection
+    /// re-runs with fresh reservation data — the now-full agent drops out in
+    /// the resource filter — until placement succeeds or no agent fits.
     ///
     /// The reservation is released by the caller on send failure or once the
     /// agent starts reporting the VM; its TTL is the backstop.
@@ -366,17 +366,21 @@ final class SchedulerService: @unchecked Sendable {
         let amounts = ReservationAmounts(
             cpu: requirements.cpu, memory: requirements.memory, disk: requirements.disk)
 
+        // Apply categorical and raw-capacity constraints before touching the
+        // coordination store. Reservations can only reduce availability, so
+        // an agent excluded here can never become viable during this attempt.
+        let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
+
         // Each failed attempt means a concurrent reservation landed; with n
         // agents, capacity can be stolen out from under us at most once per
         // agent before the resource filter excludes them all, so a small
         // margin over n bounds the loop without ever cutting a viable retry.
-        let maxAttempts = agents.count + 2
+        let maxAttempts = eligibleAgents.count + 2
         for attempt in 1...max(1, maxAttempts) {
-            var adjusted: [SchedulableAgent] = []
-            adjusted.reserveCapacity(agents.count)
-            for agent in agents {
-                let reserved = await coordination.activeReservations(agentId: agent.id)
-                adjusted.append(agent.subtractingReservations(reserved))
+            let reservations = await coordination.activeReservations(
+                agentIds: eligibleAgents.map(\.id))
+            let adjusted = eligibleAgents.map {
+                $0.subtractingReservations(reservations[$0.id] ?? .zero)
             }
 
             let selectedId = try selectAgent(
@@ -385,7 +389,7 @@ final class SchedulerService: @unchecked Sendable {
             // The atomic reserve checks against the agent's *raw* reported
             // availability — the store re-subtracts reservations itself, so
             // passing adjusted numbers would double-count them.
-            guard let selectedAgent = agents.first(where: { $0.id == selectedId }) else {
+            guard let selectedAgent = eligibleAgents.first(where: { $0.id == selectedId }) else {
                 throw SchedulerError.noAvailableAgents
             }
             let capacity = ReservationAmounts(

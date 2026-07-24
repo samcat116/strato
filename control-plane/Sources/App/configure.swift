@@ -200,7 +200,8 @@ public func configure(_ app: Application) async throws {
         app.middleware.use(
             RateLimitMiddleware(
                 config: rateLimitConfig,
-                fallbackStore: InMemoryRateLimitStore()
+                fallbackStore: InMemoryRateLimitStore(),
+                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.valkey) : nil
             ))
         app.logger.info(
             "Rate limiting enabled",

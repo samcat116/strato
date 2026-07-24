@@ -5,6 +5,7 @@ import NIOWebSocket
 import Fluent
 import NIOCore
 import NIOConcurrencyHelpers
+import SQLKit
 import Tracing
 
 /// Thread-safe WebSocket connection manager
@@ -2073,36 +2074,52 @@ actor AgentService {
     /// per-agent VM counts, filtered to agents whose presence key is live.
     func schedulableAgentsFromDatabase() async -> [SchedulableAgent] {
         do {
-            let agents = try await Agent.query(on: app.db)
+            async let onlineAgents = Agent.query(on: app.db)
                 .filter(\.$status == .online)
                 .all()
+            async let groupedCounts = runningVMCountsFromDatabase()
+            let (agents, runningVMCounts) = try await (onlineAgents, groupedCounts)
 
-            let placedVMs = try await VM.query(on: app.db)
-                .filter(\.$hypervisorId != nil)
-                .all()
-            var runningVMCounts: [String: Int] = [:]
-            for vm in placedVMs {
-                if let hypervisorId = vm.hypervisorId {
-                    runningVMCounts[hypervisorId, default: 0] += 1
-                }
-            }
-
-            var present: [Agent] = []
-            for agent in agents {
-                // Fail open on nil (store unavailable): the row said online,
-                // and refusing all placement would couple VM creation to
-                // Valkey harder than issue #258's degradation policy allows.
-                if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == false {
-                    continue
-                }
-                present.append(agent)
-            }
+            // Fail open on nil (store unavailable): the rows said online, and
+            // refusing all placement would couple VM creation to Valkey harder
+            // than issue #258's degradation policy allows.
+            let presence = await app.coordination.agentPresence(
+                agentKeys: agents.map(\.identity.key))
+            let present =
+                presence.map { states in
+                    zip(agents, states).compactMap { agent, isPresent in
+                        isPresent ? agent : nil
+                    }
+                } ?? agents
 
             return Self.schedulableAgents(from: present, runningVMCounts: runningVMCounts)
         } catch {
             app.logger.error("Failed to load schedulable agents from database: \(error)")
             return []
         }
+    }
+
+    /// Count placed VMs per agent without hydrating every VM in the cluster.
+    private func runningVMCountsFromDatabase() async throws -> [String: Int] {
+        guard let sql = app.db as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Scheduler placement requires an SQL database")
+        }
+
+        struct Row: Decodable {
+            let hypervisor_id: String
+            let count: Int
+        }
+
+        let rows = try await sql.raw(
+            """
+            SELECT hypervisor_id, COUNT(*) AS count
+            FROM vms
+            WHERE hypervisor_id IS NOT NULL
+            GROUP BY hypervisor_id
+            """
+        ).all(decoding: Row.self)
+
+        return Dictionary(uniqueKeysWithValues: rows.map { ($0.hypervisor_id, $0.count) })
     }
 
     /// Pure transform from agent rows to the scheduler's view. Kept

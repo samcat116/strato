@@ -34,10 +34,16 @@ protocol RateLimitStore: Sendable {
 
 /// Valkey-backed store. Counters live in Valkey so that a rate limit is
 /// enforced consistently no matter which control-plane replica a request lands
-/// on. The increment+expire+TTL read is done in a single atomic `EVAL` so a
-/// crash between `INCR` and `EXPIRE` can't leave an immortal counter.
+/// on. The increment+expire+TTL read is done in one cached atomic Lua script so
+/// a crash between `INCR` and `EXPIRE` can't leave an immortal counter.
 struct ValkeyRateLimitStore: RateLimitStore {
     let client: ValkeyClient
+    private let scripts: ValkeyScriptExecutor
+
+    init(client: ValkeyClient) {
+        self.client = client
+        self.scripts = ValkeyScriptExecutor(client: client)
+    }
 
     /// `INCR` the key, set its TTL on the first hit only, and return `{count, ttl}`.
     private static let hitScript = """
@@ -49,7 +55,8 @@ struct ValkeyRateLimitStore: RateLimitStore {
         """
 
     func hit(_ key: String, window: Int) async throws -> RateLimitCount {
-        let response = try await client.eval(
+        let response = try await scripts.execute(
+            name: "rate-limit.hit",
             script: Self.hitScript,
             keys: [ValkeyKey(key)],
             args: [String(window)]
