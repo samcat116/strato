@@ -255,29 +255,30 @@ enum WhoCanService {
     /// its members' own entries carry whether a ceiling reaches them. A
     /// truncated-chain denial marks the entry ceilinged with an empty id list
     /// (the structural fail-closed names no policy).
+    ///
+    /// Every entry asks about the *same* node, so the whole list is decided in
+    /// one batch (#687): the ancestor chain and the resource attributes are
+    /// resolved once for the enumeration instead of once per principal.
     private static func markingCeilingedPrincipals(
         _ entries: [WhoCanEntry], action: String, node: IAMNode,
         built: CedarPolicySetCache.Built, on db: any Database
     ) async throws -> [WhoCanEntry] {
-        var result: [WhoCanEntry] = []
-        result.reserveCapacity(entries.count)
-        for entry in entries {
+        let targets = entries.compactMap { entry in
+            IAMPrincipal.requestPrincipal(type: entry.principal.type, id: entry.principal.id)
+                .map { IAMCheckTarget(principal: $0, node: node) }
+        }
+        guard !targets.isEmpty else { return entries }
+        let decisions = try await IAMDecisionEngine.decide(
+            targets, action: action, built: built, on: db)
+
+        return entries.map { entry in
             guard
                 let principal = IAMPrincipal.requestPrincipal(
-                    type: entry.principal.type, id: entry.principal.id)
-            else {
-                result.append(entry)
-                continue
-            }
-            let decision = try await IAMDecisionEngine.decide(
-                principal: principal, action: action, node: node, built: built, on: db)
-            if let ceilingIDs = decision.denyingCeilingIDs {
-                result.append(entry.markingCeilinged(ceilingIDs))
-            } else {
-                result.append(entry)
-            }
+                    type: entry.principal.type, id: entry.principal.id),
+                let ceilingIDs = decisions[IAMCheckTarget(principal: principal, node: node)]?.denyingCeilingIDs
+            else { return entry }
+            return entry.markingCeilinged(ceilingIDs)
         }
-        return result
     }
 
     /// The ceilings in force at the queried node: guardrails inherited down the
@@ -648,24 +649,55 @@ enum WhoCanService {
     ///   guardrails that can name a group.
     static func can(
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode,
-        app: Application, on db: any Database
+        app: Application, cache: IAMRequestCache? = nil, on db: any Database
     ) async throws -> Bool {
+        try await can(
+            principalType: principalType, principalID: principalID, action: action, nodes: [node],
+            app: app, cache: cache, on: db)[node] ?? false
+    }
+
+    /// The same answer for many resources at once (#687), so the batch check
+    /// endpoint pays one entity-slice load rather than one per item. The
+    /// single-resource form above is a batch of one.
+    static func can(
+        principalType: IAMPrincipalType, principalID: UUID, action: String, nodes: [IAMNode],
+        app: Application, cache: IAMRequestCache? = nil, on db: any Database
+    ) async throws -> [IAMNode: Bool] {
+        let distinct = Set(nodes)
+        guard !distinct.isEmpty else { return [:] }
+
         guard let principal = IAMPrincipal.requestPrincipal(type: principalType, id: principalID)
         else {
-            guard try await groupIsGranted(groupID: principalID, action: action, node: node, on: db)
-            else { return false }
-            let forbidding = try await GuardrailStore.forbidding(
-                action: action, principalType: principalType, principalID: principalID,
-                node: node, on: db)
-            return forbidding.isEmpty
+            // A group is answered from the bindings model, not the evaluator,
+            // so there is no slice to share — but the questions are still
+            // independent and few.
+            var answers: [IAMNode: Bool] = [:]
+            for node in distinct {
+                guard try await groupIsGranted(groupID: principalID, action: action, node: node, on: db)
+                else {
+                    answers[node] = false
+                    continue
+                }
+                let forbidding = try await GuardrailStore.forbidding(
+                    action: action, principalType: principalType, principalID: principalID,
+                    node: node, on: db)
+                answers[node] = forbidding.isEmpty
+            }
+            return answers
         }
 
-        guard try await principalMayAct(principal, on: db) else { return false }
+        guard try await principalMayAct(principal, on: db) else {
+            return Dictionary(uniqueKeysWithValues: distinct.map { ($0, false) })
+        }
 
         let built = try await IAMDecisionEngine.compiledSet(app)
-        let decision = try await IAMDecisionEngine.decide(
-            principal: principal, action: action, node: node, built: built, on: db)
-        return decision.verdict.allowed
+        let decisions = try await IAMDecisionEngine.decide(
+            distinct.map { IAMCheckTarget(principal: principal, node: $0) },
+            action: action, built: built, cache: cache, on: db)
+        return Dictionary(
+            uniqueKeysWithValues: distinct.map {
+                ($0, decisions[IAMCheckTarget(principal: principal, node: $0)]?.verdict.allowed ?? false)
+            })
     }
 
     /// Whether the principal can reach the evaluator at all: its row exists,

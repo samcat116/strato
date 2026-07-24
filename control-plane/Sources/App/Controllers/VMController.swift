@@ -125,19 +125,18 @@ struct VMController: RouteCollection {
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
-        // Filter VMs based on user permissions
+        // Scope the page to what the caller may read. One batched decision for
+        // the whole page (#687): looping `req.can` per VM cost a full entity
+        // slice and a decision-log insert each, so a hundred rows meant
+        // hundreds of queries to answer one question a hundred times.
         let allVMs = try await query.all()
-        var authorizedVMs: [VMDetailResponse] = []
+        let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
+        let readable = try await req.canFilter("vm:read", on: nodes)
 
-        for vm in allVMs {
-            let hasPermission = try await req.can("read", on: "virtual_machine", id: vm.id?.uuidString ?? "")
-
-            if hasPermission {
-                authorizedVMs.append(VMDetailResponse(from: vm))
-            }
+        return allVMs.compactMap { vm in
+            guard let id = vm.id, readable.contains(IAMNode(type: .virtualMachine, id: id)) else { return nil }
+            return VMDetailResponse(from: vm)
         }
-
-        return authorizedVMs
     }
 
     /// Fetch a VM by its :vmID route parameter and enforce a permission on it.

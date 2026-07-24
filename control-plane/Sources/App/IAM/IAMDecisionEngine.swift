@@ -122,9 +122,46 @@ enum IAMDecisionEngine {
         cache: IAMRequestCache? = nil,
         on db: any Database
     ) async throws -> Decision {
-        let slice = try await EntitySliceLoader.load(
-            principal: principal, node: node, action: action, cache: cache, on: db)
+        let target = IAMCheckTarget(principal: principal, node: node)
+        guard let decision = try await decide([target], action: action, built: built, cache: cache, on: db)[target]
+        else {
+            // Unreachable: the batch is total over its inputs.
+            throw Abort(.internalServerError, reason: "Authorization decision unavailable")
+        }
+        return decision
+    }
 
+    /// Decide a whole batch of "may `principal` perform `action` on `node`?"
+    /// questions at once (#687).
+    ///
+    /// Only slice loading needed batching: Cedar evaluation is pure CPU over an
+    /// entity store already in memory, so the loop below is the same loop a
+    /// caller would have written — it just runs after one set of queries
+    /// instead of one set per question. The single-question form above is a
+    /// batch of one, so both forms decide identically by construction.
+    ///
+    /// The batch shares one action, which is what lets it share one slice per
+    /// (principal, node): grants are role-shaped, so a slice serves any action.
+    static func decide(
+        _ targets: [IAMCheckTarget],
+        action: String,
+        built: CedarPolicySetCache.Built,
+        cache: IAMRequestCache? = nil,
+        on db: any Database
+    ) async throws -> [IAMCheckTarget: Decision] {
+        let slices = try await EntitySliceLoader.load(targets, action: action, cache: cache, on: db)
+        var decisions: [IAMCheckTarget: Decision] = [:]
+        decisions.reserveCapacity(slices.count)
+        for (target, slice) in slices {
+            decisions[target] = try decide(slice: slice, action: action, node: target.node, built: built)
+        }
+        return decisions
+    }
+
+    /// The decision itself, over a slice already loaded.
+    private static func decide(
+        slice: CedarEntitySlice, action: String, node: IAMNode, built: CedarPolicySetCache.Built
+    ) throws -> Decision {
         guard CedarSchemaBuilder.resourceTypes(for: action).contains(node.type.cedarEntityType) else {
             return Decision(
                 verdict: CedarCheckDecision(

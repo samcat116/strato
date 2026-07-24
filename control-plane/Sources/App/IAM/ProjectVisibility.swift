@@ -218,21 +218,21 @@ struct ProjectVisibility: Sendable {
     // MARK: - Deciding
 
     /// The projects among `projectIDs` the caller may actually read, decided by
-    /// the evaluator.
+    /// the evaluator in one batch (#687).
     ///
-    /// Phrased in the legacy vocabulary the item routes use, so a list-scoping
-    /// decision and the object check that follows it are the same question —
-    /// and the request cache (#686) answers the repeat for free.
+    /// This is the residue the SQL narrowing above deliberately leaves to the
+    /// evaluator, so it is exactly the shape batching exists for: one decision
+    /// per surviving project, all of them sharing a single entity-slice load.
+    ///
+    /// `project:read` is what the item routes' `view_project` translates to, and
+    /// the request memo is keyed on the *translated* action — so a list-scoping
+    /// decision and the object check that follows it remain the same question,
+    /// answered once (#686).
     func readableProjects(
         among projectIDs: some Sequence<UUID>, on req: Request
     ) async throws -> Set<UUID> {
-        var readable: Set<UUID> = []
-        for projectID in Set(projectIDs) {
-            if try await req.can("view_project", on: "project", id: projectID.uuidString) {
-                readable.insert(projectID)
-            }
-        }
-        return readable
+        let nodes = Set(projectIDs).map { IAMNode(type: .project, id: $0) }
+        return Set(try await req.canFilter("project:read", on: nodes).map(\.id))
     }
 
     /// The rows whose project the caller may read.

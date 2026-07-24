@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import Vapor
 
 // IAM phase 3 (issue #480): the entity-slice loader.
 //
@@ -120,6 +121,22 @@ struct CedarEntitySlice: Equatable, Sendable {
     }
 }
 
+/// One question a batch asks: which principal, on which node.
+///
+/// The action is not part of it — grants are role-shaped and action resolution
+/// happens in the policy set, so one slice serves any action on a node. A batch
+/// therefore shares its action, and callers with mixed actions group by action
+/// (the request cache makes the second group's chains and memberships free).
+struct IAMCheckTarget: Hashable, Sendable {
+    let principal: IAMPrincipal
+    let node: IAMNode
+
+    init(principal: IAMPrincipal, node: IAMNode) {
+        self.principal = principal
+        self.node = node
+    }
+}
+
 enum EntitySliceLoader {
 
     /// Gather the slice for "may `userID` act on `node`?".
@@ -157,70 +174,209 @@ enum EntitySliceLoader {
         principal: IAMPrincipal, node: IAMNode, action: String? = nil,
         cache: IAMRequestCache? = nil, on db: any Database
     ) async throws -> CedarEntitySlice {
-        // Independent loads: the chain walk knows nothing about the principal
-        // and the memberships know nothing about the resource. Only the
-        // bindings query below needs both.
-        let resolution: IAMResourceTree.Resolution
-        let facts: IAMUserFacts
-        if principal.type == .user {
-            async let resolved = IAMResourceTree.resolve(node, cache: cache, on: db)
-            async let principalFacts = IAMUserFacts.load(userID: principal.id, cache: cache, on: db)
-            (resolution, facts) = try await (resolved, principalFacts)
-        } else {
-            resolution = try await IAMResourceTree.resolve(node, cache: cache, on: db)
-            facts = .none
+        let target = IAMCheckTarget(principal: principal, node: node)
+        guard let slice = try await load([target], action: action, cache: cache, on: db)[target] else {
+            // Unreachable: the batch is total over its inputs. Failing closed
+            // beats a force-unwrap in the security-critical path.
+            throw Abort(.internalServerError, reason: "Authorization entity slice unavailable")
         }
+        return slice
+    }
+
+    /// Gather the slices for a whole batch of questions (#687).
+    ///
+    /// The single-target forms above are batches of one, so there is exactly
+    /// one place that reads the database for a slice. What batching buys is
+    /// that every read here is set-based: the ancestor chains resolve in one
+    /// lockstep walk, the principals' memberships in three queries however many
+    /// principals there are, and the bindings along every chain in a single
+    /// query. Cedar evaluation itself is pure CPU, so the loader is the only
+    /// part of a decision that needed batching at all.
+    ///
+    /// The number of queries therefore depends on the *shape* of the batch —
+    /// tree depth and node types — not on its size: a hundred VMs in a list
+    /// cost what one VM costs.
+    static func load(
+        _ targets: [IAMCheckTarget], action: String? = nil,
+        cache: IAMRequestCache? = nil, on db: any Database
+    ) async throws -> [IAMCheckTarget: CedarEntitySlice] {
+        let distinct = Set(targets)
+        guard !distinct.isEmpty else { return [:] }
+
+        // Independent loads: the chain walk knows nothing about the principals
+        // and the memberships know nothing about the resources. Only the
+        // bindings query below needs both.
+        async let resolvedChains = IAMResourceTree.resolve(distinct.map(\.node), cache: cache, on: db)
+        async let principalFacts = IAMUserFacts.load(
+            userIDs: Set(distinct.compactMap { $0.principal.type == .user ? $0.principal.id : nil }),
+            cache: cache, on: db)
+        let resolutions = try await resolvedChains
+        var userFacts = try await principalFacts
+
+        // `User`'s schema attributes are required, so a user standing as the
+        // *resource* — an admin reading somebody else's record — needs them
+        // too, or the whole entity store fails schema validation and the check
+        // fails closed. Which users those are is known only once the chains are
+        // in hand.
+        let resourceUserIDs = Set(
+            resolutions.values.lazy.flatMap(\.chain).filter { $0.type == .user }.map(\.id)
+        ).subtracting(userFacts.keys)
+        if !resourceUserIDs.isEmpty {
+            let loaded = try await IAMUserFacts.load(userIDs: resourceUserIDs, cache: cache, on: db)
+            userFacts.merge(loaded) { current, _ in current }
+        }
+
+        let bindings = try await bindingsAlongChains(
+            for: distinct, resolutions: resolutions, userFacts: userFacts, on: db)
+        let foreignWorkloads = try await agentForeignWorkloads(
+            for: distinct.map(\.node), action: action, on: db)
+
+        var slices: [IAMCheckTarget: CedarEntitySlice] = [:]
+        slices.reserveCapacity(distinct.count)
+        for target in distinct {
+            slices[target] = slice(
+                for: target,
+                resolution: resolutions[target.node]
+                    ?? IAMResourceTree.Resolution(chain: [target.node], leaf: IAMLeafFacts()),
+                userFacts: userFacts,
+                bindingsByNode: bindings,
+                hostsForeignWorkloads: foreignWorkloads[target.node])
+        }
+        return slices
+    }
+
+    /// The binding subjects whose grants count as a principal's: itself, plus
+    /// every group it belongs to. Machine principals have no groups by design,
+    /// so their subject list is just themselves.
+    private static func bindingSubjects(
+        of principal: IAMPrincipal, userFacts: [UUID: IAMUserFacts]
+    ) -> [IAMPrincipal] {
+        var subjects = [principal]
+        if principal.type == .user {
+            subjects += (userFacts[principal.id]?.groupIDs ?? []).map { IAMPrincipal(type: .group, id: $0) }
+        }
+        return subjects
+    }
+
+    /// Every active binding that any target could see, in one query, indexed by
+    /// the node it attaches to.
+    ///
+    /// Filtering to the batch's principals is what keeps the result
+    /// batch-sized; `who-can` answers the all-principals question from the
+    /// table directly. The `(type, id-set)` grouping keeps the predicate a
+    /// handful of OR terms rather than one per node — a hundred-VM list is four
+    /// or five terms, not a hundred.
+    private static func bindingsAlongChains(
+        for targets: Set<IAMCheckTarget>,
+        resolutions: [IAMNode: IAMResourceTree.Resolution],
+        userFacts: [UUID: IAMUserFacts],
+        on db: any Database
+    ) async throws -> [IAMNode: [RoleBinding]] {
+        var subjectIDs: [IAMPrincipalType: Set<UUID>] = [:]
+        var chainIDs: [IAMNodeType: Set<UUID>] = [:]
+        for target in targets {
+            for subject in bindingSubjects(of: target.principal, userFacts: userFacts) {
+                subjectIDs[subject.type, default: []].insert(subject.id)
+            }
+            for node in resolutions[target.node]?.chain ?? [] {
+                chainIDs[node.type, default: []].insert(node.id)
+            }
+        }
+        guard !subjectIDs.isEmpty, !chainIDs.isEmpty else { return [:] }
+
+        let rows = try await RoleBinding.query(on: db)
+            .group(.or) { anyPrincipal in
+                for (type, ids) in subjectIDs {
+                    anyPrincipal.group(.and) { thisType in
+                        thisType.filter(\.$principalType == type.rawValue)
+                        thisType.filter(\.$principalID ~~ Array(ids))
+                    }
+                }
+            }
+            .group(.or) { anyNode in
+                for (type, ids) in chainIDs {
+                    anyNode.group(.and) { thisType in
+                        thisType.filter(\.$nodeType == type.rawValue)
+                        thisType.filter(\.$nodeID ~~ Array(ids))
+                    }
+                }
+            }
+            .active()
+            .all()
+
+        var byNode: [IAMNode: [RoleBinding]] = [:]
+        for row in rows {
+            guard let nodeType = IAMNodeType(rawValue: row.nodeType) else { continue }
+            byNode[IAMNode(type: nodeType, id: row.nodeID), default: []].append(row)
+        }
+        return byNode
+    }
+
+    /// The agent foreign-workload inventory for the batch, or nothing when no
+    /// policy could read it.
+    ///
+    /// Gated on the same constant the forbid's action list is built from, so
+    /// the attribute is present exactly when a policy can read it.
+    private static func agentForeignWorkloads(
+        for nodes: [IAMNode], action: String?, on db: any Database
+    ) async throws -> [IAMNode: Bool] {
+        guard let action, IAMRoleRegistry.agentForeignWorkloadGuardedActions.contains(action) else { return [:] }
+        let agentIDs = Set(nodes.lazy.filter { $0.type == .agent }.map(\.id))
+        guard !agentIDs.isEmpty else { return [:] }
+
+        var rows: [UUID: Agent] = [:]
+        for agent in try await Agent.query(on: db).filter(\.$id ~~ Array(agentIDs)).all() {
+            if let id = agent.id { rows[id] = agent }
+        }
+        var inventory: [IAMNode: Bool] = [:]
+        for agentID in agentIDs {
+            // Missing row → true: an agent we cannot inventory is not one to
+            // let a delegated admin take down.
+            inventory[IAMNode(type: .agent, id: agentID)] =
+                try await rows[agentID]?.hostsForeignWorkloads(on: db) ?? true
+        }
+        return inventory
+    }
+
+    /// Assemble one slice from data already in memory. Pure — every database
+    /// read the slice needs happened in `load(_:action:cache:on:)` above.
+    private static func slice(
+        for target: IAMCheckTarget,
+        resolution: IAMResourceTree.Resolution,
+        userFacts: [UUID: IAMUserFacts],
+        bindingsByNode: [IAMNode: [RoleBinding]],
+        hostsForeignWorkloads: Bool?
+    ) -> CedarEntitySlice {
+        let principal = target.principal
+        let node = target.node
         let chain = resolution.chain
+        let facts = principal.type == .user ? (userFacts[principal.id] ?? .none) : .none
         let groupIDs = facts.groupIDs
         let organizationIDs = facts.organizationIDs
 
         var grants = CedarRoleGrants()
         var skippedConditionedBindings = 0
-        if !chain.isEmpty {
-            // The principal's own bindings plus those of every group it
-            // belongs to, on any node in the chain. Filtering to this
-            // principal is what keeps the slice per-check-sized; `who-can`
-            // answers the all-principals question from the table directly.
-            var principals: [(IAMPrincipalType, UUID)] = [(principal.type, principal.id)]
-            principals += groupIDs.map { (IAMPrincipalType.group, $0) }
-
-            let bindings = try await RoleBinding.query(on: db)
-                .group(.or) { anyPrincipal in
-                    for (type, id) in principals {
-                        anyPrincipal.group(.and) { thisPrincipal in
-                            thisPrincipal.filter(\.$principalType == type.rawValue)
-                            thisPrincipal.filter(\.$principalID == id)
-                        }
-                    }
-                }
-                .group(.or) { anyNode in
-                    for node in chain {
-                        anyNode.group(.and) { thisNode in
-                            thisNode.filter(\.$nodeType == node.type.rawValue)
-                            thisNode.filter(\.$nodeID == node.id)
-                        }
-                    }
-                }
-                .active()
-                .all()
-
-            for binding in bindings {
+        let subjects = Set(bindingSubjects(of: principal, userFacts: userFacts))
+        for chainNode in chain {
+            for binding in bindingsByNode[chainNode] ?? [] {
+                guard let principalType = IAMPrincipalType(rawValue: binding.principalType),
+                    subjects.contains(IAMPrincipal(type: principalType, id: binding.principalID))
+                else { continue }
                 guard binding.condition == nil else {
                     skippedConditionedBindings += 1
                     continue
                 }
-                // A role value that is no UUID, or an unknown principal type,
-                // is a row this build cannot interpret; skipping under-grants,
-                // never over-grants. (Whether the id names a *live* role is
-                // the compiled set's call — `contextValue(roleIDs:)` filters
-                // against it at context-build time.)
+                // A role value that is no UUID is a row this build cannot
+                // interpret; skipping under-grants, never over-grants.
+                // (Whether the id names a *live* role is the compiled set's
+                // call — `contextValue(roleIDs:)` filters against it at
+                // context-build time.)
                 guard let roleID = UUID(uuidString: binding.role) else { continue }
-                switch IAMPrincipalType(rawValue: binding.principalType) {
+                switch principalType {
                 case .user: grants.addUser(binding.principalID, roleID: roleID)
                 case .group: grants.addGroup(binding.principalID, roleID: roleID)
                 case .serviceAccount: grants.addServiceAccount(binding.principalID, roleID: roleID)
                 case .workload: grants.addWorkload(binding.principalID, roleID: roleID)
-                case nil: continue
                 }
             }
         }
@@ -287,14 +443,12 @@ enum EntitySliceLoader {
             if principalIsResource, chainNode.cedarUID == principalUID { continue }
             var attrs: [String: CedarValue] = [:]
             if chainNode.type == .user {
-                // `User`'s schema attributes are required, so a user standing
-                // as the *resource* — an admin reading somebody else's record —
-                // must carry them too, or the whole entity store fails schema
-                // validation and the check fails closed. (The self-check case
-                // never reaches here: it merged into the principal above.)
-                let target = try await IAMUserFacts.load(userID: chainNode.id, cache: cache, on: db)
+                // The resource-side user attributes prefetched above. (The
+                // self-check case never reaches here: it merged into the
+                // principal.)
+                let resourceUser = userFacts[chainNode.id] ?? .none
                 attrs = userAttrs(
-                    organizationIDs: target.organizationIDs, isSystemAdmin: target.isSystemAdmin)
+                    organizationIDs: resourceUser.organizationIDs, isSystemAdmin: resourceUser.isSystemAdmin)
             }
             if chainNode == node {
                 if let environment = resolution.leaf.environment {
@@ -305,17 +459,8 @@ enum EntitySliceLoader {
                     // become world-readable.
                     attrs["openToAllUsers"] = .bool(resolution.leaf.networkHasProject == false)
                 }
-                if node.type == .agent, let action,
-                    IAMRoleRegistry.agentForeignWorkloadGuardedActions.contains(action)
-                {
-                    // Gated on the same constant the forbid's action list is
-                    // built from, so the attribute is present exactly when a
-                    // policy can read it. Missing row → true: an agent we
-                    // cannot inventory is not one to let a delegated admin
-                    // take down.
-                    let agent = try await Agent.find(node.id, on: db)
-                    let foreign = try await agent?.hostsForeignWorkloads(on: db) ?? true
-                    attrs["hostsForeignWorkloads"] = .bool(foreign)
+                if node.type == .agent, let hostsForeignWorkloads {
+                    attrs["hostsForeignWorkloads"] = .bool(hostsForeignWorkloads)
                 }
             }
             let parents = index + 1 < chain.count ? [chain[index + 1].cedarUID] : []

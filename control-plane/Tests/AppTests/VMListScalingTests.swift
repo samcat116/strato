@@ -7,17 +7,20 @@ import VaporTesting
 
 /// Regression tests for the `GET /api/vms` 504 past ~200 VMs.
 ///
-/// `VMController.index` runs one `req.can("read", …)` per VM. The request-scoped
-/// `IAMRequestCache` (#686) already memoizes the caller's memberships and each
-/// node's resolved chain, but it keys chains by the node walked *from*, so a
-/// list of VMs sharing one project used to re-walk the shared project→org path
-/// once per VM. Caching each container's suffix lets the next sibling reuse it,
-/// leaving one row read per leaf plus the shared chain resolved once.
+/// The endpoint got here in three steps. It ran one `req.can("read", …)` per VM
+/// at ~7 queries each; #686 memoized the caller's memberships and each node's
+/// resolved chain per request; #710 additionally cached each container's suffix,
+/// so VMs sharing a project stopped re-walking the shared project→org path,
+/// leaving one row read per leaf. #687 removed the per-leaf residue too: the
+/// page is now one batched decision over one entity-slice load, and every read
+/// on the path is set-based.
 ///
-/// The property under test is *shape*, not wall-clock: with every VM in one
-/// project the chain is resolved a constant number of times, so the total query
-/// count stays under a small linear budget. A return to per-leaf re-walking
-/// pushes it past the budget.
+/// The property under test is *shape*, not wall-clock — and it is now an
+/// equality rather than a budget: the same list at two sizes must cost the same
+/// number of queries. Any per-row read that creeps back in fails it.
+///
+/// `cachedResolutionMatchesUncached` guards the other half — that all this
+/// caching and batching still produces the chain a lone uncached walk would.
 @Suite("VM List Scaling Tests", .serialized)
 final class VMListScalingTests {
 
@@ -34,7 +37,7 @@ final class VMListScalingTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("GET /api/vms query count stays under a linear budget as VMs scale")
+    @Test("GET /api/vms issues the same number of queries however many VMs it returns")
     func listQueryCountStaysBounded() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
@@ -49,43 +52,48 @@ final class VMListScalingTests {
                 name: "Scale Project", description: "many VMs", organization: org)
 
             // A viewer binding on the project makes every VM readable, so the
-            // index loop runs a real (allowed) check per VM rather than
+            // scoping decides a real (allowed) check per VM rather than
             // short-circuiting on a denial.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
 
-            let vmCount = 120
-            for index in 0..<vmCount {
-                _ = try await builder.createVM(name: "scale-vm-\(index)", project: project)
+            /// Drive `VMController.index` with a request we own so Fluent's
+            /// per-request query history (enabled on the request, not the app)
+            /// records exactly the DB work the list endpoint does. A fresh
+            /// request each time, so no memo carries between measurements.
+            func queriesToList(expecting expected: Int) async throws -> Int {
+                let req = Request(
+                    application: app, method: .GET, url: URI(path: "/api/vms"),
+                    on: app.eventLoopGroup.next())
+                req.auth.login(user)
+                req.fluent.history.start()
+                let vms = try await VMController().index(req: req)
+                req.fluent.history.stop()
+                #expect(vms.count == expected)
+                return req.fluent.history.queries.count
             }
 
-            // Drive `VMController.index` with a request we own so Fluent's
-            // per-request query history (enabled on the request, not the app)
-            // records exactly the DB work the list endpoint does. An empty query
-            // string means the unfiltered list — every VM in the org.
-            let req = Request(
-                application: app, method: .GET, url: URI(path: "/api/vms"),
-                on: app.eventLoopGroup.next())
-            req.auth.login(user)
-            req.fluent.history.start()
-            let vms = try await VMController().index(req: req)
-            req.fluent.history.stop()
+            for index in 0..<10 {
+                _ = try await builder.createVM(name: "scale-vm-\(index)", project: project)
+            }
+            let ten = try await queriesToList(expecting: 10)
 
-            #expect(vms.count == vmCount)
+            for index in 10..<120 {
+                _ = try await builder.createVM(name: "scale-vm-\(index)", project: project)
+            }
+            let oneTwenty = try await queriesToList(expecting: 120)
 
-            let queryCount = req.fluent.history.queries.count
-
-            // Per-VM cost is a small constant — the VM's own row read plus its
-            // role-binding lookup — because the project→org chain and the
-            // caller's memberships are resolved once for the whole request. If
-            // the shared chain were re-walked per VM (the pre-#686 behavior, or
-            // a regression of the container-suffix caching) each check would add
-            // the project step back, blowing this budget.
-            let budget = vmCount * 3
+            // Equal, not merely sub-linear. Since #687 the whole page is one
+            // batched decision over one entity-slice load, so list size changes
+            // the size of the `IN` clauses and nothing else — every read on the
+            // path (the VM rows, their eager-loaded interfaces, the chain walk,
+            // the caller's memberships, the bindings) is set-based. A regression
+            // that reintroduced any per-row read would show up here as a
+            // difference of 110.
             #expect(
-                queryCount < budget,
-                "GET /api/vms issued \(queryCount) queries for \(vmCount) VMs (budget \(budget)); per-request authorization memoization may have regressed"
+                oneTwenty == ten,
+                "GET /api/vms issued \(oneTwenty) queries for 120 VMs but \(ten) for 10; authorization or hydration is scaling with list size"
             )
         }
     }

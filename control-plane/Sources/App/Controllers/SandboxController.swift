@@ -112,17 +112,15 @@ struct SandboxController: RouteCollection {
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
+        // One batched decision for the whole page, as in VMController.index.
         let allSandboxes = try await query.all()
-        var authorized: [SandboxDetailResponse] = []
+        let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
+        let readable = try await req.canFilter("sandbox:read", on: nodes)
 
-        for sandbox in allSandboxes {
-            let hasPermission = try await req.can("read", on: "sandbox", id: sandbox.id?.uuidString ?? "")
-            if hasPermission {
-                authorized.append(SandboxDetailResponse(from: sandbox))
-            }
+        return allSandboxes.compactMap { sandbox in
+            guard let id = sandbox.id, readable.contains(IAMNode(type: .sandbox, id: id)) else { return nil }
+            return SandboxDetailResponse(from: sandbox)
         }
-
-        return authorized
     }
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a

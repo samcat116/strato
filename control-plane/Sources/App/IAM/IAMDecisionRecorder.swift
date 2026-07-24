@@ -152,8 +152,20 @@ final class IAMDecisionRecorder: Sendable {
     /// background-task registry so shutdown drains in-flight recordings, and
     /// gated so the fan-out cannot outgrow the connection pool.
     func recordInBackground(_ record: IAMDecisionRecord) {
-        guard config.recordDecisions else { return }
-        spawnGated { await self.record(record) }
+        recordInBackground([record])
+    }
+
+    /// Record a batch of decisions as one gated write (#687).
+    ///
+    /// A batched list decision produces a row per item, and spawning them
+    /// individually is what pushed a hundred-VM list into the shed ceiling: a
+    /// hundred tasks, each queueing for one of four slots, each holding a
+    /// connection for one insert. One task and one multi-row insert costs the
+    /// gate a single slot no matter how many rows — which is what makes the
+    /// decision log survive list scoping at all.
+    func recordInBackground(_ records: [IAMDecisionRecord]) {
+        guard config.recordDecisions, !records.isEmpty else { return }
+        spawnGated { await self.record(records) }
     }
 
     /// Record a check the legacy-vocabulary boundary could not translate.
@@ -212,6 +224,17 @@ final class IAMDecisionRecorder: Sendable {
     /// is a log line, never a request failure (the request's verdict was
     /// already enforced inline).
     func record(_ record: IAMDecisionRecord) async {
+        await self.record([record])
+    }
+
+    /// Build every row and write them together. Internal so tests can drive it
+    /// directly.
+    func record(_ records: [IAMDecisionRecord]) async {
+        guard !records.isEmpty else { return }
+        await save(records.map(entry(for:)))
+    }
+
+    private func entry(for record: IAMDecisionRecord) -> IAMDecisionLog {
         let entry = IAMDecisionLog()
         entry.requestID = record.context.requestID
         entry.path = record.context.path
@@ -249,20 +272,29 @@ final class IAMDecisionRecorder: Sendable {
         entry.resourceID = record.legacyEquivalent?.resourceID ?? record.node.id.uuidString
         entry.spicedbDecision = Self.noComparison
 
-        await save(entry)
+        return entry
     }
 
     private func save(_ entry: IAMDecisionLog) async {
+        await save([entry])
+    }
+
+    private func save(_ entries: [IAMDecisionLog]) async {
         // `liveDB`, not `app.db`: a recording cancelled by shutdown's drain
         // must bail rather than force-unwrap cleared storage (the
         // FluentProvider teardown crash, see `Application.liveDB`).
-        guard let db = app.liveDB else { return }
+        guard let db = app.liveDB, !entries.isEmpty else { return }
         do {
-            try await entry.save(on: db)
+            // One statement for the whole batch — Fluent's array `create`
+            // is a multi-row INSERT.
+            try await entries.create(on: db)
         } catch {
             logger.error(
-                "Failed to write IAM decision log entry",
-                metadata: ["error": .string("\(error)")])
+                "Failed to write IAM decision log entries",
+                metadata: [
+                    "count": .stringConvertible(entries.count),
+                    "error": .string("\(error)"),
+                ])
         }
     }
 

@@ -181,11 +181,12 @@ struct SiteController: RouteCollection {
         // narrowable by a tier-2 guardrail — rather than a check they skipped.
         // The org filter above narrows the query first, so an admin who asks
         // for one org's sites does not get every org's back.
-        var visible: [Site] = []
-        for site in sites {
-            guard let siteId = site.id else { continue }
-            let ok = try await req.can("view", on: "site", id: siteId.uuidString)
-            if ok { visible.append(site) }
+        // One batched decision for the page (#687) rather than a full
+        // evaluation per site.
+        let readable = try await req.canFilter(
+            "site:read", on: sites.compactMap { $0.id.map { IAMNode(type: .site, id: $0) } })
+        let visible = sites.filter { site in
+            site.id.map { readable.contains(IAMNode(type: .site, id: $0)) } ?? false
         }
         return try visible.map { try SiteResponse(from: $0) }
     }
