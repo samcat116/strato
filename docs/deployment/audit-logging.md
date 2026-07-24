@@ -37,7 +37,7 @@ Event types:
 | `AUDIT_RETENTION_DAYS` | — | Delete `audit_events` rows older than this many days. Unset (or non-positive) keeps events forever. |
 | `AUDIT_SYNCHRONOUS` | `false` | Write events on the request path instead of in the background. Costs every mutation an insert (and any configured HTTP POST) of latency; intended for tests. |
 | `AUDIT_MAX_QUEUE_DEPTH` | `2048` | Events that may await background delivery before the excess is shed. |
-| `AUDIT_MAX_BATCH_SIZE` | `128` | Events one drain pass ships together; the `database` backend writes a batch as a single multi-row insert. |
+| `AUDIT_MAX_BATCH_SIZE` | `128` | Events one drain pass ships together; the `database` backend writes a batch as a single multi-row insert. Clamped to 1024 (see [Delivery](#delivery)). |
 
 ### Backends
 
@@ -62,8 +62,16 @@ all three.
 Recording an event only buffers it: a background task drains the buffer in
 batches and writes every backend concurrently, so request latency is
 independent of how healthy the destinations are — a Loki outage or a slow SIEM
-delays the trail, never the API. Shutdown flushes the buffer before the
-database pools close, so a graceful stop loses nothing.
+delays the trail, never the API. Shutdown flushes the buffer, and waits for the
+batch already being delivered, before the database pools close; a graceful stop
+loses nothing unless a backend is still hung when the flush deadline expires,
+and that case is logged.
+
+The trade is that an event is no longer durable the instant its response
+returns — a caller that reads `/api/audit-events` immediately after a mutation
+may not see the row yet. For compliance regimes that require the event
+committed before the client is told the mutation succeeded, set
+`AUDIT_SYNCHRONOUS=true` and accept the per-mutation latency.
 
 The buffer is bounded by `AUDIT_MAX_QUEUE_DEPTH`. If events arrive faster than
 the backends accept them for long enough to fill it, the excess is dropped and
@@ -71,6 +79,11 @@ counted, and the control plane logs `Audit events shed under backpressure` with
 the running total (the first drop, then every hundredth). A trail with a gap in
 it says so out loud; sustained shedding means a backend needs attention or the
 queue needs raising.
+
+`AUDIT_MAX_BATCH_SIZE` is clamped to 1024. A batch is written as one multi-row
+INSERT, and Postgres rejects a statement carrying more than 65535 bind
+parameters, so an unclamped value in the thousands would fail every insert
+rather than write a bigger batch. A larger request is clamped and logged.
 
 ## Querying the trail
 

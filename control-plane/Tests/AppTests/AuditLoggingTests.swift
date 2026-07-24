@@ -496,6 +496,21 @@ final class AuditLoggingTests {
         #expect(restarted == .enqueued(startDrain: true))
     }
 
+    @Test("Batch size is clamped to what one multi-row insert can carry")
+    func batchSizeIsClamped() async throws {
+        // Postgres refuses a statement with more than 65535 bind parameters and
+        // Fluent does not chunk a collection `create`, so an operator asking
+        // for a huge batch must get a working smaller one, not an insert that
+        // fails every time.
+        let queue = AuditEventQueue(maxQueueDepth: 8192, maxBatchSize: 100_000)
+        for index in 0..<(AuditEventQueue.maxSupportedBatchSize + 10) {
+            _ = await queue.enqueue(AuditRecord(eventType: "test.clamp\(index)"))
+        }
+
+        let batch = await queue.nextBatch()
+        #expect(batch?.count == AuditEventQueue.maxSupportedBatchSize)
+    }
+
     // MARK: - Resource parsing
 
     @Test("Resource references are parsed from API paths")

@@ -339,9 +339,22 @@ actor AuditEventQueue {
     /// in the air belongs to whoever claimed it.
     private var inFlight = 0
 
+    /// Ceiling on how many events one batch may carry.
+    ///
+    /// A batch becomes a single multi-row INSERT — Fluent's collection
+    /// `create` builds one query and does not chunk — and Postgres refuses a
+    /// statement with more than 65535 bind parameters. `AuditEvent` persists
+    /// 16 columns, so the hard limit is ~4000 rows; 1024 keeps a wide margin
+    /// (16k parameters today, still safe if the table grows to twice the
+    /// columns) while being far more than any real drain needs. Without it an
+    /// operator who set `AUDIT_MAX_BATCH_SIZE` into the thousands would lose
+    /// *every* batch to a failing insert — an audit outage that reads like a
+    /// database problem.
+    static let maxSupportedBatchSize = 1024
+
     init(maxQueueDepth: Int, maxBatchSize: Int) {
         self.maxQueueDepth = max(1, maxQueueDepth)
-        self.maxBatchSize = max(1, maxBatchSize)
+        self.maxBatchSize = min(max(1, maxBatchSize), Self.maxSupportedBatchSize)
     }
 
     func enqueue(_ record: AuditRecord) -> EnqueueOutcome {
@@ -430,6 +443,14 @@ final class AuditService: @unchecked Sendable {
         self.app = app
         self.queue = AuditEventQueue(
             maxQueueDepth: config.maxQueueDepth, maxBatchSize: config.maxBatchSize)
+        if config.maxBatchSize > AuditEventQueue.maxSupportedBatchSize {
+            app.logger.warning(
+                "AUDIT_MAX_BATCH_SIZE exceeds the supported ceiling; clamping",
+                metadata: [
+                    "requested": .stringConvertible(config.maxBatchSize),
+                    "ceiling": .stringConvertible(AuditEventQueue.maxSupportedBatchSize),
+                ])
+        }
 
         if let backendOverride {
             self.backends = backendOverride
@@ -500,9 +521,15 @@ final class AuditService: @unchecked Sendable {
         }
     }
 
-    /// Ship queued events until the buffer is empty. One task at a time — the
-    /// queue hands out the drain flag — so backends see batches in order and
-    /// the fan-out cannot outgrow one in-flight write per backend.
+    /// Ship queued events until the buffer is empty. Only one drain task runs
+    /// at a time — the queue hands out the drain flag — so the fan-out cannot
+    /// outgrow one in-flight write per backend.
+    ///
+    /// That bounds concurrency; it does not promise delivery order. A `flush`
+    /// (shutdown, or a test hook) claims batches alongside a live drain, so two
+    /// `deliver` calls can briefly overlap and a backend can see batches out of
+    /// order. Nothing is lost or duplicated — `nextBatch` removes its prefix
+    /// atomically — and the trail is read back ordered by timestamp.
     private func drainQueue() async {
         while !Task.isCancelled, let batch = await queue.nextBatch() {
             await deliver(batch)
