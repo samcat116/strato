@@ -155,12 +155,20 @@ struct SiteController: RouteCollection {
     }
 
     /// GET /api/sites
-    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func listSites(req: Request) async throws -> [SiteResponse] {
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// limit/offset (optional) — select the page.
+    func listSites(req: Request) async throws -> PagedResponse<SiteResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let sites = try await visibleSites(req: req)
+        return paging.page(sites)
+    }
+
+    /// Every site the caller may read, by name, ready for slicing.
+    func visibleSites(req: Request) async throws -> [SiteResponse] {
         _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
-        var query = Site.query(on: req.db).sort(\.$name)
+        var query = Site.query(on: req.db).sort(\.$name).sort(\.$id)
         if let orgFilter {
             query = query.group(.or) { group in
                 group.filter(\.$organization.$id == orgFilter.organizationID)

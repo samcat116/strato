@@ -193,7 +193,9 @@ struct QuotaCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let quotas: [ResourceQuota] = try await environment.makeClient().get("/api/quotas")
+                let page: Page<ResourceQuota> = try await environment.makeClient()
+                    .get("/api/quotas", query: [("limit", String(listPageLimit))])
+                let quotas = page.items
                 try printResult(quotas, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "scope", "environment", "enabled", "vcpus", "memory gb", "vms"])

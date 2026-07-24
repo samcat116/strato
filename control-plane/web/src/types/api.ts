@@ -1,5 +1,21 @@
 // API Types - matches Vapor backend response types
 
+/** Paged envelope returned by every resource list endpoint (issue #700). */
+export interface Page<T> {
+  items: T[];
+  /** Total rows the caller may see, ignoring limit/offset. */
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * The server-side page-size cap. List wrappers that still want "everything"
+ * request one max-size page; adopting real pagination per view is follow-up
+ * work.
+ */
+export const LIST_PAGE_LIMIT = "500";
+
 /** How a user account came into existence (see backend UserSource). */
 export type UserSource = "local" | "scim" | "oidc";
 

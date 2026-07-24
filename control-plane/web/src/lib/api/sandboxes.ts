@@ -10,8 +10,10 @@ import type {
   SandboxLogEntry,
   SandboxLogsQueryParams,
   Operation,
+  Page,
   SandboxSnapshot,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
 // 202 Accepted with an Operation record and the work completes in the
@@ -19,10 +21,12 @@ import type {
 // is terminal. Sandboxes have no pause/resume or console endpoints.
 export const sandboxesApi = {
   list(organizationId?: string): Promise<Sandbox[]> {
-    return api.get<Sandbox[]>(
-      "/api/sandboxes",
-      organizationId ? { organization_id: organizationId } : undefined
-    );
+    return api
+      .get<Page<Sandbox>>("/api/sandboxes", {
+        limit: LIST_PAGE_LIMIT,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<Sandbox> {
@@ -64,7 +68,11 @@ export const sandboxesApi = {
   },
 
   listSnapshots(id: string): Promise<SandboxSnapshot[]> {
-    return api.get<SandboxSnapshot[]>(`/api/sandboxes/${id}/snapshots`);
+    return api
+      .get<Page<SandboxSnapshot>>(`/api/sandboxes/${id}/snapshots`, {
+        limit: LIST_PAGE_LIMIT,
+      })
+      .then((page) => page.items);
   },
 
   // Copies a snapshot's artifacts into control-plane object storage (issue

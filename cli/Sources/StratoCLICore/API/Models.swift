@@ -6,6 +6,19 @@ import Foundation
 // decodes just the fields it shows — everything non-essential is optional so
 // server additions never break an older CLI.
 
+/// Paged envelope returned by every resource list endpoint (issue #700).
+public struct Page<Item: Codable & Sendable>: Codable, Sendable {
+    public let items: [Item]
+    /// Total rows the caller may see, ignoring `limit`/`offset`.
+    public let total: Int
+    public let limit: Int
+    public let offset: Int
+}
+
+/// The server-side page-size cap. List commands request one max-size page;
+/// per-command `--limit`/`--offset` flags are follow-up work.
+public let listPageLimit = 500
+
 public struct VM: Codable, Sendable {
     public let id: UUID?
     public let name: String

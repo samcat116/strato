@@ -21,9 +21,17 @@ struct NetworkController: RouteCollection {
     /// List all networks the user has access to. Global networks (no project)
     /// are always included — they are the VM-create fallback everyone can use.
     /// GET /api/networks
-    /// Query params: project_id (optional)
+    /// Query params: project_id (optional),
+    /// limit/offset (optional) — select the page.
     @Sendable
-    func listNetworks(req: Request) async throws -> [NetworkResponse] {
+    func listNetworks(req: Request) async throws -> PagedResponse<NetworkResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let networks = try await visibleNetworks(req: req)
+        return paging.page(networks)
+    }
+
+    /// Every network the caller may read, newest first, ready for slicing.
+    func visibleNetworks(req: Request) async throws -> [NetworkResponse] {
         _ = try req.auth.require(User.self)
 
         // The projects to narrow the row query to, or nil for no narrowing at
@@ -58,7 +66,11 @@ struct NetworkController: RouteCollection {
                 }
             }
         }
-        let networks = try await query.sort(\.$createdAt, .descending).all()
+        let networks =
+            try await query
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
+            .all()
 
         var visible = networks
         if let visibility {

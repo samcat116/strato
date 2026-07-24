@@ -40,12 +40,23 @@ struct UserController: RouteCollection {
     /// through `platform-user-self`. Neither branch reads `isSystemAdmin`
     /// here: both are evaluator decisions, so they land in the decision log
     /// and a tier-2 guardrail binds them.
-    func index(req: Request) async throws -> [User.Public] {
+    /// Query params: limit/offset (optional) — select the page.
+    func index(req: Request) async throws -> PagedResponse<User.Public> {
+        let paging = try ListPaging.decode(from: req)
+        let users = try await visibleUsers(req: req)
+        return paging.page(users)
+    }
+
+    /// Every user the caller may read, by username, ready for slicing.
+    func visibleUsers(req: Request) async throws -> [User.Public] {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
-        let users = try await User.query(on: req.db).all()
+        let users = try await User.query(on: req.db)
+            .sort(\.$username)
+            .sort(\.$id)
+            .all()
         var visible: [User.Public] = []
         for user in users {
             guard let userID = user.id else { continue }

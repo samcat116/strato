@@ -37,7 +37,9 @@ struct ImageController: RouteCollection {
 
     // MARK: - List Images
 
-    func index(req: Request) async throws -> [ImageResponse] {
+    /// Query params: limit/offset (optional) — select the page.
+    func index(req: Request) async throws -> PagedResponse<ImageResponse> {
+        let paging = try ListPaging.decode(from: req)
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
@@ -63,9 +65,10 @@ struct ImageController: RouteCollection {
             .filter(\.$project.$id == projectID)
             .with(\.$artifacts)
             .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
             .all()
 
-        return images.map { ImageResponse(from: $0) }
+        return paging.page(images.map { ImageResponse(from: $0) })
     }
 
     // MARK: - Get Image Details

@@ -18,7 +18,9 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let networks: [Network] = try await environment.makeClient().get("/api/networks")
+                let page: Page<Network> = try await environment.makeClient()
+                    .get("/api/networks", query: [("limit", String(listPageLimit))])
+                let networks = page.items
                 try printResult(networks, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "subnet", "gateway", "dhcp", "attached", "default"])

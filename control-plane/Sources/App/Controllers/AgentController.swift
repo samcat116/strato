@@ -328,14 +328,24 @@ struct AgentController: RouteCollection {
     }
 
     /// GET /api/agent-enrollments
-    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func listEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// limit/offset (optional) — select the page.
+    func listEnrollments(req: Request) async throws -> PagedResponse<AgentEnrollmentListItem> {
+        let paging = try ListPaging.decode(from: req)
+        let enrollments = try await visibleEnrollments(req: req)
+        return paging.page(enrollments)
+    }
+
+    /// Every enrollment the caller may read, newest first, ready for slicing.
+    func visibleEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
         _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         // Unlike Site and Agent, an enrollment stores its scope as plain columns
         // rather than parent relations.
-        var query = AgentEnrollment.query(on: req.db).sort(\.$createdAt, .descending)
+        var query = AgentEnrollment.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
         if let orgFilter {
             query = query.group(.or) { group in
                 group.filter(\.$organizationID == orgFilter.organizationID)
@@ -453,12 +463,22 @@ struct AgentController: RouteCollection {
     // MARK: - Agent Management
 
     /// GET /api/agents
-    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func listAgents(req: Request) async throws -> [AgentResponse] {
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// limit/offset (optional) — select the page.
+    func listAgents(req: Request) async throws -> PagedResponse<AgentResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let agents = try await visibleAgents(req: req)
+        return paging.page(agents)
+    }
+
+    /// Every agent the caller may read, newest first, ready for slicing.
+    func visibleAgents(req: Request) async throws -> [AgentResponse] {
         _ = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
-        var query = Agent.query(on: req.db).sort(\.$createdAt, .descending)
+        var query = Agent.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
         if let orgFilter {
             query = query.group(.or) { group in
                 group.filter(\.$organization.$id == orgFilter.organizationID)

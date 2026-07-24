@@ -239,7 +239,9 @@ extension SandboxController {
     // MARK: - List
 
     /// GET /api/sandboxes/:sandboxID/snapshots
-    func listSnapshots(req: Request) async throws -> [SandboxSnapshotResponse] {
+    /// Query params: limit/offset (optional) — select the page.
+    func listSnapshots(req: Request) async throws -> PagedResponse<SandboxSnapshotResponse> {
+        let paging = try ListPaging.decode(from: req)
         _ = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         let sandboxID = try sandbox.requireID()
@@ -247,8 +249,9 @@ extension SandboxController {
         let snapshots = try await SandboxSnapshot.query(on: req.db)
             .filter(\.$sandbox.$id == sandboxID)
             .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
             .all()
-        return snapshots.map { SandboxSnapshotResponse(from: $0) }
+        return paging.page(snapshots.map { SandboxSnapshotResponse(from: $0) })
     }
 
     // MARK: - Delete

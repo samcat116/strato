@@ -18,7 +18,9 @@ struct VolumeCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let volumes: [Volume] = try await environment.makeClient().get("/api/volumes")
+                let page: Page<Volume> = try await environment.makeClient()
+                    .get("/api/volumes", query: [("limit", String(listPageLimit))])
+                let volumes = page.items
                 try printResult(volumes, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "size", "type", "status", "attached vm"])
                     for volume in volumes {

@@ -58,7 +58,7 @@ final class NetworkControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let networks = try res.content.decode([NetworkResponse].self)
+                let networks = try res.content.decode(PagedResponse<NetworkResponse>.self).items
                 let names = networks.map(\.name)
                 #expect(names.contains(LogicalNetwork.defaultNetworkName))
                 let defaultNet = networks.first { $0.name == LogicalNetwork.defaultNetworkName }
@@ -89,7 +89,7 @@ final class NetworkControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let names = try res.content.decode([NetworkResponse].self).map(\.name)
+                let names = try res.content.decode(PagedResponse<NetworkResponse>.self).items.map(\.name)
                 #expect(names.contains(LogicalNetwork.defaultNetworkName))
                 #expect(!names.contains("hidden-net"))
             }

@@ -312,7 +312,7 @@ final class ResourceQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
-                let quotas = try res.content.decode([ResourceQuotaResponse].self)
+                let quotas = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self).items
                 #expect(quotas.allSatisfy { $0.entityType == "organization" })
             }
 
@@ -322,7 +322,7 @@ final class ResourceQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
-                let quotas = try res.content.decode([ResourceQuotaResponse].self)
+                let quotas = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self).items
                 #expect(quotas.allSatisfy { $0.entityType == "project" })
             }
         }

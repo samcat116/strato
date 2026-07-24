@@ -91,7 +91,7 @@ final class VMAuthorizationTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let vms = try res.content.decode([VMDetailResponse].self)
+                let vms = try res.content.decode(PagedResponse<VMDetailResponse>.self).items
                 #expect(vms.map(\.name) == [vm.name])
             }
         }

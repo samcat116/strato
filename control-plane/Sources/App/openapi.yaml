@@ -237,19 +237,21 @@ paths:
     get:
       operationId: listVMs
       summary: List virtual machines
-      description: Returns VMs the caller can read, optionally scoped to one organization.
+      description: >-
+        Returns a page of the VMs the caller can read, newest first, optionally
+        scoped to one organization.
       tags: [Virtual Machines]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible virtual machines.
+          description: A page of the visible virtual machines.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/VMDetail"
+                $ref: "#/components/schemas/VMListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -470,15 +472,15 @@ paths:
       tags: [Sandboxes]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible sandboxes.
+          description: A page of the visible sandboxes.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SandboxDetail"
+                $ref: "#/components/schemas/SandboxListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -636,15 +638,16 @@ paths:
       operationId: listSandboxSnapshots
       summary: List a sandbox's snapshots
       tags: [Sandbox Snapshots]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The sandbox's snapshots.
+          description: A page of the sandbox's snapshots.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SandboxSnapshot"
+                $ref: "#/components/schemas/SandboxSnapshotListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -776,15 +779,16 @@ paths:
       operationId: listImages
       summary: List a project's images
       tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The project's images.
+          description: A page of the project's images.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Image"
+                $ref: "#/components/schemas/ImageListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1012,15 +1016,15 @@ paths:
           required: false
           schema:
             $ref: "#/components/schemas/VolumeType"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible volumes.
+          description: A page of the visible volumes.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Volume"
+                $ref: "#/components/schemas/VolumeListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -1219,15 +1223,16 @@ paths:
       operationId: listVolumeSnapshots
       summary: List a volume's snapshots
       tags: [Volumes]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The volume's snapshots.
+          description: A page of the volume's snapshots.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/VolumeSnapshot"
+                $ref: "#/components/schemas/VolumeSnapshotListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1254,15 +1259,15 @@ paths:
       tags: [Networks]
       parameters:
         - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible networks.
+          description: A page of the visible networks.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Network"
+                $ref: "#/components/schemas/NetworkListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -1343,15 +1348,16 @@ paths:
       operationId: listFloatingIPPools
       summary: List floating IP pools
       tags: [Floating IPs]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible pools.
+          description: A page of the visible pools.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/FloatingIPPool"
+                $ref: "#/components/schemas/FloatingIPPoolListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       operationId: createFloatingIPPool
@@ -1431,15 +1437,15 @@ paths:
       tags: [Floating IPs]
       parameters:
         - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible floating IPs.
+          description: A page of the visible floating IPs.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/FloatingIP"
+                $ref: "#/components/schemas/FloatingIPListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
@@ -1543,15 +1549,15 @@ paths:
       tags: [Security Groups]
       parameters:
         - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible security groups.
+          description: A page of the visible security groups.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SecurityGroup"
+                $ref: "#/components/schemas/SecurityGroupListPage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1723,15 +1729,16 @@ paths:
         the deployment, anyone else gets only their own. Not an error for a
         non-admin — a one-element list, not a 403.
       tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: All user accounts.
+          description: A page of the visible user accounts.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/UserPublic"
+                $ref: "#/components/schemas/UserListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
@@ -3758,15 +3765,15 @@ paths:
       tags: [Quotas]
       parameters:
         - $ref: "#/components/parameters/QuotaLevelQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The matching quotas.
+          description: A page of the matching quotas.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ResourceQuota"
+                $ref: "#/components/schemas/ResourceQuotaListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/quotas/{quotaID}:
     parameters:
@@ -4006,15 +4013,15 @@ paths:
       tags: [Agents]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible agents, newest first.
+          description: A page of the visible agents, newest first.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AgentDetail"
+                $ref: "#/components/schemas/AgentListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
   /api/agent-enrollments:
@@ -4029,15 +4036,15 @@ paths:
       tags: [Agents]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible enrollments, newest first.
+          description: A page of the visible enrollments, newest first.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AgentEnrollmentListItem"
+                $ref: "#/components/schemas/AgentEnrollmentListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
@@ -4325,15 +4332,15 @@ paths:
       tags: [Sites]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The visible sites, ordered by name.
+          description: A page of the visible sites, ordered by name.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SiteDetail"
+                $ref: "#/components/schemas/SiteListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
@@ -7477,6 +7484,25 @@ components:
         unbounded rather than matching nothing.
       schema:
         type: string
+    ListLimitQuery:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return per page (1–500).
+      schema:
+        type: integer
+        default: 50
+        minimum: 1
+        maximum: 500
+    ListOffsetQuery:
+      name: offset
+      in: query
+      required: false
+      description: Number of items to skip before the page starts.
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
     AuditLimitQuery:
       name: limit
       in: query
@@ -12915,6 +12941,234 @@ components:
         total:
           type: integer
           description: Total matching events, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    # Paged envelopes for the resource list endpoints (issue #700). All share
+    # the same shape: the requested page in `items`, plus the total count of
+    # rows the caller may see, ignoring `limit`/`offset`.
+    VMListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VMDetail"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SandboxListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SandboxDetail"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SandboxSnapshotListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SandboxSnapshot"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    ImageListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Image"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    VolumeListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Volume"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    VolumeSnapshotListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VolumeSnapshot"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    NetworkListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Network"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    FloatingIPPoolListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FloatingIPPool"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    FloatingIPListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FloatingIP"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SecurityGroupListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityGroup"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    UserListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserPublic"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    ResourceQuotaListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceQuota"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    AgentListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDetail"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    AgentEnrollmentListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentEnrollmentListItem"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    SiteListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteDetail"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
         limit:
           type: integer
         offset:

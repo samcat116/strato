@@ -7,14 +7,18 @@ import type {
   AgentEnrollmentListItem,
   AgentUpdateResult,
   CreateAgentEnrollmentRequest,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const agentsApi = {
   list(organizationId?: string): Promise<Agent[]> {
-    return api.get<Agent[]>(
-      "/api/agents",
-      organizationId ? { organization_id: organizationId } : undefined
-    );
+    return api
+      .get<Page<Agent>>("/api/agents", {
+        limit: LIST_PAGE_LIMIT,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<Agent> {
@@ -41,10 +45,12 @@ export const agentsApi = {
 
   // SPIFFE/SPIRE enrollments — the only agent enrollment path.
   listEnrollments(organizationId?: string): Promise<AgentEnrollmentListItem[]> {
-    return api.get<AgentEnrollmentListItem[]>(
-      "/api/agent-enrollments",
-      organizationId ? { organization_id: organizationId } : undefined
-    );
+    return api
+      .get<Page<AgentEnrollmentListItem>>("/api/agent-enrollments", {
+        limit: LIST_PAGE_LIMIT,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   createEnrollment(data: CreateAgentEnrollmentRequest): Promise<AgentEnrollment> {
