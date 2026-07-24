@@ -1,0 +1,57 @@
+control-plane/Tests/AppTests/SandboxExpiryTests.swift
+  s_136f7fbe80cc74::t_49dd84aad453c0 2
+  s_136f7fbe80cc74::t_5a4a35a9fd7508 272-296
+  s_1034a0a26ad83b::t_ea9b0cd6a348e0 270-271
+control-plane/Sources/App/Extensions/QueryBuilder+Age.swift
+  s_136f7fbe80cc74::t_0daf9c64529d16 1-35
+control-plane/Sources/App/Migrations/AddHotPathIndexes.swift
+  s_136f7fbe80cc74::t_7ebd9aec11742b 24-26
+  s_136f7fbe80cc74::t_db7935fe307672 1-16,22-23,27-75,83-105
+  s_136f7fbe80cc74::t_b535a1ad9ee62f 17-21
+  s_136f7fbe80cc74::t_d94ba3ba2ca20a 76-82
+control-plane/Sources/App/configure.swift
+  s_136f7fbe80cc74::t_fd27764b210837 635-639
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_136f7fbe80cc74::t_8d788518caa31b 229-237,239-243,245-262,264-267,269-278
+  s_136f7fbe80cc74::t_89822128ae911f 263,268
+  s_136f7fbe80cc74::t_ea3be817eaff5f 4
+  s_136f7fbe80cc74::t_b3b4d718f3bd78 238,244
+control-plane/Tests/AppTests/VolumeStuckSweepTests.swift
+  s_136f7fbe80cc74::t_11fb7ccec0b025 160-176
+control-plane/Sources/App/Services/AgentService.swift
+  s_136f7fbe80cc74::t_f7e0365f0a8907 1019
+  s_136f7fbe80cc74::t_e3e0ee55079b95 1056
+  s_136f7fbe80cc74::t_8e4d607d8cfc46 1264-1265,1267
+  s_136f7fbe80cc74::t_b8b7a82ab68c69 1088-1094,1096
+  s_136f7fbe80cc74::t_18c68dc1fc7aec 1266,1271
+  s_136f7fbe80cc74::t_65a8049313a2b7 1148-1155
+  s_136f7fbe80cc74::t_2cba5a58b14089 1097
+  s_136f7fbe80cc74::t_a00df4eaff2b18 1016,1023
+  s_136f7fbe80cc74::t_d679980fb1e9e6 1052
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_136f7fbe80cc74::t_4b96f87ff88608 59-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c566ba526f380fff53cdd0acee1b6ea40576d4b8",
+  "prompts": {},
+  "sessions": {
+    "s_1034a0a26ad83b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc8d49e-cab6-4fad-9c6c-a4e1c8569c7e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_136f7fbe80cc74": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "635ffee6-b39e-43cf-986f-a26be128418e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
