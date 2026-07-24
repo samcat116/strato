@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/ListAuthorizationScalingTests.swift
+  s_410b83026746bf::t_50f0f5cf0c13c3 389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "54ebe35b89d2f161cae290e0ae2351676939624b",
+  "prompts": {},
+  "sessions": {
+    "s_410b83026746bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5486d294-0d5f-42d4-a0f5-7de3e33822f2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
