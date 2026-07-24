@@ -386,7 +386,7 @@ final class ListAuthorizationScalingTests {
     /// assumed the store's current strictness would silently start deciding the
     /// day a looser path exists.
     private func writeAuthoredPermit(
-        _ app: Application, name: String, cedarText: String, ownerID: UUID
+        _ app: Application, name: String, ownerID: UUID, cedarText: String
     ) async throws {
         try await IAMPolicy(
             name: name,
