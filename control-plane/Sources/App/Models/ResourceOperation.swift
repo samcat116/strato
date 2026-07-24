@@ -7,7 +7,7 @@ import StratoShared
 /// kind brings its own operation budgets, stuck-resource resolution, and
 /// visibility rule; adding a resource type means extending the switches that
 /// dispatch on this enum, not forking the 202/poll/sweep machinery.
-enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
+enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
     case virtualMachine = "virtual_machine"
     case sandbox = "sandbox"
 

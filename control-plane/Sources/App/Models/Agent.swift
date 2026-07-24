@@ -199,10 +199,25 @@ final class Agent: Model, Content, @unchecked Sendable {
     }
 
     func updateResources(_ resources: AgentResources) {
-        self.availableCPU = resources.availableCPU
-        self.availableMemory = resources.availableMemory
-        self.availableDisk = resources.availableDisk
+        _ = updateAvailableResources(resources)
         self.lastHeartbeat = Date()
+    }
+
+    /// Applies the mutable capacity fields from a periodic report and returns
+    /// whether the row actually changed. Liveness timestamp policy belongs to
+    /// `AgentService`, which can coalesce the heartbeat and observed-state
+    /// messages that arrive on the same cadence.
+    @discardableResult
+    func updateAvailableResources(_ resources: AgentResources) -> Bool {
+        guard
+            availableCPU != resources.availableCPU
+                || availableMemory != resources.availableMemory
+                || availableDisk != resources.availableDisk
+        else { return false }
+        availableCPU = resources.availableCPU
+        availableMemory = resources.availableMemory
+        availableDisk = resources.availableDisk
+        return true
     }
 
     var resources: AgentResources {

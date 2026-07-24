@@ -51,6 +51,16 @@ struct CoordinationServiceTests {
         #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == true)
     }
 
+    @Test("Paired liveness refresh records presence and route together")
+    func pairedLivenessRefresh() async {
+        let service = makeService()
+        let key = agentKey("agent-a")
+
+        #expect(await service.recordAgentLiveness(agentKey: key, replicaId: "replica-1"))
+        #expect(await service.isAgentPresent(agentKey: key) == true)
+        #expect(await service.agentRoute(agentKey: key) == "replica-1")
+    }
+
     // MARK: - Sweep locks
 
     @Test("Sweep lock excludes a second acquirer until the TTL expires")

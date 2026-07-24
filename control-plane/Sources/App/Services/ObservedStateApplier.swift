@@ -17,15 +17,12 @@ import Vapor
 struct ObservedStateApplier {
     let app: Application
 
-    func apply(_ report: ObservedStateReport) async throws {
-        // Every reported VM or sandbox is accounted for in the agent's
-        // resource figures, so any placement reservation still held for one
-        // would double-count. Reservations are keyed by resource id, so both
-        // kinds release through the same call.
-        await app.coordination.releaseReservations(
-            agentId: report.agentId,
-            vmIds: report.vms.map { $0.vmId.uuidString } + report.sandboxes.map { $0.sandboxId.uuidString })
+    private struct ResourceKey: Hashable {
+        let kind: OperationResourceKind
+        let id: UUID
+    }
 
+    func apply(_ report: ObservedStateReport) async throws {
         let db = app.db
         let reported = Dictionary(
             report.vms.map { ($0.vmId, $0) },
@@ -35,15 +32,6 @@ struct ObservedStateApplier {
         let dbVMs = try await VM.query(on: db)
             .filter(\.$hypervisorId == report.agentId)
             .all()
-
-        for vm in dbVMs {
-            guard let vmID = vm.id else { continue }
-            if let observed = reported[vmID] {
-                try await applyObservedVMState(vm: vm, observed: observed, on: db)
-            } else {
-                try await handleReportedAbsence(vm: vm, agentId: report.agentId, on: db)
-            }
-        }
 
         // Sandboxes apply with the same shape as VMs: settled observations
         // update the row and resolve pending operations; absence either
@@ -57,19 +45,130 @@ struct ObservedStateApplier {
             .filter(\.$hypervisorId == report.agentId)
             .all()
 
+        // Pending operations are sparse but used by both the present and
+        // absent paths. Fetch every candidate in one report-level query
+        // instead of issuing a point query for every VM and sandbox.
+        let resourceIDs =
+            dbVMs.compactMap(\.id)
+            + dbSandboxes.compactMap(\.id)
+        let pendingOperations: [ResourceKey: ResourceOperation]
+        if resourceIDs.isEmpty {
+            pendingOperations = [:]
+        } else {
+            let operations = try await ResourceOperation.query(on: db)
+                .filter(\.$resourceID ~~ resourceIDs)
+                .filter(\.$status == .pending)
+                .all()
+            pendingOperations = Dictionary(
+                operations.map {
+                    (ResourceKey(kind: $0.resourceKind, id: $0.resourceID), $0)
+                },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+
+        // Only a pending create can still own a placement reservation. Once
+        // the resource appears in this full report its resources are already
+        // reflected in the agent snapshot, so release that reservation before
+        // completing the operation below. Steady-state reports have no pending
+        // creates and therefore avoid the reservation-index SMEMBERS entirely.
+        let accountedReservationIDs = pendingOperations.compactMap { key, operation -> String? in
+            guard operation.kind == .create else { return nil }
+            switch key.kind {
+            case .virtualMachine:
+                return reported[key.id] == nil ? nil : key.id.uuidString
+            case .sandbox:
+                return reportedSandboxes[key.id] == nil ? nil : key.id.uuidString
+            }
+        }
+        if !accountedReservationIDs.isEmpty {
+            await app.coordination.releaseReservations(
+                agentId: report.agentId,
+                vmIds: accountedReservationIDs
+            )
+        }
+
+        // Guest NIC state is another report-level batch. Only VMs whose
+        // observation can read or clear guest data participate, so agents
+        // without QGA payloads pay no NIC query at all.
+        let guestInfoVMIDs = dbVMs.compactMap { vm -> UUID? in
+            guard let vmID = vm.id, let observed = reported[vmID] else { return nil }
+            if observed.guestInfo != nil {
+                return vmID
+            }
+            if Self.guestInfoClearedByStatus.contains(observed.status),
+                vm.qgaAvailable != nil || vm.observedHostname != nil
+            {
+                return vmID
+            }
+            return nil
+        }
+        let interfacesByVMID: [UUID: [VMNetworkInterface]]
+        if guestInfoVMIDs.isEmpty {
+            interfacesByVMID = [:]
+        } else {
+            let interfaces = try await VMNetworkInterface.query(on: db)
+                .filter(\.$vm.$id ~~ guestInfoVMIDs)
+                .with(\.$observedAddresses)
+                .all()
+            interfacesByVMID = Dictionary(grouping: interfaces, by: \.$vm.id)
+        }
+
+        for vm in dbVMs {
+            guard let vmID = vm.id else { continue }
+            let operation = pendingOperations[
+                ResourceKey(kind: .virtualMachine, id: vmID)
+            ]
+            if let observed = reported[vmID] {
+                try await applyObservedVMState(
+                    vm: vm,
+                    observed: observed,
+                    pendingOperation: operation,
+                    interfaces: interfacesByVMID[vmID] ?? [],
+                    on: db
+                )
+            } else {
+                try await handleReportedAbsence(
+                    vm: vm,
+                    agentId: report.agentId,
+                    pendingOperation: operation,
+                    on: db
+                )
+            }
+        }
+
         for sandbox in dbSandboxes {
             guard let sandboxID = sandbox.id else { continue }
+            let operation = pendingOperations[
+                ResourceKey(kind: .sandbox, id: sandboxID)
+            ]
             if let observed = reportedSandboxes[sandboxID] {
-                try await applyObservedSandboxState(sandbox: sandbox, observed: observed, on: db)
+                try await applyObservedSandboxState(
+                    sandbox: sandbox,
+                    observed: observed,
+                    pendingOperation: operation,
+                    on: db
+                )
             } else {
-                try await handleReportedSandboxAbsence(sandbox: sandbox, agentId: report.agentId, on: db)
+                try await handleReportedSandboxAbsence(
+                    sandbox: sandbox,
+                    agentId: report.agentId,
+                    pendingOperation: operation,
+                    on: db
+                )
             }
         }
     }
 
     /// Apply one settled (or failing) observation to its VM row and resolve
     /// any pending operation it satisfies.
-    private func applyObservedVMState(vm: VM, observed: ObservedVMState, on db: Database) async throws {
+    private func applyObservedVMState(
+        vm: VM,
+        observed: ObservedVMState,
+        pendingOperation: ResourceOperation?,
+        interfaces: [VMNetworkInterface],
+        on db: Database
+    ) async throws {
         let vmID = try vm.requireID()
 
         // The guest-agent view (issue #563) is orthogonal to convergence and
@@ -81,9 +180,9 @@ struct ObservedStateApplier {
         // forever). A nil on a running/paused/transitional/unknown VM is left
         // alone — that's a transient probe miss, and nil-preserves-last-known.
         if let guestInfo = observed.guestInfo {
-            try await persistGuestInfo(vm: vm, guestInfo: guestInfo, on: db)
+            try await persistGuestInfo(vm: vm, guestInfo: guestInfo, interfaces: interfaces, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
-            try await clearGuestInfo(vm: vm, on: db)
+            try await clearGuestInfo(vm: vm, interfaces: interfaces, on: db)
         }
 
         // Balloon memory stats (issue #567) follow the same contract as
@@ -107,12 +206,6 @@ struct ObservedStateApplier {
                 ])
             return
         }
-
-        let pendingOperation = try await ResourceOperation.query(on: db)
-            .filter(\.$resourceKind == .virtualMachine)
-            .filter(\.$resourceID == vmID)
-            .filter(\.$status == .pending)
-            .first()
 
         var changed = false
         if observed.observedGeneration > vm.observedGeneration {
@@ -205,9 +298,12 @@ struct ObservedStateApplier {
     /// last-known view; a NIC's rows are reconciled wholesale only when the
     /// guest's set actually differs from what's stored, so unchanged reports do
     /// no writes.
-    private func persistGuestInfo(vm: VM, guestInfo: GuestInfo, on db: Database) async throws {
-        let vmID = try vm.requireID()
-
+    private func persistGuestInfo(
+        vm: VM,
+        guestInfo: GuestInfo,
+        interfaces: [VMNetworkInterface],
+        on db: Database
+    ) async throws {
         var vmChanged = false
         if vm.qgaAvailable != guestInfo.qgaAvailable {
             vm.qgaAvailable = guestInfo.qgaAvailable
@@ -228,11 +324,6 @@ struct ObservedStateApplier {
             guard let mac = iface.hardwareAddress?.lowercased() else { continue }
             addressesByMAC[mac, default: []].append(contentsOf: iface.addresses)
         }
-
-        let interfaces = try await VMNetworkInterface.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .with(\.$observedAddresses)
-            .all()
 
         for nic in interfaces {
             let nicID = try nic.requireID()
@@ -313,15 +404,17 @@ struct ObservedStateApplier {
     /// per-NIC observed addresses). Short-circuits when there's nothing recorded
     /// so it's a no-op on the steady stream of reports for a VM that never had a
     /// guest agent.
-    private func clearGuestInfo(vm: VM, on db: Database) async throws {
+    private func clearGuestInfo(
+        vm: VM,
+        interfaces: [VMNetworkInterface],
+        on db: Database
+    ) async throws {
         guard vm.qgaAvailable != nil || vm.observedHostname != nil else { return }
         vm.qgaAvailable = nil
         vm.observedHostname = nil
         try await vm.save(on: db)
 
-        let nicIDs = try await VMNetworkInterface.query(on: db)
-            .filter(\.$vm.$id == vm.requireID())
-            .all(\.$id)
+        let nicIDs = interfaces.compactMap(\.id)
         if !nicIDs.isEmpty {
             try await VMInterfaceObservedAddress.query(on: db)
                 .filter(\.$interface.$id ~~ nicIDs)
@@ -331,7 +424,12 @@ struct ObservedStateApplier {
 
     /// A VM the database maps to this agent is absent from its full report:
     /// either a confirmed deletion (desired absent) or genuine loss.
-    private func handleReportedAbsence(vm: VM, agentId: String, on db: Database) async throws {
+    private func handleReportedAbsence(
+        vm: VM,
+        agentId: String,
+        pendingOperation: ResourceOperation?,
+        on db: Database
+    ) async throws {
         let vmID = try vm.requireID()
 
         if vm.desiredStatus == .absent {
@@ -339,12 +437,7 @@ struct ObservedStateApplier {
             // the row: if we crash in between, the next report retries the
             // (idempotent) removal, whereas removing first would leave a
             // pending operation with nothing to resolve it but the sweep.
-            if let operation = try await ResourceOperation.query(on: db)
-                .filter(\.$resourceKind == .virtualMachine)
-                .filter(\.$resourceID == vmID)
-                .filter(\.$status == .pending)
-                .first()
-            {
+            if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
@@ -385,7 +478,10 @@ struct ObservedStateApplier {
     /// Sandbox counterpart of `applyObservedVMState`: apply one settled (or
     /// failing) observation and resolve any pending operation it satisfies.
     private func applyObservedSandboxState(
-        sandbox: Sandbox, observed: ObservedSandboxState, on db: Database
+        sandbox: Sandbox,
+        observed: ObservedSandboxState,
+        pendingOperation: ResourceOperation?,
+        on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
@@ -400,12 +496,6 @@ struct ObservedStateApplier {
                 ])
             return
         }
-
-        let pendingOperation = try await ResourceOperation.query(on: db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sandboxID)
-            .filter(\.$status == .pending)
-            .first()
 
         var changed = false
         if observed.observedGeneration > sandbox.observedGeneration {
@@ -472,18 +562,18 @@ struct ObservedStateApplier {
 
     /// A sandbox the database maps to this agent is absent from its full
     /// report: either a confirmed deletion (desired absent) or genuine loss.
-    private func handleReportedSandboxAbsence(sandbox: Sandbox, agentId: String, on db: Database) async throws {
+    private func handleReportedSandboxAbsence(
+        sandbox: Sandbox,
+        agentId: String,
+        pendingOperation: ResourceOperation?,
+        on db: Database
+    ) async throws {
         let sandboxID = try sandbox.requireID()
 
         if sandbox.desiredStatus == .absent {
             // Deletion confirmed. Complete the operation first, then remove
             // the row (same crash-ordering rationale as VMs).
-            if let operation = try await ResourceOperation.query(on: db)
-                .filter(\.$resourceKind == .sandbox)
-                .filter(\.$resourceID == sandboxID)
-                .filter(\.$status == .pending)
-                .first()
-            {
+            if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 

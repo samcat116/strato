@@ -398,6 +398,39 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("A reported pending create releases its placement reservation")
+    func reportReleasesCreateReservation() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let reservation = ReservationAmounts(cpu: vm.cpu, memory: vm.memory, disk: vm.disk)
+            let reserved = await app.coordination.reserveCapacity(
+                agentId: agentId,
+                vmId: vm.id!.uuidString,
+                amounts: reservation,
+                capacity: reservation
+            )
+            #expect(reserved)
+
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
+            try await operation.save(on: app.db)
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!,
+                        status: .shutdown,
+                        observedGeneration: vm.generation)
+                ]
+            )
+            await app.agentService.applyObservedStateReport(
+                envelope,
+                fromAgentKey: agentKey("recon-agent")
+            )
+
+            #expect(await app.coordination.activeReservations(agentId: agentId) == .zero)
+        }
+    }
+
     @Test("A convergence failure fails the pending operation with the agent's error")
     func reportFailsOperationWithError() async throws {
         try await withVMTestApp { app, user, vm, _ in
@@ -590,6 +623,72 @@ final class DesiredStateReconciliationTests {
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .created)
             #expect(refreshed?.observedGeneration == 0)
+        }
+    }
+
+    @Test("An identical report does not rewrite the agent row")
+    func identicalReportSkipsAgentSave() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.observedGeneration = vm.generation
+            try await vm.save(on: app.db)
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!,
+                        status: .running,
+                        observedGeneration: vm.generation)
+                ]
+            )
+            await app.agentService.applyObservedStateReport(
+                envelope,
+                fromAgentKey: agentKey("recon-agent")
+            )
+            let afterFirst = try #require(
+                try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            )
+            let firstUpdatedAt = afterFirst.updatedAt
+            let firstHeartbeat = afterFirst.lastHeartbeat
+
+            await app.agentService.applyObservedStateReport(
+                envelope,
+                fromAgentKey: agentKey("recon-agent")
+            )
+            let afterSecond = try #require(
+                try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            )
+            #expect(afterSecond.updatedAt == firstUpdatedAt)
+            #expect(afterSecond.lastHeartbeat == firstHeartbeat)
+        }
+    }
+
+    @Test("Heartbeat absence no longer duplicates observed-report reconciliation")
+    func heartbeatDoesNotReconcileVMAbsence() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.agentService.updateAgentHeartbeat(
+                AgentHeartbeatMessage(
+                    agentId: agentId,
+                    resources: AgentResources(
+                        totalCPU: 16, availableCPU: 12,
+                        totalMemory: 1 << 34, availableMemory: 1 << 33,
+                        totalDisk: 1 << 40, availableDisk: 1 << 39
+                    ),
+                    runningVMs: []
+                ),
+                fromAgentKey: agentKey("recon-agent")
+            )
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.status == .running)
         }
     }
 

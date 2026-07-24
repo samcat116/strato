@@ -79,6 +79,15 @@ protocol CoordinationStore: Sendable {
     /// existing value and TTL.
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws
 
+    /// Refresh the paired presence and socket-route keys in one backend
+    /// round trip. They share a TTL and are always advanced together.
+    func setAgentLiveness(
+        presenceKey: String,
+        routeKey: String,
+        replicaId: String,
+        ttlSeconds: Int
+    ) async throws
+
     /// Current value of `key`, or nil when the key is absent or expired.
     func getValue(_ key: String) async throws -> String?
 
@@ -113,6 +122,13 @@ protocol CoordinationStore: Sendable {
 /// hash tags to co-locate them).
 struct ValkeyCoordinationStore: CoordinationStore {
     let app: Application
+
+    private static let setAgentLivenessScript = """
+        local ttl = tonumber(ARGV[2])
+        redis.call('SET', KEYS[1], '1', 'EX', ttl)
+        redis.call('SET', KEYS[2], ARGV[1], 'EX', ttl)
+        return 1
+        """
 
     /// Sum unexpired reservations (pruning expired index entries), check the
     /// new reservation fits `capacity`, and write it — all atomically. A VM's
@@ -242,6 +258,19 @@ struct ValkeyCoordinationStore: CoordinationStore {
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
         _ = try await app.valkey.set(
             ValkeyKey(key), value: value, expiration: .seconds(max(1, ttlSeconds)))
+    }
+
+    func setAgentLiveness(
+        presenceKey: String,
+        routeKey: String,
+        replicaId: String,
+        ttlSeconds: Int
+    ) async throws {
+        _ = try await app.valkey.eval(
+            script: Self.setAgentLivenessScript,
+            keys: [ValkeyKey(presenceKey), ValkeyKey(routeKey)],
+            args: [replicaId, String(max(1, ttlSeconds))]
+        )
     }
 
     func getValue(_ key: String) async throws -> String? {
@@ -397,6 +426,17 @@ actor InMemoryCoordinationStore: CoordinationStore {
         values[key] = (value, Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds))))
     }
 
+    func setAgentLiveness(
+        presenceKey: String,
+        routeKey: String,
+        replicaId: String,
+        ttlSeconds: Int
+    ) {
+        let expiresAt = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
+        keys[presenceKey] = expiresAt
+        values[routeKey] = (replicaId, expiresAt)
+    }
+
     func getValue(_ key: String) -> String? {
         guard let entry = values[key] else { return nil }
         guard entry.expiresAt > Date() else {
@@ -513,6 +553,31 @@ actor CoordinationService {
             logger.warning(
                 "Failed to record agent presence in coordination store",
                 metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+        }
+    }
+
+    /// Refresh presence and route as one logical liveness record. The Valkey
+    /// backend performs both writes in one Lua invocation; callers can safely
+    /// throttle this to half the TTL without the two keys drifting apart.
+    @discardableResult
+    func recordAgentLiveness(
+        agentKey: String,
+        replicaId: String,
+        ttlSeconds: Int = CoordinationService.presenceTTLSeconds
+    ) async -> Bool {
+        do {
+            try await store.setAgentLiveness(
+                presenceKey: Self.presenceKey(agentKey: agentKey),
+                routeKey: Self.routeKey(agentKey: agentKey),
+                replicaId: replicaId,
+                ttlSeconds: ttlSeconds
+            )
+            return true
+        } catch {
+            logger.warning(
+                "Failed to record agent liveness in coordination store",
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return false
         }
     }
 

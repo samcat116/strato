@@ -114,6 +114,18 @@ struct AgentModelTests {
         #expect(agent.lastHeartbeat! > oldHeartbeat!)
     }
 
+    @Test("Agent resource comparison reports whether mutable capacity changed")
+    func testUpdateAvailableResourcesDetectsChanges() {
+        let agent = createTestAgent()
+        let unchanged = createTestAgentResources()
+
+        #expect(agent.updateAvailableResources(unchanged) == false)
+
+        let changed = createTestAgentResources(availableCPU: agent.availableCPU - 1)
+        #expect(agent.updateAvailableResources(changed) == true)
+        #expect(agent.availableCPU == changed.availableCPU)
+    }
+
     // MARK: - Online Status Tests
 
     @Test("Agent isOnline returns true when heartbeat is recent")
