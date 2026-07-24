@@ -175,9 +175,9 @@ final class QuotaEnforcementTests {
             _ = try await builder.createVM(name: "b", project: project)  // cpu 2
 
             let engQuota = try await builder.createResourceQuota(name: "dept", ou: eng)
-            let (usage, vms, _) = try await engQuota.calculateActualUsage(on: app.db)
+            let usage = try await engQuota.calculateActualUsage(on: app.db)
             // Before the fix this aggregated over the empty set and reported 0.
-            #expect(vms.count == 2)
+            #expect(usage.vms == 2)
             #expect(usage.vcpus == 4)
         }
     }

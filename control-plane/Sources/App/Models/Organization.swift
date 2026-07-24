@@ -156,50 +156,30 @@ struct OrganizationMemberResponse: Content {
 // MARK: - Helper Methods
 
 extension Organization {
-    /// Get all projects in this organization (including those in OUs)
+    /// Get all projects in this organization (including those in OUs).
+    ///
+    /// Two flat queries, not a tree walk: a project hangs off exactly one of an
+    /// organization or a folder (`Project.validate`), and every folder
+    /// denormalizes the organization it belongs to (issue #692).
     func getAllProjects(on db: Database) async throws -> [Project] {
-        // Get direct projects
-        let directProjects = try await self.$projects.query(on: db).all()
-
-        // Get all OUs and their projects recursively
-        let ous = try await self.$organizationalUnits.query(on: db).all()
-        var allProjects = directProjects
-
-        for ou in ous {
-            let ouProjects = try await ou.getAllProjects(on: db)
-            allProjects.append(contentsOf: ouProjects)
-        }
-
-        return allProjects
+        guard let organizationID = id else { return [] }
+        let folderIDs = try await OrganizationalUnit.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .all(\.$id)
+            .compactMap { $0 }
+        return try await Project.all(inOrganization: organizationID, folders: folderIDs, on: db)
     }
 
     /// Get all VMs in this organization (across all projects)
     func getAllVMs(on db: Database) async throws -> [VM] {
-        let projects = try await getAllProjects(on: db)
-        var allVMs: [VM] = []
-
-        for project in projects {
-            let vms = try await project.$vms.query(on: db).all()
-            allVMs.append(contentsOf: vms)
-        }
-
-        return allVMs
+        let projectIDs = try await getAllProjects(on: db).compactMap { $0.id }
+        guard !projectIDs.isEmpty else { return [] }
+        return try await VM.query(on: db).filter(\.$project.$id ~~ projectIDs).all()
     }
 
     /// Get resource usage across the organization
     func getResourceUsage(on db: Database) async throws -> ResourceUsageResponse {
-        let vms = try await getAllVMs(on: db)
-
-        let totalVCPUs = vms.reduce(0) { $0 + $1.cpu }
-        let totalMemory = vms.reduce(0) { $0 + $1.memory }
-        let totalStorage = vms.reduce(0) { $0 + $1.disk }
-
-        return ResourceUsageResponse(
-            totalVCPUs: totalVCPUs,
-            totalMemoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
-            totalStorageGB: Double(totalStorage) / 1024 / 1024 / 1024,
-            totalVMs: vms.count
-        )
+        HierarchySnapshot.resourceUsage(of: try await getAllVMs(on: db))
     }
 
 }
@@ -207,18 +187,27 @@ extension Organization {
 extension OrganizationalUnit {
     /// Get all projects in this OU and its descendants
     func getAllProjects(on db: Database) async throws -> [Project] {
-        // Get direct projects
-        let directProjects = try await self.$projects.query(on: db).all()
+        let folderIDs = try await selfAndDescendantIDs(on: db)
+        guard !folderIDs.isEmpty else { return [] }
+        return try await Project.query(on: db)
+            .filter(\.$organizationalUnit.$id ~~ folderIDs)
+            .all()
+    }
+}
 
-        // Get all child OUs and their projects recursively
-        let childOUs = try await self.$childOUs.query(on: db).all()
-        var allProjects = directProjects
-
-        for childOU in childOUs {
-            let childProjects = try await childOU.getAllProjects(on: db)
-            allProjects.append(contentsOf: childProjects)
-        }
-
-        return allProjects
+extension Project {
+    /// Every project of an organization, given the ids of its folders: those
+    /// hanging directly off the organization plus those inside any folder.
+    static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: Database) async throws
+        -> [Project]
+    {
+        try await Project.query(on: db)
+            .group(.or) { anyProject in
+                anyProject.filter(\.$organization.$id == organizationID)
+                if !folderIDs.isEmpty {
+                    anyProject.filter(\.$organizationalUnit.$id ~~ folderIDs)
+                }
+            }
+            .all()
     }
 }

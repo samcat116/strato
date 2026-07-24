@@ -16,9 +16,10 @@ import SQLKit
 /// deliveries): they cost close to nothing to maintain and stay small.
 ///
 /// Not here: the `organizational_units.path` index the audit also called for.
-/// `OrganizationalUnit.descendants()` still matches with a leading-wildcard
-/// `LIKE '%<uuid>%'`, which no index can serve; the index only becomes useful
-/// once issue #692 rewrites that to a prefix match, and belongs with it.
+/// When this migration was written `OrganizationalUnit.descendants()` still
+/// matched with a leading-wildcard `LIKE '%<uuid>%'`, which no index can serve.
+/// Issue #692 rewrote that to a prefix match and added the index alongside it,
+/// in `AddFolderPathIndex`.
 struct AddHotPathIndexes: AsyncMigration {
     /// `(index name, CREATE INDEX body)`. Kept as one list so `revert` drops
     /// exactly what `prepare` created, and so a test can assert the migrated

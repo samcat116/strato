@@ -637,6 +637,10 @@ public func configure(_ app: Application) async throws {
     // (issue #693).
     app.migrations.add(AddHotPathIndexes())
 
+    // Prefix-searchable folder paths, now that descendant lookups match on the
+    // materialized path instead of scanning for a contained uuid (issue #692).
+    app.migrations.add(AddFolderPathIndex())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

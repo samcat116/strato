@@ -125,95 +125,23 @@ extension ResourceQuota: Content {}
 // MARK: - Actual Usage Calculation
 
 extension ResourceQuota {
-    /// The project IDs within this quota's scope (its project, the projects of
-    /// its organizational unit *and every descendant OU*, or every project of
-    /// its organization). Nil when the scoping entity no longer exists (e.g.
-    /// deleted concurrently).
-    private func scopedProjectIDs(on db: Database) async throws -> [UUID]? {
-        if let projectID = $project.id {
-            return [projectID]
-        }
-        if let ouID = $organizationalUnit.id {
-            guard let ou = try await OrganizationalUnit.find(ouID, on: db) else { return nil }
-            // Include projects nested under descendant OUs, not just direct
-            // children, so a quota on an intermediate folder measures every
-            // workload beneath it (issue #645).
-            let projects = try await ou.getAllProjects(on: db)
-            return projects.compactMap { $0.id }
-        }
-        if let orgID = $organization.id {
-            guard let org = try await Organization.find(orgID, on: db) else { return nil }
-            let allProjects = try await org.getAllProjects(on: db)
-            return allProjects.compactMap { $0.id }
-        }
-        return []
-    }
-
-    /// Calculates the actual resource usage for this quota by aggregating the
-    /// VMs *and sandboxes* within its scope (project, organizational unit, or
-    /// organization) — both workload kinds draw vCPUs and memory from the same
-    /// pools (issue #415); only VMs consume storage. Returns the computed
-    /// usage along with the workloads it was derived from.
-    func calculateActualUsage(on db: Database) async throws -> (usage: QuotaUsage, vms: [VM], sandboxes: [Sandbox]) {
-        var vms: [VM] = []
-        var sandboxes: [Sandbox] = []
-
-        if let projectIDs = try await scopedProjectIDs(on: db), !projectIDs.isEmpty {
-            let vmQuery = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
-            let sandboxQuery = Sandbox.query(on: db).filter(\.$project.$id ~~ projectIDs)
-            if let environment = environment {
-                vmQuery.filter(\.$environment == environment)
-                sandboxQuery.filter(\.$environment == environment)
-            }
-            vms = try await vmQuery.all()
-            sandboxes = try await sandboxQuery.all()
-        }
-
-        // Calculate actual usage across both workload kinds. Storage counts
-        // VM disks plus sandbox snapshot artifacts (issue #426) — sandboxes
-        // themselves reserve no storage, but their checkpoints persist real
-        // bytes in the shared pool.
-        let totalVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
-        let totalMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
-        let totalStorage =
-            vms.reduce(Int64(0)) { $0 + $1.disk } + (try await sandboxSnapshotStorageInScope(on: db))
-
-        let actualUsage = QuotaUsage(
-            vcpus: totalVCPUs,
-            memoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
-            storageGB: Double(totalStorage) / 1024 / 1024 / 1024,
-            vms: vms.count,
-            sandboxes: sandboxes.count,
-            networks: 0  // TODO: Implement network counting when networking is added
-        )
-
-        return (actualUsage, vms, sandboxes)
-    }
-
-    /// Total sandbox-snapshot storage within this quota's scope (issue #426):
-    /// the sum of `size` over non-error snapshots of in-scope projects.
-    /// `creating` rows carry the admission estimate (the sandbox's guest
-    /// memory) until the agent reports actual sizes; `error` rows are
-    /// excluded — a failed checkpoint removes its partial artifacts.
+    /// The actual resource usage of the VMs *and sandboxes* within this quota's
+    /// scope (project, organizational unit, or organization) — both workload
+    /// kinds draw vCPUs and memory from the same pools (issue #415); only VMs
+    /// consume storage, alongside sandbox snapshots.
     ///
-    /// An exported snapshot (issue #428) exists twice — on its agent and in
-    /// control-plane object storage — and both copies draw from this pool, so
-    /// the recorded per-artifact sizes are added on top. Counting the
-    /// *recorded* bytes rather than a flag makes the figure track a partial
-    /// export as its artifacts land, and fall away with the row on delete.
+    /// Measured with SQL aggregates rather than by loading the workloads; see
+    /// ``QuotaUsageAggregator``. A caller that measures the same quota more
+    /// than once, or that also needs a breakdown, should resolve the scope once
+    /// with `QuotaUsageAggregator.scope(of:on:)` and reuse it.
+    func calculateActualUsage(on db: Database) async throws -> QuotaUsage {
+        try await QuotaUsageAggregator.measure(quota: self, on: db).asQuotaUsage
+    }
+
+    /// Total sandbox-snapshot storage within this quota's scope (issue #426).
     func sandboxSnapshotStorageInScope(on db: Database) async throws -> Int64 {
-        guard let projectIDs = try await scopedProjectIDs(on: db), !projectIDs.isEmpty else { return 0 }
-        let query = SandboxSnapshot.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .filter(\.$status != .error)
-        if let environment = environment {
-            query.filter(\.$environment == environment)
-        }
-        let snapshots = try await query.all()
-        return snapshots.reduce(Int64(0)) { total, snapshot in
-            let exported = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
-            return total + (snapshot.size ?? 0) + exported
-        }
+        let scope = try await QuotaUsageAggregator.scope(of: self, on: db)
+        return try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: db)
     }
 }
 
