@@ -12,9 +12,10 @@ import Vapor
 //
 // Everything cached here is immutable for the life of a request by
 // construction: the caller's group and organization memberships, the resource
-// tree above a node, and the verdict for one `(principal, action, node)`
-// triple. A mutation landing mid-request cannot make a decision already made
-// wrong — the request was authorized against the state it read.
+// tree above a node, the bindings a principal holds at a node (#735), and the
+// verdict for one `(principal, action, node)` triple. A mutation landing
+// mid-request cannot make a decision already made wrong — the request was
+// authorized against the state it read.
 
 /// The per-principal facts every check in a request needs: the memberships the
 /// tier-1 policies read and the groups whose bindings count as the principal's.
@@ -117,10 +118,22 @@ final class IAMRequestCache: Sendable {
         let node: IAMNode
     }
 
+    /// The identity of one principal's bindings at one node (#735). Bindings
+    /// are role-shaped and action-free, so one entry serves every check whose
+    /// ancestor chain passes through the node — which is what lets a request's
+    /// *distinct* authorization questions (a VM create asks `org:read`,
+    /// `image:read`, and `vm:create`) share the chain nodes their slices have
+    /// in common instead of each re-reading `role_bindings`.
+    struct BindingKey: Hashable, Sendable {
+        let principal: IAMPrincipal
+        let node: IAMNode
+    }
+
     private struct State {
         var seededUsers: [UUID: User] = [:]
         var userFacts: [UUID: IAMUserFacts] = [:]
         var chains: [IAMNode: IAMResourceTree.Resolution] = [:]
+        var bindings: [BindingKey: [IAMBindingFact]] = [:]
         var decisions: [DecisionKey: CedarCheckDecision] = [:]
     }
 
@@ -153,6 +166,14 @@ final class IAMRequestCache: Sendable {
 
     func store(chain: IAMResourceTree.Resolution, of node: IAMNode) {
         state.withLockedValue { $0.chains[node] = chain }
+    }
+
+    func bindings(at key: BindingKey) -> [IAMBindingFact]? {
+        state.withLockedValue { $0.bindings[key] }
+    }
+
+    func store(bindings: [IAMBindingFact], at key: BindingKey) {
+        state.withLockedValue { $0.bindings[key] = bindings }
     }
 
     func decision(for key: DecisionKey) -> CedarCheckDecision? {

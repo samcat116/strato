@@ -77,6 +77,18 @@ struct CedarRoleGrants: Equatable, Sendable {
     }
 }
 
+/// One applicable role binding as slice assembly consumes it: the subject it
+/// grants to (the checked principal itself, or one of its groups), the role it
+/// names, and whether a `condition` document restricts it. A value snapshot of
+/// the row — not the model — so the request cache (#735) can hold a
+/// principal's bindings at a node across the several distinct authorizations
+/// one request makes.
+struct IAMBindingFact: Equatable, Sendable {
+    let subject: IAMPrincipal
+    let role: String
+    let conditioned: Bool
+}
+
 /// Everything one authorization check hands to Cedar: the principal and
 /// resource entities (with hierarchy and attributes) and the flattened grants
 /// destined for the request context.
@@ -166,10 +178,11 @@ enum EntitySliceLoader {
     ///   Only used to decide whether to compute attributes expensive enough to
     ///   be worth skipping when no policy could read them (today: the agent
     ///   foreign-workload inventory). Passing nil simply omits those.
-    /// - Parameter cache: the request-scoped cache (#686). The principal's
-    ///   memberships and the resource's ancestor chain are the same for every
-    ///   check in a request, so they are loaded once and reused; passing nil
-    ///   loads everything, which is what callers outside a request do.
+    /// - Parameter cache: the request-scoped cache (#686, #735). The
+    ///   principal's memberships, the resource's ancestor chain, and the
+    ///   principal's bindings at each chain node are the same for every check
+    ///   in a request, so they are loaded once and reused; passing nil loads
+    ///   everything, which is what callers outside a request do.
     static func load(
         principal: IAMPrincipal, node: IAMNode, action: String? = nil,
         cache: IAMRequestCache? = nil, on db: any Database
@@ -227,7 +240,7 @@ enum EntitySliceLoader {
         }
 
         let bindings = try await bindingsAlongChains(
-            for: distinct, resolutions: resolutions, userFacts: userFacts, on: db)
+            for: distinct, resolutions: resolutions, userFacts: userFacts, cache: cache, on: db)
         let foreignWorkloads = try await agentForeignWorkloads(
             for: distinct.map(\.node), action: action, on: db)
 
@@ -239,7 +252,7 @@ enum EntitySliceLoader {
                 resolution: resolutions[target.node]
                     ?? IAMResourceTree.Resolution(chain: [target.node], leaf: IAMLeafFacts()),
                 userFacts: userFacts,
-                bindingsByNode: bindings,
+                bindings: bindings,
                 hostsForeignWorkloads: foreignWorkloads[target.node])
         }
         return slices
@@ -258,31 +271,53 @@ enum EntitySliceLoader {
         return subjects
     }
 
-    /// Every active binding that any target could see, in one query, indexed by
-    /// the node it attaches to.
+    /// Every active binding each target's principal (or its groups) holds
+    /// along the target's chain, in at most one query, indexed by
+    /// `(principal, node)`.
     ///
     /// Filtering to the batch's principals is what keeps the result
     /// batch-sized; `who-can` answers the all-principals question from the
     /// table directly. The `(type, id-set)` grouping keeps the predicate a
     /// handful of OR terms rather than one per node — a hundred-VM list is four
     /// or five terms, not a hundred.
+    ///
+    /// Pairs an earlier check already loaded answer from `cache` (#735). The
+    /// per-request decision memo (#686) only dedups *identical* questions, but
+    /// a request's distinct questions — a VM create asks `org:read`,
+    /// `image:read`, and `vm:create` — still walk overlapping chains, and
+    /// before this cache each of them re-read the shared nodes' bindings. Only
+    /// the pairs no check has seen yet reach the query; a later check whose
+    /// chain is fully covered reads nothing at all.
     private static func bindingsAlongChains(
         for targets: Set<IAMCheckTarget>,
         resolutions: [IAMNode: IAMResourceTree.Resolution],
         userFacts: [UUID: IAMUserFacts],
+        cache: IAMRequestCache?,
         on db: any Database
-    ) async throws -> [IAMNode: [RoleBinding]] {
-        var subjectIDs: [IAMPrincipalType: Set<UUID>] = [:]
-        var chainIDs: [IAMNodeType: Set<UUID>] = [:]
+    ) async throws -> [IAMRequestCache.BindingKey: [IAMBindingFact]] {
+        var bindings: [IAMRequestCache.BindingKey: [IAMBindingFact]] = [:]
+        var pending: Set<IAMRequestCache.BindingKey> = []
         for target in targets {
-            for subject in bindingSubjects(of: target.principal, userFacts: userFacts) {
-                subjectIDs[subject.type, default: []].insert(subject.id)
-            }
             for node in resolutions[target.node]?.chain ?? [] {
-                chainIDs[node.type, default: []].insert(node.id)
+                let key = IAMRequestCache.BindingKey(principal: target.principal, node: node)
+                guard bindings[key] == nil, !pending.contains(key) else { continue }
+                if let cached = cache?.bindings(at: key) {
+                    bindings[key] = cached
+                } else {
+                    pending.insert(key)
+                }
             }
         }
-        guard !subjectIDs.isEmpty, !chainIDs.isEmpty else { return [:] }
+        guard !pending.isEmpty else { return bindings }
+
+        var subjectIDs: [IAMPrincipalType: Set<UUID>] = [:]
+        var chainIDs: [IAMNodeType: Set<UUID>] = [:]
+        for key in pending {
+            for subject in bindingSubjects(of: key.principal, userFacts: userFacts) {
+                subjectIDs[subject.type, default: []].insert(subject.id)
+            }
+            chainIDs[key.node.type, default: []].insert(key.node.id)
+        }
 
         let rows = try await RoleBinding.query(on: db)
             .group(.or) { anyPrincipal in
@@ -304,12 +339,31 @@ enum EntitySliceLoader {
             .active()
             .all()
 
-        var byNode: [IAMNode: [RoleBinding]] = [:]
+        // A row whose principal or node type this build cannot interpret is
+        // dropped; it could never match a subject, so skipping under-grants,
+        // never over-grants.
+        var factsByNode: [IAMNode: [IAMBindingFact]] = [:]
         for row in rows {
-            guard let nodeType = IAMNodeType(rawValue: row.nodeType) else { continue }
-            byNode[IAMNode(type: nodeType, id: row.nodeID), default: []].append(row)
+            guard let nodeType = IAMNodeType(rawValue: row.nodeType),
+                let principalType = IAMPrincipalType(rawValue: row.principalType)
+            else { continue }
+            factsByNode[IAMNode(type: nodeType, id: row.nodeID), default: []].append(
+                IAMBindingFact(
+                    subject: IAMPrincipal(type: principalType, id: row.principalID),
+                    role: row.role,
+                    conditioned: row.condition != nil))
         }
-        return byNode
+        // The query over-fetched across principals (the union of every pending
+        // pair's subjects × nodes), so each pair keeps only its own subjects'
+        // rows — the same filter `slice` used to apply. An empty result is
+        // cached too: "no bindings here" is as reusable an answer as any.
+        for key in pending {
+            let subjects = Set(bindingSubjects(of: key.principal, userFacts: userFacts))
+            let facts = (factsByNode[key.node] ?? []).filter { subjects.contains($0.subject) }
+            bindings[key] = facts
+            cache?.store(bindings: facts, at: key)
+        }
+        return bindings
     }
 
     /// The agent foreign-workload inventory for the batch, or nothing when no
@@ -344,7 +398,7 @@ enum EntitySliceLoader {
         for target: IAMCheckTarget,
         resolution: IAMResourceTree.Resolution,
         userFacts: [UUID: IAMUserFacts],
-        bindingsByNode: [IAMNode: [RoleBinding]],
+        bindings: [IAMRequestCache.BindingKey: [IAMBindingFact]],
         hostsForeignWorkloads: Bool?
     ) -> CedarEntitySlice {
         let principal = target.principal
@@ -356,13 +410,9 @@ enum EntitySliceLoader {
 
         var grants = CedarRoleGrants()
         var skippedConditionedBindings = 0
-        let subjects = Set(bindingSubjects(of: principal, userFacts: userFacts))
         for chainNode in chain {
-            for binding in bindingsByNode[chainNode] ?? [] {
-                guard let principalType = IAMPrincipalType(rawValue: binding.principalType),
-                    subjects.contains(IAMPrincipal(type: principalType, id: binding.principalID))
-                else { continue }
-                guard binding.condition == nil else {
+            for fact in bindings[IAMRequestCache.BindingKey(principal: principal, node: chainNode)] ?? [] {
+                guard !fact.conditioned else {
                     skippedConditionedBindings += 1
                     continue
                 }
@@ -371,12 +421,12 @@ enum EntitySliceLoader {
                 // (Whether the id names a *live* role is the compiled set's
                 // call — `contextValue(roleIDs:)` filters against it at
                 // context-build time.)
-                guard let roleID = UUID(uuidString: binding.role) else { continue }
-                switch principalType {
-                case .user: grants.addUser(binding.principalID, roleID: roleID)
-                case .group: grants.addGroup(binding.principalID, roleID: roleID)
-                case .serviceAccount: grants.addServiceAccount(binding.principalID, roleID: roleID)
-                case .workload: grants.addWorkload(binding.principalID, roleID: roleID)
+                guard let roleID = UUID(uuidString: fact.role) else { continue }
+                switch fact.subject.type {
+                case .user: grants.addUser(fact.subject.id, roleID: roleID)
+                case .group: grants.addGroup(fact.subject.id, roleID: roleID)
+                case .serviceAccount: grants.addServiceAccount(fact.subject.id, roleID: roleID)
+                case .workload: grants.addWorkload(fact.subject.id, roleID: roleID)
                 }
             }
         }

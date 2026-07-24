@@ -970,7 +970,7 @@ Two enforcement details worth naming:
   class is denied by the middleware before Vapor's router can 404 it. A
   deliberate default-deny consequence (and mild enumeration hardening).
 
-#### The request-scoped cache (shipped with #686)
+#### The request-scoped cache (shipped with #686, extended by #735)
 
 A check reads three things from the database: the principal's group and
 organization memberships, the ancestor chain above the resource, and the
@@ -984,10 +984,23 @@ rows to answer one question.
 `IAMRequestCache` (`req.iamCache`) memoizes, for the life of one request:
 the per-user facts (`IAMUserFacts`: system-admin flag, group ids, org ids,
 seeded with the `User` the session already authenticated), the resolved
-ancestor chain per node, and the verdict per `(principal, action, node)`. A
-memoized verdict still sets the audit flags — a consulted decision is one the
-request acted on — but is not counted as a second decision or logged again;
-its span carries `iam.cache_hit` so the double-check stays visible in a trace.
+ancestor chain per node, the principal's bindings at each chain node, and the
+verdict per `(principal, action, node)`. A memoized verdict still sets the
+audit flags — a consulted decision is one the request acted on — but is not
+counted as a second decision or logged again; its span carries `iam.cache_hit`
+so the double-check stays visible in a trace.
+
+The bindings memo (#735) is what carries the saving across a request's
+*distinct* questions, which the verdict memo can never help with. A VM create
+asks three different questions — `org:read` on the organization, `image:read`
+on the image, `vm:create` on the project — whose chains all pass through the
+same org and mostly the same project, and each check used to re-read
+`role_bindings` for those shared nodes. Bindings are role-shaped and
+action-free, so one `(principal, node)` entry serves every check whose chain
+passes through the node (cached as value snapshots, `IAMBindingFact`, not
+model rows); only pairs no check has seen yet reach the query, and a later
+check whose chain is fully covered — the create's third — loads its slice
+without touching the database at all.
 
 Staleness is not a hazard here: a mutation landing mid-request cannot make a
 decision already made wrong, because the request was authorized against the
@@ -1026,9 +1039,10 @@ in `EntitySliceLoader`, where every read became set-based:
 - Principal memberships load in three queries however many principals the
   batch names (which is what makes who-can's ceiling marking, N principals on
   one node, cost what one principal costs).
-- Bindings along every chain come back in a **single query**, its predicate
-  grouped as `(type, id-set)` pairs so a hundred-VM page is a handful of OR
-  terms rather than a hundred.
+- Bindings along every chain come back in **at most one query** (none when
+  the request cache already holds every `(principal, node)` pair, #735), its
+  predicate grouped as `(type, id-set)` pairs so a hundred-VM page is a
+  handful of OR terms rather than a hundred.
 
 The number of queries therefore depends on the *shape* of a batch — tree depth
 and node types — not its size: scoping twenty-five VMs costs exactly what

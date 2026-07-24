@@ -205,6 +205,63 @@ final class EntitySliceLoaderTests {
         }
     }
 
+    /// The create-path shape from issue #735: one request authorizes several
+    /// *distinct* questions (a VM create asks `org:read`, `image:read`, and
+    /// `vm:create`), whose chains all pass through the same org and mostly the
+    /// same project. The decision memo (#686) never helps — the triples differ
+    /// — so slice reuse must come from the component caches: user facts,
+    /// chains (#710), and now bindings per `(principal, node)` (#735). The
+    /// property under test: a later check whose chain the request has already
+    /// covered issues **zero** queries, and still produces exactly the slice
+    /// an uncached load would.
+    @Test("A later check on an already-covered chain loads its slice without touching the database")
+    func laterChecksReuseTheSliceComponents() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Reuse")
+            let user = try await builder.createUser(username: "reuse-user", email: "reuse@example.com")
+            try await builder.addUserToOrganization(user: user, organization: tree.org)
+            let group = try await builder.createGroup(name: "reuse-team", description: "d", organization: tree.org)
+            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .group, principalID: group.id!, role: .viewer,
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+
+            // A request we own, so Fluent's per-request query history records
+            // exactly the DB work each check does.
+            let req = Request(
+                application: app, method: .POST, url: URI(path: "/api/vms"),
+                on: app.eventLoopGroup.next())
+            req.fluent.history.start()
+
+            let cache = IAMRequestCache()
+            // Check 1 (the middleware's `org:read`) and check 2 (`image:read`
+            // stand-in: a leaf whose chain spans project and org) warm the
+            // cache the way the real create path does.
+            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.orgNode, cache: cache, on: req.db)
+            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, cache: cache, on: req.db)
+
+            // Check 3 (`vm:create` on the project): its chain — project,
+            // folders, org — was fully covered by check 2, so chains, user
+            // facts, and bindings all answer from the request cache.
+            let before = req.fluent.history.queries.count
+            let cached = try await EntitySliceLoader.load(
+                userID: user.id!, node: tree.projectNode, cache: cache, on: req.db)
+            let after = req.fluent.history.queries.count
+            req.fluent.history.stop()
+            #expect(
+                after == before,
+                "third distinct check issued \(after - before) queries; its slice components should all be request-cached"
+            )
+
+            // Reuse must be invisible: the memoized slice equals the
+            // independent uncached load, grants included.
+            let uncached = try await EntitySliceLoader.load(userID: user.id!, node: tree.projectNode, on: app.db)
+            #expect(cached == uncached)
+            #expect(cached.grants.groups(for: .viewer) == [group.id!])
+        }
+    }
+
     // MARK: - Principal
 
     @Test("The principal carries group parent edges, org memberships, and the systemAdmin attribute")
