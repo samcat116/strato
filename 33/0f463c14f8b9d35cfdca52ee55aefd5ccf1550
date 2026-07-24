@@ -1,0 +1,31 @@
+control-plane/Sources/App/Services/AuditService.swift
+  s_9f7447de2d64e8::t_73c52a47e2da47 72-75,83-99,111-115,128-138,162-178,180,183,185-186,307-383,386-392,398-399,409-411,415-421,458-459,462-520,631-633,656-663
+control-plane/Tests/AppTests/AuditLoggingTests.swift
+  s_1034a0a26ad83b::t_8583daf37c7ba1 2,290,354-498
+docs/deployment/audit-logging.md
+  s_1034a0a26ad83b::t_cfd017f6c0a03f 38-40,60-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "330f463c14f8b9d35cfdca52ee55aefd5ccf1550",
+  "prompts": {},
+  "sessions": {
+    "s_1034a0a26ad83b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc8d49e-cab6-4fad-9c6c-a4e1c8569c7e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9f7447de2d64e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5db26f51-4ac8-4bd1-aa78-62acc168f99e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
