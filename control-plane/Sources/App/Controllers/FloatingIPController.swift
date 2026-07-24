@@ -122,8 +122,9 @@ struct FloatingIPController: RouteCollection {
             nodesByAction[check.action, default: []].append(check.node)
         }
         var readable: Set<IAMNode> = []
-        for action in nodesByAction.keys.sorted() {
-            readable.formUnion(try await req.canFilter(action, on: nodesByAction[action] ?? []))
+        // Sorted so the decision log records the two batches in a stable order.
+        for (action, nodes) in nodesByAction.sorted(by: { $0.key < $1.key }) {
+            readable.formUnion(try await req.canFilter(action, on: nodes))
         }
         let visible = pools.filter { pool in
             guard let scope = pool.organizationScope else { return req.allowsScopelessPlatformRow() }
