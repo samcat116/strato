@@ -35,6 +35,9 @@ Event types:
 | `AUDIT_WEBHOOK_URL` | — | Destination for the `webhook` backend (required when enabled). |
 | `LOKI_ENDPOINT` | — | Shared with VM console logs; required for the `loki` backend. |
 | `AUDIT_RETENTION_DAYS` | — | Delete `audit_events` rows older than this many days. Unset (or non-positive) keeps events forever. |
+| `AUDIT_SYNCHRONOUS` | `false` | Write events on the request path instead of in the background. Costs every mutation an insert (and any configured HTTP POST) of latency; intended for tests. |
+| `AUDIT_MAX_QUEUE_DEPTH` | `2048` | Events that may await background delivery before the excess is shed. |
+| `AUDIT_MAX_BATCH_SIZE` | `128` | Events one drain pass ships together; the `database` backend writes a batch as a single multi-row insert. |
 
 ### Backends
 
@@ -53,6 +56,21 @@ Event types:
 
 Backends compose: `AUDIT_BACKENDS=database,loki,webhook` writes each event to
 all three.
+
+### Delivery
+
+Recording an event only buffers it: a background task drains the buffer in
+batches and writes every backend concurrently, so request latency is
+independent of how healthy the destinations are — a Loki outage or a slow SIEM
+delays the trail, never the API. Shutdown flushes the buffer before the
+database pools close, so a graceful stop loses nothing.
+
+The buffer is bounded by `AUDIT_MAX_QUEUE_DEPTH`. If events arrive faster than
+the backends accept them for long enough to fill it, the excess is dropped and
+counted, and the control plane logs `Audit events shed under backpressure` with
+the running total (the first drop, then every hundredth). A trail with a gap in
+it says so out loud; sustained shedding means a backend needs attention or the
+queue needs raising.
 
 ## Querying the trail
 

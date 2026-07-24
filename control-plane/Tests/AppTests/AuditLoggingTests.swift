@@ -1,4 +1,5 @@
 import Fluent
+import NIOConcurrencyHelpers
 import Testing
 import Vapor
 import VaporTesting
@@ -286,7 +287,7 @@ final class AuditLoggingTests {
     /// Build an audit service with an explicit retention window, bypassing
     /// the environment the rest of the config came from.
     private func auditService(on app: Application, retentionDays: Int?) -> AuditService {
-        var config = AuditConfig.fromEnvironment()
+        var config = AuditConfig.fromEnvironment(app.environment)
         config.retentionDays = retentionDays
         return AuditService(app: app, config: config)
     }
@@ -348,6 +349,151 @@ final class AuditLoggingTests {
             let count = try await AuditEvent.query(on: app.db).count()
             #expect(count == 1)
         }
+    }
+
+    // MARK: - Background delivery (issue #694)
+
+    /// A backend that records what it was handed, and can be made arbitrarily
+    /// slow — standing in for the Loki/webhook POSTs whose five-second timeout
+    /// used to be paid on the request path.
+    private final class RecordingAuditBackend: AuditBackend, @unchecked Sendable {
+        let name = "recording"
+        private let delay: Duration?
+        private let state = NIOLockedValueBox<[[AuditRecord]]>([])
+
+        init(delay: Duration? = nil) {
+            self.delay = delay
+        }
+
+        /// The batches this backend received, in delivery order.
+        var batches: [[AuditRecord]] { state.withLockedValue { $0 } }
+        var records: [AuditRecord] { batches.flatMap { $0 } }
+
+        func write(_ record: AuditRecord) async {
+            await write([record])
+        }
+
+        func write(_ records: [AuditRecord]) async {
+            if let delay { try? await Task.sleep(for: delay) }
+            state.withLockedValue { $0.append(records) }
+        }
+    }
+
+    /// An audit service that delivers in the background, as deployments do.
+    private func backgroundAuditService(
+        on app: Application, backends: [any AuditBackend], maxQueueDepth: Int = 2048
+    ) -> AuditService {
+        var config = AuditConfig.fromEnvironment(app.environment)
+        config.synchronousWrites = false
+        config.maxQueueDepth = maxQueueDepth
+        return AuditService(app: app, config: config, backends: backends)
+    }
+
+    @Test("Recording an event does not wait for the backends")
+    func backgroundRecordingDoesNotBlockTheCaller() async throws {
+        try await withApp { app, _, _, _ in
+            let slow = RecordingAuditBackend(delay: .seconds(3))
+            let audit = self.backgroundAuditService(on: app, backends: [slow])
+
+            let clock = ContinuousClock()
+            let elapsed = await clock.measure {
+                await audit.record(AuditRecord(eventType: "test.background"))
+            }
+            // Enqueueing is an actor hop; the three-second backend write is
+            // somebody else's problem now.
+            #expect(elapsed < .seconds(1))
+            #expect(slow.records.isEmpty)
+
+            await audit.flush()
+            #expect(slow.records.map(\.eventType) == ["test.background"])
+        }
+    }
+
+    @Test("Queued events reach the database when the request path never waited")
+    func backgroundDeliveryPersistsAuditedMutations() async throws {
+        try await withApp { app, user, _, token in
+            app.audit = self.backgroundAuditService(
+                on: app, backends: [DatabaseAuditBackend(app: app)])
+
+            try await app.test(.POST, "/api/api-keys") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["name": "background-audit-key"])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            await app.audit.flush()
+
+            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            #expect(recorded.count == 1)
+            #expect(recorded.first?.userID == user.id)
+            #expect(recorded.first?.path == "/api/api-keys")
+        }
+    }
+
+    @Test("Shutdown flushes events the drain has not shipped yet")
+    func shutdownFlushesQueuedEvents() async throws {
+        try await withApp { app, _, _, _ in
+            app.audit = self.backgroundAuditService(
+                on: app, backends: [DatabaseAuditBackend(app: app)])
+
+            // Straight onto the queue, so the assertion is about the flush and
+            // not about a drain task that may have run already.
+            for index in 0..<3 {
+                _ = await app.audit.queue.enqueue(AuditRecord(eventType: "test.pending\(index)"))
+            }
+
+            await AuditRetentionLifecycleHandler().shutdownAsync(app)
+
+            let persisted = try await AuditEvent.query(on: app.db).all()
+            #expect(Set(persisted.map(\.eventType)) == ["test.pending0", "test.pending1", "test.pending2"])
+        }
+    }
+
+    @Test("A full queue sheds events and counts what it dropped")
+    func fullQueueShedsAndCounts() async throws {
+        try await withApp { app, _, _, _ in
+            let backend = RecordingAuditBackend()
+            let audit = self.backgroundAuditService(on: app, backends: [backend], maxQueueDepth: 2)
+
+            // Enqueue directly: `record` would start a drain that empties the
+            // queue underneath the overflow this test is about.
+            let first = await audit.queue.enqueue(AuditRecord(eventType: "a"))
+            let second = await audit.queue.enqueue(AuditRecord(eventType: "b"))
+            let third = await audit.queue.enqueue(AuditRecord(eventType: "c"))
+            let fourth = await audit.queue.enqueue(AuditRecord(eventType: "d"))
+            #expect(first == .enqueued(startDrain: true))
+            #expect(second == .enqueued(startDrain: false))
+            #expect(third == .shed(total: 1))
+            #expect(fourth == .shed(total: 2))
+
+            let stats = await audit.queue.stats
+            #expect(stats.queued == 2)
+            #expect(stats.shed == 2)
+
+            await audit.flush()
+            #expect(backend.records.map(\.eventType) == ["a", "b"])
+        }
+    }
+
+    @Test("Drained events are shipped in batches")
+    func drainedEventsAreBatched() async throws {
+        let queue = AuditEventQueue(maxQueueDepth: 16, maxBatchSize: 2)
+        for index in 0..<5 {
+            _ = await queue.enqueue(AuditRecord(eventType: "test.batch\(index)"))
+        }
+
+        var batchSizes: [Int] = []
+        while let batch = await queue.nextBatch() {
+            batchSizes.append(batch.count)
+        }
+        #expect(batchSizes == [2, 2, 1])
+
+        // Running dry retires the drain, so the next event starts a new one.
+        let stats = await queue.stats
+        #expect(!stats.draining)
+        let restarted = await queue.enqueue(AuditRecord(eventType: "test.batch5"))
+        #expect(restarted == .enqueued(startDrain: true))
     }
 
     // MARK: - Resource parsing
