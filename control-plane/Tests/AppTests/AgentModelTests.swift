@@ -431,6 +431,22 @@ struct AgentModelTests {
         }
     }
 
+    @Test("AgentResponse derives heartbeat status without mutating the agent")
+    func testAgentResponseDerivesHeartbeatStatusWithoutMutation() throws {
+        let freshOffline = createTestAgent(
+            name: "fresh-offline", status: .offline, lastHeartbeat: Date())
+        let staleOnline = createTestAgent(
+            name: "stale-online", status: .online,
+            lastHeartbeat: Date().addingTimeInterval(-120))
+        freshOffline.id = UUID()
+        staleOnline.id = UUID()
+
+        #expect(try AgentResponse(from: freshOffline).status == .online)
+        #expect(try AgentResponse(from: staleOnline).status == .offline)
+        #expect(freshOffline.status == .offline)
+        #expect(staleOnline.status == .online)
+    }
+
     // MARK: - AgentVersionTarget
 
     @Test("A dev target normalizes to nil, everything else passes through")

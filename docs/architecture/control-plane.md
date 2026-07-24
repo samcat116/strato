@@ -50,7 +50,10 @@ Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
    environment including tests.
 3. **Coordination**: Valkey (`ValkeyCoordinationStore` + Valkey-backed
    sessions) in real deployments — startup fails hard if it's missing;
-   `InMemoryCoordinationStore` + Fluent sessions under `.testing`.
+   `InMemoryCoordinationStore` + Fluent sessions under `.testing`. Session
+   keys carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every
+   read slides, and the driver skips the write-back when a request left the
+   session data unchanged.
 4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
    ~87 ordered migrations and `autoMigrate()`. Migrations run at startup;
    there is no separate migrate step.

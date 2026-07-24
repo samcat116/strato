@@ -514,15 +514,6 @@ struct AgentController: RouteCollection {
             if readable.contains(IAMNode(type: .agent, id: agentId)) { visible.append(agent) }
         }
 
-        // Update status based on heartbeat before returning
-        for agent in visible {
-            agent.updateStatusBasedOnHeartbeat()
-        }
-
-        for agent in visible {
-            try await agent.save(on: req.db)
-        }
-
         return try visible.map { try AgentResponse(from: $0) }
     }
 
@@ -536,9 +527,6 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "view")
-
-        agent.updateStatusBasedOnHeartbeat()
-        try await agent.save(on: req.db)
 
         return try AgentResponse(from: agent)
     }

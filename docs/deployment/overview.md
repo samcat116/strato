@@ -11,6 +11,14 @@ turn off:
 VMs run on **[agents](/deployment/agents)** — hypervisor hosts joined with a
 one-line command.
 
+## Session lifetime
+
+Browser sessions live in Valkey and expire after a period of inactivity — every
+request a session makes slides its expiry, so only abandoned sessions are
+reclaimed. The idle window defaults to 7 days and is set with
+`SESSION_TTL_SECONDS` (seconds; values under 60 are ignored). Shorten it for
+stricter re-authentication; note it bounds inactivity, not total session age.
+
 ## WebAuthn hostname requirements
 
 Strato authenticates users exclusively with WebAuthn/Passkeys, which browsers

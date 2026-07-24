@@ -92,11 +92,6 @@ final class SCIMToken: Model, @unchecked Sendable {
         return String(token.prefix(20))
     }
 
-    func updateLastUsed(ip: String?) {
-        self.lastUsedAt = Date()
-        self.lastUsedIP = ip
-    }
-
     var isExpired: Bool {
         guard let expiresAt = expiresAt else { return false }
         return Date() > expiresAt
