@@ -157,6 +157,23 @@ final class VolumeStuckSweepTests {
         }
     }
 
+    @Test("A .creating volume older than the shortest budget but inside its own is left alone")
+    func sweepRespectsPerStatusBudgetPastTheSQLCutoff() async throws {
+        try await withVolumeTestApp { app, user, project in
+            // The SQL age filter uses the *shortest* transitional budget (180s)
+            // so one query can serve every status; the per-status budget still
+            // decides. At 400s this row is admitted by the query and must then
+            // be rejected by `.creating`'s own 900s budget.
+            let volume = try await makeVolume(
+                status: .creating, ageSeconds: 400, on: app, user: user, project: project)
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try await Volume.find(volume.id, on: app.db)
+            #expect(swept?.status == .creating)
+        }
+    }
+
     @Test("A stuck .deleting volume is left to the retryable-delete path")
     func sweepIgnoresDeleting() async throws {
         try await withVolumeTestApp { app, user, project in

@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -265,6 +266,33 @@ final class SandboxExpiryTests {
             #expect(refreshed.status == .exited)
             #expect(refreshed.exitCode == 137)
             #expect(refreshed.desiredStatus != .absent)
+        }
+    }
+
+    @Test("A terminal sandbox with no status timestamp is aged off updatedAt")
+    func sweepAgesTerminalSandboxOffUpdatedAtWhenStatusTimestampIsMissing() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox in
+            let sandboxID = try sandbox.requireID()
+            sandbox.setStatus(.exited)
+            sandbox.exitCode = 0
+            try await sandbox.save(on: app.db)
+
+            // Rows predating `status_changed_at` carry NULL. The retention
+            // window is a SQL predicate now, so this fallback branch is what
+            // keeps those rows from being retained forever.
+            let sql = try #require(app.db as? any SQLDatabase)
+            let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
+            let past = Date().addingTimeInterval(-window - 60)
+            try await sql.raw(
+                """
+                UPDATE sandboxes SET status_changed_at = NULL, updated_at = \(bind: past)
+                WHERE id = \(bind: sandboxID)
+                """
+            ).run()
+
+            await app.agentService.sweepExpiredSandboxes()
+
+            try await pollSandboxDeleted(sandboxID, on: app.db)
         }
     }
 

@@ -1013,13 +1013,14 @@ actor AgentService {
             // (or predates the operations table) but the confirming statusUpdate
             // never landed. Same 120s timeout as the old stuck-VM sweep.
             let timeout: TimeInterval = 120
+            let stuckBefore = now.addingTimeInterval(-timeout)
             let transitional = try await VM.query(on: db)
                 .filter(\.$status ~~ [.starting, .stopping])
+                .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
             for vm in transitional {
-                let changedAt = vm.statusChangedAt ?? vm.updatedAt ?? now
-                guard now.timeIntervalSince(changedAt) > timeout, let vmID = vm.id else { continue }
+                guard let vmID = vm.id else { continue }
 
                 let hasPendingOperation =
                     try await ResourceOperation.query(on: db)
@@ -1048,11 +1049,11 @@ actor AgentService {
             // operation means the confirming report never landed.
             let transitionalSandboxes = try await Sandbox.query(on: db)
                 .filter(\.$status ~~ [.starting, .stopping])
+                .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
             for sandbox in transitionalSandboxes {
-                let changedAt = sandbox.statusChangedAt ?? sandbox.updatedAt ?? now
-                guard now.timeIntervalSince(changedAt) > timeout, let sandboxID = sandbox.id else { continue }
+                guard let sandboxID = sandbox.id else { continue }
 
                 let hasPendingOperation =
                     try await ResourceOperation.query(on: db)
@@ -1084,8 +1085,16 @@ actor AgentService {
             // is returned to a resting state. Without it, a crash mid-operation
             // (rolling upgrade, OOM kill) strands the volume in that status
             // permanently.
+            //
+            // The budget is per-status, so SQL filters on the *shortest* of
+            // them and the per-status check below narrows the rest: a superset
+            // that still keeps the scan off every freshly created volume.
+            let shortestVolumeBudget =
+                Self.transitionalVolumeStatuses.map(stuckVolumeBudgetSeconds(for:)).min() ?? 0
+            let volumeStuckBefore = now.addingTimeInterval(-shortestVolumeBudget)
             let transitionalVolumes = try await Volume.query(on: db)
-                .filter(\.$status ~~ [.creating, .attaching, .detaching, .resizing, .snapshotting, .cloning])
+                .filter(\.$status ~~ Self.transitionalVolumeStatuses)
+                .filterAged(before: volumeStuckBefore, by: \.$updatedAt, fallingBackTo: \.$createdAt)
                 .all()
 
             for volume in transitionalVolumes {
@@ -1135,6 +1144,14 @@ actor AgentService {
             app.logger.error("Stuck-operation sweep failed: \(error)")
         }
     }
+
+    /// The volume statuses the stuck-volume backstop watches. Kept in one
+    /// place because `AddHotPathIndexes` indexes exactly this set (a partial
+    /// index on `volumes.status`) — widening the list means widening that
+    /// index too, or the sweep falls back to a sequential scan.
+    static let transitionalVolumeStatuses: [VolumeStatus] = [
+        .creating, .attaching, .detaching, .resizing, .snapshotting, .cloning,
+    ]
 
     /// How long a volume may sit in a given transitional status before the
     /// stuck-operation sweep treats it as lost (issue #644). Volumes carry no
@@ -1244,18 +1261,18 @@ actor AgentService {
                 // the second `begin` would collide with the first's pending
                 // operation and log a spurious conflict.
                 let alreadyExpiring = Set(expiring.compactMap(\.sandbox.id))
+                // Terminal sandboxes are what accumulates, so the retention
+                // window is a SQL predicate rather than a Swift filter over
+                // every terminal row ever kept.
+                let expiredBefore = now.addingTimeInterval(-window)
                 let terminal = try await Sandbox.query(on: db)
                     .filter(\.$desiredStatus != .absent)
                     .filter(\.$status ~~ [.exited, .error])
+                    .filterAged(before: expiredBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                     .all()
 
                 for sandbox in terminal {
                     guard let sandboxID = sandbox.id, !alreadyExpiring.contains(sandboxID) else { continue }
-                    // `statusChangedAt` is stamped on the transition into the
-                    // terminal status; the fallbacks are safety nets for rows
-                    // that predate it.
-                    let terminalSince = sandbox.statusChangedAt ?? sandbox.updatedAt ?? now
-                    guard now.timeIntervalSince(terminalSince) > window else { continue }
                     expiring.append((sandbox, .retention(hours: hours)))
                 }
             }
