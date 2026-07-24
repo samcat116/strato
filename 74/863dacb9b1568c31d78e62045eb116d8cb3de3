@@ -1,0 +1,26 @@
+docs/architecture/control-plane.md
+  s_1fc557f79e896b::t_47cd4119bbd378 53-56
+control-plane/Tests/AppTests/ValkeySessionDriverTests.swift
+  s_1fc557f79e896b::t_e672ac9ba867ba 1-47,49-52,57-92,98,100-101,104-117,120-136,139-147,152-153,156,161-170,173-175,178-190,193-210,213-221,224-228,231-232
+  s_1fc557f79e896b::t_da1eca2e5e36d2 48,53-56,93-97,99,102-103,118-119,137-138,148-151,154-155,157-160,171-172,176-177,191-192,211-212,222-223,229-230
+control-plane/Sources/App/Services/ValkeySessions.swift
+  s_1fc557f79e896b::t_9ae3e2ab00bdcc 5-19,23-31,37-40,42-43,49,56,59-61,65-70,73-77,84-110,112-167,176-179
+docs/deployment/overview.md
+  s_1fc557f79e896b::t_be7d8baa38e016 14-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "74863dacb9b1568c31d78e62045eb116d8cb3de3",
+  "prompts": {},
+  "sessions": {
+    "s_1fc557f79e896b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "208f22d7-83e1-4f39-ae32-fa069aedc8c6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
