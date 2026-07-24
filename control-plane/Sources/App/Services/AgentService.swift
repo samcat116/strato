@@ -871,7 +871,8 @@ actor AgentService {
         }
     }
 
-    private func checkStaleAgents() async {
+    /// Internal so tests can drive one monitor pass without waiting for the timer.
+    func checkStaleAgents() async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
         // need to finish. The app-level check is a backstop for loops armed
