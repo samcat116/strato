@@ -10,14 +10,18 @@ import type {
   ResizeVolumeRequest,
   CloneVolumeRequest,
   CreateVolumeSnapshotRequest,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const volumesApi = {
   list(projectId?: string): Promise<Volume[]> {
-    return api.get<Volume[]>(
-      "/api/volumes",
-      projectId ? { project_id: projectId } : undefined
-    );
+    return api
+      .get<Page<Volume>>("/api/volumes", {
+        limit: LIST_PAGE_LIMIT,
+        ...(projectId ? { project_id: projectId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<Volume> {
@@ -60,7 +64,11 @@ export const volumesApi = {
   },
 
   listSnapshots(id: string): Promise<VolumeSnapshot[]> {
-    return api.get<VolumeSnapshot[]>(`/api/volumes/${id}/snapshots`);
+    return api
+      .get<Page<VolumeSnapshot>>(`/api/volumes/${id}/snapshots`, {
+        limit: LIST_PAGE_LIMIT,
+      })
+      .then((page) => page.items);
   },
 
   deleteSnapshot(volumeId: string, snapshotId: string): Promise<void> {

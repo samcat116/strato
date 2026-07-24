@@ -105,8 +105,16 @@ struct VMController: RouteCollection {
     }
 
     /// GET /api/vms
-    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func index(req: Request) async throws -> [VMDetailResponse] {
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// limit/offset (optional) — select the page.
+    func index(req: Request) async throws -> PagedResponse<VMDetailResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let vms = try await visibleVMs(req: req)
+        return paging.page(vms)
+    }
+
+    /// Every VM the caller may read, newest first, ready for slicing.
+    func visibleVMs(req: Request) async throws -> [VMDetailResponse] {
         // Get user from middleware
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
@@ -115,10 +123,13 @@ struct VMController: RouteCollection {
         // A VM reaches its organization through its project, so narrowing by org means
         // narrowing to that org's projects. An org with no projects matches no VMs —
         // return early rather than let an empty `~~ []` stand in for "unfiltered".
-        var query = VM.query(on: req.db).with(\.$networkInterfaces) {
-            $0.with(\.$addresses)
-            $0.with(\.$observedAddresses)
-        }
+        var query = VM.query(on: req.db)
+            .with(\.$networkInterfaces) {
+                $0.with(\.$addresses)
+                $0.with(\.$observedAddresses)
+            }
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
             if projectIDs.isEmpty { return [] }

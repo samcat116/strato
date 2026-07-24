@@ -5,17 +5,21 @@ import type {
   ResourceQuota,
   CreateQuotaRequest,
   UpdateQuotaRequest,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const quotasApi = {
   // List all quotas the user can access, optionally filtered by level
   list(level?: "organization" | "organizational_unit" | "project"): Promise<
     ResourceQuota[]
   > {
-    return api.get<ResourceQuota[]>(
-      "/api/quotas",
-      level ? { level } : undefined
-    );
+    return api
+      .get<Page<ResourceQuota>>("/api/quotas", {
+        limit: LIST_PAGE_LIMIT,
+        ...(level ? { level } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(quotaId: string): Promise<ResourceQuota> {

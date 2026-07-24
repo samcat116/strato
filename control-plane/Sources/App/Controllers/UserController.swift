@@ -39,6 +39,14 @@ struct UserController: RouteCollection {
     /// `platform-system-admin` policy; anyone else sees exactly themselves,
     /// through `platform-user-self`. Both are evaluator decisions, so they land
     /// in the decision log and a tier-2 guardrail binds them.
+    /// Query params: limit/offset (optional) — select the page.
+    func index(req: Request) async throws -> PagedResponse<User.Public> {
+        let paging = try ListPaging.decode(from: req)
+        let users = try await visibleUsers(req: req)
+        return paging.page(users)
+    }
+
+    /// Every user the caller may read, by username, ready for slicing.
     ///
     /// Narrow, then decide (`UserDirectoryVisibility`): the query is confined
     /// to the records the caller could conceivably reach, and each one that
@@ -46,13 +54,15 @@ struct UserController: RouteCollection {
     /// Before this the endpoint fetched every account in the installation and
     /// spent a full evaluation on each — a directory read that grew with the
     /// size of the whole platform for a caller who can only see themselves.
-    func index(req: Request) async throws -> [User.Public] {
+    func visibleUsers(req: Request) async throws -> [User.Public] {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
         let visibility = try await UserDirectoryVisibility.resolve(on: req)
         var query = User.query(on: req.db)
+            .sort(\.$username)
+            .sort(\.$id)
         if let candidates = visibility.candidateUserIDs {
             guard !candidates.isEmpty else { return [] }
             query = query.filter(\.$id ~~ candidates)

@@ -6,19 +6,23 @@ import type {
   CreateVMRequest,
   UpdateVMRequest,
   Operation,
+  Page,
   VMLogEntry,
   VMLogsQueryParams,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
 // an Operation record, and the actual work completes in the background. Poll
 // operationsApi.get (see OperationWatcher) until the operation is terminal.
 export const vmsApi = {
   list(organizationId?: string): Promise<VM[]> {
-    return api.get<VM[]>(
-      "/api/vms",
-      organizationId ? { organization_id: organizationId } : undefined
-    );
+    return api
+      .get<Page<VM>>("/api/vms", {
+        limit: LIST_PAGE_LIMIT,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<VM> {

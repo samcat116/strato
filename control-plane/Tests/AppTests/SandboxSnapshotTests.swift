@@ -335,7 +335,7 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let listed = try res.content.decode([SandboxSnapshotResponse].self)
+                let listed = try res.content.decode(PagedResponse<SandboxSnapshotResponse>.self).items
                 #expect(listed.count == 1)
                 #expect(listed.first?.name == "seeded")
                 #expect(listed.first?.status == .ready)

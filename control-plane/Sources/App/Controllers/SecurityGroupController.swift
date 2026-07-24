@@ -29,15 +29,24 @@ struct SecurityGroupController: RouteCollection {
     // MARK: - CRUD
 
     /// GET /api/security-groups
-    /// Query params: project_id (optional)
+    /// Query params: project_id (optional),
+    /// limit/offset (optional) — select the page.
     @Sendable
-    func listGroups(req: Request) async throws -> [SecurityGroupResponse] {
+    func listGroups(req: Request) async throws -> PagedResponse<SecurityGroupResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let groups = try await visibleGroups(req: req)
+        return paging.page(groups)
+    }
+
+    /// Every security group the caller may read, by name, ready for slicing.
+    func visibleGroups(req: Request) async throws -> [SecurityGroupResponse] {
         _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
         var query = SecurityGroup.query(on: req.db)
             .with(\.$rules)
             .sort(\.$name)
+            .sort(\.$id)
 
         // Project scoping runs for every caller, admins included: their
         // fleet-wide view comes from the tier-1 `platform-system-admin` policy

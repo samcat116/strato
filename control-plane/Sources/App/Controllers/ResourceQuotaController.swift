@@ -38,7 +38,16 @@ struct ResourceQuotaController: RouteCollection {
 
     // MARK: - Resource Quota CRUD Operations
 
-    func indexByLevel(req: Request) async throws -> [ResourceQuotaResponse] {
+    /// Query params: level (optional),
+    /// limit/offset (optional) — select the page.
+    func indexByLevel(req: Request) async throws -> PagedResponse<ResourceQuotaResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let quotas = try await visibleQuotas(req: req)
+        return paging.page(quotas)
+    }
+
+    /// Every quota in the caller's organizations, by name, ready for slicing.
+    func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
@@ -104,7 +113,7 @@ struct ResourceQuotaController: RouteCollection {
             }
         }
 
-        let quotas = try await query.sort(\.$name).all()
+        let quotas = try await query.sort(\.$name).sort(\.$id).all()
         return quotas.map { ResourceQuotaResponse(from: $0) }
     }
 

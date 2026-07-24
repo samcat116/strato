@@ -473,14 +473,14 @@ final class FloatingIPControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
+                let addresses = try res.content.decode(PagedResponse<FloatingIPResponse>.self).items.map(\.address)
                 #expect(addresses.contains("203.0.113.2"))
             }
             try await app.test(.GET, "/api/floating-ips?project_id=\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let addresses = try res.content.decode([FloatingIPResponse].self).map(\.address)
+                let addresses = try res.content.decode(PagedResponse<FloatingIPResponse>.self).items.map(\.address)
                 #expect(addresses.contains("203.0.113.2"))
             }
         }

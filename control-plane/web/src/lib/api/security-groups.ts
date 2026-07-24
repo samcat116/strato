@@ -8,14 +8,18 @@ import type {
   UpdateSecurityGroupRequest,
   CreateSecurityGroupRuleRequest,
   AttachSecurityGroupRequest,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const securityGroupsApi = {
   list(projectId?: string): Promise<SecurityGroup[]> {
-    return api.get<SecurityGroup[]>(
-      "/api/security-groups",
-      projectId ? { project_id: projectId } : undefined
-    );
+    return api
+      .get<Page<SecurityGroup>>("/api/security-groups", {
+        limit: LIST_PAGE_LIMIT,
+        ...(projectId ? { project_id: projectId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<SecurityGroup> {

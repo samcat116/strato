@@ -88,7 +88,7 @@ final class AdminExceptionPathTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 #expect(sites.contains { $0.id == site.id })
             }
 
@@ -117,7 +117,7 @@ final class AdminExceptionPathTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 #expect(!sites.contains { $0.id == site.id })
             }
         }

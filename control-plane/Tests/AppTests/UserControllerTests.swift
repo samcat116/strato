@@ -41,7 +41,7 @@ final class UserControllerTests: BaseTestCase {
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let users = try res.content.decode([User.Public].self)
+                let users = try res.content.decode(PagedResponse<User.Public>.self).items
                 #expect(users.map(\.id) == [testUser.id])
             }
         }
@@ -59,7 +59,7 @@ final class UserControllerTests: BaseTestCase {
                 req.headers.bearerAuthorization = BearerAuthorization(token: admin.token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let users = try res.content.decode([User.Public].self)
+                let users = try res.content.decode(PagedResponse<User.Public>.self).items
                 #expect(users.count >= 2)
             }
         }

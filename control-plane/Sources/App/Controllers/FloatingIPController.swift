@@ -98,10 +98,18 @@ struct FloatingIPController: RouteCollection {
     }
 
     /// GET /api/floating-ip-pools
+    /// Query params: limit/offset (optional) — select the page.
     @Sendable
-    func listPools(req: Request) async throws -> [FloatingIPPoolResponse] {
+    func listPools(req: Request) async throws -> PagedResponse<FloatingIPPoolResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let pools = try await visiblePools(req: req)
+        return paging.page(pools)
+    }
+
+    /// Every pool the caller may read, by name, ready for slicing.
+    func visiblePools(req: Request) async throws -> [FloatingIPPoolResponse] {
         _ = try req.auth.require(User.self)
-        let pools = try await FloatingIPPool.query(on: req.db).sort(\.$name).all()
+        let pools = try await FloatingIPPool.query(on: req.db).sort(\.$name).sort(\.$id).all()
 
         // One filter for everyone: a scoped pool is an evaluator check on its
         // org/OU, which the tier-1 `platform-system-admin` policy answers for
@@ -274,15 +282,24 @@ struct FloatingIPController: RouteCollection {
     // MARK: - Floating IPs (project resources, network-style authz)
 
     /// GET /api/floating-ips
-    /// Query params: project_id (optional)
+    /// Query params: project_id (optional),
+    /// limit/offset (optional) — select the page.
     @Sendable
-    func listFloatingIPs(req: Request) async throws -> [FloatingIPResponse] {
+    func listFloatingIPs(req: Request) async throws -> PagedResponse<FloatingIPResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let floatingIPs = try await visibleFloatingIPs(req: req)
+        return paging.page(floatingIPs)
+    }
+
+    /// Every floating IP the caller may read, newest first, ready for slicing.
+    func visibleFloatingIPs(req: Request) async throws -> [FloatingIPResponse] {
         _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
         var query = FloatingIP.query(on: req.db)
             .with(\.$interface) { $0.with(\.$addresses) }
             .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
 
         // Project scoping runs for every caller. An admin holds no per-project
         // bindings, but every project their rows land in is still put to the

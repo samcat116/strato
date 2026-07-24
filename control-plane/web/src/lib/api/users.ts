@@ -5,9 +5,11 @@ import type {
   AdminCreateUserRequest,
   AdminCreateUserResponse,
   CreateUserRequest,
+  Page,
   UpdateUserRequest,
   User,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const usersApi = {
   // Create the account record before starting the passkey ceremony.
@@ -22,7 +24,9 @@ export const usersApi = {
 
   // System-admin only.
   list(): Promise<User[]> {
-    return api.get<User[]>("/api/users");
+    return api
+      .get<Page<User>>("/api/users", { limit: LIST_PAGE_LIMIT })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<User> {

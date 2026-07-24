@@ -343,7 +343,7 @@ final class AgentOrganizationScopeTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let items = try res.content.decode([AgentEnrollmentListItem].self)
+                let items = try res.content.decode(PagedResponse<AgentEnrollmentListItem>.self).items
                 #expect(items.isEmpty)
             }
         }

@@ -123,7 +123,7 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/floating-ip-pools", on: app,
-                    running: { try await FloatingIPController().listPools(req: $0) },
+                    running: { try await FloatingIPController().visiblePools(req: $0) },
                     expecting: { pools in
                         pools.count == expected && pools.allSatisfy { $0.allocatedCount == 1 }
                     })
@@ -180,7 +180,7 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/agent-enrollments", on: app,
-                    running: { try await AgentController().listEnrollments(req: $0) },
+                    running: { try await AgentController().visibleEnrollments(req: $0) },
                     expecting: { $0.count == expected })
             }
 
@@ -219,7 +219,7 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: admin, path: "/api/users", on: app,
-                    running: { try await UserController().index(req: $0) },
+                    running: { try await UserController().visibleUsers(req: $0) },
                     expecting: { $0.count == expected })
             }
 
@@ -252,7 +252,7 @@ final class ListAuthorizationScalingTests {
             func queriesToList() async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/users", on: app,
-                    running: { try await UserController().index(req: $0) },
+                    running: { try await UserController().visibleUsers(req: $0) },
                     expecting: { $0.map(\.username) == ["diruser"] })
             }
 
@@ -359,6 +359,135 @@ final class ListAuthorizationScalingTests {
             let visibility = try await UserDirectoryVisibility.resolve(on: req)
 
             #expect(visibility.candidateUserIDs == nil)
+        }
+    }
+
+    // MARK: - Authored policies
+
+    /// Recompile the policy set against the current database. The rows below are
+    /// written directly rather than through `PolicyStore`, so nothing bumps the
+    /// version for us.
+    private func rebuildPolicySet(_ app: Application) async throws {
+        let version = try await PolicySetVersionService.current(on: app.db)
+        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+    }
+
+    /// Write an authored policy row straight to the table, bypassing
+    /// `PolicyStore`.
+    ///
+    /// That bypass is the point rather than a shortcut. `PolicyStore.prepare`
+    /// refuses both shapes these two tests need — an unscoped `resource`
+    /// outright (`PolicyError.unscopedResource`), and a `User`-scoped one
+    /// because containment walks the named resource's ancestry looking for the
+    /// owner node, and a user record's chain is just itself. So an authored
+    /// permit reaching a user record cannot be written through the store today;
+    /// `authoredPermitRecords` handles it because the compiled set evaluates
+    /// every enabled row globally however it got there, and narrowing that
+    /// assumed the store's current strictness would silently start deciding the
+    /// day a looser path exists.
+    private func writeAuthoredPermit(
+        _ app: Application, name: String, cedarText: String, ownerID: UUID
+    ) async throws {
+        try await IAMPolicy(
+            name: name,
+            ownerType: .organization,
+            ownerID: ownerID,
+            cedarText: cedarText,
+            effect: .permit,
+            enabled: true
+        ).save(on: app.db)
+        try await rebuildPolicySet(app)
+    }
+
+    /// An authored permit (#606) is the one way a non-admin holds `user:read` on
+    /// another account without a binding, so its resource scope has to become a
+    /// candidate. This asserts the consequence rather than just the branch: the
+    /// subject comes back from the endpoint, which it cannot do if narrowing
+    /// dropped it — the failure mode here is silent and closed.
+    @Test("An authored permit on another user's record survives the directory narrowing")
+    func narrowingAdmitsAuthoredPermitRecords() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Authored Directory Org")
+            let user = try await builder.createUser(
+                username: "authoredcaller", email: "authoredcaller@example.com", isSystemAdmin: false)
+            let subject = try await builder.createUser(
+                username: "authoredsubject", email: "authoredsubject@example.com", isSystemAdmin: false)
+            let unrelated = try await builder.createUser(
+                username: "authoredunrelated", email: "authoredunrelated@example.com", isSystemAdmin: false)
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+
+            func directory() async throws -> [String] {
+                let req = Request(
+                    application: app, method: .GET, url: URI(path: "/api/users"),
+                    on: app.eventLoopGroup.next())
+                req.auth.login(user)
+                return try await UserController().visibleUsers(req: req).map(\.username)
+            }
+
+            // No binding and no policy: the caller reaches only themselves.
+            #expect(try await directory() == ["authoredcaller"])
+
+            try await writeAuthoredPermit(
+                app, name: "read-one-user", ownerID: org.id!,
+                cedarText: """
+                    permit (
+                        principal == User::"\(user.id!.uuidString.lowercased())",
+                        action == Action::"user:read",
+                        resource == User::"\(subject.id!.uuidString.lowercased())"
+                    );
+                    """)
+
+            let req = Request(
+                application: app, method: .GET, url: URI(path: "/api/users"),
+                on: app.eventLoopGroup.next())
+            req.auth.login(user)
+            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+
+            let candidates = try #require(visibility.candidateUserIDs)
+            #expect(Set(candidates) == [user.id!, subject.id!])
+            #expect(!candidates.contains(unrelated.id!))
+            #expect(try await directory() == ["authoredcaller", "authoredsubject"])
+        }
+    }
+
+    /// A permit the inspector cannot bound — `resource is User` names no entity,
+    /// so there is no candidate to derive — must widen to no narrowing at all.
+    ///
+    /// Widening is not merely defensive here, it is the correct answer: this
+    /// policy really does permit `user:read` on every account, so a candidate
+    /// set built from bindings alone would hide the whole directory the
+    /// evaluator is allowing. Both halves are asserted for that reason.
+    @Test("An unboundable authored permit widens the directory to no narrowing")
+    func unboundableAuthoredPermitWidensNarrowing() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Unbounded Directory Org")
+            let user = try await builder.createUser(
+                username: "unboundedcaller", email: "unboundedcaller@example.com", isSystemAdmin: false)
+            let other = try await builder.createUser(
+                username: "unboundedother", email: "unboundedother@example.com", isSystemAdmin: false)
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+
+            try await writeAuthoredPermit(
+                app, name: "read-any-user", ownerID: org.id!,
+                cedarText: """
+                    permit (principal, action == Action::"user:read", resource is User);
+                    """)
+
+            let req = Request(
+                application: app, method: .GET, url: URI(path: "/api/users"),
+                on: app.eventLoopGroup.next())
+            req.auth.login(user)
+            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            #expect(visibility.candidateUserIDs == nil)
+
+            let listRequest = Request(
+                application: app, method: .GET, url: URI(path: "/api/users"),
+                on: app.eventLoopGroup.next())
+            listRequest.auth.login(user)
+            let visible = try await UserController().visibleUsers(req: listRequest).map(\.username)
+            #expect(Set(visible) == [user.username, other.username])
         }
     }
 }

@@ -194,7 +194,7 @@ final class SecurityGroupControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let groups = try res.content.decode([SecurityGroupResponse].self)
+                let groups = try res.content.decode(PagedResponse<SecurityGroupResponse>.self).items
                 #expect(groups.map(\.name) == ["web"])
             }
 
@@ -654,7 +654,7 @@ final class SecurityGroupControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let visible = try res.content.decode([SecurityGroupResponse].self)
+                let visible = try res.content.decode(PagedResponse<SecurityGroupResponse>.self).items
                 #expect(!visible.contains { $0.id == group.id })
             }
         }

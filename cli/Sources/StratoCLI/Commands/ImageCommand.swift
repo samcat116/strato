@@ -22,8 +22,9 @@ struct ImageCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let projectID = try resolveProject(project, environment: environment)
-                let images: [Image] = try await environment.makeClient()
-                    .get("/api/projects/\(projectID)/images")
+                let page: Page<Image> = try await environment.makeClient()
+                    .get("/api/projects/\(projectID)/images", query: [("limit", String(listPageLimit))])
+                let images = page.items
                 try printResult(images, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "format", "arch", "size", "status", "created"])

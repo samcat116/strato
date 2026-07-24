@@ -98,14 +98,24 @@ struct SandboxController: RouteCollection {
     // MARK: - Reads
 
     /// GET /api/sandboxes
-    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func index(req: Request) async throws -> [SandboxDetailResponse] {
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// limit/offset (optional) — select the page.
+    func index(req: Request) async throws -> PagedResponse<SandboxDetailResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let sandboxes = try await visibleSandboxes(req: req)
+        return paging.page(sandboxes)
+    }
+
+    /// Every sandbox the caller may read, newest first, ready for slicing.
+    func visibleSandboxes(req: Request) async throws -> [SandboxDetailResponse] {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
             if projectIDs.isEmpty { return [] }

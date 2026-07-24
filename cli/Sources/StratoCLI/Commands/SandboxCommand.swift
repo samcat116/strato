@@ -18,7 +18,9 @@ struct SandboxCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let sandboxes: [Sandbox] = try await environment.makeClient().get("/api/sandboxes")
+                let page: Page<Sandbox> = try await environment.makeClient()
+                    .get("/api/sandboxes", query: [("limit", String(listPageLimit))])
+                let sandboxes = page.items
                 try printResult(sandboxes, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "image", "status", "expires", "created"])
                     for sandbox in sandboxes {
