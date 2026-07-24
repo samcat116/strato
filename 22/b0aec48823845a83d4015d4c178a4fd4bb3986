@@ -1,0 +1,89 @@
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_fa9e1a346b7184::t_b833eded6996cc 369,377,541-548
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_0358bb3acc0907::t_349e21909f15b5 479-486
+control-plane/Sources/App/Migrations/AddFolderPathIndex.swift
+  s_fa9e1a346b7184::t_5aa1cc57f4575d 1-38
+control-plane/Sources/App/Models/Organization.swift
+  s_fa9e1a346b7184::t_c46c0d1447acc2 159-163,165-170,175-177,182,190-196,198-211
+control-plane/Sources/App/Services/HierarchySnapshot.swift
+  s_fa9e1a346b7184::t_c9037ee3a2c77d 1-113
+control-plane/Sources/App/Services/HierarchyTreeBuilder.swift
+  s_fa9e1a346b7184::t_ae625600930eb6 8-11,17-18,21,24-26,31,37-38,40-51,55-58,60-67,71-73,86,93
+control-plane/Sources/App/Services/QuotaComplianceService.swift
+  s_fa9e1a346b7184::t_8599fee5ddd3ca 7-8,57-59,63
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_fa9e1a346b7184::t_4defd538a178a4 13-17,37-38,308,311-314,316-319,321-323
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_fa9e1a346b7184::t_a3e9267fd0d79a 1-278
+control-plane/Sources/App/configure.swift
+  s_fa9e1a346b7184::t_a17d17ebfc05c3 640-643
+control-plane/Tests/AppTests/FolderSubtreeTests.swift
+  s_1034a0a26ad83b::t_50c81f1d5aaa36 1-122
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_1034a0a26ad83b::t_35454f792319c7 74
+control-plane/Tests/AppTests/ProjectQuotaServiceTests.swift
+  s_0358bb3acc0907::t_a23ac4b6d9e057 115-118,120
+control-plane/Tests/AppTests/QuotaUsageAggregatorTests.swift
+  s_0358bb3acc0907::t_b447b2f5119972 1-280
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_9f7447de2d64e8::t_eae64c9b25d098 73-78,85-88,93-94,133-136,141,143
+control-plane/Sources/App/Migrations/AddHotPathIndexes.swift
+  s_9f7447de2d64e8::t_b178b7fcd1557b 19-22
+control-plane/Sources/App/Models/OrganizationalUnit.swift
+  s_9f7447de2d64e8::t_e176fd08e345f7 137-142,144-145,147-152,156-163
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_9f7447de2d64e8::t_26979388d13c1e 128-138,141,143-144
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_0358bb3acc0907::t_31fce60c655a06 7,9-12,39-40
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_16b00324a799ce::t_476f40b4b758f9 178,180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "22b0aec48823845a83d4015d4c178a4fd4bb3986",
+  "prompts": {},
+  "sessions": {
+    "s_0358bb3acc0907": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f9199-4a74-7f62-ade3-e20aa4d9dbef",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_1034a0a26ad83b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc8d49e-cab6-4fad-9c6c-a4e1c8569c7e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_16b00324a799ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df687d21-cf05-4f5f-b7c8-f676f76d6493",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9f7447de2d64e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5db26f51-4ac8-4bd1-aa78-62acc168f99e",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_fa9e1a346b7184": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f918f-9dbe-75d1-a558-c6599b409c75",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
