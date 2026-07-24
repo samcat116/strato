@@ -34,26 +34,33 @@ struct UserController: RouteCollection {
 
     // MARK: - User CRUD
 
-    /// The user directory, filtered per row on `user:read` — the same shape as
-    /// every other list endpoint. An admin sees everyone through the tier-1
+    /// The user directory, scoped on `user:read` — the same shape as every
+    /// other list endpoint. An admin sees everyone through the tier-1
     /// `platform-system-admin` policy; anyone else sees exactly themselves,
-    /// through `platform-user-self`. Neither branch reads `isSystemAdmin`
-    /// here: both are evaluator decisions, so they land in the decision log
-    /// and a tier-2 guardrail binds them.
+    /// through `platform-user-self`. Both are evaluator decisions, so they land
+    /// in the decision log and a tier-2 guardrail binds them.
+    ///
+    /// Narrow, then decide (`UserDirectoryVisibility`): the query is confined
+    /// to the records the caller could conceivably reach, and each one that
+    /// survives is put to the evaluator in a single batched decision (#687).
+    /// Before this the endpoint fetched every account in the installation and
+    /// spent a full evaluation on each — a directory read that grew with the
+    /// size of the whole platform for a caller who can only see themselves.
     func index(req: Request) async throws -> [User.Public] {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
-        let users = try await User.query(on: req.db).all()
-        var visible: [User.Public] = []
-        for user in users {
-            guard let userID = user.id else { continue }
-            if try await req.can("user:read", on: IAMNode(type: .user, id: userID)) {
-                visible.append(user.asPublic())
-            }
+        let visibility = try await UserDirectoryVisibility.resolve(on: req)
+        var query = User.query(on: req.db)
+        if let candidates = visibility.candidateUserIDs {
+            guard !candidates.isEmpty else { return [] }
+            query = query.filter(\.$id ~~ candidates)
         }
-        return visible
+        let users = try await query.all()
+
+        let readable = try await visibility.readableUsers(among: users.compactMap(\.id), on: req)
+        return users.filter { $0.id.map(readable.contains) ?? false }.map { $0.asPublic() }
     }
 
     func show(req: Request) async throws -> User.Public {

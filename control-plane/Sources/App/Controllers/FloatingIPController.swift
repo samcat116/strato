@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -61,10 +62,10 @@ struct FloatingIPController: RouteCollection {
     /// org/folder node. The pool itself has no node in the IAM tree.
     private static func poolScopeCheck(_ scope: OrganizationScope, manage: Bool) -> (action: String, node: IAMNode) {
         switch scope {
-        case .organization(let id):
-            return (manage ? "org:update" : "org:read", IAMNode(type: .organization, id: id))
-        case .organizationalUnit(let id):
-            return (manage ? "folder:update" : "folder:read", IAMNode(type: .organizationalUnit, id: id))
+        case .organization:
+            return (manage ? "org:update" : "org:read", scope.checkNode)
+        case .organizationalUnit:
+            return (manage ? "folder:update" : "folder:read", scope.checkNode)
         }
     }
 
@@ -108,24 +109,58 @@ struct FloatingIPController: RouteCollection {
         // admins — so an admin's full view is a logged, guardrail-bound
         // decision rather than a skipped check. A scopeless pool has no node
         // and stays system-admin only, as in `requirePoolPermission`.
-        var visible: [FloatingIPPool] = []
+        //
+        // Which read action a pool stands for depends on the kind of scope
+        // owning it (`org:read` vs `folder:read`), so the page costs one
+        // batched decision per action (#687) instead of one evaluation per
+        // pool. Unioning the two verdict sets is unambiguous because the node
+        // type determines the action: an Organization node is only ever asked
+        // `org:read`, a folder node only ever `folder:read`.
+        var nodesByAction: [String: [IAMNode]] = [:]
         for pool in pools {
-            guard let scope = pool.organizationScope else {
-                if req.allowsScopelessPlatformRow() { visible.append(pool) }
-                continue
-            }
+            guard let scope = pool.organizationScope else { continue }
             let check = Self.poolScopeCheck(scope, manage: false)
-            if try await req.can(check.action, on: check.node) { visible.append(pool) }
+            nodesByAction[check.action, default: []].append(check.node)
+        }
+        var readable: Set<IAMNode> = []
+        for action in nodesByAction.keys.sorted() {
+            readable.formUnion(try await req.canFilter(action, on: nodesByAction[action] ?? []))
+        }
+        let visible = pools.filter { pool in
+            guard let scope = pool.organizationScope else { return req.allowsScopelessPlatformRow() }
+            return readable.contains(Self.poolScopeCheck(scope, manage: false).node)
         }
 
-        var responses: [FloatingIPPoolResponse] = []
-        for pool in visible {
-            let count = try await FloatingIP.query(on: req.db)
-                .filter(\.$pool.$id == pool.requireID())
-                .count()
-            responses.append(try FloatingIPPoolResponse(from: pool, allocatedCount: count))
+        let counts = try await Self.allocatedCounts(forPools: visible.compactMap(\.id), on: req.db)
+        return try visible.map { pool in
+            try FloatingIPPoolResponse(from: pool, allocatedCount: counts[pool.requireID()] ?? 0)
         }
-        return responses
+    }
+
+    /// How many addresses each of `poolIDs` has allocated, as one grouped
+    /// `COUNT` for the whole page rather than a `COUNT` per pool (#687).
+    ///
+    /// Pools with no allocations produce no row, so callers read a missing key
+    /// as zero — which is also why the caller maps over its own pool list
+    /// rather than over this result.
+    private static func allocatedCounts(
+        forPools poolIDs: [UUID], on db: any Database
+    ) async throws -> [UUID: Int] {
+        guard !poolIDs.isEmpty else { return [:] }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Unsupported database")
+        }
+        let rows = try await sql.select()
+            .column("pool_id")
+            .column(SQLFunction("count", args: SQLLiteral.all), as: "allocated")
+            .from(FloatingIP.schema)
+            .where(SQLColumn("pool_id"), .in, SQLBind.group(poolIDs))
+            .groupBy("pool_id")
+            .all()
+        return try rows.reduce(into: [:]) { counts, row in
+            counts[try row.decode(column: "pool_id", as: UUID.self)] =
+                try row.decode(column: "allocated", as: Int.self)
+        }
     }
 
     /// POST /api/floating-ip-pools

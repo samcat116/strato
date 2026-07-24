@@ -23,6 +23,18 @@ enum OrganizationScope: Equatable, Sendable {
         }
     }
 
+    /// The same node as `checkResource`, in the tree vocabulary the batched
+    /// list-filtering path (`Request.canFilter`) speaks. The legacy pair above
+    /// is what the per-item `req.can(_:on:id:)` sites still take.
+    var checkNode: IAMNode {
+        switch self {
+        case .organization(let id):
+            return IAMNode(type: .organization, id: id)
+        case .organizationalUnit(let id):
+            return IAMNode(type: .organizationalUnit, id: id)
+        }
+    }
+
     var organizationID: UUID? {
         if case .organization(let id) = self { return id }
         return nil

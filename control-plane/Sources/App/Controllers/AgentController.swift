@@ -352,15 +352,20 @@ struct AgentController: RouteCollection {
         // fleet-wide view is an evaluator decision, logged and guardrail-bound,
         // not a skipped check. A scopeless row has no node to check and stays
         // system-admin only, matching the item endpoints' `requireSystemAdmin`.
-        var visible: [AgentEnrollment] = []
-        for enrollment in enrollments {
-            guard let scope = enrollment.organizationScope else {
-                if req.allowsScopelessPlatformRow() { visible.append(enrollment) }
-                continue
-            }
-            let resource = scope.checkResource
-            let ok = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
-            if ok { visible.append(enrollment) }
+        // The scoped rows are decided in one batch (#687); a scopeless row has
+        // no node to batch and is answered without the evaluator.
+        //
+        // `manage_agents` translates to `agent:manage` whichever kind of scope
+        // owns the row, so org and folder nodes share one batch. Asking in the
+        // action vocabulary directly is the same question `requireManageAgents`
+        // asks through the translator — and the request memo is keyed on the
+        // translated action, so a listed row and the item route it links to are
+        // decided once, not twice.
+        let manageable = try await req.canFilter(
+            "agent:manage", on: enrollments.compactMap { $0.organizationScope?.checkNode })
+        let visible = enrollments.filter { enrollment in
+            guard let scope = enrollment.organizationScope else { return req.allowsScopelessPlatformRow() }
+            return manageable.contains(scope.checkNode)
         }
 
         // Never echo the SPIRE join token in a list response — it is shown
