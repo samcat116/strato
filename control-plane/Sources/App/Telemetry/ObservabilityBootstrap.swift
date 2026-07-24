@@ -43,6 +43,17 @@ extension Application {
         var otelConfig = OTel.Configuration.default
         otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
 
+        // Widen the RED duration histogram past 10s. The OTel default top bucket
+        // is 10_000ms, so `histogram_quantile` clamps to 10 whenever the quantile
+        // lands in `+Inf` — an 11s, a 24s and a 300s request all render as a flat
+        // 10s ceiling, which is exactly how the #731 probe stall hid on the
+        // "Slowest routes (p95)" panel. Append 30s and 60s so a >10s tail is
+        // actually distinguishable. Scoped to this one instrument by label; the
+        // internal sub-second timers (placement/authz/sync) keep the default set.
+        otelConfig.metrics.durationHistogramBuckets[Telemetry.httpRequestDurationMetric] =
+            [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000, 30000, 60000]
+            .map { Duration.milliseconds($0) }
+
         // Resource attributes stamped on every metric/log/trace so signals
         // are queryable per build, per deployment, and per replica. Combined
         // with anything supplied via OTEL_RESOURCE_ATTRIBUTES.

@@ -108,13 +108,19 @@ enum Telemetry {
     /// to `unmatched`. `status` is bucketed by class (`2xx`, `4xx`, ...) for the
     /// counter to keep label cardinality low, while the duration timer carries
     /// only method + route.
+    /// Label of the RED duration histogram. Named here because the histogram's
+    /// bucket bounds are configured by label at OTel bootstrap
+    /// (`ObservabilityBootstrap`) — sharing the constant keeps the override
+    /// pinned to the instrument it widens.
+    static let httpRequestDurationMetric = "strato_http_server_request_duration_seconds"
+
     static func recordHTTPRequest(method: String, route: String, statusClass: String, durationSeconds: Double) {
         Counter(
             label: "strato_http_server_requests_total",
             dimensions: [("method", method), ("route", route), ("status", statusClass)]
         ).increment()
         Timer(
-            label: "strato_http_server_request_duration_seconds",
+            label: Telemetry.httpRequestDurationMetric,
             dimensions: [("method", method), ("route", route)]
         ).recordSeconds(durationSeconds)
     }
