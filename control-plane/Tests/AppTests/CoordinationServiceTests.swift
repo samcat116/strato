@@ -27,6 +27,17 @@ struct CoordinationServiceTests {
         #expect(await service.isAgentPresent(agentKey: agentKey("agent-b")) == false)
     }
 
+    @Test("Presence for a fleet is returned in input order from one batch")
+    func batchedPresence() async {
+        let service = makeService()
+        let keys = ["agent-a", "agent-b", "agent-c"].map(agentKey)
+
+        await service.recordAgentPresence(agentKey: keys[0])
+        await service.recordAgentPresence(agentKey: keys[2])
+
+        #expect(await service.agentPresence(agentKeys: keys) == [true, false, true])
+    }
+
     @Test("Presence expires after its TTL")
     func presenceTTLExpiry() async throws {
         let service = makeService()
@@ -176,6 +187,20 @@ struct CoordinationServiceTests {
 
         let reservedB = await service.activeReservations(agentId: "agent-b")
         #expect(reservedB == .zero)
+    }
+
+    @Test("Reservation totals for eligible agents are returned as one batch")
+    func batchedActiveReservations() async {
+        let service = makeService()
+        let half = ReservationAmounts(cpu: 2, memory: 4096, disk: 25000)
+
+        _ = await service.reserveCapacity(agentId: "agent-a", vmId: "vm-1", amounts: half, capacity: capacity)
+        _ = await service.reserveCapacity(agentId: "agent-b", vmId: "vm-2", amounts: wholeAgent, capacity: capacity)
+
+        let totals = await service.activeReservations(agentIds: ["agent-b", "agent-a", "agent-c"])
+        #expect(totals["agent-a"] == half)
+        #expect(totals["agent-b"] == wholeAgent)
+        #expect(totals["agent-c"] == .zero)
     }
 }
 
