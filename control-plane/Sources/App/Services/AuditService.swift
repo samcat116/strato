@@ -69,6 +69,10 @@ struct AuditRecord: Content, Sendable {
 /// - `LOKI_ENDPOINT` — shared with VM logs; used by the `loki` backend.
 /// - `AUDIT_RETENTION_DAYS` — delete `audit_events` rows older than this many
 ///   days; unset (or non-positive) keeps events forever.
+/// - `AUDIT_SYNCHRONOUS` — write events on the request path instead of
+///   draining them in the background; default true only under `.testing`.
+/// - `AUDIT_MAX_QUEUE_DEPTH` / `AUDIT_MAX_BATCH_SIZE` — bounds on the
+///   background queue and on how many events one drained batch writes.
 struct AuditConfig: Sendable {
     var enabled: Bool
     var backendNames: [String]
@@ -76,8 +80,23 @@ struct AuditConfig: Sendable {
     var webhookURL: String?
     var lokiEndpoint: String?
     var retentionDays: Int?
+    /// Await every backend inline in `record` rather than enqueueing.
+    ///
+    /// The test hook from issue #694: the suites assert on `audit_events` rows
+    /// (and on the external backends' effects) immediately after a request
+    /// returns, so tests keep the old inline behaviour and get determinism for
+    /// free. Deployments never pay for it — a mutation's latency must not
+    /// depend on an audit backend's health.
+    var synchronousWrites: Bool
+    /// How many events may wait for the background drain before the excess is
+    /// shed. A queue that grows without limit only trades a slow SIEM for an
+    /// OOM.
+    var maxQueueDepth: Int
+    /// How many queued events one drain pass writes together; the `database`
+    /// backend turns a batch into a single multi-row insert.
+    var maxBatchSize: Int
 
-    static func fromEnvironment() -> AuditConfig {
+    static func fromEnvironment(_ environment: Environment) -> AuditConfig {
         let backends =
             Environment.get("AUDIT_BACKENDS")?
             .split(separator: ",")
@@ -89,7 +108,11 @@ struct AuditConfig: Sendable {
             includeReads: Environment.get("AUDIT_INCLUDE_READS").flatMap(Bool.init) ?? false,
             webhookURL: Environment.get("AUDIT_WEBHOOK_URL"),
             lokiEndpoint: Environment.get("LOKI_ENDPOINT"),
-            retentionDays: Environment.get("AUDIT_RETENTION_DAYS").flatMap(Int.init)
+            retentionDays: Environment.get("AUDIT_RETENTION_DAYS").flatMap(Int.init),
+            synchronousWrites: Environment.get("AUDIT_SYNCHRONOUS").flatMap(Bool.init)
+                ?? (environment == .testing),
+            maxQueueDepth: Environment.get("AUDIT_MAX_QUEUE_DEPTH").flatMap(Int.init) ?? 2048,
+            maxBatchSize: Environment.get("AUDIT_MAX_BATCH_SIZE").flatMap(Int.init) ?? 128
         )
     }
 }
@@ -102,6 +125,17 @@ struct AuditConfig: Sendable {
 protocol AuditBackend: Sendable {
     var name: String { get }
     func write(_ record: AuditRecord) async
+    /// Ship a drained batch. The default writes them one at a time; backends
+    /// with a cheaper bulk form (the database's multi-row insert) override it.
+    func write(_ records: [AuditRecord]) async
+}
+
+extension AuditBackend {
+    func write(_ records: [AuditRecord]) async {
+        for record in records {
+            await write(record)
+        }
+    }
 }
 
 /// Shared encoder so every external backend ships identical JSON.
@@ -125,13 +159,31 @@ final class DatabaseAuditBackend: AuditBackend, @unchecked Sendable {
     }
 
     func write(_ record: AuditRecord) async {
+        await write([record])
+    }
+
+    /// One multi-row insert per drained batch. Fluent's collection `create`
+    /// issues a single statement, so a burst of mutations costs one round trip
+    /// rather than one per event.
+    func write(_ records: [AuditRecord]) async {
+        guard !records.isEmpty else { return }
+        // `liveDB`, not `app.db`: the drain runs in a background task that
+        // shutdown may have cancelled, and reading `app.db` after storage is
+        // cleared force-unwraps nil (see `Application.liveDB`).
+        guard let db = app.liveDB else {
+            app.logger.debug(
+                "Dropping audit events; application is shutting down",
+                metadata: ["count": .stringConvertible(records.count)])
+            return
+        }
         do {
-            try await AuditEvent(from: record).save(on: app.db)
+            try await records.map(AuditEvent.init(from:)).create(on: db)
         } catch {
             app.logger.error(
-                "Failed to persist audit event",
+                "Failed to persist audit events",
                 metadata: [
-                    "eventType": .string(record.eventType),
+                    "count": .stringConvertible(records.count),
+                    "eventTypes": .string(Set(records.map(\.eventType)).sorted().joined(separator: ",")),
                     "error": .string(String(reflecting: error)),
                 ])
         }
@@ -252,17 +304,128 @@ final class WebhookAuditBackend: AuditBackend, @unchecked Sendable {
     }
 }
 
+// MARK: - Background queue
+
+/// The buffer between `record` and the backends (issue #694).
+///
+/// Audit writes used to be awaited on the request path: every mutation paid a
+/// database insert, and with `loki`/`webhook` configured, up to two HTTP POSTs
+/// with five-second timeouts — so a slow SIEM lengthened every write in the
+/// deployment. Events now queue here and a single drain task ships them in
+/// batches.
+///
+/// The queue is bounded and its overflow is counted rather than silently
+/// dropped, mirroring `IAMRecordingGate`: an audit trail that sheds is a trail
+/// whose gap has a number attached to it. Unlike that gate, producers never
+/// wait for a slot — the whole point is that the request path does not block on
+/// audit — so the backpressure valve is shedding, not queuing the caller.
+actor AuditEventQueue {
+    /// What `enqueue` did with the event.
+    enum EnqueueOutcome: Equatable, Sendable {
+        /// Buffered. `startDrain` is true when the caller must start the drain
+        /// task because no drain is running.
+        case enqueued(startDrain: Bool)
+        /// Dropped because the buffer is full, with the running total.
+        case shed(total: Int)
+    }
+
+    private let maxQueueDepth: Int
+    private let maxBatchSize: Int
+    private var pending: [AuditRecord] = []
+    private var draining = false
+    private var shedTotal = 0
+    /// Batches handed out by `nextBatch` and not yet reported delivered. An
+    /// empty `pending` is not the same as "everything is written": the batch
+    /// in the air belongs to whoever claimed it.
+    private var inFlight = 0
+
+    /// Ceiling on how many events one batch may carry.
+    ///
+    /// A batch becomes a single multi-row INSERT — Fluent's collection
+    /// `create` builds one query and does not chunk — and Postgres refuses a
+    /// statement with more than 65535 bind parameters. `AuditEvent` persists
+    /// 16 columns, so the hard limit is ~4000 rows; 1024 keeps a wide margin
+    /// (16k parameters today, still safe if the table grows to twice the
+    /// columns) while being far more than any real drain needs. Without it an
+    /// operator who set `AUDIT_MAX_BATCH_SIZE` into the thousands would lose
+    /// *every* batch to a failing insert — an audit outage that reads like a
+    /// database problem.
+    static let maxSupportedBatchSize = 1024
+
+    init(maxQueueDepth: Int, maxBatchSize: Int) {
+        self.maxQueueDepth = max(1, maxQueueDepth)
+        self.maxBatchSize = min(max(1, maxBatchSize), Self.maxSupportedBatchSize)
+    }
+
+    func enqueue(_ record: AuditRecord) -> EnqueueOutcome {
+        guard pending.count < maxQueueDepth else {
+            shedTotal += 1
+            return .shed(total: shedTotal)
+        }
+        pending.append(record)
+        guard !draining else { return .enqueued(startDrain: false) }
+        draining = true
+        return .enqueued(startDrain: true)
+    }
+
+    /// Take the next batch, or nil when the buffer is empty. The caller owns
+    /// the batch until it reports back through `finishBatch`.
+    ///
+    /// The drain task passes `endDrainWhenEmpty: true`, so running dry also
+    /// clears the flag that says a drain is live. Both halves happen in one
+    /// actor step, so an `enqueue` racing a finishing drain either lands in
+    /// that drain's batch or starts a fresh one — never neither. `flush`
+    /// passes false: it borrows work from a drain that is still running and
+    /// must not retire it.
+    func nextBatch(endDrainWhenEmpty: Bool = true) -> [AuditRecord]? {
+        guard !pending.isEmpty else {
+            if endDrainWhenEmpty { draining = false }
+            return nil
+        }
+        let batch = Array(pending.prefix(maxBatchSize))
+        pending.removeFirst(batch.count)
+        inFlight += 1
+        return batch
+    }
+
+    /// Report a claimed batch delivered (or given up on).
+    func finishBatch() {
+        inFlight = max(0, inFlight - 1)
+    }
+
+    /// Nothing queued and nothing in the air — the condition `flush` waits for.
+    var isIdle: Bool {
+        pending.isEmpty && inFlight == 0
+    }
+
+    /// Retire the drain without emptying the buffer — for a drain task that
+    /// was cancelled rather than one that ran dry.
+    func endDrain() {
+        draining = false
+    }
+
+    /// Snapshot for tests and diagnostics.
+    var stats: (queued: Int, draining: Bool, shed: Int) {
+        (pending.count, draining, shedTotal)
+    }
+}
+
 // MARK: - Service
 
-/// Fans audit events out to the configured backends. Writes are awaited inline
-/// (a database insert, plus short-timeout HTTP pushes for the optional external
-/// backends) so an event is durably recorded before the response returns and
-/// tests can assert on it deterministically.
+/// Fans audit events out to the configured backends.
+///
+/// Events are buffered and shipped by a background drain task, so a mutation's
+/// latency never depends on the health of a backend (issue #694). Setting
+/// `AUDIT_SYNCHRONOUS` — the default under `.testing` — awaits the backends
+/// inline instead, which is what lets the suites assert on the trail right
+/// after a request returns.
 final class AuditService: @unchecked Sendable {
     let config: AuditConfig
     private let backends: [any AuditBackend]
     private let logger: Logger
     private let app: Application
+    /// The buffer feeding the background drain; unused in synchronous mode.
+    let queue: AuditEventQueue
 
     /// The periodic retention-sweep loop, when armed. Locked because the class
     /// is shared across request handlers while boot/shutdown mutate it.
@@ -272,10 +435,27 @@ final class AuditService: @unchecked Sendable {
         config.enabled && !backends.isEmpty
     }
 
-    init(app: Application, config: AuditConfig = .fromEnvironment()) {
+    /// - Parameter backends: overrides the destinations named by `config`;
+    ///   the seam tests use to observe delivery without a live Loki or SIEM.
+    init(app: Application, config: AuditConfig, backends backendOverride: [any AuditBackend]? = nil) {
         self.config = config
         self.logger = app.logger
         self.app = app
+        self.queue = AuditEventQueue(
+            maxQueueDepth: config.maxQueueDepth, maxBatchSize: config.maxBatchSize)
+        if config.maxBatchSize > AuditEventQueue.maxSupportedBatchSize {
+            app.logger.warning(
+                "AUDIT_MAX_BATCH_SIZE exceeds the supported ceiling; clamping",
+                metadata: [
+                    "requested": .stringConvertible(config.maxBatchSize),
+                    "ceiling": .stringConvertible(AuditEventQueue.maxSupportedBatchSize),
+                ])
+        }
+
+        if let backendOverride {
+            self.backends = backendOverride
+            return
+        }
 
         var backends: [any AuditBackend] = []
         if config.enabled {
@@ -312,10 +492,97 @@ final class AuditService: @unchecked Sendable {
         self.backends = backends
     }
 
+    /// Record an event. Returns as soon as the event is buffered unless
+    /// `AUDIT_SYNCHRONOUS` is set, in which case every backend is awaited.
     func record(_ record: AuditRecord) async {
         guard isEnabled else { return }
-        for backend in backends {
-            await backend.write(record)
+        guard !config.synchronousWrites else {
+            await deliver([record])
+            return
+        }
+        switch await queue.enqueue(record) {
+        case .shed(let total):
+            // Log the first drop and then every hundredth: a saturated queue
+            // is a standing condition, not an incident to repeat per event.
+            if total == 1 || total % 100 == 0 {
+                logger.warning(
+                    "Audit events shed under backpressure",
+                    metadata: [
+                        "shed_total": .stringConvertible(total),
+                        "max_queue_depth": .stringConvertible(config.maxQueueDepth),
+                    ])
+            }
+        case .enqueued(let startDrain):
+            // Tracked by the background-task registry so shutdown drains the
+            // buffer before Fluent tears its pools down.
+            if startDrain {
+                app.backgroundTasks.spawn { [self] in await drainQueue() }
+            }
+        }
+    }
+
+    /// Ship queued events until the buffer is empty. Only one drain task runs
+    /// at a time — the queue hands out the drain flag — so the fan-out cannot
+    /// outgrow one in-flight write per backend.
+    ///
+    /// That bounds concurrency; it does not promise delivery order. A `flush`
+    /// (shutdown, or a test hook) claims batches alongside a live drain, so two
+    /// `deliver` calls can briefly overlap and a backend can see batches out of
+    /// order. Nothing is lost or duplicated — `nextBatch` removes its prefix
+    /// atomically — and the trail is read back ordered by timestamp.
+    private func drainQueue() async {
+        while !Task.isCancelled, let batch = await queue.nextBatch() {
+            await deliver(batch)
+            await queue.finishBatch()
+        }
+        // Cancelled (shutdown's grace period expired) rather than run dry:
+        // retire the drain explicitly, so anything enqueued afterwards starts
+        // a fresh one instead of waiting on a task that is gone. What is still
+        // queued is the shutdown flush's to write.
+        if Task.isCancelled {
+            await queue.endDrain()
+        }
+    }
+
+    /// Write one batch to every configured backend, concurrently: the
+    /// destinations are independent, and the database insert must not queue
+    /// behind a five-second HTTP timeout.
+    private func deliver(_ records: [AuditRecord]) async {
+        guard !records.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for backend in backends {
+                group.addTask { await backend.write(records) }
+            }
+        }
+    }
+
+    /// Write everything queued and return once the queue is idle. The
+    /// determinism hook for tests that run with background delivery on, and the
+    /// shutdown drain that guarantees a graceful stop loses no events.
+    ///
+    /// "Idle" means more than an empty buffer: a drain task that already
+    /// claimed a batch is still delivering it, and returning while that batch
+    /// is in the air would hand callers the same false "everything is written"
+    /// an empty queue used to imply. So this writes what it can claim and then
+    /// waits out anyone else's batch, polling as `BackgroundTaskRegistry.drain`
+    /// does. Bounded by `timeout`, so a wedged backend cannot stall shutdown.
+    func flush(waitingUpTo timeout: Duration = .seconds(10)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if let batch = await queue.nextBatch(endDrainWhenEmpty: false) {
+                await deliver(batch)
+                await queue.finishBatch()
+                continue
+            }
+            if await queue.isIdle { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let remaining = await queue.stats
+        if remaining.queued > 0 {
+            logger.warning(
+                "Audit flush timed out with events still queued",
+                metadata: ["queued": .stringConvertible(remaining.queued)])
         }
     }
 
@@ -426,7 +693,9 @@ extension Application {
 
     var audit: AuditService {
         get {
-            lazyService(AuditServiceKey.self) { AuditService(app: self) }
+            lazyService(AuditServiceKey.self) {
+                AuditService(app: self, config: .fromEnvironment(environment))
+            }
         }
         set {
             setStorageValue(AuditServiceKey.self, to: newValue)
@@ -449,7 +718,17 @@ struct AuditRetentionLifecycleHandler: LifecycleHandler {
     }
 
     func shutdownAsync(_ application: Application) async {
-        application.auditServiceIfCreated?.shutdown()
+        guard let audit = application.auditServiceIfCreated else { return }
+        // Write out whatever is still queued before Fluent's pools close. The
+        // drain task is tracked by the background-task registry, but that
+        // registry's own drain is bounded and runs from a different lifecycle
+        // handler, so a graceful stop does not rely on the two orderings: an
+        // explicit flush here leaves nothing behind either way. The budget is
+        // the external backends' own request timeout — long enough for one
+        // in-flight POST to land, short enough that a wedged SIEM cannot hold
+        // the process open.
+        await audit.flush(waitingUpTo: .seconds(5))
+        audit.shutdown()
     }
 }
 
