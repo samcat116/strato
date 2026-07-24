@@ -57,6 +57,8 @@ extension LastUsedTracked {
     func recordUsage(ip: String?, on app: Application, now: Date = Date()) {
         guard let id, lastUsedIsStale(now: now) else { return }
 
+        let staleBefore = now.addingTimeInterval(-Self.lastUsedDebounceWindow)
+
         app.backgroundTasks.spawn {
             // `liveDB`, not `app.db`: shutdown's drain may have cancelled us,
             // after which reading `app.db` force-unwraps nil (see
@@ -66,6 +68,16 @@ extension LastUsedTracked {
             do {
                 try await Self.query(on: db)
                     .filter(.id, .equal, id)
+                    // The staleness check above ran against a row read before
+                    // this write, so concurrent requests on one credential can
+                    // all decide to write. Repeating the check as a predicate
+                    // lets the database settle it: the first writer's value
+                    // fails the others' `WHERE`, and one window still costs one
+                    // row write no matter how many callers raced.
+                    .group(.or) { stale in
+                        stale.filter(Self.lastUsedAtKey, .equal, Date?.none)
+                        stale.filter(Self.lastUsedAtKey, .lessThan, staleBefore)
+                    }
                     .set([
                         Self.lastUsedAtKey: .bind(now),
                         Self.lastUsedIPKey: ip.map { .bind($0) } ?? .null,

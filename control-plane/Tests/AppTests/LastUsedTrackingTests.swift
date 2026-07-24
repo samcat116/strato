@@ -69,15 +69,19 @@ struct LastUsedTrackingTests {
         return (session, accessToken)
     }
 
-    /// Replaces the routing table with a single bearer-authenticated route, the
-    /// shape the other authenticator suites use.
+    /// Replaces the routing table with a single route behind the production
+    /// authentication pipeline.
+    ///
+    /// The route is deliberately *not* wrapped in its own
+    /// `BearerAuthorizationHeaderAuthenticator`: `configure` already installs
+    /// one application-wide, and a second copy would authenticate — and so
+    /// record usage — twice per request, which no real request does.
     private func registerProtectedRoute(on app: Application) {
         app.routes.all.removeAll()
         // Ad-hoc route outside the production classification; declare it so the
         // default-deny middleware treats it as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
-        protected.get("test") { req -> String in
+        app.get("test") { req -> String in
             guard req.auth.has(User.self) else { throw Abort(.unauthorized) }
             return "ok"
         }
@@ -205,6 +209,33 @@ struct LastUsedTrackingTests {
         #expect(afterRepeats.lastUsedIP == "198.51.100.7")
 
         app.fluent.history.stop()
+        try await app.shutdownForTesting()
+    }
+
+    @Test("A second writer racing on the same stale row is rejected by the database")
+    func testConcurrentWritersCollapseToOne() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await makeUser(on: app.db)
+        let (apiKey, _) = try await makeAPIKey(
+            for: user, on: app.db, lastUsedAt: nil, lastUsedIP: nil)
+        let keyID = try apiKey.requireID()
+
+        // Both calls run against the same in-memory row — the state two
+        // concurrent requests see when neither has written yet — so both pass
+        // the in-process staleness check and only the `WHERE` can separate
+        // them.
+        let first = Date()
+        apiKey.recordUsage(ip: "198.51.100.1", on: app, now: first)
+        await app.backgroundTasks.drain(timeout: .seconds(10))
+        apiKey.recordUsage(ip: "198.51.100.2", on: app, now: first.addingTimeInterval(1))
+        await app.backgroundTasks.drain(timeout: .seconds(10))
+
+        let reloaded = try #require(try await APIKey.find(keyID, on: app.db))
+        #expect(reloaded.lastUsedIP == "198.51.100.1")
+
         try await app.shutdownForTesting()
     }
 
