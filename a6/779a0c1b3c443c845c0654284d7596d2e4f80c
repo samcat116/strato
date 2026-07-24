@@ -1,0 +1,39 @@
+control-plane/Tests/AppTests/AgentControllerTests.swift
+  s_7445c193283849::t_86a4fab1c3855f 1-4,8,36-75,78-111
+  s_7445c193283849::t_a84eeb30251a7d 76-77
+control-plane/Sources/App/Models/Agent.swift
+  s_7445c193283849::t_86a4fab1c3855f 314-319,321,323,325-330,439
+control-plane/Sources/App/Services/AgentService.swift
+  s_7445c193283849::t_af2083b3c9ffc4 875
+  s_7445c193283849::t_2c105a6cd57ed8 874
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_7445c193283849::t_86a4fab1c3855f 434,436-440,443-449
+  s_7445c193283849::t_ac532d65629231 435,441-442
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_7445c193283849::t_af2083b3c9ffc4 4,16-40
+  s_1fc557f79e896b::t_25c69b4a5e6648 41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a6779a0c1b3c443c845c0654284d7596d2e4f80c",
+  "prompts": {},
+  "sessions": {
+    "s_1fc557f79e896b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "208f22d7-83e1-4f39-ae32-fa069aedc8c6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7445c193283849": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f91c4-a255-7120-b3e4-30b5b5959c20",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
