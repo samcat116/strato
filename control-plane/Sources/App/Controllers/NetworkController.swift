@@ -24,9 +24,13 @@ struct NetworkController: RouteCollection {
     /// Query params: project_id (optional)
     @Sendable
     func listNetworks(req: Request) async throws -> [NetworkResponse] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
 
-        let projectScope: [UUID]
+        // The projects to narrow the row query to, or nil for no narrowing at
+        // all (a system admin). Global networks are outside it either way:
+        // they carry no project and are readable by everyone, by tier-1 policy.
+        let projectScope: [UUID]?
+        var visibility: ProjectVisibility?
         if let projectIdString = req.query[String.self, at: "project_id"],
             let projectId = UUID(uuidString: projectIdString)
         {
@@ -38,20 +42,36 @@ struct NetworkController: RouteCollection {
 
             projectScope = [projectId]
         } else {
-            projectScope = try await getAccessibleProjects(for: user, on: req)
+            // Narrow to the projects the caller could reach, then let the
+            // evaluator decide the ones that carry rows (`ProjectVisibility`).
+            let resolved = try await ProjectVisibility.resolve(on: req)
+            visibility = resolved
+            projectScope = resolved.candidateProjectIDs
         }
 
-        let networks =
-            try await LogicalNetwork.query(on: req.db)
-            .group(.or) { group in
+        var query = LogicalNetwork.query(on: req.db)
+        if let projectScope {
+            query = query.group(.or) { group in
                 group.filter(\.$project.$id == nil)
-                group.filter(\.$project.$id ~~ projectScope)
+                if !projectScope.isEmpty {
+                    group.filter(\.$project.$id ~~ projectScope)
+                }
             }
-            .sort(\.$createdAt, .descending)
-            .all()
+        }
+        let networks = try await query.sort(\.$createdAt, .descending).all()
+
+        var visible = networks
+        if let visibility {
+            let readable = try await visibility.readableProjects(
+                among: networks.compactMap { $0.$project.id }, on: req)
+            visible = networks.filter { network in
+                guard let projectID = network.$project.id else { return true }
+                return readable.contains(projectID)
+            }
+        }
 
         var responses: [NetworkResponse] = []
-        for network in networks {
+        for network in visible {
             let count = try await attachedInterfaceCount(for: network, on: req.db)
             responses.append(NetworkResponse(from: network, attachedInterfaceCount: count))
         }
@@ -695,20 +715,6 @@ struct NetworkController: RouteCollection {
         return network
     }
 
-    /// Get all project IDs the user has access to
-    private func getAccessibleProjects(for user: User, on req: Request) async throws -> [UUID] {
-        let allProjects = try await Project.query(on: req.db).all()
-        var accessibleProjectIds: [UUID] = []
-
-        for project in allProjects {
-            let hasAccess = try await req.can("view_project", on: "project", id: project.id!.uuidString)
-            if hasAccess {
-                accessibleProjectIds.append(project.id!)
-            }
-        }
-
-        return accessibleProjectIds
-    }
 }
 
 extension String {
