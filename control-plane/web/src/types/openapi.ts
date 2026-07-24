@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List virtual machines
-         * @description Returns VMs the caller can read, optionally scoped to one organization.
+         * @description Returns a page of the VMs the caller can read, newest first, optionally scoped to one organization.
          */
         get: operations["listVMs"];
         put?: never;
@@ -7383,6 +7383,111 @@ export interface components {
             limit: number;
             offset: number;
         };
+        VMListPage: {
+            items: components["schemas"]["VMDetail"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        SandboxListPage: {
+            items: components["schemas"]["SandboxDetail"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        SandboxSnapshotListPage: {
+            items: components["schemas"]["SandboxSnapshot"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        ImageListPage: {
+            items: components["schemas"]["Image"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        VolumeListPage: {
+            items: components["schemas"]["Volume"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        VolumeSnapshotListPage: {
+            items: components["schemas"]["VolumeSnapshot"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        NetworkListPage: {
+            items: components["schemas"]["Network"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        FloatingIPPoolListPage: {
+            items: components["schemas"]["FloatingIPPool"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        FloatingIPListPage: {
+            items: components["schemas"]["FloatingIP"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        SecurityGroupListPage: {
+            items: components["schemas"]["SecurityGroup"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        UserListPage: {
+            items: components["schemas"]["UserPublic"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        ResourceQuotaListPage: {
+            items: components["schemas"]["ResourceQuota"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        AgentListPage: {
+            items: components["schemas"]["AgentDetail"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        AgentEnrollmentListPage: {
+            items: components["schemas"]["AgentEnrollmentListItem"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        SiteListPage: {
+            items: components["schemas"]["SiteDetail"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
         /** @description Maps one value of the provider's groups claim to a Strato group. Groups named here are IdP-managed: membership is reconciled on every login. */
         OIDCGroupMapping: {
             /** @description The claim value as emitted by the IdP (a name, or an object id). */
@@ -8120,6 +8225,10 @@ export interface components {
         AuditFromQuery: string;
         /** @description Upper bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
         AuditToQuery: string;
+        /** @description Maximum number of items to return per page (1–500). */
+        ListLimitQuery: number;
+        /** @description Number of items to skip before the page starts. */
+        ListOffsetQuery: number;
         /** @description Maximum number of audit events to return (1–500). */
         AuditLimitQuery: number;
         /** @description Number of audit events to skip. */
@@ -8281,6 +8390,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -8288,13 +8401,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible virtual machines. */
+            /** @description A page of the visible virtual machines. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VMDetail"][];
+                    "application/json": components["schemas"]["VMListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -8596,6 +8709,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -8603,13 +8720,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible sandboxes. */
+            /** @description A page of the visible sandboxes. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SandboxDetail"][];
+                    "application/json": components["schemas"]["SandboxListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -8833,7 +8950,12 @@ export interface operations {
     };
     listSandboxSnapshots: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path: {
                 /** @description The sandbox's id. */
@@ -8843,13 +8965,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The sandbox's snapshots. */
+            /** @description A page of the sandbox's snapshots. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SandboxSnapshot"][];
+                    "application/json": components["schemas"]["SandboxSnapshotListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -9013,7 +9135,12 @@ export interface operations {
     };
     listImages: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path: {
                 /** @description The project's id. */
@@ -9023,13 +9150,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The project's images. */
+            /** @description A page of the project's images. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Image"][];
+                    "application/json": components["schemas"]["ImageListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -9316,6 +9443,10 @@ export interface operations {
                 project_id?: components["parameters"]["ProjectIdQuery"];
                 status?: components["schemas"]["VolumeStatus"];
                 type?: components["schemas"]["VolumeType"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -9323,13 +9454,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible volumes. */
+            /** @description A page of the visible volumes. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Volume"][];
+                    "application/json": components["schemas"]["VolumeListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -9599,7 +9730,12 @@ export interface operations {
     };
     listVolumeSnapshots: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path: {
                 /** @description The volume's id. */
@@ -9609,13 +9745,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The volume's snapshots. */
+            /** @description A page of the volume's snapshots. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VolumeSnapshot"][];
+                    "application/json": components["schemas"]["VolumeSnapshotListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -9650,6 +9786,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one project. */
                 project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -9657,13 +9797,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible networks. */
+            /** @description A page of the visible networks. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Network"][];
+                    "application/json": components["schemas"]["NetworkListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -9779,20 +9919,25 @@ export interface operations {
     };
     listFloatingIPPools: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The visible pools. */
+            /** @description A page of the visible pools. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FloatingIPPool"][];
+                    "application/json": components["schemas"]["FloatingIPPoolListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -9909,6 +10054,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one project. */
                 project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -9916,13 +10065,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible floating IPs. */
+            /** @description A page of the visible floating IPs. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FloatingIP"][];
+                    "application/json": components["schemas"]["FloatingIPListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -10069,6 +10218,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one project. */
                 project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -10076,13 +10229,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible security groups. */
+            /** @description A page of the visible security groups. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SecurityGroup"][];
+                    "application/json": components["schemas"]["SecurityGroupListPage"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -10299,20 +10452,25 @@ export interface operations {
     };
     listUsers: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description All user accounts. */
+            /** @description A page of the visible user accounts. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserPublic"][];
+                    "application/json": components["schemas"]["UserListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -12877,6 +13035,10 @@ export interface operations {
             query?: {
                 /** @description Restrict results to quotas attached at one level of the hierarchy. An unrecognized value behaves like omitting the parameter. */
                 level?: components["parameters"]["QuotaLevelQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -12884,13 +13046,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The matching quotas. */
+            /** @description A page of the matching quotas. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResourceQuota"][];
+                    "application/json": components["schemas"]["ResourceQuotaListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -13185,6 +13347,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -13192,13 +13358,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible agents, newest first. */
+            /** @description A page of the visible agents, newest first. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentDetail"][];
+                    "application/json": components["schemas"]["AgentListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -13210,6 +13376,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -13217,13 +13387,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible enrollments, newest first. */
+            /** @description A page of the visible enrollments, newest first. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentEnrollmentListItem"][];
+                    "application/json": components["schemas"]["AgentEnrollmentListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -13529,6 +13699,10 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
             };
             header?: never;
             path?: never;
@@ -13536,13 +13710,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The visible sites, ordered by name. */
+            /** @description A page of the visible sites, ordered by name. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SiteDetail"][];
+                    "application/json": components["schemas"]["SiteListPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];

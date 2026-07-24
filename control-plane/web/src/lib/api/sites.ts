@@ -1,14 +1,22 @@
 // Site (availability zone) API endpoints
 
 import { api } from "./client";
-import type { Site, CreateSiteRequest, UpdateSiteRequest } from "@/types/api";
+import type {
+  Site,
+  CreateSiteRequest,
+  UpdateSiteRequest,
+  Page,
+} from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const sitesApi = {
   list(organizationId?: string): Promise<Site[]> {
-    return api.get<Site[]>(
-      "/api/sites",
-      organizationId ? { organization_id: organizationId } : undefined
-    );
+    return api
+      .get<Page<Site>>("/api/sites", {
+        limit: LIST_PAGE_LIMIT,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<Site> {

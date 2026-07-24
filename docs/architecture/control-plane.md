@@ -183,6 +183,18 @@ budget (`OperationResourceKind.completionBudgetSeconds` in
 `Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
 the one imperative exception: it awaits a correlated agent response.
 
+**Resource list endpoints page by default** (issue #700): every list (VMs,
+sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
+enrollments, sites, users, images, snapshots, quotas) returns a
+`PagedResponse` envelope — `items` plus `total`/`limit`/`offset` — with
+`limit` defaulting to 50 and capped at 500 (`Extensions/ListPaging.swift`).
+Handlers fetch the SQL-scoped rows with a deterministic sort (`createdAt` or
+`name`, `id` tiebreak), run the batched authorization filter, and slice the
+page from the filtered result — so `total` counts exactly the rows the caller
+may read, at the cost of still materializing the scoped set server-side.
+Pushing the slice into SQL requires authorization-aware query scoping and is
+future work.
+
 ## The agent WebSocket (`/agent/ws`)
 
 `Controllers/AgentWebSocketController.swift` + `Services/AgentService.swift`:

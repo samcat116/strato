@@ -5,14 +5,18 @@ import type {
   Network,
   CreateNetworkRequest,
   UpdateNetworkRequest,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const networksApi = {
   list(projectId?: string): Promise<Network[]> {
-    return api.get<Network[]>(
-      "/api/networks",
-      projectId ? { project_id: projectId } : undefined
-    );
+    return api
+      .get<Page<Network>>("/api/networks", {
+        limit: LIST_PAGE_LIMIT,
+        ...(projectId ? { project_id: projectId } : {}),
+      })
+      .then((page) => page.items);
   },
 
   get(id: string): Promise<Network> {

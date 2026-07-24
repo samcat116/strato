@@ -56,7 +56,7 @@ final class ProjectVisibilityTests {
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
         } afterResponse: { res in
             #expect(res.status == .ok, "\(res.status): \(res.body.string)")
-            names = try res.content.decode([VolumeResponse].self).map(\.name)
+            names = try res.content.decode(PagedResponse<VolumeResponse>.self).items.map(\.name)
         }
         return names
     }
@@ -271,7 +271,7 @@ final class ProjectVisibilityTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok, "\(res.status): \(res.body.string)")
-                let names = try res.content.decode([NetworkResponse].self).map(\.name)
+                let names = try res.content.decode(PagedResponse<NetworkResponse>.self).items.map(\.name)
                 #expect(names.contains("global-net"))
                 #expect(!names.contains("scoped-net"))
             }

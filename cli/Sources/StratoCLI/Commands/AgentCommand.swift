@@ -18,7 +18,9 @@ struct AgentCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let agents: [Agent] = try await environment.makeClient().get("/api/agents")
+                let page: Page<Agent> = try await environment.makeClient()
+                    .get("/api/agents", query: [("limit", String(listPageLimit))])
+                let agents = page.items
                 try printResult(agents, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "hostname", "version", "arch", "online", "last heartbeat"])

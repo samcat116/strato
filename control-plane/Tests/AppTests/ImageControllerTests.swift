@@ -536,7 +536,7 @@ final class ImageControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
-                let images = try res.content.decode([ImageResponse].self)
+                let images = try res.content.decode(PagedResponse<ImageResponse>.self).items
                 #expect(images.isEmpty)
             }
         }
@@ -558,7 +558,7 @@ final class ImageControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
-                let images = try res.content.decode([ImageResponse].self)
+                let images = try res.content.decode(PagedResponse<ImageResponse>.self).items
                 #expect(images.count == 1)
                 #expect(images[0].id == image.id)
                 #expect(images[0].name == "Test Image")

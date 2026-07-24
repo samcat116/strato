@@ -32,9 +32,17 @@ struct VolumeController: RouteCollection {
 
     /// List all volumes the user has access to
     /// GET /api/volumes
-    /// Query params: project_id (optional), status (optional)
+    /// Query params: project_id (optional), status (optional),
+    /// limit/offset (optional) — select the page.
     @Sendable
-    func listVolumes(req: Request) async throws -> [VolumeResponse] {
+    func listVolumes(req: Request) async throws -> PagedResponse<VolumeResponse> {
+        let paging = try ListPaging.decode(from: req)
+        let volumes = try await visibleVolumes(req: req)
+        return paging.page(volumes)
+    }
+
+    /// Every volume the caller may read, newest first, ready for slicing.
+    func visibleVolumes(req: Request) async throws -> [VolumeResponse] {
         _ = try req.auth.require(User.self)
 
         // Build query
@@ -81,6 +89,7 @@ struct VolumeController: RouteCollection {
         var volumes =
             try await query
             .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
             .all()
 
         if let visibility {
@@ -786,17 +795,20 @@ struct VolumeController: RouteCollection {
 
     /// List all snapshots for a volume
     /// GET /api/volumes/:volumeId/snapshots
+    /// Query params: limit/offset (optional) — select the page.
     @Sendable
-    func listSnapshots(req: Request) async throws -> [SnapshotResponse] {
+    func listSnapshots(req: Request) async throws -> PagedResponse<SnapshotResponse> {
+        let paging = try ListPaging.decode(from: req)
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
 
         let snapshots = try await VolumeSnapshot.query(on: req.db)
             .filter(\.$volume.$id == volume.id!)
             .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
             .all()
 
-        return snapshots.map { SnapshotResponse(from: $0) }
+        return paging.page(snapshots.map { SnapshotResponse(from: $0) })
     }
 
     // MARK: - Delete Snapshot

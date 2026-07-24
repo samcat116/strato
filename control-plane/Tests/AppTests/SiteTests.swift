@@ -495,7 +495,7 @@ final class SiteTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 #expect(sites.isEmpty)
             }
         }
@@ -517,7 +517,7 @@ final class SiteTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 #expect(sites.count == 2)
             }
 
@@ -527,7 +527,7 @@ final class SiteTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 let names = sites.map(\.name)
                 #expect(names == [ownSite.name])
             }
@@ -553,7 +553,7 @@ final class SiteTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let sites = try res.content.decode([SiteResponse].self)
+                let sites = try res.content.decode(PagedResponse<SiteResponse>.self).items
                 let names = Set(sites.map(\.name))
                 #expect(names == Set(["dc-org", "dc-ou"]))
             }

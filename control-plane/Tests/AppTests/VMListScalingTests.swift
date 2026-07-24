@@ -68,7 +68,7 @@ final class VMListScalingTests {
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
                 req.fluent.history.start()
-                let vms = try await VMController().index(req: req)
+                let vms = try await VMController().visibleVMs(req: req)
                 req.fluent.history.stop()
                 #expect(vms.count == expected)
                 return req.fluent.history.queries.count

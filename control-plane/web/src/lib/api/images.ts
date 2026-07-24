@@ -7,11 +7,17 @@ import type {
   CreateImageRequest,
   UpdateImageRequest,
   ImageStatusResponse,
+  Page,
 } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const imagesApi = {
   list(projectId: string): Promise<Image[]> {
-    return api.get<Image[]>(`/api/projects/${projectId}/images`);
+    return api
+      .get<Page<Image>>(`/api/projects/${projectId}/images`, {
+        limit: LIST_PAGE_LIMIT,
+      })
+      .then((page) => page.items);
   },
 
   get(projectId: string, imageId: string): Promise<Image> {

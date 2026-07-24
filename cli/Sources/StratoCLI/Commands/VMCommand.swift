@@ -21,7 +21,9 @@ struct VMCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let vms: [VM] = try await environment.makeClient().get("/api/vms")
+                let page: Page<VM> = try await environment.makeClient()
+                    .get("/api/vms", query: [("limit", String(listPageLimit))])
+                let vms = page.items
                 try printResult(vms, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "status", "cpu", "memory", "disk", "created"])
                     for vm in vms {
