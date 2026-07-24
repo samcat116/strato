@@ -119,8 +119,8 @@ public struct SandboxSpec: Codable, Sendable {
 // MARK: - Registry Credential
 
 /// Short-lived credential material for pulling a sandbox's image from a private
-/// registry. Minted fresh at every sync assembly, so a long-lived desired
-/// entry never carries an expired credential. Agents use it
+/// registry. Reused across syncs only while safely inside its own expiry, so a
+/// long-lived desired entry never carries an expired credential. Agents use it
 /// for the pull and must never persist it; durable credential storage lives
 /// only on the control plane (issue #414).
 public struct RegistryCredential: Codable, Sendable {

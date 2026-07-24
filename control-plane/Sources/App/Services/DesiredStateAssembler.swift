@@ -18,12 +18,32 @@ import Vapor
 struct DesiredStateAssembler {
     let app: Application
 
+    private struct NetworkAssemblyScope {
+        let networkNames: Set<String>
+        let authoritative: Bool
+        let floatingIPAgentIDs: Set<String>
+        /// VMs whose topology this agent authors. These are already loaded
+        /// with NICs while deriving the network scope, so security-group
+        /// assembly must reuse them rather than querying the same rows again.
+        let coveredVMs: [VM]
+    }
+
     /// The full authoritative sync for an agent. Image download URLs are
     /// mTLS-authenticated relative paths (issue #493), so nothing in the
     /// assembly expires or needs re-signing. Safe to call redundantly:
     /// identical syncs diff to nothing on the agent.
     func assemble(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
+        // Capability, site, and rollout decisions all read the same agent
+        // row. Load it once instead of issuing four point queries during one
+        // assembly. Unknown ids retain the legacy permissive behavior used by
+        // empty/backstop syncs.
+        let agent: Agent?
+        if let agentUUID = UUID(uuidString: agentId) {
+            agent = try await Agent.find(agentUUID, on: db)
+        } else {
+            agent = nil
+        }
         let vms = try await VM.query(on: db)
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
@@ -36,21 +56,33 @@ struct DesiredStateAssembler {
             }
             .all()
 
-        // DHCP/DNS config the agent programs into OVN lives on the logical
-        // network, not the NIC row, so fetch the networks once and index by name
-        // for the spec builder. Few rows; a full scan is cheaper than per-VM
-        // lookups.
-        let networksByName = try await Dictionary(
-            LogicalNetwork.query(on: db).all().map { ($0.name, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        // The agent's authoritative sandbox set (issue #413). Loaded before
+        // network scope so sandbox-only network references are included.
+        let sandboxes = try await Sandbox.query(on: db)
+            .filter(\.$hypervisorId == agentId)
+            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
+            .all()
+
+        let scope = try await networkAssemblyScope(
+            agentId: agentId, agent: agent, ownVMs: vms, ownSandboxes: sandboxes, on: db)
+
+        // DHCP/DNS config lives on the logical-network row. Query exactly the
+        // union used by local workload specs and authoritative topology.
+        let ownVMNetworkNames = Set(vms.flatMap { $0.networkInterfaces.map(\.network) })
+        let sandboxNetworkNames = Set(
+            sandboxes.flatMap { $0.networkInterfaces.map(\.network) })
+        let requiredNetworkNames =
+            ownVMNetworkNames.union(sandboxNetworkNames).union(scope.networkNames)
+        let networksByName = try await logicalNetworksByName(
+            names: requiredNetworkNames, on: db)
 
         // NIC → security-group membership for the specs (and, below, the
         // group definitions the topology authority realizes). Omitted
         // entirely for pre-v20 agents: they would decode and silently ignore
         // the fields, so sending them only misstates what the sync achieved;
         // the attach API refuses new attachments against such agents.
-        let sendSecurityGroups = try await agentSupportsSecurityGroups(agentId: agentId, on: db)
+        let sendSecurityGroups =
+            agent.map { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) } ?? true
         let securityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
             securityGroupsByInterface = try await nicSecurityGroupMemberships(
@@ -114,22 +146,11 @@ struct DesiredStateAssembler {
                 ))
         }
 
-        // The agent's authoritative sandbox set (issue #413). Loaded before the
-        // network scope so a sandbox's NIC network is realized on its host even
-        // when no VM references it (issue #416). Specs are assembled fresh from
-        // the database like VM specs.
-        let sandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId == agentId)
-            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            .all()
-
         // First-class network desired state (issue #342): the logical networks
         // the agent should realize as level-triggered desired state (switches,
         // per-project routers, SNAT uplinks). Which networks — and whether this
         // agent may write topology at all — depends on its site membership
         // (issue #343); see `networkAssemblyScope`.
-        let scope = try await networkAssemblyScope(
-            agentId: agentId, ownVMs: vms, ownSandboxes: sandboxes, on: db)
         // Floating IPs attached to NICs of VMs the receiving agent's topology
         // writes cover (issue #344): its own VMs for a site-less agent, every
         // site VM for the site's controller. Keyed by network name, matching
@@ -138,7 +159,7 @@ struct DesiredStateAssembler {
         // field, so sending it only misstates what the sync achieved; the
         // attach API refuses new attachments against such agents.
         let floatingIPsByNetwork: [String: [DesiredFloatingIP]]
-        if try await agentSupportsFloatingIPs(agentId: agentId, on: db) {
+        if agent.map({ WireProtocol.supportsFloatingIPs($0.wireProtocolVersion ?? 0) }) ?? true {
             floatingIPsByNetwork = try await desiredFloatingIPs(
                 forAgentIDs: scope.floatingIPAgentIDs, on: db)
         } else {
@@ -267,7 +288,7 @@ struct DesiredStateAssembler {
         let securityGroups: [DesiredSecurityGroup]?
         if sendSecurityGroups && scope.authoritative {
             securityGroups = try await desiredSecurityGroups(
-                forAgentIDs: scope.floatingIPAgentIDs, on: db)
+                forVMs: scope.coveredVMs, on: db)
         } else {
             securityGroups = nil
         }
@@ -275,7 +296,7 @@ struct DesiredStateAssembler {
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
-            desiredAgentUpdate: await desiredAgentUpdateForSync(agentId: agentId, on: db),
+            desiredAgentUpdate: await desiredAgentUpdateForSync(agent: agent),
             securityGroups: securityGroups)
     }
 
@@ -288,9 +309,8 @@ struct DesiredStateAssembler {
     /// rollout's health budget against silence), or an artifact that cannot
     /// currently be resolved (best effort — the sync also carries workload
     /// state and must not fail on the release host being down).
-    private func desiredAgentUpdateForSync(agentId: String, on db: any Database) async -> DesiredAgentUpdate? {
-        guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try? await Agent.find(agentUUID, on: db),
+    private func desiredAgentUpdateForSync(agent: Agent?) async -> DesiredAgentUpdate? {
+        guard let agent,
             agent.autoUpdate,
             let assigned = agent.updateDesiredVersion,
             AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned),
@@ -321,6 +341,20 @@ struct DesiredStateAssembler {
         }
     }
 
+    /// Load a name-indexed logical-network slice without ever issuing an
+    /// unbounded table scan. Empty scopes intentionally produce no query.
+    private func logicalNetworksByName(
+        names: Set<String>, on db: any Database
+    ) async throws -> [String: LogicalNetwork] {
+        guard !names.isEmpty else { return [:] }
+        return Dictionary(
+            try await LogicalNetwork.query(on: db)
+                .filter(\.$name ~~ Array(names))
+                .all()
+                .map { ($0.name, $0) },
+            uniquingKeysWith: { first, _ in first })
+    }
+
     /// Per-sandbox registry work at sync assembly (issue #414): pins an
     /// unpinned tag to its manifest digest and derives the short-lived pull
     /// credential the sync carries. Best effort throughout — a registry that
@@ -335,7 +369,9 @@ struct DesiredStateAssembler {
     /// matters to agents that have not materialized the sandbox yet, and must
     /// not re-converge ones that have.
     private func sandboxRegistryMaterial(
-        _ sandbox: Sandbox, secrets: [RegistryPullSecret], on db: any Database
+        _ sandbox: Sandbox,
+        secrets: [RegistryPullSecret],
+        on db: any Database
     ) async -> RegistryCredential? {
         // A sandbox on its way out pulls nothing: no digest pin, no
         // credential material toward the agent tearing it down.
@@ -399,15 +435,26 @@ struct DesiredStateAssembler {
         }
 
         guard let secretRow, let basic else { return nil }
+        let cacheKey = RegistryCredentialCache.Key(
+            secretID: secretRow.id,
+            registry: ref.registry,
+            repository: ref.repository,
+            username: secretRow.username,
+            encryptedSecret: secretRow.secret)
+        if let cached = await app.registryCredentialCache.credential(for: cacheKey) {
+            return cached
+        }
 
         do {
             if let token = try await app.registryClient.mintPullToken(for: ref, credential: basic) {
-                return RegistryCredential(
+                let credential = RegistryCredential(
                     registry: ref.registry,
                     username: secretRow.username,
                     password: token.token,
                     expiresAt: token.expiresAt,
                     bearer: true)
+                await app.registryCredentialCache.store(credential, for: cacheKey)
+                return credential
             }
         } catch let error as RegistryClientError {
             // Policy refusal (e.g. plaintext token realm), not transience:
@@ -456,19 +503,27 @@ struct DesiredStateAssembler {
     ///   its own VMs' ports to the shared NB, but topology belongs to the
     ///   controller — two level-triggered writers would fight over teardown.
     private func networkAssemblyScope(
-        agentId: String, ownVMs: [VM], ownSandboxes: [Sandbox], on db: any Database
-    ) async throws -> (networkNames: Set<String>, authoritative: Bool, floatingIPAgentIDs: Set<String>) {
+        agentId: String,
+        agent: Agent?,
+        ownVMs: [VM],
+        ownSandboxes: [Sandbox],
+        on db: any Database
+    ) async throws -> NetworkAssemblyScope {
         // A network referenced by either a VM or a sandbox on this host must be
         // realized here (issue #416).
         var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
         ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.network) })
 
-        guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db),
+        guard let agent,
+            let agentUUID = agent.id,
             let siteID = agent.$site.id,
             let site = try await Site.find(siteID, on: db)
         else {
-            return (ownReferences, true, [agentId])
+            return NetworkAssemblyScope(
+                networkNames: ownReferences,
+                authoritative: true,
+                floatingIPAgentIDs: [agentId],
+                coveredVMs: ownVMs)
         }
 
         // A pre-v4 agent doesn't know `networksAuthoritative` and would read
@@ -484,7 +539,11 @@ struct DesiredStateAssembler {
                     "site": .string(site.name),
                     "protocolVersion": .stringConvertible(agent.wireProtocolVersion ?? 0),
                 ])
-            return (ownReferences, true, [agentId])
+            return NetworkAssemblyScope(
+                networkNames: ownReferences,
+                authoritative: true,
+                floatingIPAgentIDs: [agentId],
+                coveredVMs: ownVMs)
         }
 
         guard let controllerID = site.$networkControllerAgent.id else {
@@ -494,10 +553,18 @@ struct DesiredStateAssembler {
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
                 metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
-            return ([], false, [])
+            return NetworkAssemblyScope(
+                networkNames: [],
+                authoritative: false,
+                floatingIPAgentIDs: [],
+                coveredVMs: [])
         }
         guard controllerID == agentUUID else {
-            return ([], false, [])
+            return NetworkAssemblyScope(
+                networkNames: [],
+                authoritative: false,
+                floatingIPAgentIDs: [],
+                coveredVMs: [])
         }
 
         let siteAgentIDs = try await Agent.query(on: db)
@@ -520,27 +587,11 @@ struct DesiredStateAssembler {
             .filter(\.$site.$id == siteID)
             .all()
         names.formUnion(pinned.map(\.name))
-        return (names, true, Set(siteAgentIDs))
-    }
-
-    /// Whether the receiving agent's reconciler realizes floating IP NAT
-    /// (wire protocol >= 12). An unknown agent id defaults to supporting —
-    /// there is nothing to protect on a peer that has no registration row.
-    private func agentSupportsFloatingIPs(agentId: String, on db: any Database) async throws -> Bool {
-        guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db)
-        else { return true }
-        return WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0)
-    }
-
-    /// Whether the receiving agent's reconciler realizes security groups
-    /// (wire protocol >= 20). An unknown agent id defaults to supporting —
-    /// there is nothing to protect on a peer that has no registration row.
-    private func agentSupportsSecurityGroups(agentId: String, on db: any Database) async throws -> Bool {
-        guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db)
-        else { return true }
-        return WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0)
+        return NetworkAssemblyScope(
+            networkNames: names,
+            authoritative: true,
+            floatingIPAgentIDs: Set(siteAgentIDs),
+            coveredVMs: siteVMs)
     }
 
     /// NIC id → attached security-group ids (sorted for stable wire output)
@@ -565,18 +616,9 @@ struct DesiredStateAssembler {
     /// the transitive closure over rule references so every `$pg_…`
     /// address-set match resolves against an existing port group.
     private func desiredSecurityGroups(
-        forAgentIDs agentIDs: Set<String>, on db: any Database
+        forVMs vms: [VM], on db: any Database
     ) async throws -> [DesiredSecurityGroup] {
-        guard !agentIDs.isEmpty else { return [] }
-        let vmIDs = try await VM.query(on: db)
-            .filter(\.$hypervisorId ~~ agentIDs)
-            .all()
-            .compactMap(\.id)
-        guard !vmIDs.isEmpty else { return [] }
-        let interfaceIDs = try await VMNetworkInterface.query(on: db)
-            .filter(\.$vm.$id ~~ vmIDs)
-            .all()
-            .compactMap(\.id)
+        let interfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
         guard !interfaceIDs.isEmpty else { return [] }
 
         var groupIDs = Set(
@@ -638,9 +680,9 @@ struct DesiredStateAssembler {
     ) async throws -> [String: [DesiredFloatingIP]] {
         guard !agentIDs.isEmpty else { return [:] }
         let attached = try await FloatingIP.query(on: db)
+            .filter(\.$interface.$id != nil)
             .with(\.$interface)
             .all()
-            .filter { $0.$interface.id != nil }
         guard !attached.isEmpty else { return [:] }
 
         // Load the owning VMs (scoped to the covered agents) with their full
@@ -687,10 +729,56 @@ struct DesiredStateAssembler {
 }
 
 extension Application {
+    private struct RegistryCredentialCacheKey: StorageKey, LockKey {
+        typealias Value = RegistryCredentialCache
+    }
+
     /// The desired-state sync assembler. Stateless and cheap to construct (it
     /// holds a reference), so it is materialized per access rather than
     /// stored — the same idiom as `resourceOperationCoordinator`.
     var desiredStateAssembler: DesiredStateAssembler {
         DesiredStateAssembler(app: self)
+    }
+
+    /// Bearer material is shared across all assemblies on this replica and
+    /// retained only until shortly before the registry's own expiry.
+    var registryCredentialCache: RegistryCredentialCache {
+        lazyService(RegistryCredentialCacheKey.self) { RegistryCredentialCache() }
+    }
+}
+
+/// Sync-level bearer cache. The distribution client also caches its raw
+/// tokens, but keeping the wire credential here means an assembly can avoid
+/// calling the registry client at all while the credential remains valid,
+/// including for test doubles and alternate registry clients.
+actor RegistryCredentialCache {
+    struct Key: Hashable, Sendable {
+        let secretID: UUID?
+        let registry: String
+        let repository: String
+        let username: String
+        /// The stored secret representation (ciphertext when encryption is
+        /// configured). Including it invalidates the key immediately when a
+        /// pull secret rotates.
+        let encryptedSecret: String
+    }
+
+    private static let expiryMargin: TimeInterval = 30
+    private var credentials: [Key: RegistryCredential] = [:]
+
+    func credential(for key: Key) -> RegistryCredential? {
+        guard let credential = credentials[key] else { return nil }
+        guard
+            let expiresAt = credential.expiresAt,
+            expiresAt.timeIntervalSinceNow > Self.expiryMargin
+        else {
+            credentials[key] = nil
+            return nil
+        }
+        return credential
+    }
+
+    func store(_ credential: RegistryCredential, for key: Key) {
+        credentials[key] = credential
     }
 }
