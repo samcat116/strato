@@ -126,14 +126,12 @@ struct FloatingIPController: RouteCollection {
             if try await req.can(check.action, on: check.node) { visible.append(pool) }
         }
 
-        var responses: [FloatingIPPoolResponse] = []
-        for pool in visible {
-            let count = try await FloatingIP.query(on: req.db)
-                .filter(\.$pool.$id == pool.requireID())
-                .count()
-            responses.append(try FloatingIPPoolResponse(from: pool, allocatedCount: count))
+        // One grouped count for the page rather than a COUNT per pool.
+        let counts = try await FloatingIP.counts(
+            groupedBy: \.$pool, in: try visible.map { try $0.requireID() }, on: req.db)
+        return try visible.map { pool in
+            try FloatingIPPoolResponse(from: pool, allocatedCount: counts[pool.requireID()] ?? 0)
         }
-        return responses
     }
 
     /// POST /api/floating-ip-pools

@@ -65,27 +65,23 @@ struct SiteController: RouteCollection {
 
     /// How many floating IPs are attached to NICs of VMs hosted in the site —
     /// the set whose NAT rules the site's controller realizes.
+    ///
+    /// A VM names its host agent by id string rather than referencing it, so
+    /// the agent ids are still a query of their own; from there the count is
+    /// one join down `floating_ips → NIC → VM` instead of hydrating every VM
+    /// in the site, every NIC on those VMs and the whole `floating_ips` table
+    /// to intersect them in Swift.
     static func attachedFloatingIPCount(inSite site: Site, on db: Database) async throws -> Int {
         let siteAgentIDs = try await Agent.query(on: db)
             .filter(\.$site.$id == site.requireID())
-            .all()
-            .compactMap { $0.id?.uuidString }
+            .all(\.$id)
+            .map(\.uuidString)
         guard !siteAgentIDs.isEmpty else { return 0 }
-        let siteVMIDs = try await VM.query(on: db)
-            .filter(\.$hypervisorId ~~ siteAgentIDs)
-            .all()
-            .compactMap(\.id)
-        guard !siteVMIDs.isEmpty else { return 0 }
-        let nicIDs = Set(
-            try await VMNetworkInterface.query(on: db)
-                .filter(\.$vm.$id ~~ siteVMIDs)
-                .all()
-                .compactMap(\.id))
-        guard !nicIDs.isEmpty else { return 0 }
         return try await FloatingIP.query(on: db)
-            .all()
-            .filter { floatingIP in floatingIP.$interface.id.map(nicIDs.contains) ?? false }
-            .count
+            .join(parent: \.$interface)
+            .join(from: VMNetworkInterface.self, parent: \.$vm)
+            .filter(VM.self, \.$hypervisorId ~~ siteAgentIDs)
+            .count()
     }
 
     /// Trim a free-text metadata string, mapping blank input to nil so a
