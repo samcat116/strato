@@ -473,6 +473,7 @@ final class RegistryPullSecretTests {
             #expect(stored.imageDigest == sampleDigest)
             _ = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(scripted.resolveCallCount == 1)
+            #expect(scripted.mintCallCount == 1)
         }
     }
 
