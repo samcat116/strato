@@ -35,6 +35,16 @@ entitling the node's `strato-agent` to its SPIFFE ID — and returns a
   networking has a single owning OVN deployment. Every organization is
   created with a default site (`<org> Default Site`), so one always exists to
   choose; create additional sites to split capacity across availability zones.
+- Each site has one **network controller**: the single agent that authors
+  the site's shared OVN topology (switches, routers, NAT). The first
+  OVN-capable node to join a site with no controller is designated
+  automatically, so a single-node site needs no extra step. If a site's
+  members are all user-mode (SLIRP) nodes, or an operator has cleared the
+  designation, the site reconciles **no** networks until one is set — the
+  Sites page flags it, and `PUT /api/sites/:id` with
+  `{"networkControllerAgentId": "<agentId>"}` designates one. VM placement,
+  VM start and site-pinned network creation refuse loudly in that state
+  rather than accepting work that would never converge.
 - The join token is a one-time secret shown **once**, at creation time. It
   is redeemed the first time `spire-agent` attests and is inert afterwards.
 - Enrollment fails if the control plane has no SPIRE server configured.

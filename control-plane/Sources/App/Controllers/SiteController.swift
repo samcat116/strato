@@ -422,6 +422,12 @@ struct SiteController: RouteCollection {
 
         agent.$site.id = targetSiteId
         try await agent.save(on: req.db)
+        // The other way an agent joins a site (registration is the first): a
+        // site with no designated controller reconciles no topology, so its
+        // first OVN-capable member takes the job rather than leaving the
+        // operator to discover the requirement from agent logs (issue #743).
+        await SiteNetworkAuthority.designateIfUnset(
+            agent: agent, siteID: targetSiteId, on: req.db, logger: req.logger)
         await req.application.agentService.syncDesiredStateToAllAgents()
         return try AgentResponse(from: agent)
     }
@@ -440,10 +446,22 @@ struct SiteController: RouteCollection {
 
         // Never orphan a site's topology authority by pulling its controller:
         // reconciliation would silently stop for every network in the site.
+        // Unless it is the last member — the first node to join a site is
+        // designated automatically (issue #743), so refusing there would trap
+        // a single-node site's only agent in it; with the site emptied there
+        // is no topology left to author, so the designation is just cleared.
         if site.$networkControllerAgent.id == agentId {
-            throw Abort(
-                .conflict,
-                reason: "Agent is this site's network controller; designate another controller first")
+            let remainingMembers = try await Agent.query(on: req.db)
+                .filter(\.$site.$id == siteId)
+                .filter(\.$id != agentId)
+                .count()
+            guard remainingMembers == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "Agent is this site's network controller; designate another controller first")
+            }
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: req.db)
         }
         // A removed agent may still host VMs whose networks are pinned to the
         // site; those VMs would keep running but their networks would no

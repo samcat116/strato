@@ -547,21 +547,32 @@ struct AgentController: RouteCollection {
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
 
-        // Never delete a site's designated network controller: the controller
-        // reference deliberately has no FK (see CreateSite), so the site would
-        // keep pointing at a vanished agent, no member could ever match it,
-        // and reconciliation of the site's networks would silently stop.
+        // Never delete a site's designated network controller while the site
+        // still has other members: the controller reference deliberately has
+        // no FK (see CreateSite), so the site would keep pointing at a
+        // vanished agent, no member could ever match it, and reconciliation of
+        // the site's networks would silently stop. The site's *last* member is
+        // the exception — since the first node to join a site is designated
+        // automatically (issue #743), refusing there would make a single-node
+        // site's only agent undeletable, and once it is gone the site has
+        // nothing left to reconcile. Its designation is cleared below instead.
         // Checked before SPIRE deprovisioning so the refusal has no side
         // effects.
         let controlledSites = try await Site.query(on: req.db)
             .filter(\.$networkControllerAgent.$id == agentId)
-            .count()
-        guard controlledSites == 0 else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent is a site's network controller; designate a replacement controller before deregistering it"
-            )
+            .all()
+        for site in controlledSites {
+            let remainingMembers = try await Agent.query(on: req.db)
+                .filter(\.$site.$id == site.requireID())
+                .filter(\.$id != agentId)
+                .count()
+            guard remainingMembers == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent is a site's network controller; designate a replacement controller before deregistering it"
+                )
+            }
         }
 
         // Remove the SPIRE workload entry before anything else, and fail
@@ -592,6 +603,14 @@ struct AgentController: RouteCollection {
 
         // Remove from in-memory registry if present
         await req.agentService.forceUnregisterAgent(agent.identity)
+
+        // Give up the designations the guard above allowed — only sites this
+        // agent was the last member of get here — so none is left pointing at
+        // the row that is about to vanish.
+        for site in controlledSites {
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: req.db)
+        }
 
         // Delete from database, along with the workload-registry rows mapping
         // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries

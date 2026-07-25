@@ -137,6 +137,31 @@ export default function SitesPage() {
       toast.error(error instanceof Error ? error.message : "Failed to update site"),
   });
 
+  // Same full-replace echo as the status change. A site with no controller
+  // reconciles no network topology at all, so this is the one-click fix for
+  // the badge the table shows in that state (issue #743).
+  const setController = useMutation({
+    mutationFn: ({ site, agentId }: { site: Site; agentId: string }) =>
+      sitesApi.update(site.id, {
+        description: site.description,
+        networkControllerAgentId: agentId,
+        status: site.status,
+        latitude: site.latitude,
+        longitude: site.longitude,
+        locationLabel: site.locationLabel,
+        regionCode: site.regionCode,
+        labels: site.labels,
+      }),
+    onSuccess: () => {
+      invalidate();
+      toast.success("Network controller designated");
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : "Failed to designate a network controller"
+      ),
+  });
+
   const deleteSite = useMutation({
     mutationFn: sitesApi.delete,
     onSuccess: () => {
@@ -151,6 +176,19 @@ export default function SitesPage() {
     id ? (agents.find((a) => a.id === id)?.name ?? `${id.slice(0, 8)}…`) : "None";
 
   const memberCount = (siteId: string) => agents.filter((a) => a.siteId === siteId).length;
+
+  // Members that can actually author the site's OVN topology — the only ones
+  // the API accepts as a controller. Agents predating structured capability
+  // reporting are judged by their legacy capability strings, as the backend
+  // does.
+  const eligibleControllers = (siteId: string) =>
+    agents.filter(
+      (a) =>
+        a.siteId === siteId &&
+        (a.networkCapability
+          ? a.networkCapability === "overlay"
+          : a.capabilities.includes("ovn_networking"))
+    );
 
   const locationSummary = (site: Site) => {
     const parts: string[] = [];
@@ -330,7 +368,43 @@ export default function SitesPage() {
                         {memberCount(site.id)}
                       </TableCell>
                       <TableCell className="text-foreground/80">
-                        {controllerName(site.networkControllerAgentId)}
+                        {site.networkControllerAgentId ? (
+                          controllerName(site.networkControllerAgentId)
+                        ) : (
+                          <div className="space-y-1">
+                            <Badge variant="destructive">No network controller</Badge>
+                            <p className="text-xs text-muted-foreground">
+                              This site&apos;s networks are not reconciled.
+                            </p>
+                            {eligibleControllers(site.id).length ? (
+                              <Select
+                                onValueChange={(agentId) =>
+                                  setController.mutate({ site, agentId })
+                                }
+                                disabled={
+                                  setController.isPending &&
+                                  setController.variables?.site.id === site.id
+                                }
+                              >
+                                <SelectTrigger className="h-8 w-[180px] border-border bg-background">
+                                  <SelectValue placeholder="Designate an agent" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {eligibleControllers(site.id).map((agent) => (
+                                    <SelectItem key={agent.id} value={agent.id}>
+                                      {agent.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                Enroll an OVN-capable agent here — the first one
+                                becomes the controller automatically.
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Button

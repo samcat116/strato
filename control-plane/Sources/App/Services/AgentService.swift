@@ -493,6 +493,19 @@ actor AgentService {
 
         try await agent.save(on: db)
 
+        // A site with no designated network controller reconciles no topology
+        // at all, so the first OVN-capable node to join one takes the job
+        // (issue #743). Without this the common single-node deployment — new
+        // org, its default site, one enrolled node — comes up with switches
+        // authored by nobody and every VM parked on a logical switch that
+        // never appears, with no API-visible symptom. An existing designation
+        // is never displaced. The sync pushed right after this registration
+        // carries the new controller its authoritative topology.
+        if let siteID = agent.$site.id {
+            await SiteNetworkAuthority.designateIfUnset(
+                agent: agent, siteID: siteID, on: db, logger: app.logger)
+        }
+
         // Record that the node completed its first registration. Informational
         // only — an enrollment is not consumed by being redeemed — so a failure
         // here must not fail a registration that has already persisted.
@@ -1967,6 +1980,10 @@ actor AgentService {
             throw AgentServiceError.schedulingFailed(error.description)
         }
 
+        try await requireNetworkAuthority(
+            forAgentId: agentId, workloadId: vmId,
+            consequence: "the VM's network would never be realized and it would never boot", on: db)
+
         do {
             // Persist the placement, then sync: from here the VM is part of
             // the agent's desired state and every path (nudge now, periodic
@@ -2109,6 +2126,11 @@ actor AgentService {
             throw AgentServiceError.schedulingFailed(error.description)
         }
 
+        try await requireNetworkAuthority(
+            forAgentId: agentId, workloadId: sandboxId,
+            consequence: "the sandbox's network would never be realized and it would never start",
+            on: db)
+
         do {
             // Persist the placement, then sync: from here the sandbox is part
             // of the agent's desired state and every path (nudge now, periodic
@@ -2131,6 +2153,36 @@ actor AgentService {
             await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxId)
             throw error
         }
+    }
+
+    /// Refuses a placement the network path could never complete.
+    ///
+    /// The scheduler only asks whether a host has room. When it lands a
+    /// workload on an OVN agent whose site designates no network controller,
+    /// nothing will ever realize that workload's logical switch: the agent
+    /// parks it indefinitely and the create operation hangs until the stuck
+    /// sweep fails it with a timeout that names no cause (issue #743). Fail
+    /// the placement instead, carrying the fix in the operation's error —
+    /// releasing the reservation, as a dispatch failure does, since the
+    /// placement never becomes desired state.
+    ///
+    /// Site-less agents (legacy self-authored NB) and non-overlay
+    /// (user-mode/SLIRP) agents realize their networking without a site
+    /// controller and are unaffected.
+    private func requireNetworkAuthority(
+        forAgentId agentId: String, workloadId: String, consequence: String, on db: Database
+    ) async throws {
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db),
+            agent.supportsInterVMNetworking
+        else { return }
+        guard
+            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
+                forAgent: agent, on: db)
+        else { return }
+        await app.coordination.releaseReservation(agentId: agentId, vmId: workloadId)
+        throw AgentServiceError.schedulingFailed(
+            SiteNetworkAuthority.missingControllerReason(site: site, consequence: consequence))
     }
 
     /// The site a VM's placement is pinned to, derived from its NICs'

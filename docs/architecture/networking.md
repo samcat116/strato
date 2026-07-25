@@ -426,10 +426,22 @@ The per-agent-local-NB (Unix socket) model cannot express this.
 - Underlay (Layer 0): LAN / customer-provided routability assumed, per plan.
 - **Result:** one logical network spans a site's nodes over geneve.
 
-Remaining in this phase: controller-failover UX (re-designation is a manual
-`PUT /api/sites/:id` today; syncs handle the handover level-triggered) and
-geneve verification on real multi-node hardware (recipe in
-`deploy/ovn-central/README.md`).
+- **Designation (issue #743):** the first OVN-capable node to join a site
+  with no controller is designated automatically, at registration and at
+  `POST /api/sites/:id/agents/:agentId`, so a single-node site needs no
+  manual step. An existing designation is never displaced. A site that still
+  ends up without one (only user-mode members, or an operator-cleared field)
+  fails loudly instead of stalling: VM/sandbox placement fails the create
+  operation, `POST /vms/:id/start` and pinning a network to a *populated*
+  controller-less site answer `409`, all naming the `PUT /api/sites/:id` that
+  fixes it. The last member of a site may drop its own designation by
+  leaving or deregistering — with the site emptied there is no topology left
+  to author.
+
+Remaining in this phase: controller-failover UX (re-designation after the
+first is a manual `PUT /api/sites/:id`; syncs handle the handover
+level-triggered) and geneve verification on real multi-node hardware (recipe
+in `deploy/ovn-central/README.md`).
 
 ### Phase 3 — Floating IPs + north-south advertisement — **implemented (first cut)**
 
