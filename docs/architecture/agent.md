@@ -242,6 +242,17 @@ which free-page hinting lets KVM drop guest-freed pages (shrinking host RSS
 with no policy work) and the device's `guest-stats` expose real guest memory
 usage.
 
+`free-page-hint=on` also requires a per-VM `iothread` — QEMU processes the
+hints off the main loop and refuses to start the device without one. The
+`-object iothread,…` / `-device virtio-balloon-pci,…,iothread=…` pair is
+assembled by `StratoAgentCore/QEMUBalloonDevice` so it stays under test:
+because the device is attached to *every* VM, an invalid line there stops all
+VM boots on the host, and QEMU reports it only on the stderr SwiftQEMU sends
+to `/dev/null` — which is how issue #740 presented as a QMP connect timeout.
+When a create fails at QEMU spawn, restart the agent with
+`ENABLE_QEMU_PROCESS_LOG_FILES=true` to capture QEMU's stderr in
+`/tmp/qemu-*.log`.
+
 Stats travel over QMP (`qom-set` to enable guest-stats polling, `qom-get` to
 read), which SwiftQEMU's closed command enum doesn't speak — and each QMP
 server socket admits one client at a time, with the spawning `QEMUManager`
