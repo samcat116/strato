@@ -948,11 +948,6 @@ actor QEMUService: HypervisorService {
 
     // MARK: - Balloon memory stats (issue #567)
 
-    /// The QOM id every VM's virtio-balloon device is attached under, giving
-    /// the stats probe a deterministic `/machine/peripheral/<id>` path. The
-    /// device's full command line lives in `QEMUBalloonDevice`.
-    static let balloonDeviceID = QEMUBalloonDevice.deviceID
-
     /// The deterministic QMP monitor socket dedicated to balloon-stats probes.
     /// A QMP server socket admits one client at a time, and the other two
     /// monitors are taken (QEMUManager holds its private one; re-adoption owns
