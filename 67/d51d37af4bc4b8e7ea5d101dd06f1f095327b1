@@ -1,0 +1,30 @@
+agent/Tests/StratoAgentTests/QEMUBalloonDeviceTests.swift
+  s_4715211951d042::t_6208711850755c 16,26,38
+  s_4715211951d042::t_49c14accf009a8 1-15,17-25,27-37,39-44
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_4715211951d042::t_89d4866071009e 64
+agent/Sources/StratoAgentCore/QEMUBalloonDevice.swift
+  s_4715211951d042::t_e8ccbc5c3e0b8a 1-37
+agent/Sources/StratoAgent/QEMUService.swift
+  s_4715211951d042::t_117b52231f37e2 953-955
+  s_4715211951d042::t_660194b3419ac3 1503-1505
+  s_4715211951d042::t_79ff9df3ce82fd 237-241,247-252
+docs/architecture/agent.md
+  s_4715211951d042::t_05eb34d3be55df 245-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "67d51d37af4bc4b8e7ea5d101dd06f1f095327b1",
+  "prompts": {},
+  "sessions": {
+    "s_4715211951d042": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9bc20-d7b3-4e75-8966-562e2ae904dd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
