@@ -61,7 +61,7 @@ public actor QMPProbeClient {
     /// Also carries `query-balloon`'s `actual` (issue #567 phase 2) when QEMU
     /// answers, since the same open channel already serves the guest stats.
     public func collectMemoryStats(
-        balloonPath: String = "/machine/peripheral/balloon0",
+        balloonPath: String = QEMUBalloonDevice.qomPath,
         pollingIntervalSeconds: Int = 10
     ) async throws -> VMMemoryStats? {
         try await withChannel { channel, framer in

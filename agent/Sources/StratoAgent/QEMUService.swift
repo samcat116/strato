@@ -234,11 +234,21 @@ actor QEMUService: HypervisorService {
             try await qemuManager.createVM(
                 config: qemuConfig, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
         } catch {
+            // QEMU announces a rejected argument or an unreadable disk image on
+            // stderr and exits during setup — after its first -qmp socket
+            // appeared, which is why issue #740 presented as nothing but a QMP
+            // connect timeout. SwiftQEMU now keeps the tail of that stderr and
+            // `QMPError.processExited` carries it, so `localizedDescription`
+            // names the cause here *and* in the `lastError` the reconciler
+            // reports to the control plane. The command line stays in the log
+            // for the case where QEMU exited too early to say anything.
             logger.error(
                 "QEMU VM creation failed",
                 metadata: [
                     "vmId": .string(vmId),
                     "error": .string(error.localizedDescription),
+                    "qemuBinary": .string(qemuBinaryPath),
+                    "qemuArgs": .array(qemuConfig.additionalArgs.map { .string($0) }),
                 ])
             // Clean up the QEMU process if it's still running
             try? await qemuManager.destroy()
@@ -938,10 +948,6 @@ actor QEMUService: HypervisorService {
 
     // MARK: - Balloon memory stats (issue #567)
 
-    /// The QOM id every VM's virtio-balloon device is attached under, giving
-    /// the stats probe a deterministic `/machine/peripheral/<id>` path.
-    static let balloonDeviceID = "balloon0"
-
     /// The deterministic QMP monitor socket dedicated to balloon-stats probes.
     /// A QMP server socket admits one client at a time, and the other two
     /// monitors are taken (QEMUManager holds its private one; re-adoption owns
@@ -1488,9 +1494,9 @@ actor QEMUService: HypervisorService {
         // and once one does, free-page hinting lets the host drop guest-freed
         // pages (shrinking host RSS) while `guest-stats` gives the agent real
         // memory usage to report. `deflate-on-oom` stays at its default (off).
-        qemuConfig.additionalArgs.append(contentsOf: [
-            "-device", "virtio-balloon-pci,id=\(Self.balloonDeviceID),free-page-hint=on",
-        ])
+        // The paired iothread is mandatory, not an optimization — see
+        // QEMUBalloonDevice (issue #740).
+        qemuConfig.additionalArgs.append(contentsOf: QEMUBalloonDevice.arguments)
 
         // Third QMP monitor, dedicated to balloon-stats probes (issue #567):
         // each QMP server socket admits one client at a time, and the two
