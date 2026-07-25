@@ -118,6 +118,30 @@ host cleanly rejects placements it can't serve.
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
 
+### Diagnosing a failed QEMU spawn
+
+QEMU reports a rejected argument or an unreadable disk image on stderr and
+exits during setup — but only *after* opening its first `-qmp` socket, so a
+misconfigured spawn used to look like a socket that appeared and then refused
+the connection: a bare QMP timeout naming nothing, which is how issue #740
+hid an invalid `virtio-balloon` line that was killing every VM on the host.
+
+SwiftQEMU drains QEMU's stderr into a bounded (16KB) tail buffer and gives up
+on the socket wait as soon as the process exits, throwing
+`QMPError.processExited(exitCode:killedBySignal:stderr:)`. QEMU's own message
+therefore reaches the operator on three paths, with no environment variable to
+set first:
+
+- the error's description carries the stderr tail, so it lands in the
+  reconciler's `lastError` and the failed operation the UI shows;
+- SwiftQEMU logs `qemuStderr` metadata on the logger the agent injected;
+- `QEMUService` logs `QEMU VM creation failed` with the binary and the
+  arguments it asked for — the case where QEMU exited too early to say
+  anything at all.
+
+`ENABLE_QEMU_PROCESS_LOG_FILES=true` still tees QEMU's *stdout* to
+`/tmp/qemu-*.log`; stderr no longer depends on it.
+
 ## Firmware and the machine profile
 
 `VMSpec.machine` (`MachineProfile`, wire v17) carries the two guest features
@@ -247,11 +271,7 @@ hints off the main loop and refuses to start the device without one. The
 `-object iothread,…` / `-device virtio-balloon-pci,…,iothread=…` pair is
 assembled by `StratoAgentCore/QEMUBalloonDevice` so it stays under test:
 because the device is attached to *every* VM, an invalid line there stops all
-VM boots on the host, and QEMU reports it only on the stderr SwiftQEMU sends
-to `/dev/null` — which is how issue #740 presented as a QMP connect timeout.
-When a create fails at QEMU spawn, restart the agent with
-`ENABLE_QEMU_PROCESS_LOG_FILES=true` to capture QEMU's stderr in
-`/tmp/qemu-*.log`.
+VM boots on the host (issue #740).
 
 Stats travel over QMP (`qom-set` to enable guest-stats polling, `qom-get` to
 read), which SwiftQEMU's closed command enum doesn't speak — and each QMP

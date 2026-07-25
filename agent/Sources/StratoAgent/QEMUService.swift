@@ -234,11 +234,14 @@ actor QEMUService: HypervisorService {
             try await qemuManager.createVM(
                 config: qemuConfig, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
         } catch {
-            // SwiftQEMU sends QEMU's stderr to /dev/null, so a fatal argument
-            // error (QEMU exits during setup, after its first -qmp socket
-            // appeared) reaches us as nothing but a QMP connect timeout — the
-            // symptom that hid issue #740 for half an hour. Log the command
-            // line we asked for, and where the real message can be captured.
+            // QEMU announces a rejected argument or an unreadable disk image on
+            // stderr and exits during setup — after its first -qmp socket
+            // appeared, which is why issue #740 presented as nothing but a QMP
+            // connect timeout. SwiftQEMU now keeps the tail of that stderr and
+            // `QMPError.processExited` carries it, so `localizedDescription`
+            // names the cause here *and* in the `lastError` the reconciler
+            // reports to the control plane. The command line stays in the log
+            // for the case where QEMU exited too early to say anything.
             logger.error(
                 "QEMU VM creation failed",
                 metadata: [
@@ -246,10 +249,6 @@ actor QEMUService: HypervisorService {
                     "error": .string(error.localizedDescription),
                     "qemuBinary": .string(qemuBinaryPath),
                     "qemuArgs": .array(qemuConfig.additionalArgs.map { .string($0) }),
-                    "hint": .string(
-                        "a QMP connect failure usually means QEMU rejected its arguments and exited; "
-                            + "restart the agent with ENABLE_QEMU_PROCESS_LOG_FILES=true to capture QEMU's "
-                            + "stderr in /tmp/qemu-*.log"),
                 ])
             // Clean up the QEMU process if it's still running
             try? await qemuManager.destroy()
