@@ -175,6 +175,22 @@ struct NetworkController: RouteCollection {
                     .badRequest,
                     reason: "Site \(siteId) does not serve the network's project")
             }
+            // A site that already has member agents but designates no network
+            // controller reconciles no topology at all: the switch would be
+            // created in the database and realized nowhere, and the first VM
+            // on it would park forever with no API-visible symptom (issue
+            // #743). An *empty* site is not refused — pre-provisioning a
+            // network for capacity that hasn't been enrolled yet is
+            // legitimate, and the first OVN-capable node to join becomes the
+            // controller automatically.
+            if site.$networkControllerAgent.id == nil {
+                let members = try await Agent.query(on: req.db).filter(\.$site.$id == siteId).count()
+                guard members == 0 else {
+                    throw SiteNetworkAuthority.missingControllerAbort(
+                        site: site,
+                        consequence: "a network pinned to it would be realized nowhere")
+                }
+            }
         }
 
         let network = LogicalNetwork(

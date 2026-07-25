@@ -981,6 +981,23 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
         }
 
+        // A boot the network path can't complete is refused up front rather
+        // than accepted as a 202 that never finishes: on an OVN host whose
+        // site designates no network controller, the VM's logical switch is
+        // authored by nobody and the agent parks the workload forever
+        // (issue #743). Placement guards the same condition at create time;
+        // this catches a site that lost its controller since.
+        if let hypervisorId = vm.hypervisorId,
+            let agentUUID = UUID(uuidString: hypervisorId),
+            let agent = try await Agent.find(agentUUID, on: req.db),
+            agent.supportsInterVMNetworking,
+            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
+                forAgent: agent, on: req.db)
+        {
+            throw SiteNetworkAuthority.missingControllerAbort(
+                site: site, consequence: "this VM's network cannot be realized and it would never boot")
+        }
+
         // The desired status and generation bump are the mutation;
         // observed-state reports complete the operation (issue #260). No
         // transitional `.starting` is stored — in-flight state is derived

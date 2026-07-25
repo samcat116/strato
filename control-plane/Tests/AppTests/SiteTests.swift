@@ -369,22 +369,43 @@ final class SiteTests {
         }
     }
 
-    @Test("A site's network controller cannot be deregistered")
+    @Test("A site's network controller cannot be deregistered while the site has other members")
     func controllerDeregistrationGuard() async throws {
         try await withSiteTestApp { app, _, _, token in
             let site = try await self.makeSite(app: app, name: "dc-dereg")
             let controllerId = try await self.registerAgent(app: app, named: "dereg-ctl", siteID: site.id)
+            let peerId = try await self.registerAgent(app: app, named: "dereg-peer", siteID: site.id)
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
 
             // The controller reference has no FK, so deletion would leave the
-            // site pointing at a vanished agent and reconciliation would stop.
+            // site pointing at a vanished agent and reconciliation would stop
+            // for the peer that is still there.
             try await app.test(.DELETE, "/api/agents/\(controllerId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-            #expect(try await Agent.find(UUID(uuidString: controllerId), on: app.db) != nil)
+            let survivor = try await Agent.find(UUID(uuidString: controllerId), on: app.db)
+            #expect(survivor != nil)
+
+            // Once it is the last member there is no topology left to author,
+            // so it deregisters and gives its designation up — otherwise a
+            // single-node site's auto-designated agent (issue #743) could
+            // never be retired.
+            try await app.test(.DELETE, "/api/agents/\(peerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            try await app.test(.DELETE, "/api/agents/\(controllerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            #expect(try await Agent.find(UUID(uuidString: controllerId), on: app.db) == nil)
+            let emptied = try #require(try await Site.find(site.id, on: app.db))
+            #expect(emptied.$networkControllerAgent.id == nil)
         }
     }
 
@@ -402,19 +423,37 @@ final class SiteTests {
         }
     }
 
-    @Test("The designated network controller cannot be removed from its site")
+    @Test("The designated network controller cannot be removed while the site has other members")
     func controllerRemovalGuard() async throws {
         try await withSiteTestApp { app, _, _, token in
             let site = try await self.makeSite(app: app, name: "dc-c")
-            let controllerId = try await self.registerAgent(app: app, named: "ctl", siteID: site.id)
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(app: app, named: "ctl", siteID: siteID)
+            let peerId = try await self.registerAgent(app: app, named: "ctl-peer", siteID: siteID)
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/sites/\(site.id!.uuidString)/agents/\(controllerId)") { req in
+            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(controllerId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
+
+            // Emptying the site is allowed: with no members left there is no
+            // topology to author, so the last one out clears the designation
+            // rather than being trapped in the site (issue #743).
+            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(peerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(controllerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let emptied = try #require(try await Site.find(siteID, on: app.db))
+            #expect(emptied.$networkControllerAgent.id == nil)
         }
     }
 
@@ -766,6 +805,11 @@ final class SiteTests {
         try await withSiteTestApp { app, _, project, _ in
             let site = try await self.makeSite(app: app, name: "dc-f")
             let agentId = try await self.registerAgent(app: app, named: "lone-agent", siteID: site.id)
+            // Registration designates the first eligible member (issue #743);
+            // clear it to exercise the undesignated state, which an operator
+            // can still reach with a `PUT /api/sites/:id` that omits the field.
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "lone-vm", onAgent: agentId,
                 network: LogicalNetwork.defaultNetworkName)
@@ -810,6 +854,229 @@ final class SiteTests {
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(sync.networksAuthoritative)
             #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
+        }
+    }
+
+    // MARK: - Automatic controller designation (issue #743)
+
+    @Test("The first topology-capable node to join a site becomes its controller")
+    func firstMemberBecomesController() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let site = try await self.makeSite(app: app, name: "dc-auto")
+            let siteID = try #require(site.id)
+            let firstId = try await self.registerAgent(app: app, named: "auto-first", siteID: siteID)
+
+            var reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+
+            // A second member joining changes nothing: an existing
+            // designation is never displaced.
+            _ = try await self.registerAgent(app: app, named: "auto-second", siteID: siteID)
+            reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+
+            // Nor does the controller itself re-registering after a restart.
+            _ = try await self.registerAgent(app: app, named: "auto-first", siteID: siteID)
+            reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+        }
+    }
+
+    @Test("A node the sync path would ignore is never auto-designated")
+    func ineligibleMembersAreNotDesignated() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let site = try await self.makeSite(app: app, name: "dc-auto-caps")
+            let siteID = try #require(site.id)
+
+            // Pre-v4: assembly keeps it on legacy per-node scoping, so it
+            // would author nothing for the site. User-mode (SLIRP): no OVN
+            // network service to reconcile topology with.
+            _ = try await self.registerAgent(
+                app: app, named: "auto-old", siteID: siteID, protocolVersion: 3)
+            _ = try await self.registerAgent(
+                app: app, named: "auto-slirp", siteID: siteID, networkCapability: .userMode)
+            var reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id == nil)
+
+            // An overlay member enrolled later takes the job.
+            let overlayId = try await self.registerAgent(
+                app: app, named: "auto-overlay", siteID: siteID)
+            reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id?.uuidString == overlayId)
+        }
+    }
+
+    @Test("Assigning the first agent through the sites API designates it too")
+    func assignEndpointDesignatesController() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            let site = try await self.makeSite(app: app, name: "dc-assign")
+            let siteID = try #require(site.id)
+            // Registered site-less, then moved in through the sites API —
+            // the other way an agent joins a site.
+            let agentId = try await self.registerAgent(app: app, named: "assign-node")
+
+            try await app.test(.POST, "/api/sites/\(siteID.uuidString)/agents/\(agentId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let reloaded = try #require(try await Site.find(siteID, on: app.db))
+            #expect(reloaded.$networkControllerAgent.id?.uuidString == agentId)
+        }
+    }
+
+    // MARK: - Loud preconditions when a site has no controller (issue #743)
+
+    @Test("Starting a VM in a controllerless site is refused, not accepted and stalled")
+    func startRefusedWithoutController() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "dc-start-guard")
+            let siteID = try #require(site.id)
+            let agentId = try await self.registerAgent(app: app, named: "start-guard-node", siteID: siteID)
+            // Undo the automatic designation: this is the state an operator
+            // reaches by clearing the field on a `PUT /api/sites/:id`.
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: app.db)
+
+            try await self.placeVM(
+                app: app, project: project, named: "stalled-vm", onAgent: agentId,
+                network: LogicalNetwork.defaultNetworkName)
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "stalled-vm").first())
+            let vmID = try #require(vm.id)
+
+            try await app.test(.POST, "/api/vms/\(vmID.uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("no network controller"))
+            }
+
+            // Designating one makes the same boot acceptable.
+            site.$networkControllerAgent.id = UUID(uuidString: agentId)
+            try await site.save(on: app.db)
+            try await app.test(.POST, "/api/vms/\(vmID.uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
+    @Test("Pinning a network to a populated site with no controller is refused")
+    func networkPinRefusedWithoutController() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "dc-pin-guard")
+            let siteID = try #require(site.id)
+
+            struct Body: Content {
+                let name: String
+                let subnet: String
+                let projectId: UUID?
+                let siteId: UUID?
+            }
+
+            // An empty site is fine: pre-provisioning a network for capacity
+            // that hasn't been enrolled yet is legitimate, and the first node
+            // to join becomes the controller.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(
+                        name: "pre-provisioned-net", subnet: "10.60.0.0/24", projectId: project.id,
+                        siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // A site that has members but designates none of them realizes no
+            // topology at all, so a network pinned there would be created and
+            // reconciled nowhere.
+            _ = try await self.registerAgent(app: app, named: "pin-guard-node", siteID: siteID)
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: app.db)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(
+                        name: "orphaned-net", subnet: "10.61.0.0/24", projectId: project.id,
+                        siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("no network controller"))
+            }
+        }
+    }
+
+    @Test("A pre-v4 member's workloads are accepted in a controllerless site")
+    func preSiteAuthorityMemberIsNotGated() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "dc-legacy-guard")
+            let siteID = try #require(site.id)
+            // Pre-v4 and therefore never auto-designated — assembly keeps it
+            // on legacy per-node scoping, authoritative over its own networks,
+            // so its workloads *are* realized even though the site designates
+            // no controller. The preconditions must agree with assembly.
+            let agentId = try await self.registerAgent(
+                app: app, named: "legacy-node", siteID: siteID, protocolVersion: 3)
+            let unmanaged = try #require(try await Site.find(siteID, on: app.db))
+            #expect(unmanaged.$networkControllerAgent.id == nil)
+
+            // Placement: the only schedulable agent, on an unpinned network.
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "legacy-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), network: LogicalNetwork.defaultNetworkName,
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+            try await app.agentService.createVM(vm: vm, db: app.db)
+            let placed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(placed.hypervisorId == agentId)
+
+            // And its boot is accepted rather than 409'd.
+            try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
+    @Test("Placement onto a controllerless site fails the operation instead of hanging")
+    func placementRefusedWithoutController() async throws {
+        try await withSiteTestApp { app, _, project, _ in
+            let site = try await self.makeSite(app: app, name: "dc-place-guard")
+            let siteID = try #require(site.id)
+            let agentId = try await self.registerAgent(app: app, named: "place-guard-node", siteID: siteID)
+            site.$networkControllerAgent.id = nil
+            try await site.save(on: app.db)
+
+            // A network pinned to the site confines placement to its agents,
+            // so the scheduler can only land on the controllerless host.
+            let builder = TestDataBuilder(db: app.db)
+            let pinned = LogicalNetwork(
+                name: "place-guard-net", subnet: "10.62.0.0/24", gateway: "10.62.0.1",
+                projectID: project.id, siteID: siteID)
+            try await pinned.save(on: app.db)
+            let vm = try await builder.createVM(name: "unplaceable-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), network: "place-guard-net",
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+
+            await #expect(throws: AgentServiceError.self) {
+                try await app.agentService.createVM(vm: vm, db: app.db)
+            }
+            let unplaced = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(unplaced.hypervisorId == nil)
+
+            // With a controller designated the same placement succeeds.
+            site.$networkControllerAgent.id = UUID(uuidString: agentId)
+            try await site.save(on: app.db)
+            try await app.agentService.createVM(vm: vm, db: app.db)
+            let placed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(placed.hypervisorId == agentId)
         }
     }
 

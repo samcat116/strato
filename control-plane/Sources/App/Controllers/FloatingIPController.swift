@@ -677,18 +677,15 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
         }
-        guard let siteID = agent.$site.id else { return agent }
-        guard let site = try await Site.find(siteID, on: db),
-            let controllerID = site.$networkControllerAgent.id,
-            let controller = try await Agent.find(controllerID, on: db)
-        else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "The VM's site has no network controller, so nothing would realize the NAT rule; designate one first"
-            )
+        switch try await SiteNetworkAuthority.resolve(forAgent: agent, on: db) {
+        case .selfAuthored(let host):
+            return host
+        case .controller(let controller):
+            return controller
+        case .unassigned(let site):
+            throw SiteNetworkAuthority.missingControllerAbort(
+                site: site, consequence: "nothing would realize the NAT rule")
         }
-        return controller
     }
 
     private func fetchFloatingIPWithPermission(req: Request, permission: String) async throws -> FloatingIP {
