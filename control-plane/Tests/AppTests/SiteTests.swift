@@ -1009,6 +1009,40 @@ final class SiteTests {
         }
     }
 
+    @Test("A pre-v4 member's workloads are accepted in a controllerless site")
+    func preSiteAuthorityMemberIsNotGated() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "dc-legacy-guard")
+            let siteID = try #require(site.id)
+            // Pre-v4 and therefore never auto-designated — assembly keeps it
+            // on legacy per-node scoping, authoritative over its own networks,
+            // so its workloads *are* realized even though the site designates
+            // no controller. The preconditions must agree with assembly.
+            let agentId = try await self.registerAgent(
+                app: app, named: "legacy-node", siteID: siteID, protocolVersion: 3)
+            let unmanaged = try #require(try await Site.find(siteID, on: app.db))
+            #expect(unmanaged.$networkControllerAgent.id == nil)
+
+            // Placement: the only schedulable agent, on an unpinned network.
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "legacy-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), network: LogicalNetwork.defaultNetworkName,
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+            try await app.agentService.createVM(vm: vm, db: app.db)
+            let placed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(placed.hypervisorId == agentId)
+
+            // And its boot is accepted rather than 409'd.
+            try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
     @Test("Placement onto a controllerless site fails the operation instead of hanging")
     func placementRefusedWithoutController() async throws {
         try await withSiteTestApp { app, _, project, _ in

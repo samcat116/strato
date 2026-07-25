@@ -34,8 +34,20 @@ enum SiteNetworkAuthority {
         case unassigned(Site)
     }
 
+    /// Mirrors `DesiredStateAssembler.networkAssemblyScope`, including the
+    /// order of its two escapes: a site-less agent *and* a pre-v4 sited agent
+    /// both come back `.selfAuthored`, because assembly keeps the pre-v4 agent
+    /// on legacy per-node scoping (`authoritative: true`, its own networks,
+    /// its own floating IPs) whether or not the site has a controller — its
+    /// binary predates `ovn_northbound`, so it writes its own local NB. Its
+    /// workloads are realized and do boot in a controller-less site, and every
+    /// precondition built on this must agree, or it would reject placements
+    /// and boots that assembly would have carried through.
     static func resolve(forAgent agent: Agent, on db: any Database) async throws -> Authority {
         guard let siteID = agent.$site.id, let site = try await Site.find(siteID, on: db) else {
+            return .selfAuthored(agent)
+        }
+        guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
             return .selfAuthored(agent)
         }
         guard let controllerID = site.$networkControllerAgent.id,
