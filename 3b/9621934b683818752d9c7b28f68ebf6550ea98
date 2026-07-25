@@ -1,0 +1,55 @@
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_fdeafd7a7f36f2::t_c533de51e96390 180-192
+  s_fdeafd7a7f36f2::t_fd5ce00fd87351 140-164
+  s_fdeafd7a7f36f2::t_42f3cf2bf6ef44 371-407
+control-plane/Tests/AppTests/SiteTests.swift
+  s_fdeafd7a7f36f2::t_3ac34255ad6416 860-1048
+  s_fdeafd7a7f36f2::t_34d867354c5181 426,430-432,436,441-456
+  s_fdeafd7a7f36f2::t_013e7c4e597c2f 808-812
+  s_fdeafd7a7f36f2::t_8d9d1b05e68615 372,377,382-383,389-408
+docs/architecture/networking.md
+  s_fdeafd7a7f36f2::t_bcb85afd9bfcf0 429-444
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_fdeafd7a7f36f2::t_d16f2bf385a9ce 550-558,563-575
+  s_fdeafd7a7f36f2::t_32d6d75716e9c6 607-609
+  s_fdeafd7a7f36f2::t_256e3349df9b1b 610-614
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_fdeafd7a7f36f2::t_7ed242fdccf819 425-430
+  s_fdeafd7a7f36f2::t_a5fad981b3331d 449-452,454-464
+control-plane/Sources/App/Services/AgentService.swift
+  s_fdeafd7a7f36f2::t_c6a1e5df0fa39e 1983-1985
+  s_fdeafd7a7f36f2::t_5d21d93132976f 2158-2178,2182-2187
+  s_fdeafd7a7f36f2::t_ca2b3b279b1530 2179-2181
+  s_fdeafd7a7f36f2::t_e1cffa10bff657 496-508
+  s_fdeafd7a7f36f2::t_dcf9256fdc4dd5 2129-2133
+  s_fdeafd7a7f36f2::t_87bb053744e560 1986
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_fdeafd7a7f36f2::t_8adfb097b32f4f 680-687
+control-plane/Sources/App/Controllers/VMController.swift
+  s_fdeafd7a7f36f2::t_b0558a08908e97 984-1000
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_fdeafd7a7f36f2::t_d6ba5138acdbda 178-193
+docs/deployment/agents.md
+  s_fdeafd7a7f36f2::t_99c6dd0ac26543 38-47
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_fdeafd7a7f36f2::t_ca2b3b279b1530 114-115
+  s_fdeafd7a7f36f2::t_78c5023aeea2e1 1-59,61-62,64,75-111,116-146
+  s_fdeafd7a7f36f2::t_b089963cb16106 112-113
+  s_fdeafd7a7f36f2::t_fc20213e961e49 60,63,65-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "3b9621934b683818752d9c7b28f68ebf6550ea98",
+  "prompts": {},
+  "sessions": {
+    "s_fdeafd7a7f36f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4000576b-8b38-462c-92a6-643a0100d402",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
