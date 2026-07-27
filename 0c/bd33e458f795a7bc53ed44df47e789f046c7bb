@@ -1,0 +1,21 @@
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_d46a8d38a11041::t_95887637fac50e 234-235,239,266-269,632
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_d46a8d38a11041::t_6a90409f5f55e3 377-378,381-382,384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "0cbd33e458f795a7bc53ed44df47e789f046c7bb",
+  "prompts": {},
+  "sessions": {
+    "s_d46a8d38a11041": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10f3af35-08b3-4b82-8296-7d1fbe7b808c",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
