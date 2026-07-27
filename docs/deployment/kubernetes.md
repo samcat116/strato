@@ -80,6 +80,11 @@ for anything other than localhost). When `ingress.tls` is set, the chart
 derives sensible WebAuthn defaults from the first ingress host, but setting
 them explicitly is recommended.
 
+To provision users yourself rather than letting anyone sign up, add
+`strato.selfRegistrationEnabled: false`. The first account is still creatable,
+so first-run setup works with it disabled — see
+[Self-registration](/deployment/overview#self-registration).
+
 Further hardening options (network policies, pod disruption budgets,
 resource limits, external database) are documented in the
 [chart README](https://github.com/samcat116/strato/blob/main/helm/strato-control-plane/README.md).

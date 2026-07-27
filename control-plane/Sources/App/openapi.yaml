@@ -1777,6 +1777,11 @@ paths:
         same browser session, which is bound to this account as a one-shot
         enrollment grant. The first account created in a deployment becomes a
         system admin.
+
+
+        Returns 403 when the operator has disabled self-registration
+        (`SELF_REGISTRATION_ENABLED=false`), except while the deployment has no
+        users at all — the first account can always be created.
       tags: [Users]
       security: []
       requestBody:
@@ -1793,7 +1798,26 @@ paths:
               schema:
                 $ref: "#/components/schemas/UserPublic"
         "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/public/registration:
+    get:
+      operationId: getRegistrationPolicy
+      summary: Whether accounts may be self-created
+      description: >-
+        Unauthenticated login-page surface: reports whether
+        `/api/users/register` is currently accepting accounts, so the sign-in
+        screen knows whether to offer account creation. `selfRegistrationEnabled`
+        already accounts for bootstrap, so clients can render on it directly.
+      tags: [Users]
+      security: []
+      responses:
+        "200":
+          description: The effective registration policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistrationPolicy"
   /api/users/{userID}:
     parameters:
       - $ref: "#/components/parameters/UserIDPath"
@@ -13421,6 +13445,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OIDCProviderPublicSummary"
+
+    RegistrationPolicy:
+      type: object
+      description: >-
+        Whether the sign-in screen should offer account creation.
+      required: [selfRegistrationEnabled, bootstrapRequired]
+      properties:
+        selfRegistrationEnabled:
+          type: boolean
+          description: >-
+            Whether `POST /api/users/register` will accept an account right now.
+            False when the operator disabled self-registration, unless the
+            deployment has no users yet.
+        bootstrapRequired:
+          type: boolean
+          description: >-
+            True when no users exist, so the next account created is the first
+            one and becomes the system admin.
 
     SCIMTokenSummary:
       type: object

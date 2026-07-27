@@ -82,6 +82,7 @@ export {
   useTestOIDCProvider,
   oidcProviderErrorMessage,
 } from "./use-oidc-providers";
+export { useRegistrationPolicy } from "./use-registration-policy";
 export {
   useSSFStreams,
   useCreateSSFStream,

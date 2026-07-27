@@ -83,7 +83,9 @@ startup on both paths.
 1. Click **Register** and enter a username, email, and display name
 2. Click **Register with Passkey** and follow your browser's prompts
 3. **The first registered user automatically becomes the system
-   administrator** — register yourself before exposing the URL to others
+   administrator** — register yourself before exposing the URL to others, or
+   turn off [self-registration](/deployment/overview#self-registration)
+   altogether and create the rest of your users by invitation
 4. Complete onboarding to create your organization
 
 ### 2. Add a hypervisor

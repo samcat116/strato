@@ -23,6 +23,11 @@ docker compose up -d
 Open `http://localhost` and register — the first user becomes the system
 administrator.
 
+To keep anyone else from signing themselves up afterwards, set
+`SELF_REGISTRATION_ENABLED=false` in `.env` (it can be set before first run
+too — the first account is always creatable). See
+[Self-registration](/deployment/overview#self-registration).
+
 ### Without a browser (CI / automation)
 
 First-user registration is a WebAuthn browser flow. To drive a fresh

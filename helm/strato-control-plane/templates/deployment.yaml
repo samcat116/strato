@@ -202,6 +202,8 @@ spec:
               value: "{{ .Values.strato.webauthn.relyingPartyName }}"
             - name: WEBAUTHN_RELYING_PARTY_ORIGIN
               value: "{{ include "strato-control-plane.webauthnOrigin" . }}"
+            - name: SELF_REGISTRATION_ENABLED
+              value: "{{ .Values.strato.selfRegistrationEnabled }}"
             # Enable Secure session cookies + HSTS only when browsers reach us over
             # HTTPS. Derived from the resolved WebAuthn origin's scheme so it tracks
             # exactly what that origin considers HTTPS — an explicit https:// origin

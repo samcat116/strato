@@ -25,6 +25,10 @@ struct UserController: RouteCollection {
         auth.post("logout", use: logout)
         auth.get("session", use: getSession)
 
+        // Public: the login page asks whether to offer account creation before
+        // any session exists, alongside the SSO discovery routes.
+        routes.grouped("api", "public").get("registration", use: registrationPolicy)
+
         // Passkey-claim flow for admin-created (invited) accounts. Public: gated
         // by a one-time claim token rather than a session.
         auth.get("claim", ":token", use: claimInfo)
@@ -91,8 +95,36 @@ struct UserController: RouteCollection {
         return user.asPublic()
     }
 
+    /// Whether the login page should offer account creation, and whether doing
+    /// so would bootstrap the installation. Public and unauthenticated — this
+    /// is asked before any session exists.
+    func registrationPolicy(req: Request) async throws -> RegistrationPolicyResponse {
+        let bootstrapRequired = try await User.isFirstUser(on: req.db)
+        return RegistrationPolicyResponse(
+            selfRegistrationEnabled: req.registrationPolicy.allowsRegistration(
+                bootstrapRequired: bootstrapRequired
+            ),
+            bootstrapRequired: bootstrapRequired
+        )
+    }
+
     func register(req: Request) async throws -> User.Public {
         let createUser = try req.content.decode(CreateUserRequest.self)
+
+        // Check if this is the first user (should be system admin)
+        let isFirstUser = try await User.isFirstUser(on: req.db)
+
+        // Refuse before touching the account table when the operator has closed
+        // self-registration: the conflict check below distinguishes taken names
+        // from free ones, and an install that isn't accepting sign-ups should
+        // not answer that question for an anonymous caller. Bootstrap is exempt
+        // — see `RegistrationPolicy`.
+        guard req.registrationPolicy.allowsRegistration(bootstrapRequired: isFirstUser) else {
+            throw Abort(
+                .forbidden,
+                reason: "Self-registration is disabled. Ask an administrator to create your account."
+            )
+        }
 
         // Check if username or email already exists
         let existingUser = try await User.query(on: req.db)
@@ -105,9 +137,6 @@ struct UserController: RouteCollection {
         if existingUser != nil {
             throw Abort(.conflict, reason: "Username or email already exists")
         }
-
-        // Check if this is the first user (should be system admin)
-        let isFirstUser = try await User.isFirstUser(on: req.db)
 
         let user = User(
             username: createUser.username,

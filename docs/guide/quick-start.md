@@ -52,7 +52,9 @@ Visit `http://localhost:8080`. Credentials are auto-generated into the
 1. Click **Register** and create an account with a passkey (Touch ID,
    security key, etc.).
 2. **The first registered user automatically becomes the system
-   administrator** — register yourself before exposing the URL to others.
+   administrator** — register yourself before exposing the URL to others, or
+   turn off [self-registration](/deployment/overview#self-registration)
+   altogether and create the rest of your users by invitation.
 3. Complete the onboarding flow to create your organization.
 
 ## Add a hypervisor
