@@ -157,12 +157,8 @@ final class WorkloadPrincipalTests {
                 app, principal: .serviceAccount(accountID), action: "vm:read",
                 node: IAMNode(type: .virtualMachine, id: tree.vm.requireID()))
 
-            var entries: [IAMDecisionLog] = []
-            for _ in 0..<200 {
-                entries = try await IAMDecisionLog.query(on: app.db).all()
-                if !entries.isEmpty { break }
-                try await Task.sleep(for: .milliseconds(25))
-            }
+            await app.iamDecisionRecorder.flush()
+            let entries = try await IAMDecisionLog.query(on: app.db).all()
             let entry = try #require(entries.first)
             #expect(entry.subject == "service_account:\(accountID.uuidString)")
         }

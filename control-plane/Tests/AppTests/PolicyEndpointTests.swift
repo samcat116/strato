@@ -134,12 +134,8 @@ final class PolicyEndpointTests {
     }
 
     private func onlyDecision(_ app: Application) async throws -> IAMDecisionLog {
-        var entries: [IAMDecisionLog] = []
-        for _ in 0..<200 {
-            entries = try await IAMDecisionLog.query(on: app.db).all()
-            if !entries.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(25))
-        }
+        await app.iamDecisionRecorder.flush()
+        let entries = try await IAMDecisionLog.query(on: app.db).all()
         #expect(entries.count == 1)
         return try #require(entries.first)
     }

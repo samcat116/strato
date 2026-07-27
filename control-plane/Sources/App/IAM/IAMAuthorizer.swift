@@ -333,7 +333,7 @@ enum IAMAuthorizer {
                 ))
         }
 
-        app.iamDecisionRecorder.recordInBackground(records)
+        await app.iamDecisionRecorder.record(records)
         return decisions
     }
 
@@ -379,7 +379,7 @@ enum IAMAuthorizer {
                     "path": .string(context.path),
                 ])
             state?.decisionEvaluated.withLockedValue { $0 = true }
-            app.iamDecisionRecorder.recordUntranslatedDenial(
+            await app.iamDecisionRecorder.recordUntranslatedDenial(
                 subject: userID.uuidString, equivalent: equivalent, context: context)
             return false
         }

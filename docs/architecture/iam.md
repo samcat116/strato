@@ -698,7 +698,8 @@ legacy-vocabulary question as asked at the check site, the latter is always
 
 - **Coverage is total by construction.** Every check `IAMAuthorizer`
   evaluates — the middleware's route-mapped checks, `req.can`, and the
-  Cedar-native form — is recorded off the request path in a background task.
+  Cedar-native form — is recorded off the request path, queued for a batching
+  drain.
   `IAM_DECISION_LOG_ENABLED` controls whether rows are written at all; it
   defaults on everywhere except `.testing`, where hundreds of unrelated
   controller tests would each pay a background insert per check for rows
@@ -738,13 +739,24 @@ legacy-vocabulary question as asked at the check site, the latter is always
   when recording is switched off, so the kill switch stops new rows without
   stranding the ones already written.
 - **Recording is bounded, not free.** Recording is off the request path but
-  not off the connection pool: each record holds a connection for its insert,
-  against a Fluent pool that defaults to one connection per event loop.
-  `IAMRecordingGate` caps concurrent recordings
-  (`IAM_DECISION_LOG_MAX_CONCURRENCY`, default 4) and the queue behind them
-  (`IAM_DECISION_LOG_MAX_QUEUE_DEPTH`, default 512); overflow is shed and
-  counted rather than queued without limit, so a saturated gate is a number
-  rather than a latency regression in the request path.
+  not off the connection pool: a row still costs a connection, against a
+  Fluent pool that defaults to one connection per event loop. It used to cost
+  one background task and one single-row insert *per check*, so a VM create —
+  three authorizations — spawned three inserts competing with the create's own
+  queries; the wait for a connection, up to ~530ms on a loaded host, is what
+  the traces showed (#736). Decisions now go through `IAMDecisionQueue`: a
+  bounded buffer (`IAM_DECISION_LOG_MAX_QUEUE_DEPTH`, default 2048) drained by
+  a single task that writes each batch (`IAM_DECISION_LOG_MAX_BATCH_SIZE`,
+  default 128) as one multi-row insert. Recording therefore holds at most one
+  connection at a time, and the batching is self-regulating: an idle drain
+  writes each row as it arrives, a drain waiting on a connection accumulates,
+  so rows coalesce exactly when the pool is contended. Overflow is shed and counted
+  rather than queued without limit, so a saturated queue is a number rather
+  than a latency regression in the request path. The drain runs with no
+  service context: it outlives the request that started it and carries other
+  requests' rows, so its inserts form their own trace instead of nesting under
+  one arbitrary `iam.authorize` span. Shutdown flushes the queue before
+  Fluent's pools close.
 
 Since cutover the system-admin bypass is gone from the middleware and
 `req.can`: admins are allowed by the `platform-system-admin` policy inside the
@@ -1098,7 +1110,7 @@ Phases; each landed independently:
    `SpiceDBService`, and `schema.zed` are gone; compose/helm/CI no longer
    run SpiceDB. The decision log keeps its own knobs
    (`IAM_DECISION_LOG_ENABLED` / `IAM_DECISION_LOG_RETENTION_DAYS` /
-   `IAM_DECISION_LOG_MAX_CONCURRENCY` / `IAM_DECISION_LOG_MAX_QUEUE_DEPTH`),
+   `IAM_DECISION_LOG_MAX_QUEUE_DEPTH` / `IAM_DECISION_LOG_MAX_BATCH_SIZE`),
    and the decision-log API keeps the historical
    `spicedbPermission`/`spicedbDecision` field names for compatibility
    (`spicedbDecision` is always `none` on new rows).

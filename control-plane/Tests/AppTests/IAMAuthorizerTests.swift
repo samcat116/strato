@@ -74,14 +74,10 @@ final class IAMAuthorizerTests {
         )
     }
 
-    /// The decision row is written by a tracked background task; wait for it.
+    /// The decision row is written by the batching drain; flush it out first.
     private func onlyEntry(_ app: Application) async throws -> IAMDecisionLog {
-        var entries: [IAMDecisionLog] = []
-        for _ in 0..<200 {
-            entries = try await IAMDecisionLog.query(on: app.db).all()
-            if !entries.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(25))
-        }
+        await app.iamDecisionRecorder.flush()
+        let entries = try await IAMDecisionLog.query(on: app.db).all()
         #expect(entries.count == 1)
         return try #require(entries.first)
     }
@@ -341,36 +337,66 @@ final class IAMAuthorizerTests {
         }
     }
 
-    /// The gate is what keeps decision recording off the connection pool: each
-    /// record holds a connection for its insert, against a Fluent pool that
-    /// defaults to one connection per event loop.
-    @Test("The gate admits up to its ceiling, queues to its depth, then sheds")
-    func gateBoundsConcurrency() async throws {
-        let gate = IAMRecordingGate(maxConcurrent: 2, maxQueueDepth: 1)
+    /// The queue is what keeps decision recording off the connection pool
+    /// (#736): checks buffer here and one drain writes them in batches, rather
+    /// than each check taking a connection from a Fluent pool that defaults to
+    /// one connection per event loop.
+    @Test("Separately recorded decisions coalesce into one batch, and overflow is shed")
+    func queueBatchesAndSheds() async throws {
+        let queue = IAMDecisionQueue(maxQueueDepth: 3, maxBatchSize: 8)
 
-        #expect(await gate.acquire() == .admitted)
-        #expect(await gate.acquire() == .admitted)
+        // The shape a VM create makes: three separate checks, each recording
+        // on its own. Only the first starts a drain, and all three leave in
+        // one batch — that is the whole point of the change.
+        let first = await queue.enqueue([sample(path: "/api/vms")])
+        #expect(first == .init(accepted: 1, shed: 0, shedTotal: 0, startDrain: true))
+        let second = await queue.enqueue([sample(path: "/api/vms")])
+        #expect(second == .init(accepted: 1, shed: 0, shedTotal: 0, startDrain: false))
+        _ = await queue.enqueue([sample(path: "/api/vms")])
 
-        // The third has no slot but the queue has room, so it parks. Run it
-        // detached — awaiting it here would deadlock by design.
-        let queued = Task { await gate.acquire() }
-        var spins = 0
-        while await gate.stats.queued < 1, spins < 200 {
-            try await Task.sleep(for: .milliseconds(5))
-            spins += 1
+        // A fourth arriving with a batch of two takes the one remaining slot
+        // and sheds the rest: partial acceptance, so a large list decision
+        // arriving at a full queue writes what fits instead of losing all of it.
+        let overflow = await queue.enqueue([sample(path: "/api/vms"), sample(path: "/api/vms")])
+        #expect(overflow == .init(accepted: 0, shed: 2, shedTotal: 2, startDrain: false))
+
+        let batch = try #require(await queue.nextBatch())
+        #expect(batch.count == 3)
+        // The claimed batch is still in the air until it is reported written.
+        #expect(await queue.isIdle == false)
+        await queue.finishBatch()
+        #expect(await queue.isIdle)
+        #expect(await queue.stats.shed == 2)
+    }
+
+    /// The create-shaped request — three checks, three decisions — still
+    /// records every one of them, and the flush is what a caller waits on
+    /// instead of a sleep.
+    @Test("Every check of a multi-check request is recorded")
+    func multiCheckRequestRecordsEveryDecision() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(app, prefix: "multi")
+            let version = try await PolicySetVersionService.current(on: app.db)
+            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+
+            for permission in ["read", "update", "delete"] {
+                _ = try await check(
+                    app, user: tree.user, permission: permission, resourceType: "virtual_machine",
+                    resourceID: tree.vm.id!.uuidString)
+            }
+            await app.iamDecisionRecorder.flush()
+
+            let actions = try await IAMDecisionLog.query(on: app.db).all().compactMap(\.iamAction)
+            #expect(Set(actions) == ["vm:read", "vm:update", "vm:delete"])
         }
-        #expect(await gate.stats.queued == 1)
+    }
 
-        // The fourth finds the queue full and is shed with a running count,
-        // rather than growing the line without limit.
-        #expect(await gate.acquire() == .shed(total: 1))
-        #expect(await gate.acquire() == .shed(total: 2))
-
-        // Releasing hands the slot straight to the waiter.
-        await gate.release()
-        #expect(await queued.value == .admitted)
-        #expect(await gate.stats.queued == 0)
-        #expect(await gate.stats.inFlight == 2)
+    private func sample(path: String) -> PendingIAMDecision {
+        .untranslated(
+            subject: UUID().uuidString,
+            equivalent: LegacyCheckEquivalent(
+                permission: "read", resourceType: "virtual_machine", resourceID: UUID().uuidString),
+            context: IAMCheckContext(path: path, method: "GET", requestID: "test-request"))
     }
 
     @Test("The retention sweep prunes rows older than the window")
