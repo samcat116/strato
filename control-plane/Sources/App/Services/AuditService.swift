@@ -3,6 +3,7 @@ import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
+import Tracing
 import Vapor
 
 // MARK: - Event types
@@ -514,9 +515,15 @@ final class AuditService: @unchecked Sendable {
             }
         case .enqueued(let startDrain):
             // Tracked by the background-task registry so shutdown drains the
-            // buffer before Fluent tears its pools down.
+            // buffer before Fluent tears its pools down. The drain runs with no
+            // service context: it outlives the request that happened to start
+            // it and writes other requests' events too, so its inserts belong
+            // in a trace of their own rather than nested under one arbitrary
+            // request span.
             if startDrain {
-                app.backgroundTasks.spawn { [self] in await drainQueue() }
+                app.backgroundTasks.spawn { [self] in
+                    await ServiceContext.$current.withValue(nil) { await drainQueue() }
+                }
             }
         }
     }
