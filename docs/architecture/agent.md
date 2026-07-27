@@ -219,8 +219,8 @@ The `user-data` document has two shapes:
   control (this skips Strato's console/password/SSH-key provisioning).
 
 Both non-passthrough shapes also install and enable the **QEMU guest agent**
-(issue #563) so stock cloud images gain verified shutdown, fs-freeze snapshots,
-and guest IP reporting without image changes. The no-caller path uses cloud-init's
+(issue #563) so stock cloud images gain verified shutdown and guest IP
+reporting without image changes. The no-caller path uses cloud-init's
 native `packages:` key; the multipart path installs it from a `text/x-shellscript`
 part instead, because a caller cloud-config's own `packages:` list would replace
 a merged key under cloud-init's `dict(replace)+list()` policy (the same reason
@@ -248,11 +248,13 @@ pre-qga behavior:
 - **Verified shutdown**: `shutdownVM` tries `guest-shutdown` first; its success
   confirms the guest heard us, and it falls back to the universal ACPI powerdown
   when qga doesn't answer.
-- **fs-freeze snapshots**: the volume-snapshot handler freezes the attached
-  guest's filesystems (named by the control plane's `attachedVMId`) around
-  overlay creation and always thaws afterward, under a hard time cap — a frozen
-  guest is worse than a crash-consistent snapshot. A detached volume or qga-less
-  guest just gets the crash-consistent snapshot.
+- **fs-freeze snapshots** (withdrawn in issue #747): the volume-snapshot
+  handler used to freeze the attached guest's filesystems around overlay
+  creation. Nothing made that overlay the guest's active layer, so the freeze
+  only lent an inconsistent snapshot a consistency signal. The handler now
+  refuses any snapshot whose `attachedVMId` is set; `QGAClient` keeps the
+  freeze/thaw verbs for the eventual QMP-based live snapshot. See
+  [storage](./storage.md#snapshots).
 - **Guest info**: a throttled slow poll (folded into the heartbeat cadence)
   probes running QEMU VMs for hostname and configured addresses off the report's
   hot path, caching the result the observed-state report reads. This is the only

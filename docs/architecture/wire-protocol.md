@@ -75,9 +75,11 @@ Version 15 has no gate either: it added the QEMU guest agent (issue #563).
 Both fields it introduces are optional and nil-tolerant in each direction —
 `ObservedVMState.guestInfo` (the guest's observed hostname and per-MAC
 addresses, agent → control plane) and `VolumeSnapshotMessage.attachedVMId`
-(control plane → agent, so the agent can fs-freeze the right guest around a
-snapshot). A nil from an older peer reads identically to "not known" and can
-never mean a destructive action, so no send-side gate is needed.
+(control plane → agent). A nil from an older peer reads identically to "not
+known" and can never mean a destructive action, so no send-side gate is needed.
+`attachedVMId` originally told the agent which guest to fs-freeze around a
+snapshot; since issue #747 the agent uses it to *refuse* the snapshot, so the
+field's meaning tightened without its shape changing.
 
 Version 16 follows the same pattern: `ObservedVMState.memoryStats` (issue
 #567) carries the guest's virtio-balloon memory statistics on the

@@ -228,8 +228,26 @@ extension Volume {
         return status == .available
     }
 
+    /// Snapshots require a detached volume (issue #747). The filesystem
+    /// backend's snapshot is a qcow2 overlay whose backing file is the volume,
+    /// and nothing redirects a running QEMU's active layer onto that overlay —
+    /// the guest keeps writing to the same base the overlay points at, so the
+    /// "snapshot" never diverges from the live volume and captures no
+    /// point-in-time state. Rather than return a silently-wrong snapshot for
+    /// the case operators most rely on, an attached volume is refused until a
+    /// real live-snapshot path (QMP `blockdev-snapshot-sync` plus the layer
+    /// bookkeeping it implies) exists.
     var canSnapshot: Bool {
-        return status == .available || status == .attached
+        return status == .available
+    }
+
+    /// Cloning is `qemu-img convert` of the volume's file, so it has the same
+    /// requirement as a snapshot: a guest writing the source mid-copy yields a
+    /// torn image. Its own property rather than a reuse of `canSnapshot`, so
+    /// the two rules can move independently — a live-snapshot path (issue #747)
+    /// would relax one without relaxing the other.
+    var canClone: Bool {
+        return status == .available
     }
 
     /// A volume is deletable from every state except while actively `.attached`
