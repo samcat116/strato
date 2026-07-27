@@ -45,10 +45,24 @@ struct TarTestBuilder {
             }
             body.append(Data("\(length)\(payload)".utf8))
         }
+        addRawPax(body)
+    }
+
+    /// PAX extended header with a hand-written (possibly malformed) body.
+    mutating func addRawPax(_ body: Data) {
         appendHeader(
             name: "./PaxHeaders/next", mode: 0o644, uid: 0, gid: 0, size: body.count,
             typeFlag: UInt8(ascii: "x"))
         appendContent(body)
+    }
+
+    /// A regular-file header whose 12-byte size field is written verbatim, for
+    /// sizes the octal encoder cannot express (GNU base-256). No content is
+    /// appended — the declared size is a lie, which is the point.
+    mutating func addFileWithRawSizeField(_ name: String, sizeField: [UInt8]) {
+        appendHeader(
+            name: name, mode: 0o644, uid: 0, gid: 0, size: 0, typeFlag: UInt8(ascii: "0"),
+            sizeField: sizeField)
     }
 
     /// GNU `L` long-name entry applying `name` to the next entry.
@@ -71,7 +85,7 @@ struct TarTestBuilder {
 
     private mutating func appendHeader(
         name: String, mode: UInt16, uid: Int, gid: Int, size: Int, typeFlag: UInt8,
-        linkName: String = ""
+        linkName: String = "", sizeField: [UInt8]? = nil
     ) {
         var block = [UInt8](repeating: 0, count: 512)
 
@@ -85,7 +99,11 @@ struct TarTestBuilder {
         put(String(format: "%07o", mode), 100, 8)
         put(String(format: "%07o", uid), 108, 8)
         put(String(format: "%07o", gid), 116, 8)
-        put(String(format: "%011o", size), 124, 12)
+        if let sizeField {
+            for (index, byte) in sizeField.prefix(12).enumerated() { block[124 + index] = byte }
+        } else {
+            put(String(format: "%011o", size), 124, 12)
+        }
         put(String(format: "%011o", 0), 136, 12)  // mtime
         block[156] = typeFlag
         put(linkName, 157, 100)
