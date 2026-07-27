@@ -377,6 +377,11 @@ struct WebhookOutboxTests {
             let operation = ResourceOperation(vmID: vm.id!, userID: fixture.user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
+            // A second completion path's view of the row, loaded while it is
+            // still pending — the shape that used to enqueue a duplicate,
+            // contradictory event below (issue #733).
+            let staleView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
+
             let won = try await operation.completeIfPending(as: .succeeded, error: nil, on: app.db)
             #expect(won)
 
@@ -389,10 +394,14 @@ struct WebhookOutboxTests {
             #expect(delivery.payload.contains(vm.id!.uuidString))
             #expect(delivery.payload.contains("\"operationKind\":\"boot\""))
 
-            // The losing (second) completion path must not enqueue again.
+            // The losing (second) completion path must not enqueue again —
+            // neither from a freshly reloaded row nor from the stale instance it
+            // loaded while the operation was still pending.
             let reloaded = try #require(try await ResourceOperation.find(operation.id, on: app.db))
             let wonAgain = try await reloaded.completeIfPending(as: .failed, error: "x", on: app.db)
             #expect(!wonAgain)
+            let staleWon = try await staleView.completeIfPending(as: .failed, error: "x", on: app.db)
+            #expect(!staleWon)
             let countAfter = try await WebhookDelivery.query(on: app.db).count()
             #expect(countAfter == 1)
         }
