@@ -374,6 +374,14 @@ final class ResourceQuotaTests {
     @Test("Cannot reduce quota below current usage")
     func testCannotReduceQuotaBelowUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            // 4 VMs × 2 vCPUs. The quota's own counters are left at zero, as they
+            // are for any quota whose scope was already populated when it was
+            // created — the guard has to measure, not read them (issue #742).
+            for index in 0..<4 {
+                _ = try await builder.createVM(name: "in-use-\(index)", project: testProject)
+            }
+
             let quota = ResourceQuota(
                 name: "In Use Quota",
                 organizationID: testOrganization.id,
@@ -384,7 +392,6 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            quota.reservedVCPUs = 8
             try await quota.save(on: app.db)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
@@ -403,6 +410,80 @@ final class ResourceQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
+
+            // Same for the count limits, over the same never-backfilled counters.
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: 3,  // Less than the 4 VMs in scope
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    /// A limit the request doesn't touch may already sit below real usage — a
+    /// quota introduced over an oversized tenant, or one whose workloads grew
+    /// while it was disabled. Now that the counters are refreshed to reality
+    /// before saving, `validate()`'s reserved-vs-max check would have made such
+    /// a quota permanently uneditable, including the very edits that fix it.
+    @Test("An over-committed quota can still be raised, renamed and disabled")
+    func testOverCommittedQuotaStaysEditable() async throws {
+        try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            for index in 0..<3 {
+                _ = try await builder.createVM(name: "over-\(index)", project: testProject)
+            }
+
+            // 6 vCPUs and 3 VMs in scope against a limit of 4 and 2.
+            let quota = ResourceQuota(
+                name: "Over Committed",
+                organizationID: testOrganization.id,
+                organizationalUnitID: nil,
+                projectID: nil,
+                maxVCPUs: 4,
+                maxMemory: Int64(20.0 * 1024 * 1024 * 1024),
+                maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
+                maxVMs: 2
+            )
+            try await quota.save(on: app.db)
+
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: "Over Committed (paused)",
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        isEnabled: false
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+
+                let response = try res.content.decode(ResourceQuotaResponse.self)
+                #expect(response.name == "Over Committed (paused)")
+                #expect(response.isEnabled == false)
+                // The update healed the never-backfilled counters on the way past.
+                #expect(response.usage.reservedVCPUs == 6)
+                #expect(response.usage.vmCount == 3)
+            }
+
+            let reloaded = try await ResourceQuota.find(quota.id, on: app.db)
+            #expect(reloaded?.reservedVCPUs == 6)
+            #expect(reloaded?.vmCount == 3)
         }
     }
 
@@ -437,6 +518,11 @@ final class ResourceQuotaTests {
     @Test("Cannot delete quota with usage")
     func testCannotDeleteQuotaWithUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createVM(name: "guarded", project: testProject)
+
+            // Counters left at zero, as they are for any quota created over an
+            // already populated scope: the guard measures the scope (issue #742).
             let quota = ResourceQuota(
                 name: "Used Quota",
                 organizationID: testOrganization.id,
@@ -447,14 +533,167 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            quota.reservedVCPUs = 2
-            quota.vmCount = 1
             try await quota.save(on: app.db)
 
             try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
+            }
+
+            let survivor = try await ResourceQuota.find(quota.id, on: app.db)
+            #expect(survivor != nil)
+        }
+    }
+
+    /// A sandbox reserves vCPUs and memory but no storage and no VM count, so
+    /// it is the workload most easily missed by a guard that reads the wrong
+    /// fields.
+    @Test("Cannot delete a quota whose scope holds only sandboxes")
+    func testCannotDeleteQuotaWithSandboxUsage() async throws {
+        try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createSandbox(name: "guarded-sbx", project: testProject)
+
+            let quota = try await builder.createResourceQuota(
+                name: "Sandbox Quota", organization: testOrganization)
+
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    // MARK: - Quotas Created Over an Existing Tenant (issue #742)
+
+    /// The rollout case: an admin starts enforcing limits on an organization
+    /// that is already running workloads. Nothing creates or deletes a VM
+    /// afterwards, so before this fix nothing ever resynced the counters off
+    /// zero — and both admin-facing integrity guards read them.
+    @Test("A quota created over live workloads guards its real usage")
+    func testQuotaCreatedOverExistingWorkloadsGuardsRealUsage() async throws {
+        try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            for index in 0..<5 {
+                _ = try await builder.createVM(name: "existing-\(index)", project: testProject)
+            }
+
+            var quotaID: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/quotas") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Rollout Quota",
+                        maxVCPUs: 100,
+                        maxMemoryGB: 200,
+                        maxStorageGB: 1000,
+                        maxVMs: 50,
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        environment: nil,
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+
+                let response = try res.content.decode(ResourceQuotaResponse.self)
+                quotaID = response.id
+                // Create backfills the counters from the workloads already in scope.
+                #expect(response.usage.reservedVCPUs == 10)
+                #expect(response.usage.vmCount == 5)
+            }
+
+            let id = try #require(quotaID)
+
+            // Lowering a limit under the real usage is rejected…
+            try await app.test(.PUT, "/api/quotas/\(id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: 4,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // …and the quota guarding those workloads can't be deleted.
+            try await app.test(.DELETE, "/api/quotas/\(id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // The guards and the usage endpoint agree on the same fresh numbers.
+            try await app.test(.GET, "/api/quotas/\(id)/usage") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+
+                let usage = try res.content.decode(QuotaUsageResponse.self)
+                #expect(usage.actual.vcpus == 10)
+                #expect(usage.actual.vms == 5)
+                #expect(usage.reserved.vcpus == usage.actual.vcpus)
+                #expect(usage.reserved.vms == usage.actual.vms)
+            }
+        }
+    }
+
+    /// The counters can also be stale *high* — a quota resynced before its
+    /// workloads were deleted. Reading them then blocks edits and deletions
+    /// that should be allowed, so the fix has to measure in both directions.
+    @Test("Stale-high counters don't block a legitimate update or delete")
+    func testStaleHighCountersDoNotBlockAdmin() async throws {
+        try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
+            let quota = ResourceQuota(
+                name: "Stale Quota",
+                organizationID: testOrganization.id,
+                organizationalUnitID: nil,
+                projectID: nil,
+                maxVCPUs: 10,
+                maxMemory: Int64(20.0 * 1024 * 1024 * 1024),
+                maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
+                maxVMs: 5
+            )
+            // Left over from workloads that no longer exist.
+            quota.reservedVCPUs = 8
+            quota.vmCount = 4
+            try await quota.save(on: app.db)
+
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: 2,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: 1,
+                        maxSandboxes: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+
+                let response = try res.content.decode(ResourceQuotaResponse.self)
+                #expect(response.limits.maxVCPUs == 2)
+                #expect(response.usage.reservedVCPUs == 0)
+                #expect(response.usage.vmCount == 0)
+            }
+
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
             }
         }
     }

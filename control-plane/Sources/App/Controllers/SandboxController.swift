@@ -164,8 +164,7 @@ struct SandboxController: RouteCollection {
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         let sandboxID = try sandbox.requireID()
 
-        let requestedLimit: Int = req.query["limit"] ?? 20
-        let limit = min(max(requestedLimit, 1), 100)
+        let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
         let operations = try await ResourceOperation.query(on: req.db)
             .filter(\.$resourceKind == .sandbox)

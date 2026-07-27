@@ -71,8 +71,8 @@ struct QuotaEnforcementService {
     /// the VM — rolls the reservations back atomically.
     ///
     /// Each quota's counters are first resynced to real in-scope usage so the
-    /// admission check has an accurate baseline even for a quota created *after* some
-    /// of its VMs already existed (whose reservations `createQuota` never backfilled).
+    /// admission check has an accurate baseline no matter how stale the stored
+    /// counters are — they are only ever a cache of the last resync.
     ///
     /// Concurrent creates that share a quota are serialized by a transaction-scoped
     /// advisory lock per applicable quota (see ``lockQuotas``): without it, two
@@ -309,10 +309,18 @@ struct QuotaEnforcementService {
     /// lossy GB figures in `QuotaUsage`) so memory/storage stay byte-accurate. Does
     /// not persist — the caller saves.
     ///
-    /// Three aggregate queries over an already-resolved scope: this runs under the
-    /// per-quota advisory lock, so every row it doesn't load is lock time every
-    /// other create in the organization doesn't wait for (issue #692).
-    private static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
+    /// The counters are a cache, correct only as of the last resync: nothing
+    /// maintains them outside this file and the quota controller's write paths, and
+    /// a row written any other way (a migration, a fixture) starts at zero however
+    /// full its scope is. Any code whose *verdict* depends on how much of a quota is
+    /// in use — including the controller's update and delete integrity guards
+    /// (issue #742) — must resync first rather than read the stored fields.
+    ///
+    /// Three aggregate queries over an already-resolved scope: on the admission
+    /// path this runs under the per-quota advisory lock, so every row it doesn't
+    /// load is lock time every other create in the organization doesn't wait for
+    /// (issue #692).
+    static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
         let scope = try await QuotaUsageAggregator.scope(of: quota, on: db)
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
         quota.reservedVCPUs = usage.vcpus

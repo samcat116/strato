@@ -154,6 +154,16 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(quota: quota, on: req)
 
+        // Measure the scope before evaluating the "not below current usage" guards
+        // below. The stored counters are only a cache of the last resync — zero for
+        // any quota row nothing has resynced yet — so reading them let an admin set
+        // a limit under real usage (issue #742). The refreshed figures are persisted
+        // by the `save` at the end, healing the row on the way past. A concurrent
+        // create can land between the measurement and the save, but admission
+        // always resyncs before it checks, so a momentarily low cache can't
+        // over-commit anything.
+        try await QuotaEnforcementService.resyncReservations(quota, on: req.db)
+
         // Update fields
         if let name = updateRequest.name {
             quota.name = name
@@ -221,6 +231,11 @@ struct ResourceQuotaController: RouteCollection {
             quota.isEnabled = isEnabled
         }
 
+        // Scope and limit invariants only. The counters now hold real usage, and a
+        // scope already over a limit this request didn't touch must stay editable —
+        // raising, disabling or renaming such a quota is exactly how an operator
+        // fixes it. Every limit this request *did* change was checked against the
+        // same fresh figures above.
         try quota.validate()
         try await quota.save(on: req.db)
 
@@ -243,9 +258,18 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(quota: quota, on: req)
 
-        // Check if quota has any reservations
-        if quota.reservedVCPUs > 0 || quota.reservedMemory > 0 || quota.reservedStorage > 0 || quota.vmCount > 0
-            || quota.sandboxCount > 0
+        // Check if the quota's scope holds any workloads, measured now rather than
+        // read from the stored counters: those are a cache of the last enforcement
+        // resync and are still zero for a quota created over an already populated
+        // scope, so the guard used to wave through the deletion of a quota holding
+        // back live VMs and sandboxes (issue #742).
+        //
+        // Measures without writing the figures back, unlike `update`: the row is
+        // either about to be deleted or is being left alone by a rejected request,
+        // so there is nothing here for a healed cache to be read by.
+        let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
+        if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
+            || usage.sandboxCount > 0
         {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
@@ -606,6 +630,17 @@ struct ResourceQuotaController: RouteCollection {
         )
 
         try quota.validate()
+
+        // Backfill the reservation counters from the workloads the new quota
+        // already governs, so the stored figures are honest from the moment the
+        // row exists instead of reading zero until the next create or delete in
+        // this scope resyncs them (issue #742). The scope is resolved from the
+        // quota's own scope FKs and environment, so this works before the insert.
+        //
+        // Deliberately not a `validate()`: a quota introduced *below* an existing
+        // tenant's usage is legitimate — that's how enforcement starts on a live
+        // tenant, and admission then blocks any further growth.
+        try await QuotaEnforcementService.resyncReservations(quota, on: db)
         try await quota.save(on: db)
 
         return quota

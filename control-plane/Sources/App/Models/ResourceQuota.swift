@@ -371,6 +371,16 @@ extension ResourceQuota {
 // MARK: - Validations
 
 extension ResourceQuota {
+    /// The invariants that hold regardless of how much of the quota is in use:
+    /// exactly one scope, and positive limits.
+    ///
+    /// Deliberately *not* "reserved fits within max" (issue #742). The write
+    /// paths measure real usage into the reservation counters, and a scope can
+    /// legitimately be over its limits — introducing a quota below an existing
+    /// tenant's usage is how enforcement starts, and further growth is then
+    /// blocked at admission — so such a quota has to stay editable for an
+    /// operator to raise, disable, or rename it. Each limit an update *does*
+    /// change is guarded against freshly measured usage by the caller.
     func validate() throws {
         // Ensure quota belongs to exactly one entity
         let parentCount = [
@@ -388,13 +398,6 @@ extension ResourceQuota {
         // Validate limits are positive
         if maxVCPUs <= 0 || maxMemory <= 0 || maxStorage <= 0 || maxVMs <= 0 || maxSandboxes <= 0 {
             throw Abort(.badRequest, reason: "All resource limits must be positive")
-        }
-
-        // Validate reserved doesn't exceed max
-        if reservedVCPUs > maxVCPUs || reservedMemory > maxMemory || reservedStorage > maxStorage || vmCount > maxVMs
-            || sandboxCount > maxSandboxes
-        {
-            throw Abort(.badRequest, reason: "Reserved resources cannot exceed maximum limits")
         }
     }
 }

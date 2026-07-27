@@ -23,8 +23,10 @@ struct AuditEventController: RouteCollection {
         /// ISO8601 timestamps (e.g. `2026-07-09T12:00:00Z`).
         var from: String?
         var to: String?
-        var limit: Int?
-        var offset: Int?
+        // `limit`/`offset` are read straight off the request (see `intQuery`)
+        // rather than decoded here: decoding them as `Int?` would surface a
+        // malformed value as Vapor's generic decoding failure instead of the
+        // shared "must be an integer" 400 every other list endpoint returns.
     }
 
     func listAll(req: Request) async throws -> AuditEventListResponse {
@@ -45,8 +47,8 @@ struct AuditEventController: RouteCollection {
     private func list(
         query: ListQuery, organizationID: UUID?, on req: Request
     ) async throws -> AuditEventListResponse {
-        let limit = min(max(query.limit ?? 50, 1), 500)
-        let offset = max(query.offset ?? 0, 0)
+        let limit = try req.intQuery("limit", default: 50, in: 1...500)
+        let offset = try req.intQuery("offset", default: 0, in: 0...Int.max)
 
         let dbQuery = AuditEvent.query(on: req.db)
         if let organizationID {

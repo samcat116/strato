@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { EditImageDialog } from "@/components/images/edit-image-dialog";
+import { ImageStatusBadge } from "@/components/images/image-status-badge";
 import { useImage, useDeleteArtifact } from "@/lib/hooks/use-images";
 import { imagesApi } from "@/lib/api/images";
 import type { ArtifactKind } from "@/types/api";
@@ -30,23 +31,6 @@ function formatBytes(bytes: number): string {
   const mb = bytes / 1024 / 1024;
   if (mb >= 1) return `${mb.toFixed(2)} MB`;
   return `${(bytes / 1024).toFixed(2)} KB`;
-}
-
-function ImageStatusBadge({ status }: { status: string }) {
-  const statusStyles: Record<string, string> = {
-    ready: "bg-green-600",
-    pending: "bg-yellow-600",
-    uploading: "bg-primary",
-    downloading: "bg-primary",
-    validating: "bg-purple-600",
-    error: "bg-red-600",
-  };
-
-  return (
-    <Badge className={statusStyles[status] || "bg-muted"}>
-      {status.charAt(0).toUpperCase() + status.slice(1)}
-    </Badge>
-  );
 }
 
 export default function ImageDetailPage() {
@@ -130,7 +114,10 @@ export default function ImageDetailPage() {
           </Link>
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-semibold text-foreground">{image.name}</h2>
-            <ImageStatusBadge status={image.status} />
+            <ImageStatusBadge
+              status={image.status}
+              downloadProgress={image.downloadProgress}
+            />
           </div>
           {image.description && (
             <p className="text-muted-foreground mt-1">{image.description}</p>

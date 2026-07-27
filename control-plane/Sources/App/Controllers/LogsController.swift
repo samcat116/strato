@@ -38,7 +38,7 @@ struct LogsController: RouteCollection {
         }
 
         // Parse query parameters
-        let limit = min(req.query[Int.self, at: "limit"] ?? 100, 1000)  // Cap at 1000
+        let limit = try req.intQuery("limit", default: 100, in: 1...1000)
         let directionStr = req.query[String.self, at: "direction"] ?? "backward"
         let direction = QueryDirection(rawValue: directionStr) ?? .backward
 
@@ -88,7 +88,7 @@ struct LogsController: RouteCollection {
         }
 
         // Parse query parameters
-        let limit = min(req.query[Int.self, at: "limit"] ?? 100, 1000)  // Cap at 1000
+        let limit = try req.intQuery("limit", default: 100, in: 1...1000)
         let directionStr = req.query[String.self, at: "direction"] ?? "backward"
         let direction = QueryDirection(rawValue: directionStr) ?? .backward
 
