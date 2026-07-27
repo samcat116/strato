@@ -1,0 +1,72 @@
+docs/deployment/kubernetes.md
+  s_139feef40e734d::t_dc332f3b8452af 83-87
+docs/guide/getting-started.md
+  s_139feef40e734d::t_5f5b388524c109 86-88
+control-plane/Sources/App/configure.swift
+  s_139feef40e734d::t_03e64abc152468 246-255
+control-plane/web/src/types/api.ts
+  s_139feef40e734d::t_cc41745219c6cd 771-781
+control-plane/Tests/AppTests/RegistrationPolicyTests.swift
+  s_139feef40e734d::t_12eb25e2a7831d 1-157
+helm/strato-control-plane/README.md
+  s_139feef40e734d::t_82f838841f0b4a 141
+docs/deployment/docker-compose.md
+  s_139feef40e734d::t_c9858f680182b9 26-30
+control-plane/web/src/types/openapi.ts
+  s_139feef40e734d::t_2c668d2ff4068d 1284-1285,1294-1313,7631-7637,10560,10564-10582
+  s_139feef40e734d::t_a96702afe65c8b 10583
+control-plane/web/src/components/auth/login-form.tsx
+  s_139feef40e734d::t_da90170d3b4acd 290-303
+  s_139feef40e734d::t_2b93c2b0d1a2c6 32-37
+  s_139feef40e734d::t_958577dbf90b9f 19
+deploy/compose/.env.example
+  s_139feef40e734d::t_52356c143f06ae 33-38
+control-plane/web/src/lib/api/index.ts
+  s_139feef40e734d::t_13b729ba9444ad 20
+control-plane/web/src/lib/hooks/index.ts
+  s_139feef40e734d::t_ee3f2d038493d0 85
+control-plane/Sources/App/Services/RegistrationPolicy.swift
+  s_139feef40e734d::t_c79afa98a25f7b 1-83
+deploy/compose/setup.sh
+  s_139feef40e734d::t_b298c046b79cdc 134-138
+control-plane/web/src/lib/api/registration.ts
+  s_139feef40e734d::t_5495035bc9ce66 1-14
+control-plane/web/src/app/(auth)/register/page.tsx
+  s_139feef40e734d::t_4f61b04f403efd 31-32
+  s_139feef40e734d::t_e04c9832e78aae 12-13,18-20,24-27,29
+  s_139feef40e734d::t_3f007c65579081 7,11,14-15
+control-plane/Sources/App/Controllers/UserController.swift
+  s_139feef40e734d::t_6ccc59052aff04 28-31
+  s_139feef40e734d::t_1765cdc1f0f11b 98-110,114-128
+control-plane/Sources/App/openapi.yaml
+  s_139feef40e734d::t_4d4c72c649682c 13449-13466
+  s_139feef40e734d::t_db0a759593c725 1780-1784,1801,1803-1820
+helm/strato-control-plane/templates/deployment.yaml
+  s_139feef40e734d::t_890afab0b7cc3b 205-206
+deploy/compose/docker-compose.yml
+  s_139feef40e734d::t_7cdb81df170ca6 280-283
+docs/deployment/overview.md
+  s_139feef40e734d::t_b6ced3d01bb450 22-41
+docs/guide/quick-start.md
+  s_139feef40e734d::t_2bf4869fbe0921 55-57
+helm/strato-control-plane/values.yaml
+  s_139feef40e734d::t_14e05a17159a15 386-392
+control-plane/web/src/lib/hooks/use-registration-policy.ts
+  s_139feef40e734d::t_ac66e458ed7b87 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "2ed0668b3925a0ed2cb445be4ae259325ef4a3ee",
+  "prompts": {},
+  "sessions": {
+    "s_139feef40e734d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d24b1d31-bd8e-474e-a02c-0f97d6294d81",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
