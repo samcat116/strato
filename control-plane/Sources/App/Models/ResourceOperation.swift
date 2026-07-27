@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import Vapor
 import StratoShared
 
@@ -169,6 +170,23 @@ final class ResourceOperation: Model, @unchecked Sendable {
     }
 }
 
+/// Why a completion could not be recorded at all — as opposed to losing the
+/// compare-and-swap, which is an ordinary `false` return.
+enum OperationCompletionError: Error, CustomStringConvertible, Sendable {
+    /// The verdict guard is a conditional `UPDATE`, so it needs the SQL
+    /// interface. Every supported deployment is PostgreSQL; this exists so a
+    /// database that cannot express the compare-and-swap fails loudly instead
+    /// of silently double-completing operations.
+    case unsupportedDatabase
+
+    var description: String {
+        switch self {
+        case .unsupportedDatabase:
+            return "Recording an operation verdict requires an SQL database"
+        }
+    }
+}
+
 extension ResourceOperation {
     /// The actor recorded on operations the control plane starts by itself,
     /// with no user behind them — today the sandbox expiry sweep (issue #424).
@@ -183,21 +201,53 @@ extension ResourceOperation {
     /// the two completion paths (agent response and stuck-operation sweep)
     /// cannot overwrite each other's verdict. Returns whether this call won.
     ///
+    /// The pending check is a database compare-and-swap, not an in-memory read
+    /// of `self.status` (issue #733): the completion paths hold separately
+    /// loaded instances and are not serialized against each other, so an
+    /// in-memory guard passes on both while the blind `UPDATE ... WHERE id = ?`
+    /// behind `save` lets the second one overwrite the first's verdict. The
+    /// `AND status = 'pending'` predicate is instead evaluated by PostgreSQL
+    /// under the row lock, so of two racing transactions exactly one updates a
+    /// row. Same technique as `WebhookDeliveryService.claimDueDeliveries`.
+    ///
     /// The winning flip also enqueues `operation.completed`/`operation.failed`
     /// webhook deliveries (issue #559), in the same transaction as the status
     /// write: because every completion path funnels through here, this is the
     /// one place the outbox rows commit atomically with the verdict — and the
     /// "only the winner" guard means the event is enqueued exactly once.
     func completeIfPending(as status: VMOperationStatus, error: String?, on db: Database) async throws -> Bool {
-        guard self.status == .pending else { return false }
-        self.status = status
-        self.error = error
-        self.completedAt = Date()
-        try await db.transaction { db in
-            try await self.save(on: db)
+        guard let id = self.id else { return false }
+        let completedAt = Date()
+
+        return try await db.transaction { db in
+            guard let sql = db as? any SQLDatabase else {
+                throw OperationCompletionError.unsupportedDatabase
+            }
+            struct CompletedRow: Decodable {
+                let id: UUID
+            }
+            let updated = try await sql.raw(
+                """
+                UPDATE resource_operations
+                SET status = \(bind: status.rawValue),
+                    error = \(bind: error),
+                    completed_at = \(bind: completedAt)
+                WHERE id = \(bind: id)
+                  AND status = \(bind: VMOperationStatus.pending.rawValue)
+                RETURNING id
+                """
+            ).all(decoding: CompletedRow.self)
+            // Zero rows: another path already took this operation terminal.
+            guard !updated.isEmpty else { return false }
+
+            // Carry the committed verdict onto this instance — the webhook
+            // payload reads it, and callers keep using the model afterwards.
+            self.status = status
+            self.error = error
+            self.completedAt = completedAt
             try await WebhookEvents.enqueueOperationCompletion(for: self, on: db)
+            return true
         }
-        return true
     }
 
     var completionBudgetSeconds: TimeInterval {
