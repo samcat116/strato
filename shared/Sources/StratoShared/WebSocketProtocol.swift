@@ -1041,13 +1041,15 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
     public let volumePath: String
     public let snapshotPath: String?
     /// The VM this volume is currently attached to, when the control plane
-    /// knows it (`Volume.$vm`), so the agent can quiesce that guest's
-    /// filesystems with the QEMU guest agent (`guest-fsfreeze-freeze`/`-thaw`)
-    /// around the overlay creation for an application-consistent snapshot
-    /// (issue #563). Nil for a detached volume, or from an older control plane:
-    /// the agent then takes the crash-consistent snapshot it always did.
-    /// Best-effort — an unattached or qga-less VM still snapshots, just without
-    /// the freeze.
+    /// knows it (`Volume.$vm`). Nil for a detached volume, or from an older
+    /// control plane.
+    ///
+    /// Originally the cue to fs-freeze that guest around overlay creation
+    /// (issue #563); since issue #747 it is a **refusal** signal instead. The
+    /// backend's snapshot is an overlay backed by the volume, and nothing
+    /// switches the running QEMU's active layer onto it, so a snapshot taken
+    /// while a guest is writing the base is not point-in-time however well the
+    /// guest was quiesced. The agent rejects the request when this is set.
     public let attachedVMId: String?
 
     public init(

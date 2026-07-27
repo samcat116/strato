@@ -42,9 +42,10 @@ export function CreateSnapshotDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
-  // Only available/attached volumes can be snapshotted
+  // Detached volumes only: a snapshot of a volume a guest is still writing
+  // would not be point-in-time (issue #747), so the backend refuses it.
   const candidateVolumes = (volumes ?? []).filter(
-    (v) => v.id && (v.status === "available" || v.status === "attached")
+    (v) => v.id && v.status === "available"
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -103,8 +104,8 @@ export function CreateSnapshotDialog({
                 </Label>
                 {candidateVolumes.length === 0 ? (
                   <div className="text-sm text-muted-foreground py-2">
-                    No volumes can be snapshotted right now. Volumes must be
-                    available or attached.
+                    No volumes can be snapshotted right now. Detach a volume
+                    from its VM to snapshot it.
                   </div>
                 ) : (
                   <select

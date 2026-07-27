@@ -413,9 +413,11 @@ actor VolumeService {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
-        // Name the attached VM so the agent can fs-freeze that guest around the
-        // overlay for an application-consistent snapshot (issue #563). Nil when
-        // the volume is detached — the agent then takes a crash-consistent one.
+        // Still name the attached VM, even though `canSnapshot` now admits
+        // only detached volumes (issue #747): if the control plane's own
+        // bookkeeping ever drifts — status `.available` with `$vm` still set —
+        // the agent uses this to refuse rather than write a snapshot that
+        // isn't point-in-time.
         let message = VolumeSnapshotMessage(
             volumeId: volume.id!.uuidString,
             snapshotId: snapshot.id!.uuidString,

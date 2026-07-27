@@ -3311,62 +3311,44 @@ extension Agent {
             return
         }
 
-        // Application-consistent snapshot when the control plane names the VM
-        // holding the volume and that guest runs a responsive qga (issue #563):
-        // freeze the guest's filesystems around overlay creation, then always
-        // thaw. Best-effort — a detached volume, an older control plane, or a
-        // qga-less/hung guest all fall through to the crash-consistent path.
-        let qemu = hypervisorServices[.qemu] as? QEMUService
-        let freezeVMId = message.attachedVMId
-        // `true` once a freeze was *attempted* against a responsive guest — the
-        // guest can be frozen even if the freeze reply was late, so this (not
-        // "freeze confirmed") is what gates the mandatory thaw below.
-        var freezeAttempted = false
-        if let vmId = freezeVMId, let qemu {
-            freezeAttempted = await qemu.freezeGuestFilesystems(vmId: vmId)
+        // Refuse to snapshot a volume a guest is still writing (issue #747).
+        // `createSnapshot` makes a qcow2 overlay whose backing file is the
+        // volume; nothing redirects the running QEMU's active layer onto that
+        // overlay, so the guest keeps writing the base the overlay reads
+        // through. The result tracks the live volume forever and captures no
+        // point-in-time state — quiescing the guest first (the fs-freeze this
+        // path used to do, issue #563) only made that silent inconsistency
+        // look trustworthy. The control plane no longer admits snapshots of
+        // an attached volume; this catches an older control plane and any
+        // drift in its bookkeeping.
+        if let attachedVMId = message.attachedVMId {
+            let reason =
+                "Volume \(message.volumeId) is attached to running VM \(attachedVMId). "
+                + "A snapshot taken while a guest is writing the volume would not be point-in-time; detach the volume first."
+            await sendError(for: message.requestId, error: reason)
+            logger.warning(
+                "Refusing snapshot of an attached volume",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "snapshotId": .string(message.snapshotId),
+                    "attachedVMId": .string(attachedVMId),
+                ])
+            return
         }
 
-        let result: Result<String, Error>
         do {
-            if freezeAttempted {
-                // Hard-cap the frozen window: a frozen guest is worse than a
-                // crash-consistent snapshot, so on overrun we thaw and proceed.
-                result = .success(
-                    try await StageBudget.run(
-                        seconds: StageBudget.guestFreezeSeconds, stage: "frozen-snapshot",
-                        onTimeout: .cancelAndWait
-                    ) {
-                        try await storageBackend.createSnapshot(
-                            volumeId: message.volumeId,
-                            snapshotId: message.snapshotId,
-                            volumePath: message.volumePath
-                        )
-                    })
-            } else {
-                result = .success(
-                    try await storageBackend.createSnapshot(
-                        volumeId: message.volumeId,
-                        snapshotId: message.snapshotId,
-                        volumePath: message.volumePath
-                    ))
-            }
-        } catch {
-            result = .failure(error)
-        }
-
-        // Unconditional thaw whenever a freeze was attempted, whatever the
-        // snapshot's outcome (the "defer thaw" the freeze contract requires).
-        if freezeAttempted, let vmId = freezeVMId, let qemu {
-            await qemu.thawGuestFilesystems(vmId: vmId)
-        }
-
-        switch result {
-        case .success(let snapshotPath):
+            let snapshotPath = try await storageBackend.createSnapshot(
+                volumeId: message.volumeId,
+                snapshotId: message.snapshotId,
+                volumePath: message.volumePath
+            )
             let response = VolumeStatusResponse(
                 volumeId: message.volumeId,
                 status: "available",
                 storagePath: snapshotPath
             )
+            // Encoding the reply is its own failure mode: the snapshot exists,
+            // so it must not be reported as a failed create.
             do {
                 let data = try AnyCodableValue(response)
                 await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
@@ -3380,9 +3362,8 @@ extension Agent {
                     "volumeId": .string(message.volumeId),
                     "snapshotId": .string(message.snapshotId),
                     "path": .string(snapshotPath),
-                    "freezeAttempted": .stringConvertible(freezeAttempted),
                 ])
-        case .failure(let error):
+        } catch {
             await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
             logger.error(
                 "Failed to create snapshot",

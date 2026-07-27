@@ -17,4 +17,17 @@ struct VolumeStatusTests {
         let expected = status != .attached
         #expect(volume.canDelete == expected)
     }
+
+    @Test("canSnapshot admits only a detached volume", arguments: VolumeStatus.allCases)
+    func testCanSnapshot(status: VolumeStatus) {
+        let volume = Volume()
+        volume.status = status
+
+        // Issue #747: `.attached` used to be admitted, and produced an overlay
+        // backed by the volume a guest was still writing — a "snapshot" that
+        // tracked the live data instead of freezing a moment in time. Only a
+        // detached volume can be snapshotted correctly by the overlay backend.
+        let expected = status == .available
+        #expect(volume.canSnapshot == expected)
+    }
 }

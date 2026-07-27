@@ -197,13 +197,22 @@ Snapshots are external qcow2 overlays created with the volume as backing
 file. The backing format is detected per volume rather than assumed, so raw
 volumes snapshot correctly.
 
-When the volume is attached to a running VM whose guest runs the QEMU guest
-agent, the snapshot is **application-consistent**: the agent freezes the guest's
-filesystems (`guest-fsfreeze-freeze`) around the overlay creation and always
-thaws afterward, under a hard time cap (issue #563). The control plane names the
-attached VM in `VolumeSnapshotMessage.attachedVMId`; a detached volume, an older
-control plane, or a qga-less/hung guest falls back to the crash-consistent
-snapshot taken before. See [agent](./agent.md#qemu-guest-agent-qga).
+**Only detached volumes can be snapshotted** (issue #747). The overlay reads
+through to the volume, and nothing switches a running QEMU's active layer onto
+it — the guest would keep writing the same base the overlay points at, so the
+"snapshot" would track the live volume instead of freezing a moment in time.
+The control plane rejects a snapshot of an `attached` volume with `409`
+(`Volume.canSnapshot` requires `.available`), and the agent refuses any request
+that still names an attached VM in `VolumeSnapshotMessage.attachedVMId` — a
+guard against an older control plane or drifted bookkeeping.
+
+This replaces the fs-freeze quiescing added in issue #563: freezing the guest
+around overlay creation produced an application-consistency *signal* for a
+snapshot that captured nothing, which is worse than refusing. `QGAClient` still
+speaks `guest-fsfreeze-freeze`/`-thaw` for whoever implements the real live
+snapshot — QMP `blockdev-snapshot-sync` (or `blockdev-backup`), which makes the
+overlay the guest's active layer and needs the volume's `storagePath`, the VM
+manifest, and snapshot deletion to follow the resulting backing chain.
 
 ### Volume placement across agents
 

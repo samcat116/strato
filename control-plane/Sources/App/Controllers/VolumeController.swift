@@ -626,12 +626,20 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "snapshot")
         let request = try req.content.decode(CreateSnapshotRequest.self)
 
-        // Validate volume can be snapshotted
+        // Validate volume can be snapshotted. An attached volume gets its own
+        // message: refusing it is a deliberate correctness guard (issue #747),
+        // not a transient state the caller should wait out.
         guard volume.canSnapshot else {
+            if volume.status == .attached {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Volume is attached to a running VM. Snapshots of an attached volume would not be point-in-time, so they are refused; detach the volume first."
+                )
+            }
             throw Abort(
                 .conflict,
-                reason:
-                    "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available' or 'attached'"
+                reason: "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available'"
             )
         }
 

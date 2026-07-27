@@ -44,15 +44,19 @@ public enum StageBudget {
     // instead of stalling the report or the shutdown. A live agent answers a
     // sync + query in milliseconds.
     public static let guestAgentSeconds = 5
-    // The bound on the freeze command itself and on the overlay-create step
-    // while the guest is frozen (issue #563). More generous than the general
-    // qga budget: `guest-fsfreeze-freeze` flushes dirty pages across every
-    // guest filesystem, which under I/O load is legitimately slower than a
-    // millisecond round-trip — too tight a bound would routinely cancel a
-    // freeze that was about to succeed. A frozen guest is still worse than a
-    // crash-consistent snapshot, so this caps how long the window can last;
-    // the caller thaws unconditionally once a freeze was attempted, even if
-    // that freeze's reply arrived after the budget.
+    // The bound on `guest-fsfreeze-freeze` and on any work done while the
+    // guest is frozen (issue #563). More generous than the general qga budget:
+    // freezing flushes dirty pages across every guest filesystem, which under
+    // I/O load is legitimately slower than a millisecond round-trip — too
+    // tight a bound would routinely cancel a freeze that was about to succeed.
+    // A frozen guest is worse than an inconsistent snapshot, so this caps how
+    // long the window can last; a caller must thaw unconditionally once a
+    // freeze was attempted, even if that freeze's reply arrived late.
+    //
+    // Currently unused: volume snapshots stopped freezing in issue #747 (the
+    // overlay they wrapped was never the guest's active layer, so the freeze
+    // only made a non-point-in-time snapshot look trustworthy). Kept alongside
+    // `QGAClient`'s freeze/thaw verbs for the real live-snapshot path.
     public static let guestFreezeSeconds = 30
 
     /// What a budget does with an operation that is still running when the

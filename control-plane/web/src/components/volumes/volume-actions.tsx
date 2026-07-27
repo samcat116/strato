@@ -82,8 +82,9 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
   const canAttach = volume.status === "available";
   const canDetach = volume.status === "attached";
   const canResize = volume.status === "available";
-  const canSnapshot =
-    volume.status === "available" || volume.status === "attached";
+  // Detached only: a snapshot of an attached volume would not be point-in-time
+  // (issue #747), so the backend refuses it.
+  const canSnapshot = volume.status === "available";
   const canClone = volume.status === "available";
   const canDelete =
     volume.status === "available" ||
