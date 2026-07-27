@@ -87,7 +87,7 @@ struct IAMDecisionLogController: RouteCollection {
     func list(req: Request) async throws -> [DecisionLogDTO] {
         try requireSystemAdmin(req)
 
-        let limit = min(max(try intQuery(req, "limit") ?? 100, 1), 500)
+        let limit = try req.intQuery("limit", default: 100, in: 1...500)
         let mismatchesOnly = (try? req.query.get(Bool.self, at: "mismatchesOnly")) ?? false
 
         let query = IAMDecisionLog.query(on: req.db)
@@ -119,8 +119,8 @@ struct IAMDecisionLogController: RouteCollection {
             throw Abort(.internalServerError, reason: "Decision-log summary requires an SQL database")
         }
 
-        let sinceHours = min(max(try intQuery(req, "sinceHours") ?? 24, 1), 24 * 90)
-        let limit = min(max(try intQuery(req, "limit") ?? 200, 1), 1000)
+        let sinceHours = try req.intQuery("sinceHours", default: 24, in: 1...(24 * 90))
+        let limit = try req.intQuery("limit", default: 200, in: 1...1000)
         let since = Date().addingTimeInterval(-Double(sinceHours) * 3600)
 
         struct Row: Decodable {
@@ -157,17 +157,6 @@ struct IAMDecisionLogController: RouteCollection {
     }
 
     // MARK: - Query parsing
-
-    /// An integer query parameter, or `nil` when absent. A malformed value is
-    /// a 400 rather than a silent fallback to the default — a burn-down that
-    /// quietly ignores `limit=abc` reports the wrong window.
-    private func intQuery(_ req: Request, _ name: String) throws -> Int? {
-        guard let raw: String = req.query[name], !raw.isEmpty else { return nil }
-        guard let value = Int(raw) else {
-            throw Abort(.badRequest, reason: "Query parameter '\(name)' must be an integer")
-        }
-        return value
-    }
 
     /// An ISO8601 timestamp query parameter, or `nil` when absent.
     ///

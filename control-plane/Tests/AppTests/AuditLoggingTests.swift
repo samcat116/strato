@@ -245,6 +245,14 @@ final class AuditLoggingTests {
                 let decoded = try res.content.decode(AuditEventListResponse.self)
                 #expect(decoded.total == 0)
             }
+
+            // A malformed page bound is a 400, not a silent fall back to the
+            // default page (issue #732).
+            try await app.test(.GET, "/api/audit-events?limit=abc") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
         }
     }
 

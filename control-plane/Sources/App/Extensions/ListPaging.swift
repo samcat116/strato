@@ -19,17 +19,9 @@ struct ListPaging: Sendable {
     /// Non-integer values are a 400, not a silent fallback.
     static func decode(from req: Request) throws -> ListPaging {
         ListPaging(
-            limit: min(max(try intQuery(req, "limit") ?? defaultLimit, 1), maxLimit),
-            offset: max(try intQuery(req, "offset") ?? 0, 0)
+            limit: try req.intQuery("limit", default: defaultLimit, in: 1...maxLimit),
+            offset: try req.intQuery("offset", default: 0, in: 0...Int.max)
         )
-    }
-
-    private static func intQuery(_ req: Request, _ name: String) throws -> Int? {
-        guard let raw = req.query[String.self, at: name] else { return nil }
-        guard let value = Int(raw) else {
-            throw Abort(.badRequest, reason: "Query parameter '\(name)' must be an integer")
-        }
-        return value
     }
 
     /// Wraps an already authorization-filtered, deterministically ordered list

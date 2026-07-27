@@ -184,7 +184,7 @@ struct WebhookSubscriptionController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(
             organizationID: subscription.$organization.id, on: req)
 
-        let limit = min(max(req.query[Int.self, at: "limit"] ?? 50, 1), 200)
+        let limit = try req.intQuery("limit", default: 50, in: 1...200)
         let deliveries = try await WebhookDelivery.query(on: req.db)
             .filter(\.$subscription.$id == subscription.requireID())
             .sort(\.$createdAt, .descending)
