@@ -57,6 +57,11 @@ public final class TarArchiveReader {
     /// Sanity cap on PAX/GNU metadata entry sizes — a hostile layer must not
     /// make the reader buffer gigabytes of "metadata".
     private static let maxMetadataSize: Int64 = 1024 * 1024
+    /// Sanity cap on a single entry's content size. Layers legitimately carry
+    /// multi-gigabyte files, but nothing remotely near this; the bound exists
+    /// so a crafted size (base-256 header field or PAX `size` record) cannot
+    /// reach the padding arithmetic, where it would overflow and trap.
+    private static let maxEntrySize: Int64 = 1 << 40
 
     private let fileHandle: FileHandle
     /// Unconsumed content bytes (plus padding) of the current entry.
@@ -115,6 +120,12 @@ public final class TarArchiveReader {
             default:
                 var name = nameOverride ?? header.name
                 let size = sizeOverride ?? header.size
+                // Bound the size before any padding arithmetic: both sources
+                // (the header field and a PAX/GNU override) are attacker-chosen
+                // and can otherwise overflow `paddedSize`.
+                guard size >= 0, size <= Self.maxEntrySize else {
+                    throw TarError.malformed("entry '\(name)' declares an out-of-range size of \(size) bytes")
+                }
                 var type = entryType(for: header.typeFlag)
                 // Pre-POSIX archives mark directories as files with a
                 // trailing slash.
@@ -288,7 +299,14 @@ public final class TarArchiveReader {
             }
             let recordEnd = data.index(index, offsetBy: length)
             // Record body: after the space, up to (excluding) the trailing \n.
-            let body = data[data.index(after: space)..<data.index(before: recordEnd)]
+            // A length that doesn't reach past "<len> " would invert that
+            // range, which traps rather than throwing — reject it first.
+            let bodyStart = data.index(after: space)
+            let bodyEnd = data.index(before: recordEnd)
+            guard bodyStart <= bodyEnd else {
+                throw TarError.malformed("PAX record shorter than its length prefix")
+            }
+            let body = data[bodyStart..<bodyEnd]
             let text = String(decoding: body, as: UTF8.self)
             if let equals = text.firstIndex(of: "=") {
                 records[String(text[..<equals])] = String(text[text.index(after: equals)...])
@@ -310,8 +328,8 @@ public final class TarArchiveReader {
     }
 
     private func readMetadataContent(size: Int64) throws -> Data {
-        guard size <= Self.maxMetadataSize else {
-            throw TarError.malformed("metadata entry of \(size) bytes exceeds sanity limit")
+        guard size >= 0, size <= Self.maxMetadataSize else {
+            throw TarError.malformed("metadata entry of \(size) bytes is outside the sanity limit")
         }
         let padded = Self.paddedSize(size)
         let data = fileHandle.readData(ofLength: Int(padded))
@@ -337,6 +355,9 @@ public final class TarArchiveReader {
         contentRemaining = 0
     }
 
+    /// Rounds a content length up to the 512-byte block boundary. Callers must
+    /// have bounded `size` first (`maxEntrySize`/`maxMetadataSize`): the `+ 511`
+    /// traps on sizes near `Int64.max`.
     private static func paddedSize(_ size: Int64) -> Int64 {
         (size + 511) / 512 * 512
     }

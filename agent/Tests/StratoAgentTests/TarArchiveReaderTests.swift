@@ -133,6 +133,53 @@ struct TarArchiveReaderTests {
         }
     }
 
+    @Test("a PAX record shorter than its length prefix is rejected, not trapped")
+    func paxUndersizedRecord() throws {
+        // "2 " claims a 2-byte record, leaving the body range inverted.
+        var builder = TarTestBuilder()
+        builder.addRawPax(Data("2 ".utf8))
+        builder.addFile("placeholder", content: Data())
+        let path = try writeArchive(builder.finish())
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let reader = try TarArchiveReader(path: path)
+        #expect(throws: TarArchiveReader.TarError.self) {
+            _ = try reader.nextEntry()
+        }
+    }
+
+    @Test("a base-256 size of Int64.max is rejected, not trapped")
+    func base256SizeOverflow() throws {
+        // High bit set marks base-256; the remaining bytes decode to exactly
+        // Int64.max, which the padding arithmetic cannot round up.
+        let sizeField: [UInt8] = [0x80, 0x00, 0x00, 0x00, 0x7f] + [UInt8](repeating: 0xff, count: 7)
+        var builder = TarTestBuilder()
+        builder.addFileWithRawSizeField("huge", sizeField: sizeField)
+        let path = try writeArchive(builder.finish())
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let reader = try TarArchiveReader(path: path)
+        #expect(throws: TarArchiveReader.TarError.self) {
+            _ = try reader.nextEntry()
+        }
+    }
+
+    @Test("a PAX size override outside the entry-size bounds is rejected")
+    func paxSizeOverrideOutOfRange() throws {
+        for size in ["9223372036854775807", "-4096"] {
+            var builder = TarTestBuilder()
+            builder.addPax(["size": size])
+            builder.addFile("placeholder", content: Data())
+            let path = try writeArchive(builder.finish())
+            defer { try? FileManager.default.removeItem(atPath: path) }
+
+            let reader = try TarArchiveReader(path: path)
+            #expect(throws: TarArchiveReader.TarError.self) {
+                _ = try reader.nextEntry()
+            }
+        }
+    }
+
     @Test("trailing-slash names are directories even with a file type flag")
     func trailingSlashDirectory() throws {
         var builder = TarTestBuilder()
