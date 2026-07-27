@@ -44,14 +44,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-
         // Verify project exists and user has access
-        guard try await Project.find(projectID, on: req.db) != nil else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
+        let projectID = try await req.requireProject().requireID()
 
         // Check user permission on project (view_project permission allows listing images)
         let hasPermission = try await req.can("view_project", on: "project", id: projectID.uuidString)
@@ -116,14 +110,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-
         // Verify project exists and user has create permission
-        guard try await Project.find(projectID, on: req.db) != nil else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
+        let projectID = try await req.requireProject().requireID()
 
         let hasPermission = try await req.can("update_project", on: "project", id: projectID.uuidString)
 

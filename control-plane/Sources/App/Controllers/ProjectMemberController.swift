@@ -82,7 +82,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// GET /api/projects/:projectID/members — user members + group grants.
     func list(req: Request) async throws -> ProjectMembersResponse {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -149,7 +149,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// POST /api/projects/:projectID/members — grant a user a role on the project.
     func grant(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -211,7 +211,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// PATCH /api/projects/:projectID/members/:userID — change a user's role.
     func updateRole(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -287,7 +287,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// DELETE /api/projects/:projectID/members/:userID — revoke a user's role.
     func revoke(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -332,7 +332,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// POST /api/projects/:projectID/groups — grant a group a role on the project.
     func grantGroup(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -394,7 +394,7 @@ struct ProjectMemberController: RouteCollection {
 
     /// DELETE /api/projects/:projectID/groups/:groupID — revoke a group's role.
     func revokeGroup(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -435,16 +435,6 @@ struct ProjectMemberController: RouteCollection {
     }
 
     // MARK: - Helpers
-
-    private func loadProject(_ req: Request) async throws -> Project {
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        return project
-    }
 
     /// The canonical role id string for a stored mirror value — a UUID as-is,
     /// or a legacy relational name mapped to its seeded id — so the response's

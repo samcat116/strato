@@ -84,7 +84,7 @@ struct ServiceAccountController: RouteCollection {
 
     /// GET /api/projects/:projectID/service-accounts
     func list(req: Request) async throws -> [ServiceAccountResponse] {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         let projectID = try project.requireID()
         try await req.authorize("serviceaccount:list", on: IAMNode(type: .project, id: projectID))
 
@@ -102,7 +102,7 @@ struct ServiceAccountController: RouteCollection {
 
     /// POST /api/projects/:projectID/service-accounts
     func create(req: Request) async throws -> Response {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         let projectID = try project.requireID()
         try await req.authorize("serviceaccount:create", on: IAMNode(type: .project, id: projectID))
 
@@ -379,16 +379,6 @@ struct ServiceAccountController: RouteCollection {
             roles[binding.principalID, default: []].append(role.rawValue)
         }
         return roles.mapValues { $0.sorted() }
-    }
-
-    private func loadProject(_ req: Request) async throws -> Project {
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        return project
     }
 
     private func loadAccount(_ req: Request) async throws -> ServiceAccount {
