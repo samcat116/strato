@@ -548,6 +548,44 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("A timed-out delete keeps converging on absent instead of resurrecting the VM")
+    func stuckDeleteKeepsConvergingOnAbsent() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
+            // A delete leaves `status` non-transitional: the user deleted a
+            // running VM and the agent has not reported the absence yet.
+            vm.setStatus(.running)
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
+            try await operation.save(on: app.db)
+            operation.createdAt = Date().addingTimeInterval(-400)  // past the 300s delete budget
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            // The operation times out, but the deletion intent survives it
+            // (issue #734) — reverting desired to `.running` here would have
+            // the agent recreate a fresh, blank VM under this id.
+            let swept = try await ResourceOperation.find(operation.id, on: app.db)
+            #expect(swept?.status == .failed)
+
+            let sweptVM = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(sweptVM.desiredStatus == .absent)
+            #expect(sweptVM.generation == vm.generation)
+
+            // The agent comes back and reports the VM absent: the delete still
+            // completes, row removed, rather than being re-materialized.
+            let envelope = try self.report(agentId: agentId, vms: [])
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
+
+            let gone = try await VM.find(vm.id, on: app.db)
+            #expect(gone == nil)
+        }
+    }
+
     @Test("Absence of an established VM that should exist marks it as error")
     func absenceOfEstablishedVMIsDrift() async throws {
         try await withVMTestApp { app, _, vm, _ in

@@ -161,6 +161,72 @@ final class VMOperationTests {
         }
     }
 
+    // MARK: - Completion guard (only one verdict per operation)
+
+    @Test("A stale pending instance cannot overwrite a recorded verdict")
+    func staleInstanceCannotOverwriteVerdict() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            // The two completion paths — the observed-state applier and the
+            // stuck-operation sweep — each load their own instance while the row
+            // is still pending. Whichever writes second is holding a stale
+            // in-memory `pending`, so only a database-side check can stop it.
+            let applierView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
+            let sweepView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
+
+            let applierWon = try await applierView.completeIfPending(as: .succeeded, error: nil, on: app.db)
+            #expect(applierWon)
+
+            #expect(sweepView.status == .pending)
+            let sweepWon = try await sweepView.completeIfPending(as: .failed, error: "timed out", on: app.db)
+            #expect(!sweepWon)
+
+            // The winner's verdict stands; the loser wrote nothing.
+            let settled = try #require(try await ResourceOperation.find(operation.id, on: app.db))
+            #expect(settled.status == .succeeded)
+            #expect(settled.error == nil)
+        }
+    }
+
+    @Test("Two concurrent completions with opposite verdicts: exactly one wins")
+    func concurrentCompletionsSettleOnOneVerdict() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .reboot)
+            try await operation.save(on: app.db)
+            let operationID = try operation.requireID()
+
+            let verdicts: [(status: VMOperationStatus, error: String?)] = [
+                (.succeeded, nil), (.failed, "timed out"),
+            ]
+            let wins = try await withThrowingTaskGroup(of: Bool.self) { group in
+                for verdict in verdicts {
+                    group.addTask {
+                        guard let view = try await ResourceOperation.find(operationID, on: app.db) else {
+                            return false
+                        }
+                        return try await view.completeIfPending(
+                            as: verdict.status, error: verdict.error, on: app.db)
+                    }
+                }
+                var results: [Bool] = []
+                for try await won in group { results.append(won) }
+                return results
+            }
+
+            #expect(wins.count(where: { $0 }) == 1)
+            #expect(wins.count(where: { !$0 }) == 1)
+
+            // The row settled on one of the two verdicts, consistently — a
+            // `.failed` row must carry its error and a `.succeeded` one must not.
+            let settled = try #require(try await ResourceOperation.find(operationID, on: app.db))
+            #expect(settled.status != .pending)
+            #expect(settled.completedAt != nil)
+            #expect((settled.status == .failed) == (settled.error != nil))
+        }
+    }
+
     // MARK: - Stuck-operation sweep (restart safety)
 
     @Test("The sweep fails a pending operation past its budget and resolves the VM")

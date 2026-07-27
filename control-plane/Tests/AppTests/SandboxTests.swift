@@ -163,10 +163,16 @@ final class SandboxTests {
             #expect(sandbox.revertDesiredToObserved() == false)
             #expect(sandbox.desiredStatus == .running)
 
-            // An unachieved `.absent` (failed delete) reverts to a resting state.
+            // A failed delete's `.absent` is never abandoned (issue #734):
+            // reverting it would resurrect a sandbox the user deleted, and the
+            // reconciler would recreate a blank one once the agent had torn it
+            // down. The generation must not move either.
+            sandbox.setStatus(.running)
             sandbox.setDesiredStatus(.absent)
-            #expect(sandbox.revertDesiredToObserved() == true)
-            #expect(sandbox.desiredStatus == .stopped)
+            let generation = sandbox.generation
+            #expect(sandbox.revertDesiredToObserved() == false)
+            #expect(sandbox.desiredStatus == .absent)
+            #expect(sandbox.generation == generation)
         }
     }
 
@@ -1254,6 +1260,43 @@ final class SandboxTests {
 
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .error)
+        }
+    }
+
+    @Test("A timed-out sandbox delete keeps converging on absent instead of resurrecting it")
+    func sweepLeavesStuckDeleteConvergingOnAbsent() async throws {
+        try await withSandboxTestApp { app, user, _, sandbox, _ in
+            let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
+
+            // A delete leaves `status` non-transitional: the user deleted a
+            // running sandbox and the agent has not reported the absence yet.
+            sandbox.setStatus(.running)
+            sandbox.setDesiredStatus(.absent)
+            try await sandbox.save(on: app.db)
+
+            let operation = ResourceOperation(
+                sandboxID: sandbox.id!, userID: user.id!, kind: .delete)
+            try await operation.save(on: app.db)
+            operation.createdAt = Date(timeIntervalSinceNow: -400)  // past the delete budget
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try #require(await ResourceOperation.find(operation.id, on: app.db))
+            #expect(swept.status == .failed)
+
+            // The timeout must not abandon the deletion (issue #734) — a live
+            // desired state would have the agent recreate a blank sandbox.
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.desiredStatus == .absent)
+            #expect(refreshed.generation == sandbox.generation)
+
+            // The agent returns and reports absence: the delete still lands.
+            let envelope = try self.report(agentId: agentId, sandboxes: [])
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
+
+            let gone = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(gone == nil)
         }
     }
 }

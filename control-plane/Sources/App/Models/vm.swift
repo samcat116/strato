@@ -291,12 +291,21 @@ extension VM {
 
     /// Realigns desired state with observed reality after a failed operation,
     /// bumping the generation. Without this, the unachieved intent lingers —
-    /// e.g. a delete that failed on a pre-state-sync agent leaves
-    /// `desired_status = .absent`, which a later sync (say, after the agent
-    /// upgrades to the state-sync protocol) would replay destructively without
-    /// any new user action. Returns whether anything changed; does not persist.
+    /// e.g. a failed boot leaves `desired_status = .running`, which a later
+    /// sync would replay without any new user action.
+    ///
+    /// A deletion's `.absent` is the one intent never abandoned (issue #734).
+    /// Replaying it is idempotent and converges on what the user already
+    /// committed to; reverting it to a live resting state resurrects a VM the
+    /// user deleted — and once the agent has torn the VM down, the reconciler
+    /// sees a live desired state for a VM it does not have and creates a fresh
+    /// blank one in its place. A stuck delete keeps converging toward absent.
+    ///
+    /// Returns whether anything changed; does not persist.
     @discardableResult
     func revertDesiredToObserved() -> Bool {
+        guard desiredStatus != .absent else { return false }
+
         let resting: DesiredVMStatus
         switch status {
         case .running, .starting:
@@ -315,8 +324,10 @@ extension VM {
     /// (issue #259/#412): a still-transitional VM — or one whose `create` never
     /// settled (`.created`) — is escalated to `.error`, then desired state is
     /// realigned with observed reality (`revertDesiredToObserved`) so the
-    /// unachieved intent does not linger and replay destructively on a later
-    /// sync. Shared by `ResourceOperationCoordinator.recordVerdict` and the
+    /// unachieved intent does not linger and replay on a later sync. A stuck
+    /// *delete* is exempt from that realignment — see
+    /// `revertDesiredToObserved` — so a timed-out delete cannot resurrect the
+    /// VM. Shared by `ResourceOperationCoordinator.recordVerdict` and the
     /// stuck-operation sweep; `telemetryReason` keeps a reported failure
     /// (`operation_failed`) distinct from a swept timeout (`stuck_operation`)
     /// in the error metric. Returns whether anything changed; does not persist
