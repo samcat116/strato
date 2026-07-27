@@ -360,6 +360,15 @@ final class VMOperationTests {
                 #expect(operations.count == 1)
                 #expect(operations.first?.id == newer.id)
             }
+
+            // A malformed limit is a 400 here too, not a silent fall back to
+            // the default — every int query parameter goes through the same
+            // shared parse (issue #732).
+            try await app.test(.GET, "/api/vms/\(vm.id!)/operations?limit=abc") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
         }
     }
 }

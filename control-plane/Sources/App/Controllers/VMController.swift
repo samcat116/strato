@@ -91,8 +91,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
         let vmID = try vm.requireID()
 
-        let requestedLimit: Int = req.query["limit"] ?? 20
-        let limit = min(max(requestedLimit, 1), 100)
+        let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
         let operations = try await ResourceOperation.query(on: req.db)
             .filter(\.$resourceKind == .virtualMachine)
