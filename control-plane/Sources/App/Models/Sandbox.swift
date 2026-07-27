@@ -221,15 +221,19 @@ extension Sandbox {
 
     /// Realigns desired state with observed reality after a failed operation,
     /// bumping the generation — same rationale as `VM.revertDesiredToObserved`:
-    /// a failed operation's unachieved intent (e.g. a delete's `.absent`) must
-    /// not linger and replay destructively on a later sync. Returns whether
-    /// anything changed; does not persist.
+    /// a failed operation's unachieved intent must not linger and replay on a
+    /// later sync, except for a deletion's `.absent`, which is never abandoned
+    /// (issue #734) because reverting it resurrects a sandbox the user deleted
+    /// and has the reconciler recreate a blank one. Returns whether anything
+    /// changed; does not persist.
     @discardableResult
     func revertDesiredToObserved() -> Bool {
+        guard desiredStatus != .absent else { return false }
+
         // An already-satisfied desired state needs no realignment. This also
         // handles `.exited`, which satisfies both `.running` and `.stopped`,
         // without churning the desired value (and generation) either way.
-        if desiredStatus != .absent, desiredStatus.isSatisfied(by: status) {
+        if desiredStatus.isSatisfied(by: status) {
             return false
         }
         let resting: DesiredSandboxStatus
@@ -248,7 +252,8 @@ extension Sandbox {
     /// still-transitional sandbox — or one whose `create` was never confirmed
     /// by any agent (`observedGeneration == 0`; sandboxes have no
     /// `.created`-style pre-placement status) — to `.error`, then realigns
-    /// desired state with observed reality. Shared by
+    /// desired state with observed reality (a stuck *delete* is exempt, so it
+    /// cannot resurrect the sandbox). Shared by
     /// `ResourceOperationCoordinator.recordVerdict` and the stuck-operation
     /// sweep. Returns whether anything changed; does not persist — call
     /// `save(on:)` afterwards.
