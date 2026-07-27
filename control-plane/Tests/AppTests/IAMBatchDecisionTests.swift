@@ -306,9 +306,15 @@ final class IAMBatchDecisionTests {
             let sameVerdicts = second.mapValues(\.allowed) == first.mapValues(\.allowed)
             #expect(sameVerdicts)
 
-            try await Task.sleep(for: .milliseconds(500))
+            await app.iamDecisionRecorder.flush()
             let rows = try await IAMDecisionLog.query(on: app.db).count()
             #expect(rows == nodes.count, "expected one row per node, got \(rows)")
+
+            // And the whole batch cost one insert pass (#736): the rows ride
+            // the shared queue, which hands the drain up to `maxBatchSize` of
+            // them as a single multi-row statement.
+            let writes = app.iamDecisionRecorder.writeCount.withLockedValue { $0 }
+            #expect(writes == 1, "expected one insert for \(nodes.count) decisions, got \(writes)")
 
             let actions = Set(try await IAMDecisionLog.query(on: app.db).all().compactMap(\.iamAction))
             #expect(actions == ["vm:read"])
@@ -341,7 +347,7 @@ final class IAMBatchDecisionTests {
                 #expect(res.status == .ok)
             }
 
-            try await Task.sleep(for: .milliseconds(500))
+            await app.iamDecisionRecorder.flush()
             let rows = try await IAMDecisionLog.query(on: app.db)
                 .filter(\.$resourceID == vmID)
                 .all()
