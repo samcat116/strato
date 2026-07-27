@@ -654,29 +654,6 @@ final class SchedulerService: @unchecked Sendable {
         logger.debug("Random selected agent '\(selected.name)'")
         return selected
     }
-
-    // MARK: - Utility Methods
-
-    /// Get a human-readable description of scheduling decision
-    func getSchedulingInfo(for agentId: String, in agents: [SchedulableAgent]) -> String? {
-        guard let agent = agents.first(where: { $0.id == agentId }) else {
-            return nil
-        }
-
-        return """
-            Agent: \(agent.name)
-            Status: \(agent.status)
-            CPU: \(agent.availableCPU)/\(agent.totalCPU) (\(String(format: "%.1f%%", agent.cpuUtilization * 100)) used)
-            Memory: \(formatBytes(agent.availableMemory))/\(formatBytes(agent.totalMemory)) (\(String(format: "%.1f%%", agent.memoryUtilization * 100)) used)
-            Disk: \(formatBytes(agent.availableDisk))/\(formatBytes(agent.totalDisk)) (\(String(format: "%.1f%%", agent.diskUtilization * 100)) used)
-            Running VMs: \(agent.runningVMCount)
-            """
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / (1024 * 1024 * 1024)
-        return String(format: "%.1f GB", gb)
-    }
 }
 
 // MARK: - Application Extension

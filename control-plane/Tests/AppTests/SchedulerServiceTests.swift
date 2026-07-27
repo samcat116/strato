@@ -685,37 +685,6 @@ struct SchedulerServiceTests {
         }
     }
 
-    // MARK: - Utility Method Tests
-
-    @Test("getSchedulingInfo returns formatted information")
-    func testGetSchedulingInfo() throws {
-        let logger = Logger(label: "test")
-        let scheduler = SchedulerService(logger: logger)
-
-        let agents = [
-            createTestAgent(
-                id: "agent1",
-                name: "test-agent",
-                totalCPU: 8,
-                availableCPU: 6,
-                totalMemory: 16_000_000_000,
-                availableMemory: 12_000_000_000,
-                totalDisk: 100_000_000_000,
-                availableDisk: 80_000_000_000,
-                status: .online,
-                runningVMCount: 3
-            )
-        ]
-
-        let info = scheduler.getSchedulingInfo(for: "agent1", in: agents)
-
-        #expect(info != nil)
-        #expect(info!.contains("test-agent"))
-        #expect(info!.contains("online"))
-        #expect(info!.contains("6/8"))
-        #expect(info!.contains("Running VMs: 3"))
-    }
-
     // MARK: - Machine profile: Secure Boot and vTPM (issue #565)
 
     /// Requirements for a Windows-shaped VM: firmware boot with Secure Boot
@@ -845,19 +814,5 @@ struct SchedulerServiceTests {
         let windowsRequirements = SchedulerService.placementRequirements(for: windows)
         #expect(windowsRequirements.requiresVTPM)
         #expect(windowsRequirements.requiresSecureBoot)
-    }
-
-    @Test("getSchedulingInfo returns nil for unknown agent")
-    func testGetSchedulingInfoUnknownAgent() throws {
-        let logger = Logger(label: "test")
-        let scheduler = SchedulerService(logger: logger)
-
-        let agents = [
-            createTestAgent(id: "agent1", name: "agent1")
-        ]
-
-        let info = scheduler.getSchedulingInfo(for: "unknown", in: agents)
-
-        #expect(info == nil)
     }
 }
