@@ -278,21 +278,6 @@ The scheduler logs detailed information about placement decisions:
 [INFO] Selected agent 'hypervisor-01' for VM 'web-server-1' - CPU: 12/16, Memory: 24GB/32GB, Disk: 100GB/500GB
 ```
 
-### Diagnostic Endpoints
-
-You can use `SchedulerService.getSchedulingInfo()` to get human-readable agent information:
-
-```swift
-let info = req.scheduler.getSchedulingInfo(for: agentId, in: schedulableAgents)
-// Returns:
-// Agent: hypervisor-01
-// Status: online
-// CPU: 12/16 (75.0% used)
-// Memory: 24.0 GB/32.0 GB (75.0% used)
-// Disk: 100.0 GB/500.0 GB (20.0% used)
-// Running VMs: 8
-```
-
 ## Future Enhancements
 
 Potential improvements for future versions:
