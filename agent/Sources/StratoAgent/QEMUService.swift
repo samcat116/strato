@@ -678,75 +678,12 @@ actor QEMUService: HypervisorService {
         }
     }
 
-    /// Freezes the attached guest's filesystems for an application-consistent
-    /// snapshot. Returns whether a freeze was **attempted** against a responsive
-    /// guest agent — the caller MUST `thawGuestFilesystems` whenever this is
-    /// `true`, because `guest-fsfreeze-freeze` can leave the guest frozen even
-    /// when its reply arrives *after* the budget (freezing flushes every guest
-    /// filesystem and is legitimately slow under I/O load), and a frozen guest
-    /// left un-thawed blocks all guest I/O. `false` (no qga socket, or the guest
-    /// agent didn't answer a liveness ping) means nothing was frozen and the
-    /// snapshot is crash-consistent — the pre-#563 behavior.
-    func freezeGuestFilesystems(vmId: String) async -> Bool {
-        guard let client = qgaClient(vmId: vmId) else { return false }
-
-        // Confirm the guest agent is actually answering before freezing.
-        // Otherwise a running-but-qga-less guest (its socket exists, but nothing
-        // is listening) would pay a freeze-timeout *and* a thaw-timeout on every
-        // snapshot. A ping is a quick sync round-trip.
-        do {
-            try await StageBudget.run(
-                seconds: StageBudget.guestAgentSeconds, stage: "qga-ping", onTimeout: .cancelAndWait
-            ) {
-                try await client.ping()
-            }
-        } catch {
-            logger.debug(
-                "Guest agent not responding; snapshot will be crash-consistent",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-            return false
-        }
-
-        // From here the guest may end up frozen even if the freeze reply is
-        // late, so the caller must thaw regardless of the outcome below.
-        do {
-            let count = try await StageBudget.run(
-                seconds: StageBudget.guestFreezeSeconds, stage: "qga-fsfreeze", onTimeout: .cancelAndWait
-            ) {
-                try await client.freezeFilesystems()
-            }
-            logger.info(
-                "Froze guest filesystems for snapshot",
-                metadata: ["vmId": .string(vmId), "frozen": .stringConvertible(count)])
-        } catch {
-            logger.warning(
-                "Guest fs-freeze did not confirm within its budget; thawing regardless (snapshot may be crash-consistent)",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-        }
-        return true
-    }
-
-    /// Thaws the attached guest's filesystems after a snapshot. Safe (and
-    /// intended) to call unconditionally once a freeze was attempted — a frozen
-    /// guest is worse than a crash-consistent snapshot, and qga returns 0 when
-    /// nothing is frozen — so a thaw failure is logged loudly.
-    func thawGuestFilesystems(vmId: String) async {
-        guard let client = qgaClient(vmId: vmId) else { return }
-        do {
-            let count = try await StageBudget.run(
-                seconds: StageBudget.guestAgentSeconds, stage: "qga-fsthaw", onTimeout: .cancelAndWait
-            ) {
-                try await client.thawFilesystems()
-            }
-            logger.info(
-                "Thawed guest filesystems after snapshot",
-                metadata: ["vmId": .string(vmId), "thawed": .stringConvertible(count)])
-        } catch {
-            logger.error(
-                "Guest fs-thaw failed; guest filesystems may remain frozen",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-        }
-    }
+    // Volume snapshots used to fs-freeze the attached guest here (issue #563).
+    // Issue #747 removed that: the overlay the freeze wrapped was never made
+    // the guest's active layer, so quiescing bought a consistency signal for a
+    // snapshot that captured nothing. Snapshots of an attached volume are
+    // refused instead; `QGAClient` keeps the freeze/thaw verbs for the real
+    // live-snapshot path.
 
     // MARK: - CPU/memory hot-add (issue #568)
 

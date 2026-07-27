@@ -266,9 +266,9 @@ public struct CloudInitProvisioner {
             chpasswd:
               expire: false
             ssh_pwauth: true
-            # Install the QEMU guest agent so the host can do verified shutdown,
-            # fs-freeze snapshots, and guest IP reporting. Most cloud images
-            # already ship it; this covers those that don't.
+            # Install the QEMU guest agent so the host can do verified shutdown
+            # and guest IP reporting. Most cloud images already ship it; this
+            # covers those that don't.
             packages:
               - qemu-guest-agent
             # Bring hot-added vCPUs/memory online automatically (issue #568).
@@ -379,7 +379,7 @@ public struct CloudInitProvisioner {
     static let qgaSetupScript = """
         #!/bin/sh
         # Strato guest-agent setup: install the QEMU guest agent so the host can
-        # do verified shutdown, fs-freeze snapshots, and guest IP reporting
+        # do verified shutdown and guest IP reporting
         # (issue #563). Most cloud images already ship it; this covers those
         # that don't, without requiring image changes.
         if command -v apt-get >/dev/null 2>&1; then
