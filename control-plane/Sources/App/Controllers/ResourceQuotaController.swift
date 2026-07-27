@@ -231,12 +231,12 @@ struct ResourceQuotaController: RouteCollection {
             quota.isEnabled = isEnabled
         }
 
-        // Structure only: the counters now hold real usage, and a scope that is
-        // already over a limit this request didn't touch must stay editable —
+        // Scope and limit invariants only. The counters now hold real usage, and a
+        // scope already over a limit this request didn't touch must stay editable —
         // raising, disabling or renaming such a quota is exactly how an operator
         // fixes it. Every limit this request *did* change was checked against the
         // same fresh figures above.
-        try quota.validateStructure()
+        try quota.validate()
         try await quota.save(on: req.db)
 
         return ResourceQuotaResponse(from: quota)
@@ -263,6 +263,10 @@ struct ResourceQuotaController: RouteCollection {
         // resync and are still zero for a quota created over an already populated
         // scope, so the guard used to wave through the deletion of a quota holding
         // back live VMs and sandboxes (issue #742).
+        //
+        // Measures without writing the figures back, unlike `update`: the row is
+        // either about to be deleted or is being left alone by a rejected request,
+        // so there is nothing here for a healed cache to be read by.
         let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
         if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
             || usage.sandboxCount > 0
@@ -625,7 +629,7 @@ struct ResourceQuotaController: RouteCollection {
             isEnabled: createRequest.isEnabled ?? true
         )
 
-        try quota.validateStructure()
+        try quota.validate()
 
         // Backfill the reservation counters from the workloads the new quota
         // already governs, so the stored figures are honest from the moment the
