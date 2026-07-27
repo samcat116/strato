@@ -1,0 +1,20 @@
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_c0d7ec587116bf::t_e01e6047193a60 23
+  s_c0d7ec587116bf::t_a16e71c17acb6e 117-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "924731fb6750086467c790c02f2252c922a7e399",
+  "prompts": {},
+  "sessions": {
+    "s_c0d7ec587116bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdd95c3e-3999-4185-a813-9e72ba036106",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
