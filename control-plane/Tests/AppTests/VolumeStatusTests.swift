@@ -30,4 +30,17 @@ struct VolumeStatusTests {
         let expected = status == .available
         #expect(volume.canSnapshot == expected)
     }
+
+    @Test("canClone admits only a detached volume", arguments: VolumeStatus.allCases)
+    func testCanClone(status: VolumeStatus) {
+        let volume = Volume()
+        volume.status = status
+
+        // Cloning copies the volume's file, so an attached source is torn for
+        // the same reason an attached snapshot isn't point-in-time. `canClone`
+        // is its own rule rather than a reuse of `canSnapshot` so relaxing one
+        // (issue #747's live-snapshot path) can't silently relax the other.
+        let expected = status == .available
+        #expect(volume.canClone == expected)
+    }
 }

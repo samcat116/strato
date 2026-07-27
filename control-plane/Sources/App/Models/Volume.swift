@@ -241,6 +241,15 @@ extension Volume {
         return status == .available
     }
 
+    /// Cloning is `qemu-img convert` of the volume's file, so it has the same
+    /// requirement as a snapshot: a guest writing the source mid-copy yields a
+    /// torn image. Its own property rather than a reuse of `canSnapshot`, so
+    /// the two rules can move independently — a live-snapshot path (issue #747)
+    /// would relax one without relaxing the other.
+    var canClone: Bool {
+        return status == .available
+    }
+
     /// A volume is deletable from every state except while actively `.attached`
     /// to a VM (detach it first). `.deleting` was always retryable — agent-side
     /// directory removal is idempotent, so re-issuing the DELETE is safe — and

@@ -89,6 +89,25 @@ struct VolumeSnapshotGuardTests {
         }
     }
 
+    @Test("Cloning an attached volume is refused with 409")
+    func attachedVolumeCannotBeCloned() async throws {
+        try await withVolume(status: .attached, attachedToVM: true) { app, volume, token in
+            // Clone shares the guard's reasoning: `qemu-img convert` of a file
+            // a guest is writing produces a torn copy. It used to share
+            // `canSnapshot` outright, so this pins it as its own rule.
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(CloneVolumeRequest(name: "guard-clone", description: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("detach the volume first"))
+            }
+
+            let volumeCount = try await Volume.query(on: app.db).count()
+            #expect(volumeCount == 1)
+        }
+    }
+
     @Test("Snapshotting a detached volume passes the status guard")
     func detachedVolumeIsAdmitted() async throws {
         try await withVolume(status: .available) { app, volume, token in

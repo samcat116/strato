@@ -206,6 +206,11 @@ The control plane rejects a snapshot of an `attached` volume with `409`
 that still names an attached VM in `VolumeSnapshotMessage.attachedVMId` — a
 guard against an older control plane or drifted bookkeeping.
 
+Cloning has its own `canClone` with the same rule, for a related reason: it is
+a `qemu-img convert` of the volume's file, and a guest writing the source
+mid-copy produces a torn image. The two are separate properties so a future
+live-snapshot path can relax one without relaxing the other.
+
 This replaces the fs-freeze quiescing added in issue #563: freezing the guest
 around overlay creation produced an application-consistency *signal* for a
 snapshot that captured nothing, which is worse than refusing. `QGAClient` still

@@ -723,12 +723,20 @@ struct VolumeController: RouteCollection {
         let sourceVolume = try await fetchVolumeWithPermission(req: req, user: user, permission: "clone")
         let request = try req.content.decode(CloneVolumeRequest.self)
 
-        // Validate source volume can be cloned
-        guard sourceVolume.canSnapshot else {
+        // Validate source volume can be cloned. As with snapshots (issue #747),
+        // an attached volume gets a message naming the fix rather than the
+        // generic status text.
+        guard sourceVolume.canClone else {
+            if sourceVolume.status == .attached {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Volume is attached to a running VM. Cloning copies the volume's file, so a guest writing it mid-copy would produce a torn image; detach the volume first."
+                )
+            }
             throw Abort(
                 .conflict,
-                reason:
-                    "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available' or 'attached'"
+                reason: "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available'"
             )
         }
 
