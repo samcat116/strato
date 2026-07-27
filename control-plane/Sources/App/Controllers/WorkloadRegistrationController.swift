@@ -173,12 +173,7 @@ struct WorkloadRegistrationController: RouteCollection {
     }
 
     private func loadGrantTarget(_ req: Request) async throws -> (Project, WorkloadRegistration) {
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
+        let project = try await req.requireProject()
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }

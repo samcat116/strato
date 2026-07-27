@@ -38,7 +38,7 @@ struct RegistryPullSecretController: RouteCollection {
 
     /// GET — every pull secret in the project (metadata only, no secrets).
     func list(req: Request) async throws -> [RegistryPullSecretResponse] {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
         let secrets = try await RegistryPullSecret.query(on: req.db)
@@ -50,7 +50,7 @@ struct RegistryPullSecretController: RouteCollection {
 
     /// POST — add a credential for a registry the project has none for yet.
     func create(req: Request) async throws -> Response {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
@@ -98,7 +98,7 @@ struct RegistryPullSecretController: RouteCollection {
     /// immutable: pointing a credential at a different registry is a
     /// delete-and-create, not an edit.
     func update(req: Request) async throws -> RegistryPullSecretResponse {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
@@ -124,7 +124,7 @@ struct RegistryPullSecretController: RouteCollection {
     /// DELETE — remove the credential. Sandboxes already pinned to a digest
     /// keep converging on it; their next pull simply becomes anonymous.
     func delete(req: Request) async throws -> HTTPStatus {
-        let project = try await loadProject(req)
+        let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
@@ -161,16 +161,6 @@ struct RegistryPullSecretController: RouteCollection {
             throw Abort(.badRequest, reason: "'registry' must be a registry host like 'ghcr.io'")
         }
         return host
-    }
-
-    private func loadProject(_ req: Request) async throws -> Project {
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        return project
     }
 
     private func loadSecret(_ req: Request, in project: Project) async throws -> RegistryPullSecret {

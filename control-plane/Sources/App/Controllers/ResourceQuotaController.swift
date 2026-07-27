@@ -423,13 +423,8 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
+        let project = try await req.requireProject()
+        let projectID = try project.requireID()
 
         // Verify user has access to project
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
@@ -448,15 +443,10 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
+        let project = try await req.requireProject()
+        let projectID = try project.requireID()
 
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
-
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
 
         // Verify user has admin access to project
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
@@ -530,9 +520,7 @@ struct ResourceQuotaController: RouteCollection {
             }
             try await OrganizationAccessService.requireMember(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {
-            guard let project = try await Project.find(projectID, on: req.db) else {
-                throw Abort(.notFound, reason: "Project not found")
-            }
+            let project = try await req.requireProject(id: projectID)
             try await OrganizationAccessService.requireProjectMember(project: project, on: req)
         } else {
             try requireSystemAdminForScopelessQuota(on: req)
@@ -548,9 +536,7 @@ struct ResourceQuotaController: RouteCollection {
             }
             try await OrganizationAccessService.requireAdmin(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {
-            guard let project = try await Project.find(projectID, on: req.db) else {
-                throw Abort(.notFound, reason: "Project not found")
-            }
+            let project = try await req.requireProject(id: projectID)
             try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
         } else {
             try requireSystemAdminForScopelessQuota(on: req)
