@@ -193,9 +193,6 @@ struct NetworkController: RouteCollection {
             }
         }
 
-        try await Self.assertNameSafeForFleet(
-            name: name, projectId: projectId, siteId: request.siteId, on: req.db)
-
         let network = LogicalNetwork(
             name: name,
             subnet: subnet,
@@ -217,6 +214,13 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
+                // Inside the transaction, under a name lock: two concurrent
+                // cross-project creates of the same name would otherwise both
+                // observe "no collision" and both commit, since the unique
+                // index is per project.
+                try await LogicalNetworkService.lockName(name, on: db)
+                try await Self.assertNameSafeForFleet(
+                    name: name, projectId: projectId, siteId: request.siteId, on: db)
                 try await network.save(on: db)
                 try await RoleBindingService.grant(
                     principalType: .user,
@@ -273,15 +277,19 @@ struct NetworkController: RouteCollection {
         // Renaming an in-use network is safe since issue #765: NICs, addresses
         // and the agent's OVN objects all key on the row id, so the name is a
         // display label nothing resolves through.
+        //
+        // Set only when the name actually changes, so an unrelated edit that
+        // echoes the current name back doesn't get held to the collision guard.
+        var renamedTo: String?
         if let newName = request.name, newName != network.name {
             let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 throw Abort(.badRequest, reason: "Network name must not be empty")
             }
-            // Renaming *into* a collision is the same hazard as creating one.
-            try await Self.assertNameSafeForFleet(
-                name: trimmed, projectId: network.$project.id, siteId: network.$site.id, on: req.db)
+            // Renaming *into* a collision is the same hazard as creating one;
+            // the guard runs with the save, under the name lock.
             network.name = trimmed
+            renamedTo = trimmed
         }
 
         // Track changes that alter how agents realize the network's L3, so the
@@ -450,7 +458,17 @@ struct NetworkController: RouteCollection {
         }
 
         do {
-            try await network.save(on: req.db)
+            let pendingRename = renamedTo
+            try await req.db.transaction { db in
+                // A rename into a cross-project collision needs the same
+                // in-transaction check under the same name lock as create.
+                if let renamedTo = pendingRename {
+                    try await LogicalNetworkService.lockName(renamedTo, on: db)
+                    try await Self.assertNameSafeForFleet(
+                        name: renamedTo, projectId: network.$project.id, siteId: network.$site.id, on: db)
+                }
+                try await network.save(on: db)
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
@@ -537,6 +555,11 @@ struct NetworkController: RouteCollection {
     /// Scoped to the fleet that could realize the network: its site's agents
     /// when pinned, otherwise every agent (an unpinned network can be realized
     /// on any host a VM lands on).
+    ///
+    /// This is one half of the guard. It cannot see an agent that joins *later*
+    /// — a rollback to an older binary, or a newly-enrolled one — so
+    /// `AgentService.registerAgent` runs the mirror check and refuses such a
+    /// registration.
     static func assertNameSafeForFleet(
         name: String, projectId: UUID, siteId: UUID?, on db: Database
     ) async throws {

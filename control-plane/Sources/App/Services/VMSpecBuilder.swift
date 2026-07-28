@@ -84,15 +84,30 @@ struct VMSpecBuilder {
     /// `securityGroupsByInterface` maps NIC id → its security-group ids;
     /// missing entries emit nil (unmanaged), which is also the default so
     /// callers that predate security groups — and tests — need not fetch it.
+    ///
+    /// `logger`, when supplied, records a dropped NIC. A miss is only reachable
+    /// through an assembly bug, but dropping one silently costs a VM a NIC with
+    /// no symptom anywhere — so the sync paths pass a logger and the pure
+    /// callers (tests) need not.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
-        securityGroupsByInterface: [UUID: [UUID]] = [:]
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        logger: Logger? = nil
     ) -> [NetworkSpec] {
         interfaces
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .compactMap { interface in
-                guard let network = networks[interface.logicalNetworkID] else { return nil }
+                guard let network = networks[interface.logicalNetworkID] else {
+                    logger?.error(
+                        "NIC's logical network was not loaded; omitting it from the VM spec",
+                        metadata: [
+                            "interfaceId": .string(interface.id?.uuidString ?? "unsaved"),
+                            "networkId": .string(interface.logicalNetworkID.uuidString),
+                            "deviceName": .string(interface.deviceName),
+                        ])
+                    return nil
+                }
                 return NetworkSpec.build(
                     interface: interface,
                     network: network,
@@ -155,7 +170,8 @@ struct VMSpecBuilder {
     static func buildVMSpecWithVolumes(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
-        securityGroupsByInterface: [UUID: [UUID]] = [:]
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        logger: Logger? = nil
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -184,7 +200,7 @@ struct VMSpecBuilder {
             volumes: volumes,
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
-                securityGroupsByInterface: securityGroupsByInterface),
+                securityGroupsByInterface: securityGroupsByInterface, logger: logger),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData

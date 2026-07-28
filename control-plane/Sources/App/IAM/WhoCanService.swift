@@ -698,9 +698,12 @@ enum WhoCanService {
 
     /// Whether the principal can reach the evaluator at all: its row exists,
     /// and (for a user) the account is not disabled. This has to precede the
-    /// decision — the compiled set contains permits over *any* principal
-    /// (`platform-open-network-read`), so an id nobody can authenticate as
-    /// would otherwise be reported able to act.
+    /// decision, because the compiled set may contain permits over *any*
+    /// principal — an id nobody can authenticate as would otherwise be
+    /// reported able to act. (No such permit exists today: the one that did,
+    /// `platform-open-network-read`, went away with global networks in issue
+    /// #765. The guard stays, since the next unconstrained permit must not
+    /// silently reintroduce the hole.)
     private static func principalMayAct(_ principal: IAMPrincipal, on db: any Database) async throws -> Bool {
         switch principal.type {
         case .user:

@@ -100,7 +100,8 @@ struct DesiredStateAssembler {
                 volumes: vm.volumes,
                 networkInterfaces: vm.networkInterfaces,
                 networks: networksByID,
-                securityGroupsByInterface: securityGroupsByInterface
+                securityGroupsByInterface: securityGroupsByInterface,
+                logger: app.logger
             )
 
             // Image download info lets the agent materialize a VM it doesn't

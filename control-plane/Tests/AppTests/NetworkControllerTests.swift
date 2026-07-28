@@ -407,6 +407,56 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("A pre-v21 agent cannot register into a fleet that already has colliding names")
+    func registrationRefusedWhenNamesAlreadyCollide() async throws {
+        try await withNetworkTestApp { app, user, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try #require(try await Organization.find(user.currentOrganizationId, on: app.db))
+            let neighbour = try await builder.createProject(
+                name: "Late Rollback Neighbour", description: "p", organization: org)
+
+            // Two projects legitimately own "default" while the whole fleet is
+            // current. The create-time guard cannot see an agent that joins
+            // afterwards, so registration runs the mirror check (issue #765).
+            try await builder.createNetwork(
+                name: "default", project: project, subnet: "10.50.0.0/24", gateway: "10.50.0.1")
+            try await builder.createNetwork(
+                name: "default", project: neighbour, subnet: "10.51.0.0/24", gateway: "10.51.0.1")
+
+            func register(protocolVersion: Int, named name: String) async throws -> UUID {
+                let message = AgentRegisterMessage(
+                    agentId: name,
+                    hostname: "rollback-host",
+                    version: "1.0.0",
+                    capabilities: ["qemu"],
+                    resources: AgentResources(
+                        totalCPU: 8, availableCPU: 8,
+                        totalMemory: 1 << 33, availableMemory: 1 << 33,
+                        totalDisk: 1 << 39, availableDisk: 1 << 39
+                    ),
+                    protocolVersion: protocolVersion
+                )
+                return try await app.agentService.registerAgent(
+                    message, agentName: name, organizationScope: .organization(org.id!))
+            }
+
+            await #expect(throws: AgentServiceError.self) {
+                _ = try await register(
+                    protocolVersion: WireProtocol.projectNetworkIsolationMinimumVersion - 1,
+                    named: "rolled-back-agent")
+            }
+            // The refusal is total: no half-registered row survives it.
+            let rows = try await Agent.query(on: app.db).filter(\.$name == "rolled-back-agent").count()
+            #expect(rows == 0)
+
+            // A current agent joins the same fleet without complaint.
+            _ = try await register(
+                protocolVersion: WireProtocol.currentVersion, named: "current-agent")
+            let current = try await Agent.query(on: app.db).filter(\.$name == "current-agent").count()
+            #expect(current == 1)
+        }
+    }
+
     @Test("POST /api/networks accepts a name another project already uses")
     func createAllowsDuplicateNameAcrossProjects() async throws {
         try await withNetworkTestApp { app, user, project, token in
