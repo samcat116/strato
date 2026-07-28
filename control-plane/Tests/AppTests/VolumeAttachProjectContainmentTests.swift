@@ -102,8 +102,14 @@ struct VolumeAttachProjectContainmentTests {
                 try req.content.encode(
                     AttachVolumeRequest(vmId: vm.id!, deviceName: nil, bootOrder: nil, readonly: nil))
             } afterResponse: { res in
-                // The containment guard admits it; the request then fails at
-                // the agent round-trip, since no agent is connected in tests.
+                // Pin the *specific* downstream failure, not merely the absence
+                // of the containment message: an attach that clears every guard
+                // dies at the agent dispatch (`VolumeServiceError.agentNotFound`
+                // is not an `AbortError`, so it surfaces as 500). Asserting only
+                // that the containment reason is missing would still pass if a
+                // refactor moved some earlier-firing check ahead of the guard —
+                // any such check answers 400/403/404/409 and fails here.
+                #expect(res.status == .internalServerError)
                 #expect(!res.body.string.contains("belongs to a different project"))
             }
 
