@@ -768,6 +768,17 @@ export interface SSOLookupResponse {
   providers: PublicOIDCProvider[];
 }
 
+/**
+ * Whether the sign-in screen should offer account creation.
+ * `selfRegistrationEnabled` is the effective answer — an install with no users
+ * reports it as true even when the operator disabled self-registration, since
+ * the first account always has to be creatable.
+ */
+export interface RegistrationPolicy {
+  selfRegistrationEnabled: boolean;
+  bootstrapRequired: boolean;
+}
+
 // Shared Signals Framework receiver streams (org-scoped; managed by org admins)
 export interface SSFStream {
   id: string;

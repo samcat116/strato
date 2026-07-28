@@ -19,6 +19,26 @@ reclaimed. The idle window defaults to 7 days and is set with
 `SESSION_TTL_SECONDS` (seconds; values under 60 are ignored). Shorten it for
 stricter re-authentication; note it bounds inactivity, not total session age.
 
+## Self-registration
+
+By default anyone who can reach the sign-in screen can create an account from
+it. Deployments that provision users themselves — admin invitations or SSO —
+close that door with `SELF_REGISTRATION_ENABLED=false` (Helm:
+`strato.selfRegistrationEnabled: false`). The sign-in screen then stops
+offering account creation and `POST /api/users/register` is refused, so the
+setting holds even against someone who types `/register` directly.
+
+The first account is the exception: it can always be created, whatever the
+setting says. An installation with no users has no administrator who could
+invite anyone, so refusing there would lock everyone out permanently. As soon
+as that account exists the door closes again — meaning you can ship the setting
+disabled from day one and still complete first-run setup. To bootstrap without
+a browser at all, use the `bootstrap` command instead (see
+[Docker Compose](/deployment/docker-compose#without-a-browser-ci-automation)).
+
+Existing users are unaffected: this gates account creation only, not sign-in,
+invitations, SCIM provisioning, or SSO.
+
 ## WebAuthn hostname requirements
 
 Strato authenticates users exclusively with WebAuthn/Passkeys, which browsers

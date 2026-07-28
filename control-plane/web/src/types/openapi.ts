@@ -1281,8 +1281,30 @@ export interface paths {
         /**
          * Self-register an account
          * @description Public. Creates the account row only; the caller must immediately enroll a passkey via `/auth/register/begin` + `/auth/register/finish` from the same browser session, which is bound to this account as a one-shot enrollment grant. The first account created in a deployment becomes a system admin.
+         *
+         *     Returns 403 when the operator has disabled self-registration (`SELF_REGISTRATION_ENABLED=false`), except while the deployment has no users at all — the first account can always be created.
          */
         post: operations["selfRegisterUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether accounts may be self-created
+         * @description Unauthenticated login-page surface: reports whether `/api/users/register` is currently accepting accounts, so the sign-in screen knows whether to offer account creation. `selfRegistrationEnabled` already accounts for bootstrap, so clients can render on it directly.
+         */
+        get: operations["getRegistrationPolicy"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7606,6 +7628,13 @@ export interface components {
             organizationID?: string | null;
             providers: components["schemas"]["OIDCProviderPublicSummary"][];
         };
+        /** @description Whether the sign-in screen should offer account creation. */
+        RegistrationPolicy: {
+            /** @description Whether `POST /api/users/register` will accept an account right now. False when the operator disabled self-registration, unless the deployment has no users yet. */
+            selfRegistrationEnabled: boolean;
+            /** @description True when no users exist, so the next account created is the first one and becomes the system admin. */
+            bootstrapRequired: boolean;
+        };
         /** @description A SCIM provisioning token; the secret itself is never returned. */
         SCIMTokenSummary: {
             /** Format: uuid */
@@ -10528,7 +10557,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getRegistrationPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective registration policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPolicy"];
+                };
+            };
         };
     };
     getUser: {

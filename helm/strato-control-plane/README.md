@@ -138,6 +138,7 @@ externalDatabase:
 | `strato.webauthn.relyingPartyId` | string | `"localhost"` | WebAuthn relying party identifier |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `"http://localhost:8080"` | WebAuthn relying party origin |
+| `strato.selfRegistrationEnabled` | bool | `true` | Allow visitors to create their own accounts from the sign-in screen. The first account is always creatable, so this can be `false` from the start |
 | `postgresql.enabled` | bool | `true` | Enable PostgreSQL subchart |
 | `postgresql.auth.database` | string | `"vapor_database"` | PostgreSQL database name |
 | `postgresql.auth.username` | string | `"vapor_username"` | PostgreSQL username |

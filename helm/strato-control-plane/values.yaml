@@ -383,6 +383,13 @@ strato:
     #   - http://<hostname> otherwise
     relyingPartyOrigin: ""
 
+  # Whether visitors may create their own accounts from the sign-in screen.
+  # Set to false once your users are provisioned (admin invites or SSO): the
+  # "Create one" link disappears and /api/users/register is refused. The very
+  # first account is always creatable — a deployment with no users has no admin
+  # who could invite anyone — so this is safe to disable from the start.
+  selfRegistrationEnabled: true
+
   # At-rest encryption of stored secrets (OIDC client secrets, SSF stream
   # auth tokens) — STRATO_SECRET_ENCRYPTION_KEY. Optional: when unset the
   # control plane warns and stores them unencrypted. Point existingSecret at
