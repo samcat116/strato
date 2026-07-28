@@ -1975,6 +1975,23 @@ actor AgentService {
         // deployment, so it pins the VM's placement (issue #343).
         let requiredSiteID = try await pinnedSiteID(for: vm, on: db)
 
+        // A VM carrying any security group must land on a v20+ agent that can
+        // enforce it; an older agent realizes the NIC with no ACLs (fail-open).
+        // Checked here, the single placement choke point for both create and
+        // reschedule, so a "firewalled" VM never silently moves onto an agent
+        // that drops its firewall.
+        let sgInterfaceIDs = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id == vm.requireID())
+            .all()
+            .compactMap { $0.id }
+        var requiresSecurityGroups = false
+        if !sgInterfaceIDs.isEmpty {
+            requiresSecurityGroups =
+                try await VMInterfaceSecurityGroup.query(on: db)
+                .filter(\.$interface.$id ~~ sgInterfaceIDs)
+                .count() > 0
+        }
+
         // Use scheduler to select the best agent and atomically reserve the
         // VM's resources on it, so a concurrent create can't place against
         // the same capacity (issue #258).
@@ -1982,7 +1999,8 @@ actor AgentService {
         do {
             agentId = try await app.scheduler.selectAndReserveAgent(
                 requirements: SchedulerService.placementRequirements(
-                    for: vm, architecture: image?.architecture, siteID: requiredSiteID),
+                    for: vm, architecture: image?.architecture, siteID: requiredSiteID,
+                    requiresSecurityGroups: requiresSecurityGroups),
                 vmId: vmId,
                 from: schedulableAgents,
                 coordination: app.coordination,

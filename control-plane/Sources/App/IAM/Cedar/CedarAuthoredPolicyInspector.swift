@@ -48,6 +48,11 @@ struct AuthoredPolicyShape: Equatable, Sendable {
     /// is unconstrained (`resource`), a bare type (`resource is VM`), or names
     /// something that is not a resolvable entity.
     let resourceScope: AuthoredResourceScope?
+    /// The concrete principal a `permit` grants to, when the scope names one by
+    /// `==`/`in`, or nil for the unconstrained `principal`, a bare `principal
+    /// is T`, or a non-resolvable reference. Used to decide whether authoring
+    /// the policy is a cross-org grant (see the `iam:grantExternal` gate).
+    let principalScope: AuthoredResourceScope?
     let actionScope: AuthoredActionScope
     /// Whether the principal scope is anything other than the unconstrained
     /// `principal` (`==`/`in`/`is`). Read for the authored-guardrail self-lock
@@ -100,10 +105,27 @@ enum CedarAuthoredPolicyInspector {
         return AuthoredPolicyShape(
             effect: effect,
             resourceScope: resourceScope(est),
+            principalScope: principalScope(est),
             actionScope: actionScope(est),
             principalConstrained: principalConstrained(est),
             hasConditions: hasConditions(est)
         )
+    }
+
+    /// The principal a `principal == X` / `principal in X` scope names, or nil
+    /// for the unconstrained `principal` or a bare `principal is T` (both of
+    /// which reach principals across orgs, and are handled by the caller as
+    /// "not a single, resolvable principal"). Mirrors `resourceScope`.
+    private static func principalScope(_ est: [String: Any]) -> AuthoredResourceScope? {
+        guard let scope = est["principal"] as? [String: Any], let op = scope["op"] as? String else {
+            return nil
+        }
+        switch op {
+        case "==", "in":
+            return entityScope(scope["entity"])
+        default:
+            return nil
+        }
     }
 
     /// Whether the principal scope is constrained at all — anything other than
