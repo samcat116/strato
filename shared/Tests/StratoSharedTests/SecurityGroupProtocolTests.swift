@@ -72,16 +72,17 @@ struct SecurityGroupProtocolTests {
     @Test("NetworkSpec carries securityGroupIds and tolerates their absence")
     func networkSpecSecurityGroupIds() throws {
         let ids = [UUID(), UUID()]
-        let spec = NetworkSpec(network: "default", securityGroupIds: ids)
+        let spec = NetworkSpec(network: "default", networkId: UUID(), securityGroupIds: ids)
         let data = try WireProtocol.makeEncoder().encode(spec)
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
         #expect(decoded.securityGroupIds == ids)
 
         // A spec from a pre-security-group control plane has no key at all:
         // nil marks the NIC unmanaged (it joins no port groups, including the
-        // drop group), preserving legacy traffic.
+        // drop group), preserving legacy traffic. (`networkId` is present
+        // regardless — it has been required since wire v21.)
         let legacy = """
-            {"network":"default"}
+            {"network":"default","networkId":"\(UUID().uuidString)"}
             """
         let legacyDecoded = try WireProtocol.makeDecoder().decode(
             NetworkSpec.self, from: Data(legacy.utf8))

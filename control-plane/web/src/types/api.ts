@@ -1529,10 +1529,9 @@ export interface Network {
   /** IPv6 subnet (always a /64) when the network is dual-stack. */
   subnet6?: string;
   gateway6?: string;
-  projectId?: string;
-  /** The seeded global "default" network, which cannot be renamed or deleted. */
-  isDefault: boolean;
-  /** Number of VM interfaces attached; a network in use cannot be deleted. */
+  /** Owning project. Network names are unique per project, not globally. */
+  projectId: string;
+  /** VM and sandbox interfaces attached; a network in use cannot be deleted. */
   attachedInterfaceCount: number;
   /** Whether agents program OVN's DHCP responder to configure guests. */
   dhcpEnabled: boolean;

@@ -77,7 +77,6 @@ export function NetworkTable({
           <TableHead className="text-muted-foreground font-medium">Subnet</TableHead>
           <TableHead className="text-muted-foreground font-medium">Gateway</TableHead>
           <TableHead className="text-muted-foreground font-medium">DHCP / DNS</TableHead>
-          <TableHead className="text-muted-foreground font-medium">Scope</TableHead>
           <TableHead className="text-muted-foreground font-medium">Interfaces</TableHead>
           <TableHead className="text-muted-foreground font-medium text-right">
             Actions
@@ -87,12 +86,10 @@ export function NetworkTable({
       <TableBody className="divide-y divide-border">
         {networks.map((network) => {
           const inUse = network.attachedInterfaceCount > 0;
-          const deletable = !network.isDefault && !inUse;
-          const disabledReason = network.isDefault
-            ? "The default network cannot be deleted"
-            : inUse
-              ? "Detach all interfaces before deleting"
-              : undefined;
+          const deletable = !inUse;
+          const disabledReason = inUse
+            ? "Detach all interfaces before deleting"
+            : undefined;
           return (
             <TableRow
               key={network.id}
@@ -102,14 +99,6 @@ export function NetworkTable({
                 <span className="font-medium text-foreground">
                   {network.name}
                 </span>
-                {network.isDefault && (
-                  <Badge
-                    variant="outline"
-                    className="ml-2 border-input text-muted-foreground"
-                  >
-                    default
-                  </Badge>
-                )}
               </TableCell>
               <TableCell className="text-foreground/80 font-mono text-sm">
                 <div>{network.subnet}</div>

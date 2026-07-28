@@ -642,6 +642,13 @@ public func configure(_ app: Application) async throws {
     // materialized path instead of scanning for a contained uuid (issue #692).
     app.migrations.add(AddFolderPathIndex())
 
+    // Per-project network isolation (issue #765): NICs reference their logical
+    // network by id, and every network belongs to a project — retiring the
+    // shared global `default` network all tenants used to sit on. The first
+    // migration destroys every NIC; see its doc comment.
+    app.migrations.add(RekeyInterfacesToLogicalNetworkID())
+    app.migrations.add(ScopeLogicalNetworksToProjects())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

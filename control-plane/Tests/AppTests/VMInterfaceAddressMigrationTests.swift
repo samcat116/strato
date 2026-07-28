@@ -39,6 +39,48 @@ struct VMInterfaceAddressMigrationTests {
         }
     }
 
+    /// The address table as `CreateVMInterfaceAddresses` creates it. A snapshot
+    /// rather than the live `VMInterfaceAddress`, which has since traded its
+    /// `network` name column for a `logical_network_id` foreign key (issue
+    /// #765) that does not exist at this point in migration history.
+    private final class AddressRow: Model, @unchecked Sendable {
+        static let schema = "vm_interface_addresses"
+
+        @ID(key: .id)
+        var id: UUID?
+
+        @Parent(key: "interface_id")
+        var interface: LegacyInterface
+
+        @Field(key: "network")
+        var network: String
+
+        @Field(key: "family")
+        var family: String
+
+        @Field(key: "address")
+        var address: String
+
+        @Field(key: "prefix_length")
+        var prefixLength: Int
+
+        @OptionalField(key: "gateway")
+        var gateway: String?
+
+        init() {}
+
+        convenience init(
+            interfaceID: UUID, network: String, family: String, address: String, prefixLength: Int
+        ) {
+            self.init()
+            self.$interface.id = interfaceID
+            self.network = network
+            self.family = family
+            self.address = address
+            self.prefixLength = prefixLength
+        }
+    }
+
     private final class NetworkRow: Model, @unchecked Sendable {
         static let schema = "logical_networks"
 
@@ -104,7 +146,7 @@ struct VMInterfaceAddressMigrationTests {
 
             try await CreateVMInterfaceAddresses().prepare(on: app.db)
 
-            let addresses = try await VMInterfaceAddress.query(on: app.db).all()
+            let addresses = try await AddressRow.query(on: app.db).all()
             #expect(addresses.count == 3)
             #expect(addresses.allSatisfy { $0.family == "ipv4" })
 
@@ -118,8 +160,8 @@ struct VMInterfaceAddressMigrationTests {
 
             // The uniqueness backstop exists: a duplicate (network, address)
             // insert must fail.
-            let duplicate = VMInterfaceAddress(
-                interfaceID: addressless.id!, network: "default", family: .ipv4,
+            let duplicate = AddressRow(
+                interfaceID: addressless.id!, network: "default", family: "ipv4",
                 address: "192.168.1.10", prefixLength: 24)
             await #expect(throws: (any Error).self) {
                 try await duplicate.save(on: app.db)

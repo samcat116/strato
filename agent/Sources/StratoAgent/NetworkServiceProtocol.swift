@@ -15,16 +15,17 @@ protocol NetworkServiceProtocol: Sendable {
     /// in the VM's interface list; it namespaces host-side resources (TAP device,
     /// logical switch port) so multi-NIC VMs don't collide.
     func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo
-    func attachVMToNetwork(vmId: String, networkName: String, macAddress: String?) async throws -> VMNetworkInfo
     /// Tears down the host-side resources of one NIC. Must be idempotent: it is
     /// called on delete and on create-failure rollback, possibly after a crash.
     func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws
-    func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo?
 
     // Network Topology Management
-    func createLogicalNetwork(name: String, subnet: String, gateway: String?) async throws -> UUID
-    func deleteLogicalNetwork(name: String) async throws
-    func listLogicalNetworks() async throws -> [NetworkInfo]
+    //
+    // There is no imperative create/delete/attach surface: topology is
+    // level-triggered from `reconcileNetworkTopology` alone. The old
+    // message-driven path named its OVN objects after user-chosen network
+    // names, which two projects may now share (issue #765), and nothing had
+    // sent those messages since desired-state sync landed.
 
     /// Converge this host's L3 network topology (logical routers, router ports,
     /// SNAT uplinks) toward the control plane's authoritative desired network
@@ -60,11 +61,13 @@ extension NetworkServiceProtocol {
 // MARK: - Network Configuration Models
 
 struct VMNetworkConfig: Sendable {
+    /// Human label for logs and external-ids. Never an identifier: names are
+    /// unique only within a project (issue #765).
     let networkName: String
-    /// The network's id; when present the agent names the OVN logical switch
-    /// after it (not `networkName`), matching the network reconciler and keeping
-    /// user-chosen names out of the OVN namespace (issue #342).
-    let networkId: UUID?
+    /// The network's id. Every OVN object the NIC touches is named after it —
+    /// the logical switch and the DHCP row's `network-id` external-id — so
+    /// user-chosen names never enter the OVN namespace (issue #342).
+    let networkId: UUID
     let macAddress: String?
     let ipAddress: String?
     let subnet: String?
@@ -94,7 +97,7 @@ struct VMNetworkConfig: Sendable {
     let securityGroupIds: [UUID]?
 
     init(
-        networkName: String, networkId: UUID? = nil, macAddress: String? = nil, ipAddress: String? = nil,
+        networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil

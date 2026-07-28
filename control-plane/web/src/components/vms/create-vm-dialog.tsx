@@ -136,7 +136,8 @@ export function CreateVMDialog({
         cpu: parseInt(formData.cpu) || 2,
         memory: (parseInt(formData.memory) || 4) * GB,
         disk: (parseInt(formData.disk) || 50) * GB,
-        ...(formData.networkId ? { networkId: formData.networkId } : {}),
+        // Required: there is no default network to fall back to (issue #765).
+        networkId: formData.networkId,
         sshPublicKey: formData.sshPublicKey.trim() || undefined,
         // Sent verbatim (no trim): the first bytes are the format header
         // cloud-init dispatches on.
@@ -366,12 +367,15 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, networkId: e.target.value })
                 }
-                disabled={isLoading}
+                disabled={isLoading || networks.length === 0}
+                required
                 className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="">default (auto)</option>
+                <option value="" disabled>
+                  Select a network
+                </option>
                 {networks
-                  .filter((network) => network.id && !network.isDefault)
+                  .filter((network) => network.id)
                   .map((network) => (
                     <option key={network.id} value={network.id!}>
                       {network.name} ({network.subnet})
@@ -379,8 +383,9 @@ export function CreateVMDialog({
                   ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                The VM&apos;s IP is allocated automatically from the selected
-                network.
+                {networks.length === 0
+                  ? "This project has no networks yet. Create one before adding a VM."
+                  : "The VM's IP is allocated automatically from the selected network."}
               </p>
             </div>
 

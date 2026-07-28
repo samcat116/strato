@@ -143,7 +143,7 @@ struct MockSandboxRuntimeTests {
         let runtime = makeRuntime()
         let spec = SandboxSpec(
             image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
-            network: NetworkSpec(network: "default"))
+            network: NetworkSpec(network: "default", networkId: UUID()))
         await #expect(throws: SandboxRuntimeError.self) {
             try await runtime.createSandbox(
                 sandboxId: "sb-net", spec: spec, registryCredential: nil, networkAttachments: [])

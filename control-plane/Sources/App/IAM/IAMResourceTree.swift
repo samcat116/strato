@@ -42,12 +42,6 @@ struct IAMLeafFacts: Sendable, Equatable {
     /// the types that genuinely have none (environment is an attribute, never
     /// a container) and for a leaf whose row is missing.
     var environment: String?
-    /// Network leaves only: whether the row named a project, and whether it
-    /// named a site. Nil for any other type, and for a missing row — which
-    /// callers must read as the closed answer (an unreadable network is not
-    /// world-readable), never as "no project".
-    var networkHasProject: Bool?
-    var networkHasSite: Bool?
 }
 
 /// Walks the resource tree upward. Role bindings attach to any node — an
@@ -374,37 +368,13 @@ enum IAMResourceTree {
                 id: \.id, projectID: { $0.$project.id })
 
         case .network:
-            var steps: [UUID: Step] = [:]
-            var siteScoped: [UUID: UUID] = [:]
-            for network in try await LogicalNetwork.query(on: db).filter(\.$id ~~ idList).all() {
-                guard let id = network.id else { continue }
-                let facts = IAMLeafFacts(
-                    networkHasProject: network.$project.id != nil, networkHasSite: network.$site.id != nil)
-                if let projectID = network.$project.id {
-                    steps[id] = Step(parent: IAMNode(type: .project, id: projectID), leaf: facts)
-                    continue
-                }
-                // A site-scoped network has no project; it inherits from
-                // whichever org or folder owns the site's capacity. The site
-                // itself is not part of the chain, so it is resolved here
-                // rather than walked through.
-                steps[id] = Step(parent: nil, leaf: facts)
-                if let siteID = network.$site.id { siteScoped[id] = siteID }
-            }
-            if !siteScoped.isEmpty {
-                var scopes: [UUID: IAMNode] = [:]
-                for site in try await Site.query(on: db).filter(\.$id ~~ Array(Set(siteScoped.values))).all() {
-                    guard let id = site.id,
-                        let scope = scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id)
-                    else { continue }
-                    scopes[id] = scope
-                }
-                for (networkID, siteID) in siteScoped {
-                    guard let leaf = steps[networkID]?.leaf else { continue }
-                    steps[networkID] = Step(parent: scopes[siteID], leaf: leaf)
-                }
-            }
-            return steps
+            // Every network belongs to a project (issue #765), so the chain is
+            // the same one-hop climb as any other project-scoped resource. A
+            // site pin constrains where the network is *realized*, never who
+            // may act on it.
+            return projectParents(
+                try await LogicalNetwork.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
 
         case .site:
             var steps: [UUID: Step] = [:]

@@ -448,16 +448,14 @@ final class IAMAuthorizerBackstopTests {
     func truncatedChainFailsClosed() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
-            // A site-scoped network whose site has no owning scope: the chain
-            // is [network, site] and never reaches an organization, so an
+            // A network in a project that belongs to no organization: the chain
+            // is [network, project] and never reaches an organization, so an
             // org-anchored guardrail could not match it.
-            let scopelessSite = Site(name: "scopeless-dc", organizationScope: nil)
-            try await scopelessSite.save(on: app.db)
-            let network = LogicalNetwork(
-                name: "orphan-net", subnet: "10.99.0.0/24", gateway: "10.99.0.1",
-                projectID: nil, externalAccess: false)
-            network.$site.id = scopelessSite.id
-            try await network.save(on: app.db)
+            let orphanProject = try await builder.createProject(
+                name: "Orphan Project", description: "no organization")
+            let network = try await builder.createNetwork(
+                name: "orphan-net", project: orphanProject, subnet: "10.99.0.0/24",
+                gateway: "10.99.0.1", externalAccess: false)
 
             let user = try await builder.createUser(
                 username: "trunc-user", email: "trunc-user@example.com")
@@ -487,32 +485,40 @@ final class IAMAuthorizerBackstopTests {
         }
     }
 
-    @Test("A deliberately global network (no project, no site) still evaluates normally")
-    func globalNetworkChainIsCompleteByDesign() async throws {
+    @Test("A network is readable only through a grant on its project's chain")
+    func networkReadRequiresAGrant() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
-            let network = LogicalNetwork(
-                name: "global-net", subnet: "10.98.0.0/24", gateway: "10.98.0.1",
-                projectID: nil, externalAccess: false)
-            try await network.save(on: app.db)
+            let org = try await builder.createOrganization(name: "Net Read Org")
+            let project = try await builder.createProject(
+                name: "Net Read Project", description: "d", organization: org)
+            let network = try await builder.createNetwork(
+                name: "read-net", project: project, subnet: "10.98.0.0/24", gateway: "10.98.0.1",
+                externalAccess: false)
             let user = try await builder.createUser(
-                username: "global-net-user", email: "global-net-user@example.com")
+                username: "net-read-user", email: "net-read-user@example.com")
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
-            let decision = try await IAMAuthorizer.authorize(
-                userID: user.id!,
-                action: "network:read",
-                node: IAMNode(type: .network, id: network.id!),
-                legacyEquivalent: nil,
-                context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
-                state: nil,
-                app: app,
-                db: app.db
-            )
-            // platform-open-network-read, not the truncation denial.
-            #expect(decision.allowed)
-            #expect(decision.determiningPolicyIDs == ["platform-open-network-read"])
+            let node = IAMNode(type: .network, id: network.id!)
+            let context = IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil)
+
+            // Nothing is world-readable any more: the permit that made
+            // project-less networks open to every authenticated user went away
+            // with global networks themselves (issue #765).
+            let ungranted = try await IAMAuthorizer.authorize(
+                userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
+                context: context, state: nil, app: app, db: app.db)
+            #expect(!ungranted.allowed)
+
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+
+            let granted = try await IAMAuthorizer.authorize(
+                userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
+                context: context, state: nil, app: app, db: app.db)
+            #expect(granted.allowed)
         }
     }
 

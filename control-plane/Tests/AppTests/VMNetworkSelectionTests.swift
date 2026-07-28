@@ -45,6 +45,9 @@ final class VMNetworkSelectionTests {
 
             let project = try await builder.createProject(
                 name: "NetSel Project", description: "p", organization: org)
+            // Nothing provisions a network with a project (issue #765), so the
+            // fixture makes the one most tests here select by name.
+            try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let token = try await user.generateAPIKey(on: app.db)
 
@@ -84,7 +87,7 @@ final class VMNetworkSelectionTests {
             }
 
             let created = try await nic(forVMNamed: "net-vm", on: app.db)
-            #expect(created?.network == "selectable-net")
+            #expect(created?.logicalNetworkID == network.id)
             // Allocated from the chosen subnet, not the default 192.168.1.0/24.
             let address = created?.ipv4Address
             #expect(address?.address.hasPrefix("10.100.0.") == true)
@@ -103,7 +106,7 @@ final class VMNetworkSelectionTests {
                     CreateVMBody(
                         name: "userdata-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
-                        networkId: nil, networkName: nil, userData: payload))
+                        networkId: nil, networkName: "default", userData: payload))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
@@ -122,7 +125,7 @@ final class VMNetworkSelectionTests {
                     CreateVMBody(
                         name: "bad-userdata-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
-                        networkId: nil, networkName: nil, userData: "echo missing shebang\n"))
+                        networkId: nil, networkName: "default", userData: "echo missing shebang\n"))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -144,7 +147,7 @@ final class VMNetworkSelectionTests {
                     CreateVMBody(
                         name: "fc-userdata-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
-                        networkId: nil, networkName: nil,
+                        networkId: nil, networkName: "default",
                         userData: "#cloud-config\npackages: [nginx]\n",
                         hypervisorType: "firecracker"))
             } afterResponse: { res in
@@ -169,7 +172,7 @@ final class VMNetworkSelectionTests {
                     CreateVMBody(
                         name: "secret-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
-                        networkId: nil, networkName: nil, userData: secret))
+                        networkId: nil, networkName: "default", userData: secret))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
@@ -221,7 +224,7 @@ final class VMNetworkSelectionTests {
                     CreateVMBody(
                         name: "unauthorized-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
-                        networkId: nil, networkName: nil))
+                        networkId: nil, networkName: "default"))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -262,26 +265,53 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms omitting the network falls back to the default network")
-    func createWithoutNetworkUsesDefault() async throws {
+    @Test("POST /api/vms by network name resolves the caller's own project's network")
+    func createByNameResolvesWithinProject() async throws {
+        try await withApp { app, _, org, project, image, token in
+            // A same-named network in another project must not be reachable —
+            // and must not even perturb the lookup (issue #765).
+            let otherProject = try await TestDataBuilder(db: app.db).createProject(
+                name: "Twin Project", description: "p", organization: org)
+            let twin = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "default", project: otherProject, subnet: "10.130.0.0/24", gateway: "10.130.0.1")
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "named-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let created = try await nic(forVMNamed: "named-vm", on: app.db)
+            #expect(created?.logicalNetworkID != twin.id)
+            // The caller's own "default", whose subnet is the fixture's.
+            #expect(created?.ipv4Address?.address.hasPrefix("192.168.1.") == true)
+        }
+    }
+
+    @Test("POST /api/vms with no network at all is rejected (400)")
+    func createWithoutNetworkRejected() async throws {
         try await withApp { app, _, _, project, image, token in
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateVMBody(
-                        name: "default-vm", imageId: image.id, projectId: project.id,
+                        name: "networkless-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
                         networkId: nil, networkName: nil))
             } afterResponse: { res in
-                #expect(res.status == .accepted)
+                #expect(res.status == .badRequest)
             }
 
-            let created = try await nic(forVMNamed: "default-vm", on: app.db)
-            #expect(created?.network == LogicalNetwork.defaultNetworkName)
+            #expect(try await VM.query(on: app.db).filter(\.$name == "networkless-vm").count() == 0)
         }
     }
 
-    @Test("POST /api/vms rejects a network from a different project (403)")
+    @Test("POST /api/vms reports a network from a different project as not found (404)")
     func createRejectsCrossProjectNetwork() async throws {
         try await withApp { app, user, org, project, image, token in
             let otherProject = try await TestDataBuilder(db: app.db).createProject(
@@ -291,6 +321,8 @@ final class VMNetworkSelectionTests {
                 projectID: otherProject.id!, createdByID: user.id!)
             try await foreignNetwork.save(on: app.db)
 
+            // 404, not 403: confirming the id exists elsewhere would disclose
+            // another tenant's networks (issue #765).
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -299,7 +331,7 @@ final class VMNetworkSelectionTests {
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
                         networkId: foreignNetwork.id, networkName: nil))
             } afterResponse: { res in
-                #expect(res.status == .forbidden)
+                #expect(res.status == .notFound)
             }
 
             #expect(try await VM.query(on: app.db).filter(\.$name == "cross-vm").count() == 0)
@@ -327,7 +359,7 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms rejects an unknown network id (400)")
+    @Test("POST /api/vms rejects an unknown network id (404)")
     func createRejectsUnknownNetwork() async throws {
         try await withApp { app, _, _, project, image, token in
             try await app.test(.POST, "/api/vms") { req in
@@ -338,7 +370,7 @@ final class VMNetworkSelectionTests {
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
                         networkId: UUID(), networkName: nil))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                #expect(res.status == .notFound)
             }
         }
     }
@@ -346,14 +378,17 @@ final class VMNetworkSelectionTests {
     @Test("GET /api/vms/:id includes the VM's network interfaces")
     func showIncludesNetworkInterfaces() async throws {
         try await withApp { app, _, _, project, _, token in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "iface-vm", project: project)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "iface-vm", project: project)
+            let network = try await builder.createNetwork(
+                name: "iface-net", project: project, subnet: "192.168.9.0/24", gateway: "192.168.9.1")
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "default",
+                vmID: vm.id!, logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:aa:bb:cc",
                 deviceName: "net0", orderIndex: 0)
             try await nic.save(on: app.db)
             let address = VMInterfaceAddress(
-                interfaceID: nic.id!, network: "default", family: .ipv4,
+                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.42", prefixLength: 24, gateway: "192.168.1.1")
             try await address.save(on: app.db)
 
@@ -364,7 +399,7 @@ final class VMNetworkSelectionTests {
                 let detail = try res.content.decode(VMDetailResponse.self)
                 #expect(detail.networkInterfaces.count == 1)
                 let iface = detail.networkInterfaces.first
-                #expect(iface?.network == "default")
+                #expect(iface?.networkId == network.id)
                 #expect(iface?.addresses.count == 1)
                 let respAddress = iface?.addresses.first
                 #expect(respAddress?.family == "ipv4")

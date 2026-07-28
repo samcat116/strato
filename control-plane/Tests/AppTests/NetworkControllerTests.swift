@@ -1,13 +1,15 @@
+import Fluent
+import StratoShared
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
+
 @testable import App
 
 /// Tests for the project-scoped network management API (`/api/networks`):
-/// listing (globals always visible), creation with CIDR/gateway validation and
-/// duplicate-name handling, update guards while a network is in use, and the
-/// delete-in-use / default-network protections.
+/// listing (scoped to the caller's projects), creation with CIDR/gateway
+/// validation and per-project name uniqueness, update guards while a network is
+/// in use, and the delete-in-use protections.
 @Suite("Network Controller Tests", .serialized)
 final class NetworkControllerTests {
 
@@ -51,47 +53,47 @@ final class NetworkControllerTests {
 
     // MARK: - List
 
-    @Test("GET /api/networks always includes the global default network")
-    func listIncludesGlobalDefault() async throws {
+    @Test("GET /api/networks lists the caller's project's networks")
+    func listIncludesProjectNetworks() async throws {
         try await withNetworkTestApp { app, _, project, token in
+            let mine = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "listed-net", project: project, subnet: "10.8.0.0/24", gateway: "10.8.0.1")
+
             try await app.test(.GET, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let networks = try res.content.decode(PagedResponse<NetworkResponse>.self).items
-                let names = networks.map(\.name)
-                #expect(names.contains(LogicalNetwork.defaultNetworkName))
-                let defaultNet = networks.first { $0.name == LogicalNetwork.defaultNetworkName }
-                #expect(defaultNet?.isDefault == true)
-                #expect(defaultNet?.projectId == nil)
+                let listed = networks.first { $0.id == mine.id }
+                #expect(listed?.name == "listed-net")
+                #expect(listed?.projectId == project.id)
             }
-            _ = project
         }
     }
 
-    @Test("GET /api/networks?project_id excludes other projects but keeps globals")
-    func listScopesToProjectPlusGlobals() async throws {
+    @Test("GET /api/networks?project_id excludes other projects' networks")
+    func listScopesToProject() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            // A network in a different project that must not appear.
+            // A network in a different project that must not appear — including
+            // one sharing the caller's network name, which is legal now.
             let builder = TestDataBuilder(db: app.db)
             let otherProject = try await builder.createProject(
                 name: "Other Project",
                 description: "not the caller's project",
                 organization: try await Organization.find(user.currentOrganizationId, on: app.db)
             )
-            let hiddenNetwork = LogicalNetwork(
-                name: "hidden-net", subnet: "10.9.0.0/24", gateway: "10.9.0.1",
-                projectID: otherProject.id!, createdByID: user.id!
-            )
-            try await hiddenNetwork.save(on: app.db)
+            try await builder.createNetwork(
+                name: "shared-name", project: project, subnet: "10.8.0.0/24", gateway: "10.8.0.1")
+            let hidden = try await builder.createNetwork(
+                name: "shared-name", project: otherProject, subnet: "10.9.0.0/24", gateway: "10.9.0.1")
 
             try await app.test(.GET, "/api/networks?project_id=\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let names = try res.content.decode(PagedResponse<NetworkResponse>.self).items.map(\.name)
-                #expect(names.contains(LogicalNetwork.defaultNetworkName))
-                #expect(!names.contains("hidden-net"))
+                let items = try res.content.decode(PagedResponse<NetworkResponse>.self).items
+                #expect(items.allSatisfy { $0.projectId == project.id })
+                #expect(!items.contains { $0.id == hidden.id })
             }
         }
     }
@@ -130,7 +132,6 @@ final class NetworkControllerTests {
                 #expect(network.subnet == "10.20.0.0/24")
                 #expect(network.gateway == "10.20.0.1")  // defaulted to first host
                 #expect(network.projectId == project.id)
-                #expect(network.isDefault == false)
                 #expect(network.attachedInterfaceCount == 0)
             }
 
@@ -257,7 +258,7 @@ final class NetworkControllerTests {
             // In use by a NIC — additive IPv6 must still be allowed.
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "grow6-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "grow6-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
@@ -285,10 +286,10 @@ final class NetworkControllerTests {
             try await network.save(on: app.db)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "shrink6-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "shrink6-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
             let address6 = VMInterfaceAddress(
-                interfaceID: nic.id!, network: "shrink6-net", family: .ipv6,
+                interfaceID: nic.id!, logicalNetworkID: network.id!, family: .ipv6,
                 address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1")
             try await address6.save(on: app.db)
 
@@ -337,18 +338,101 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("POST /api/networks rejects a duplicate name (409)")
-    func createRejectsDuplicateName() async throws {
+    @Test("POST /api/networks rejects a name already used in the same project (409)")
+    func createRejectsDuplicateNameInProject() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            // "default" already exists as a global network.
+            try await TestDataBuilder(db: app.db).createNetwork(
+                name: "taken-net", project: project, subnet: "10.39.0.0/24", gateway: "10.39.0.1")
+
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateNetworkRequest(
-                        name: LogicalNetwork.defaultNetworkName, subnet: "10.40.0.0/24", gateway: nil,
+                        name: "taken-net", subnet: "10.40.0.0/24", gateway: nil,
                         projectId: project.id!))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("POST /api/networks refuses a cross-project name collision against a pre-v21 fleet")
+    func createRefusesCollidingNameOnOldAgents() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try #require(try await Organization.find(user.currentOrganizationId, on: app.db))
+            let otherProject = try await builder.createProject(
+                name: "Old Fleet Neighbour", description: "p", organization: org)
+            try await builder.createNetwork(
+                name: "collide-net", project: otherProject, subnet: "10.42.0.0/24", gateway: "10.42.0.1")
+
+            // A pre-v21 agent keys its DHCP rows on the network *name*, so it
+            // cannot tell two same-named networks apart (issue #765).
+            let message = AgentRegisterMessage(
+                agentId: "legacy-dhcp-agent",
+                hostname: "legacy-host",
+                version: "1.0.0",
+                capabilities: ["qemu"],
+                resources: AgentResources(
+                    totalCPU: 8, availableCPU: 8,
+                    totalMemory: 1 << 33, availableMemory: 1 << 33,
+                    totalDisk: 1 << 39, availableDisk: 1 << 39
+                ),
+                protocolVersion: WireProtocol.projectNetworkIsolationMinimumVersion - 1
+            )
+            _ = try await app.agentService.registerAgent(
+                message, agentName: message.agentId, organizationScope: .organization(org.id!))
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "collide-net", subnet: "10.43.0.0/24", gateway: nil,
+                        projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("legacy-dhcp-agent"))
+            }
+
+            // A name nobody else uses is unaffected by the old agent.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "unique-net", subnet: "10.44.0.0/24", gateway: nil,
+                        projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("POST /api/networks accepts a name another project already uses")
+    func createAllowsDuplicateNameAcrossProjects() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            // The acceptance criterion of issue #765: two projects can each own
+            // a network called "default", on the same subnet, without sharing
+            // an L2 domain or an IP pool.
+            let builder = TestDataBuilder(db: app.db)
+            let otherProject = try await builder.createProject(
+                name: "Neighbour Project", description: "p",
+                organization: try await Organization.find(user.currentOrganizationId, on: app.db))
+            let theirs = try await builder.createNetwork(
+                name: "default", project: otherProject, subnet: "10.41.0.0/24", gateway: "10.41.0.1")
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "default", subnet: "10.41.0.0/24", gateway: nil,
+                        projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let mine = try res.content.decode(NetworkResponse.self)
+                #expect(mine.name == theirs.name)
+                #expect(mine.subnet == theirs.subnet)
+                #expect(mine.id != theirs.id)
+                #expect(mine.projectId == project.id)
             }
         }
     }
@@ -467,7 +551,7 @@ final class NetworkControllerTests {
 
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "gw-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "gw-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
@@ -479,62 +563,32 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("PUT /api/networks rejects a name change while the network is in use (409)")
-    func updateRejectsRenameWhileInUse() async throws {
+    @Test("PUT /api/networks renames a network that is in use")
+    func updateRenamesWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
             let network = LogicalNetwork(
                 name: "used-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
                 projectID: project.id!, createdByID: user.id!)
             try await network.save(on: app.db)
 
-            // Attach a NIC referencing the network by name.
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "nic-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "used-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
+            // Safe since issue #765: the NIC references the row by id, so the
+            // name is a label nothing resolves through.
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateNetworkRequest(name: "renamed-net", subnet: nil, gateway: nil))
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .ok)
+                let renamed = try res.content.decode(NetworkResponse.self)
+                #expect(renamed.name == "renamed-net")
             }
-        }
-    }
 
-    @Test("PUT /api/networks rejects a non-admin mutating the global default (403)")
-    func updateDefaultDeniedForNonAdmin() async throws {
-        try await withNetworkTestApp { app, _, _, token in
-            let defaultNet = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
-
-            try await app.test(.PUT, "/api/networks/\(defaultNet.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(UpdateNetworkRequest(name: "not-default", subnet: nil, gateway: nil))
-            } afterResponse: { res in
-                // Global network mutation requires system admin.
-                #expect(res.status == .forbidden)
-            }
-        }
-    }
-
-    @Test("PUT /api/networks rejects a system admin renaming the default network (409)")
-    func updateRejectsAdminRenamingDefault() async throws {
-        try await withNetworkTestApp { app, _, _, _ in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
-                username: "netadmin", email: "netadmin@example.com",
-                displayName: "Net Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
-
-            let defaultNet = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
-
-            try await app.test(.PUT, "/api/networks/\(defaultNet.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(UpdateNetworkRequest(name: "not-default", subnet: nil, gateway: nil))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
+            let reloaded = try await VMNetworkInterface.find(nic.id, on: app.db)
+            #expect(reloaded?.logicalNetworkID == network.id)
         }
     }
 
@@ -569,7 +623,7 @@ final class NetworkControllerTests {
 
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "busy-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "busy-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
             try await app.test(.DELETE, "/api/networks/\(network.id!)") { req in
@@ -580,38 +634,27 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("DELETE /api/networks rejects a non-admin deleting the global default (403)")
-    func deleteDefaultDeniedForNonAdmin() async throws {
-        try await withNetworkTestApp { app, _, _, token in
-            let defaultNet = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
+    @Test("DELETE /api/networks rejects a network carrying only sandbox interfaces (409)")
+    func deleteRejectsNetworkWithSandboxInterface() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(
+                name: "sandbox-net", project: project, subnet: "10.91.0.0/24", gateway: "10.91.0.1")
+            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/networks/\(defaultNet.id!)") { req in
+            // A sandbox NIC holds an address from the same pool, so the network
+            // is in use — the guard used to count VM interfaces only.
+            try await app.test(.DELETE, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .forbidden)
-            }
-        }
-    }
-
-    @Test("DELETE /api/networks rejects a system admin deleting the default network (409)")
-    func deleteRejectsAdminDeletingDefault() async throws {
-        try await withNetworkTestApp { app, _, _, _ in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
-                username: "deladmin", email: "deladmin@example.com",
-                displayName: "Delete Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
-
-            let defaultNet = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName).first()!
-
-            try await app.test(.DELETE, "/api/networks/\(defaultNet.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
 
-            let stillThere = try await LogicalNetwork.find(defaultNet.id, on: app.db)
+            let stillThere = try await LogicalNetwork.find(network.id, on: app.db)
             #expect(stillThere != nil)
         }
     }

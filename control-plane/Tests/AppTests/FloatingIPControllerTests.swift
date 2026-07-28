@@ -77,10 +77,11 @@ final class FloatingIPControllerTests {
         let builder = TestDataBuilder(db: app.db)
         let vm = try await builder.createVM(name: "fip-vm-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
-            vmID: vm.id!, network: network.name, macAddress: VMNetworkInterface.generateMACAddress())
+            vmID: vm.id!, logicalNetworkID: try network.requireID(), macAddress: VMNetworkInterface.generateMACAddress()
+        )
         try await nic.save(on: app.db)
         try await VMInterfaceAddress(
-            interfaceID: nic.id!, network: network.name, family: .ipv4,
+            interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
             address: fixedIP, prefixLength: 24, gateway: network.gateway
         ).save(on: app.db)
         try await placeVM(
@@ -192,7 +193,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "backstop-net", subnet: "10.50.0.0/24", gateway: "10.50.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (_, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.50.0.5")
@@ -248,11 +249,11 @@ final class FloatingIPControllerTests {
 
             let egress = LogicalNetwork(
                 name: "egress-net", subnet: "10.40.0.0/24", gateway: "10.40.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await egress.save(on: app.db)
             let isolated = LogicalNetwork(
                 name: "isolated-net", subnet: "10.41.0.0/24", gateway: "10.41.0.1",
-                projectID: project.id, externalAccess: false)
+                projectID: try project.requireID(), externalAccess: false)
             try await isolated.save(on: app.db)
 
             let (vm, nic) = try await self.createVMWithNIC(
@@ -371,7 +372,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "unplaced-net", subnet: "10.85.0.0/24", gateway: "10.85.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.85.0.5")
@@ -403,7 +404,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "no-controller-net", subnet: "10.95.0.0/24", gateway: "10.95.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.95.0.5")
@@ -561,7 +562,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "old-agent-net", subnet: "10.80.0.0/24", gateway: "10.80.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.80.0.5")
@@ -601,7 +602,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "vm-perm-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.90.0.5")
@@ -656,7 +657,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "egress-guard-net", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.60.0.5")
@@ -704,7 +705,7 @@ final class FloatingIPControllerTests {
             let pool = try await self.createPool(app: app, org: org, token: token)
             let network = LogicalNetwork(
                 name: "site-move-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
-                projectID: project.id, externalAccess: true)
+                projectID: try project.requireID(), externalAccess: true)
             try await network.save(on: app.db)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.70.0.5")

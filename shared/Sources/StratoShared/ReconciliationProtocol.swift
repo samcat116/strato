@@ -373,12 +373,15 @@ public struct DesiredFloatingIP: Codable, Sendable, Equatable {
 /// should not exist on the agent.
 ///
 /// Router scope is per-project: every network in the same project shares one
-/// logical router (giving cross-switch east-west), keyed by `routerKey`. A
-/// project-less (global) network keys its router on its own id, so it still gets
-/// outbound SNAT without joining a shared router.
+/// logical router (giving cross-switch east-west), keyed by `routerKey`. Two
+/// projects never share a router, which is what makes it safe for them to use
+/// the same subnet (issue #765).
 public struct DesiredNetworkState: Codable, Sendable {
     public let networkId: UUID
-    /// OVN logical switch name (matches `NetworkSpec.network` on VM NICs).
+    /// Human label for logs and external-ids. **Not** the OVN switch name — the
+    /// agent derives that from `networkId` (issue #342) — and not unique:
+    /// names are scoped per project, so two entries in one sync may share one
+    /// (issue #765).
     public let name: String
     /// The network's subnet in CIDR form, e.g. `192.168.1.0/24`. Used as the
     /// SNAT `logical_ip` and to size the router port's address.

@@ -270,29 +270,26 @@ final class IAMWhoCanTests {
 
     // MARK: - Grants that are not bindings
 
-    /// A global network — one with no project — is readable by every
-    /// authenticated user (`NetworkController.fetchNetworkWithPermission`),
-    /// so neither answer may be assembled from bindings alone.
-    @Test("A global network reports network:read as open to all, and can() agrees")
-    func globalNetworkReadIsOpen() async throws {
+    /// Every network belongs to a project (issue #765), so nothing is readable
+    /// without a grant — and no answer is ever "open to all".
+    @Test("A network is never open to all; reads and updates both need a grant")
+    func networkReadIsNeverOpen() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "NetOpen")
             let stranger = try await builder.createUser(username: "stranger", email: "stranger@example.com")
-            let network = LogicalNetwork(name: "global-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1")
-            try await network.save(on: app.db)
+            let network = try await builder.createNetwork(
+                name: "read-net", project: tree.project, subnet: "10.90.0.0/24", gateway: "10.90.0.1")
             let node = IAMNode(type: .network, id: network.id!)
 
             let result = try await WhoCanService.whoCan(action: "network:read", node: node, app: app, on: app.db)
-            #expect(result.openToAllAuthenticatedUsers)
+            #expect(!result.openToAllAuthenticatedUsers)
 
-            // The stranger holds no binding anywhere, but the API would still
-            // serve them this network.
             let allowed = try await WhoCanService.can(
                 principalType: .user, principalID: stranger.id!, action: "network:read",
                 node: node, app: app, on: app.db)
-            #expect(allowed)
+            #expect(!allowed)
 
-            // The exemption is read-only and network-specific.
             let update = try await WhoCanService.whoCan(action: "network:update", node: node, app: app, on: app.db)
             #expect(!update.openToAllAuthenticatedUsers)
             let canUpdate = try await WhoCanService.can(
@@ -302,29 +299,8 @@ final class IAMWhoCanTests {
         }
     }
 
-    @Test("A project-scoped network is not open to all")
-    func projectNetworkIsNotOpen() async throws {
-        try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
-            let tree = try await buildTree(builder, prefix: "NetScoped")
-            let stranger = try await builder.createUser(username: "netstranger", email: "netstranger@example.com")
-            let network = LogicalNetwork(
-                name: "project-net", subnet: "10.91.0.0/24", gateway: "10.91.0.1",
-                projectID: tree.project.id!)
-            try await network.save(on: app.db)
-            let node = IAMNode(type: .network, id: network.id!)
-
-            let result = try await WhoCanService.whoCan(action: "network:read", node: node, app: app, on: app.db)
-            #expect(!result.openToAllAuthenticatedUsers)
-            let allowed = try await WhoCanService.can(
-                principalType: .user, principalID: stranger.id!, action: "network:read",
-                node: node, app: app, on: app.db)
-            #expect(!allowed)
-        }
-    }
-
-    @Test("Global-network openness applies only to real, enabled user accounts")
-    func globalNetworkOpennessRequiresRealUser() async throws {
+    @Test("Non-user principals are refused a network read outright")
+    func networkReadRequiresRealUser() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let disabled = try await builder.createUser(username: "disabled", email: "disabled@example.com")
@@ -332,8 +308,10 @@ final class IAMWhoCanTests {
             try await disabled.save(on: app.db)
             let org = try await builder.createOrganization(name: "Open Org")
             let group = try await builder.createGroup(name: "Open Team", description: "d", organization: org)
-            let network = LogicalNetwork(name: "open-net", subnet: "10.92.0.0/24", gateway: "10.92.0.1")
-            try await network.save(on: app.db)
+            let project = try await builder.createProject(
+                name: "Open Project", description: "d", organization: org)
+            let network = try await builder.createNetwork(
+                name: "open-net", project: project, subnet: "10.92.0.0/24", gateway: "10.92.0.1")
             let node = IAMNode(type: .network, id: network.id!)
 
             func can(_ type: IAMPrincipalType, _ id: UUID) async throws -> Bool {

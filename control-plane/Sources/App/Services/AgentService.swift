@@ -2195,11 +2195,11 @@ actor AgentService {
         let nics = try await VMNetworkInterface.query(on: db)
             .filter(\.$vm.$id == vmID)
             .all()
-        let names = Set(nics.map(\.network))
-        guard !names.isEmpty else { return nil }
+        let networkIDs = Set(nics.map(\.logicalNetworkID))
+        guard !networkIDs.isEmpty else { return nil }
 
         let networks = try await LogicalNetwork.query(on: db)
-            .filter(\.$name ~~ names)
+            .filter(\.$id ~~ Array(networkIDs))
             .all()
         let siteIDs = Set(networks.compactMap { $0.$site.id })
         guard siteIDs.count <= 1 else {

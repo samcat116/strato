@@ -19,16 +19,17 @@ Strato does **L2-only, single-switch, single-node** networking:
 
 - **Control plane** models a `LogicalNetwork` as a flat L2 segment: `subnet`,
   an optional `gateway` (used only as an excluded IP + DHCP `router` option),
-  and DHCP config. Networks are global-by-name, optionally project-scoped for
-  tenancy. IPAM (`IPAMService`) allocates non-overlapping IPs across the fleet
-  for a given network name. The seeded `default` network ships with public
-  resolvers (`1.1.1.1`, `8.8.8.8`) so guests can resolve names out of the box;
-  `STRATO_DEFAULT_NETWORK_DNS_SERVERS` overrides the list, and setting it empty
-  seeds none.
+  and DHCP config. **Every network belongs to exactly one project** (issue
+  #765): names are unique only within their project — two tenants may each own
+  a `default`, on the same subnet — and everything that identifies a network
+  keys on its row id. IPAM (`IPAMService`) allocates per network id, so one
+  project exhausting its subnet cannot affect another. Nothing provisions a
+  network automatically: VM create names one explicitly or is refused.
 - **Networks are not first-class in reconciliation.** They are realized as a
-  side effect of each VM's `VMSpec.networks` — the agent "finds or creates" the
-  switch by name when a VM lands. `NetworkCreate`/`NetworkDelete` wire messages
-  exist but are unused.
+  side effect of each VM's `VMSpec.networks` — the agent finds or creates the
+  switch (named after the network's id) when a VM lands. There is no imperative
+  network wire message: topology is level-triggered from the desired-state sync
+  alone.
 - **Agent** (`NetworkServiceLinux`) creates one OVN **logical switch** per
   network name, one **logical switch port** per NIC bound to a TAP on the
   `br-int` integration bridge, and optionally programs OVN-native DHCP. Nothing

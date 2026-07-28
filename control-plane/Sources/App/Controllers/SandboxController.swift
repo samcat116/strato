@@ -205,6 +205,12 @@ struct SandboxController: RouteCollection {
             /// guest state: templated snapshots restore on any same-arch
             /// host, un-templated ones only on identical CPU models.
             let cpuTemplate: String?
+            /// Logical network for the sandbox's NIC, within its own project
+            /// (issue #765). Mutually exclusive with `networkName`; omitting
+            /// both means no NIC, since sandbox guest networking does not exist
+            /// yet (see `attachNIC`).
+            let networkId: UUID?
+            let networkName: String?
         }
 
         let createRequest = try req.content.decode(CreateSandboxRequest.self)
@@ -410,11 +416,16 @@ struct SandboxController: RouteCollection {
                     sandbox.setDesiredStatus(initialDesiredStatus)
                     try await sandbox.update(on: db)
 
-                    // One NIC on the default logical network, IPAM-allocated by
-                    // the control plane (issue #416). A missing default-network
-                    // row (pre-migration data) degrades to an address-less NIC,
-                    // matching the VM implicit-default path.
-                    try await Self.attachDefaultNIC(to: sandboxID, on: db)
+                    // One NIC on the requested logical network, IPAM-allocated by
+                    // the control plane (issue #416); no NIC when the caller
+                    // named no network (issue #765).
+                    try await Self.attachNIC(
+                        to: sandboxID,
+                        projectID: projectId,
+                        requestedNetworkID: createRequest.networkId,
+                        requestedNetworkName: createRequest.networkName,
+                        on: db
+                    )
 
                     let operation = ResourceOperation(
                         sandboxID: sandboxID, userID: userID, kind: .create)
@@ -464,62 +475,61 @@ struct SandboxController: RouteCollection {
         return try operation.acceptedResponse()
     }
 
-    /// Allocates and persists the sandbox's single NIC on the default logical
-    /// network (issue #416), reusing the VM NIC's MAC generation and IPAM. Must
-    /// run inside the create transaction so the address is reserved before the
-    /// `202` returns and before placement. A missing default-network row
-    /// degrades to an address-less NIC (matching the VM implicit-default
-    /// behavior on pre-migration data); the NIC row itself is always created so
-    /// the sandbox has a stable device name to attach. Until guest networking
-    /// lands the NIC is a control-plane-side reservation only — sync assembly
-    /// deliberately omits it from the wire spec (see
-    /// `SandboxSpecBuilder.guestNetworkingSupported`), because agents reject
-    /// networked sandbox specs.
-    private static func attachDefaultNIC(to sandboxID: UUID, on db: Database) async throws {
-        let networkName = LogicalNetwork.defaultNetworkName
+    /// Allocates and persists the sandbox's single NIC (issue #416), reusing the
+    /// VM NIC's MAC generation and IPAM. Must run inside the create transaction
+    /// so the address is reserved before the `202` returns and before placement.
+    ///
+    /// A named network is resolved within the sandbox's own project, exactly as
+    /// VM create resolves it (issue #765). Naming none is not an error the way
+    /// it is for a VM — the sandbox is simply created **with no NIC**. Guest
+    /// networking does not exist for sandboxes yet (sync assembly omits the NIC
+    /// from the wire spec, see `SandboxSpecBuilder.guestNetworkingSupported`,
+    /// because agents reject networked sandbox specs), so the NIC is a pure
+    /// control-plane address reservation; refusing the create, or silently
+    /// picking a network on the caller's behalf, would both be worse than
+    /// reserving nothing.
+    private static func attachNIC(
+        to sandboxID: UUID, projectID: UUID, requestedNetworkID: UUID?, requestedNetworkName: String?,
+        on db: Database
+    ) async throws {
+        guard requestedNetworkID != nil || requestedNetworkName != nil else { return }
 
-        var allocation: IPAMService.Allocation?
-        var allocation6: IPAMService.Allocation6?
-        var networkGateway: String?
-        var networkGateway6: String?
-        if let logicalNetwork = try await LogicalNetwork.query(on: db)
-            .filter(\.$name == networkName)
-            .first()
-        {
-            allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
-            networkGateway = logicalNetwork.gateway
-            // Dual-stack network: the NIC gets one address per family.
-            allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
-            networkGateway6 = logicalNetwork.gateway6
-        }
+        let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
+            requestedID: requestedNetworkID,
+            requestedName: requestedNetworkName,
+            projectID: projectID,
+            on: db
+        )
+        let logicalNetworkID = try logicalNetwork.requireID()
+        let allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+        // Dual-stack network: the NIC gets one address per family.
+        let allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
 
         let networkInterface = SandboxNetworkInterface(
             sandboxID: sandboxID,
-            network: networkName,
+            logicalNetworkID: logicalNetworkID,
             macAddress: VMNetworkInterface.generateMACAddress()
         )
         try await networkInterface.save(on: db)
         let interfaceID = try networkInterface.requireID()
 
-        if let allocation {
-            let address = SandboxInterfaceAddress(
-                interfaceID: interfaceID,
-                network: networkName,
-                family: .ipv4,
-                address: allocation.ipAddress,
-                prefixLength: allocation.prefixLength,
-                gateway: networkGateway
-            )
-            try await address.save(on: db)
-        }
+        let address = SandboxInterfaceAddress(
+            interfaceID: interfaceID,
+            logicalNetworkID: logicalNetworkID,
+            family: .ipv4,
+            address: allocation.ipAddress,
+            prefixLength: allocation.prefixLength,
+            gateway: logicalNetwork.gateway
+        )
+        try await address.save(on: db)
         if let allocation6 {
             let address6 = SandboxInterfaceAddress(
                 interfaceID: interfaceID,
-                network: networkName,
+                logicalNetworkID: logicalNetworkID,
                 family: .ipv6,
                 address: allocation6.ipAddress,
                 prefixLength: allocation6.prefixLength,
-                gateway: networkGateway6
+                gateway: logicalNetwork.gateway6
             )
             try await address6.save(on: db)
         }

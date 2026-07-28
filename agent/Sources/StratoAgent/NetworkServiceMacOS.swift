@@ -65,57 +65,11 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         return networkInfo
     }
 
-    func attachVMToNetwork(vmId: String, networkName: String, macAddress: String? = nil) async throws -> VMNetworkInfo {
-        let config = VMNetworkConfig(
-            networkName: networkName,
-            macAddress: macAddress,
-            subnet: "10.0.2.0/24"  // QEMU user-mode default
-        )
-        return try await createVMNetwork(vmId: vmId, nicIndex: 0, config: config)
-    }
-
     func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
         logger.info(
             "Detaching VM from user-mode network",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
         vmNetworks.removeValue(forKey: Self.nicKey(vmId: vmId, nicIndex: nicIndex))
-    }
-
-    func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo? {
-        return vmNetworks[Self.nicKey(vmId: vmId, nicIndex: 0)]
-    }
-
-    // MARK: - Network Topology Management
-
-    func createLogicalNetwork(name: String, subnet: String, gateway: String? = nil) async throws -> UUID {
-        logger.info("Creating logical network (user-mode simulation)", metadata: ["name": .string(name)])
-
-        let networkUUID = UUID()
-        let networkInfo = NetworkInfo(
-            name: name,
-            uuid: networkUUID.uuidString,
-            subnet: subnet,
-            gateway: gateway,
-            dhcpEnabled: true,
-            dnsServers: ["10.0.2.3"]  // QEMU user-mode DNS server
-        )
-
-        logicalNetworks[name] = networkInfo
-
-        logger.info("Logical network created (simulated)", metadata: ["name": .string(name)])
-        logger.warning("Note: User-mode networking on macOS provides limited network isolation")
-
-        return networkUUID
-    }
-
-    func deleteLogicalNetwork(name: String) async throws {
-        logger.info("Deleting logical network (user-mode simulation)", metadata: ["name": .string(name)])
-        logicalNetworks.removeValue(forKey: name)
-        logger.info("Logical network deleted", metadata: ["name": .string(name)])
-    }
-
-    func listLogicalNetworks() async throws -> [NetworkInfo] {
-        return Array(logicalNetworks.values)
     }
 
     // MARK: - Helper Methods

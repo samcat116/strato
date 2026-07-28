@@ -100,6 +100,9 @@ public struct DesiredSwitch: Equatable, Sendable {
     /// The network's user-facing name, i.e. the switch name older agents used
     /// before UUID naming. The actuator renames such a legacy switch in place to
     /// `name` on upgrade, so existing VM ports migrate without re-creation.
+    /// Empty when no rename may be attempted — including when another network
+    /// in the same sync shares the name, which makes the hint ambiguous
+    /// (issue #765).
     public let legacyName: String
 
     public init(name: String, subnet: String, legacyName: String) {
@@ -367,11 +370,24 @@ public enum NetworkReconciler {
     /// * A router-key group with no gatewayed network yields no router (nothing
     ///   to route). Output is fully sorted, so the plan is deterministic.
     public static func plan(networks: [DesiredNetworkState]) -> NetworkTopologyPlan {
-        let sorted = networks.sorted { $0.name < $1.name }
+        // Sorted by (name, id): names are unique only within a project (issue
+        // #765), so name alone is not a total order and Swift's sort is not
+        // stable — two same-named networks would order arbitrarily.
+        let sorted = networks.sorted { ($0.name, $0.networkId.uuidString) < ($1.name, $1.networkId.uuidString) }
+
+        // A pre-#342 switch was named after the network, so `legacyName` is how
+        // `ensureSwitch` finds and renames one in place. That only works while
+        // the name identifies a single network: when two share one, which of
+        // them inherits the existing switch — and its live port bindings —
+        // would come down to plan order. Withhold the hint from both; they get
+        // fresh id-named switches instead.
+        var nameCounts: [String: Int] = [:]
+        for network in sorted { nameCounts[network.name, default: 0] += 1 }
 
         let switches = sorted.map {
             DesiredSwitch(
-                name: OVNNaming.switchName(networkId: $0.networkId), subnet: $0.subnet, legacyName: $0.name)
+                name: OVNNaming.switchName(networkId: $0.networkId), subnet: $0.subnet,
+                legacyName: nameCounts[$0.name] == 1 ? $0.name : "")
         }
 
         // Group by router key, preserving deterministic order.

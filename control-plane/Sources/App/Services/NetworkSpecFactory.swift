@@ -9,22 +9,27 @@ extension NetworkSpec {
     ///
     /// `interface.addresses` must be eager-loaded: the per-family address rows are
     /// the source of NIC addressing (the legacy single-address columns are dead).
-    /// `network` supplies the DHCP/DNS configuration agents program into OVN; nil
-    /// (network row absent) leaves DHCP disabled.
+    /// `network` is the row the NIC's FK points at — non-optional since issue
+    /// #765, because a NIC cannot exist without one — and supplies both the
+    /// display name and the DHCP/DNS configuration agents program into OVN.
     /// `securityGroupIds` is the NIC's security-group membership (VM NICs
     /// only; sandbox NICs pass nil = unmanaged), already gated on the
     /// receiving agent's protocol version by the assembly.
     static func build(
-        interface: some NetworkAddressable, network: LogicalNetwork?, securityGroupIds: [UUID]? = nil
+        interface: some NetworkAddressable, network: LogicalNetwork, securityGroupIds: [UUID]? = nil
     ) -> NetworkSpec {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
         return NetworkSpec(
-            network: interface.network,
+            // A human label only: names are unique per project, so they cannot
+            // identify a network. Agents use it for logging and external-ids.
+            network: network.name,
             // The network's id, so the agent names its OVN switch after the id
             // (not the user-chosen name) and lands the instance on the same switch
-            // the network reconciler creates (issue #342).
-            networkId: network?.id,
+            // the network reconciler creates (issue #342). Taken from the NIC's
+            // foreign key rather than `network.id`: same value by construction —
+            // the caller looked the row up by it — but non-optional.
+            networkId: interface.logicalNetworkID,
             macAddress: interface.macAddress,
             ipAddress: ipv4?.address,
             // Old agents still read a dotted netmask off the wire.
@@ -34,10 +39,10 @@ extension NetworkSpec {
             ipv6PrefixLength: ipv6?.prefixLength,
             gateway6: ipv6?.gateway,
             mtu: interface.mtu,
-            dhcpEnabled: network?.dhcpEnabled ?? false,
-            dnsServers: network?.dnsServers ?? [],
-            domainName: network?.domainName,
-            leaseTime: network?.leaseTime,
+            dhcpEnabled: network.dhcpEnabled,
+            dnsServers: network.dnsServers,
+            domainName: network.domainName,
+            leaseTime: network.leaseTime,
             securityGroupIds: securityGroupIds
         )
     }

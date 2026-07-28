@@ -173,18 +173,11 @@ enum CedarSchemaBuilder {
                 ? "entity \(entity.rawValue)"
                 : "entity \(entity.rawValue) in [\(parents.map(\.rawValue).joined(separator: ", "))]"
             var attrs = ["\(CedarText.stringLiteral("environment"))?: String"]
-            if entity == .network {
-                // A global network (no project) is readable by every
-                // authenticated user — the tier-1 open-network policy keys on
-                // this attribute.
-                attrs.append("\(CedarText.stringLiteral("openToAllUsers")): Bool")
-            }
             if entity == .agent {
-                // Optional, unlike `openToAllUsers`: it costs a workload
-                // inventory to compute, so the loader only fills it in for the
-                // actions the tier-1 foreign-workload forbid names, and that
-                // forbid guards its read with `has`. Fleet listing does not pay
-                // for it.
+                // Optional: it costs a workload inventory to compute, so the
+                // loader only fills it in for the actions the tier-1
+                // foreign-workload forbid names, and that forbid guards its
+                // read with `has`. Fleet listing does not pay for it.
                 attrs.append("\(CedarText.stringLiteral("hostsForeignWorkloads"))?: Bool")
             }
             lines.append("\(head) {")
@@ -244,12 +237,8 @@ enum CedarSchemaBuilder {
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
         case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP, .securityGroup,
-            .serviceAccount:
+            .serviceAccount, .network:
             return [.project]
-        case .network:
-            // Project-scoped normally; a site-scoped network climbs to the
-            // org or folder owning the site's capacity (`IAMResourceTree`).
-            return [.project, .organization, .folder]
         case .site, .agent: return [.organization, .folder]
         case .user, .group, .workload: return []
         }

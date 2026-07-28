@@ -49,9 +49,9 @@ struct MessageEnvelopeTests {
 
     @Test("payload that does not match the requested type throws")
     func mismatchedPayloadThrows() throws {
-        let envelope = try MessageEnvelope(message: NetworkListMessage())
+        let envelope = try MessageEnvelope(message: SuccessMessage(requestId: "r1"))
         #expect(throws: DecodingError.self) {
-            // ConsoleDataMessage requires fields NetworkListMessage lacks.
+            // ConsoleDataMessage requires fields a success reply lacks.
             try envelope.decode(as: ConsoleDataMessage.self)
         }
     }

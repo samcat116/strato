@@ -451,6 +451,36 @@ struct TestDataBuilder {
         return ou
     }
 
+    /// A logical network in `project`. Nothing provisions one automatically
+    /// (issue #765), so any fixture whose workloads need a network must make
+    /// one — and two projects may safely share a name and a subnet.
+    @discardableResult
+    func createNetwork(
+        name: String = "default",
+        project: Project,
+        subnet: String = "192.168.1.0/24",
+        gateway: String? = "192.168.1.1",
+        subnet6: String? = nil,
+        gateway6: String? = nil,
+        dhcpEnabled: Bool = true,
+        externalAccess: Bool = true,
+        site: Site? = nil
+    ) async throws -> LogicalNetwork {
+        let network = LogicalNetwork(
+            name: name,
+            subnet: subnet,
+            gateway: gateway,
+            subnet6: subnet6,
+            gateway6: gateway6,
+            projectID: try project.requireID(),
+            dhcpEnabled: dhcpEnabled,
+            externalAccess: externalAccess,
+            siteID: site?.id
+        )
+        try await network.save(on: db)
+        return network
+    }
+
     func createProject(
         name: String,
         description: String,

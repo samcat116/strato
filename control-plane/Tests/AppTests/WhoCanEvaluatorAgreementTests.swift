@@ -140,24 +140,25 @@ final class WhoCanEvaluatorAgreementTests {
         }
     }
 
-    @Test("A machine principal reaches a platform permit: open network read")
-    func machinePrincipalOpenNetworkAgreement() async throws {
+    @Test("A machine principal with no grant is denied a network read, and who-can agrees")
+    func machinePrincipalUngrantedNetworkAgreement() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "MachineNet")
             let account = ServiceAccount(name: "net-reader", projectID: tree.project.id!)
             try await account.save(on: app.db)
-            let network = LogicalNetwork(name: "agree-global", subnet: "10.95.0.0/24", gateway: "10.95.0.1")
-            try await network.save(on: app.db)
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "agree-net", project: tree.project, subnet: "10.95.0.0/24", gateway: "10.95.0.1")
             let node = IAMNode(type: .network, id: network.id!)
 
-            // No binding anywhere — the platform-open-network-read permit is
-            // principal-unscoped, and the old bindings model missed that.
+            // No binding anywhere. Global networks — and the principal-unscoped
+            // permit that made them world-readable — are gone (issue #765), so
+            // reading one now takes a grant like any other project resource.
             let can = try await WhoCanService.can(
                 principalType: .serviceAccount, principalID: account.id!, action: "network:read",
                 node: node, app: app, on: app.db)
             let enforced = try await authorizerAllows(
                 app, principal: .serviceAccount(account.id!), action: "network:read", node: node)
-            #expect(enforced)
+            #expect(!enforced)
             #expect(can == enforced)
         }
     }
@@ -166,12 +167,12 @@ final class WhoCanEvaluatorAgreementTests {
     func unreachablePrincipalsAnswerFalse() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
-            let network = LogicalNetwork(name: "nobody-net", subnet: "10.96.0.0/24", gateway: "10.96.0.1")
-            try await network.save(on: app.db)
+            let tree = try await buildTree(app, prefix: "Unreachable")
+            let network = try await builder.createNetwork(
+                name: "nobody-net", project: tree.project, subnet: "10.96.0.0/24", gateway: "10.96.0.1")
             let node = IAMNode(type: .network, id: network.id!)
 
-            // Unknown ids: the open-network permit covers *any* principal, but
-            // nobody can authenticate as a row that does not exist.
+            // Nobody can authenticate as a row that does not exist.
             for type in [IAMPrincipalType.user, .serviceAccount, .workload] {
                 let can = try await WhoCanService.can(
                     principalType: type, principalID: UUID(), action: "network:read",

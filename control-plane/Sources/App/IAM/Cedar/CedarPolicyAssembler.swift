@@ -106,19 +106,6 @@ enum CedarPolicyAssembler {
                     };
                     """))
 
-        // A global network — one with no project — is readable by every
-        // authenticated user, because it is the fallback every VM create can
-        // land on. Today a special case in `NetworkController` and `who-can`;
-        // here it is an ordinary tier-1 permit.
-        policies.append(
-            CedarPolicySource(
-                id: "platform-open-network-read",
-                text: """
-                    @id("platform-open-network-read")
-                    permit (principal, action == Action::"network:read", resource is Network)
-                    when { resource.openToAllUsers };
-                    """))
-
         // Bare org membership grants `org:read` + `project:create` — nothing
         // else. `resource in principal.memberOfOrgs` covers both the org
         // itself and a folder beneath it (the entity slice carries the parent

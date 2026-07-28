@@ -7860,9 +7860,13 @@ components:
         networkId:
           type: string
           format: uuid
-          description: Mutually exclusive with `networkName`.
+          description: >-
+            Logical network for the VM's NIC, within the VM's own project.
+            Exactly one of `networkId` or `networkName` is required — there is
+            no default network to fall back to.
         networkName:
           type: string
+          description: Name of that network within the project. Mutually exclusive with `networkId`.
         sshPublicKey:
           type: string
         userData:
@@ -7993,13 +7997,21 @@ components:
         - Unknown
     NetworkInterface:
       type: object
-      required: [network, macAddress, addresses, deviceName, orderIndex]
+      required: [networkId, macAddress, addresses, deviceName, orderIndex]
       properties:
         id:
           type: string
           format: uuid
+        networkId:
+          type: string
+          format: uuid
+          description: The logical network this NIC attaches to.
         network:
           type: string
+          description: >-
+            Display name of the network. Present only when the response
+            eager-loaded it; names are unique per project, so the id is the
+            reference.
         macAddress:
           type: string
         addresses:
@@ -8067,6 +8079,15 @@ components:
           type: string
         ttlSeconds:
           type: integer
+        networkId:
+          type: string
+          format: uuid
+          description: >-
+            Logical network for the sandbox's NIC, within its own project.
+            Mutually exclusive with `networkName`; omitting both attaches no
+            NIC, since sandbox guest networking is not implemented yet.
+        networkName:
+          type: string
     UpdateSandboxRequest:
       type: object
       properties:
@@ -8668,7 +8689,7 @@ components:
       required:
         - name
         - subnet
-        - isDefault
+        - projectId
         - attachedInterfaceCount
         - dhcpEnabled
         - dnsServers
@@ -8679,6 +8700,7 @@ components:
           format: uuid
         name:
           type: string
+          description: Unique within the owning project, not globally.
         subnet:
           type: string
         gateway:
@@ -8690,10 +8712,9 @@ components:
         projectId:
           type: string
           format: uuid
-        isDefault:
-          type: boolean
         attachedInterfaceCount:
           type: integer
+          description: VM and sandbox interfaces attached to this network.
         dhcpEnabled:
           type: boolean
         dnsServers:
@@ -8814,8 +8835,15 @@ components:
           format: uuid
         fixedIP:
           type: string
+        networkId:
+          type: string
+          format: uuid
+          description: Network of the attached NIC.
         networkName:
           type: string
+          description: >-
+            Display name of that network, present only when the response
+            eager-loaded it.
         createdAt:
           type: string
           format: date-time

@@ -10,7 +10,18 @@ import Vapor
 /// values agents previously hardcoded — so existing deployments keep their
 /// addressing. Fresh installs can override via `STRATO_DEFAULT_NETWORK_SUBNET`
 /// and `STRATO_DEFAULT_NETWORK_GATEWAY`.
+///
+/// Issue #765 later retired this shared network: `ScopeLogicalNetworksToProjects`
+/// deletes the seeded row, since every network now belongs to a project. The
+/// seed stays here because migration history is replayed as written, not as the
+/// model looks today.
 struct CreateLogicalNetwork: AsyncMigration {
+    /// Name of the network this migration seeds. A literal, not a model
+    /// constant: migrations are pinned to the schema and the values of their
+    /// own moment in history, and the model no longer has a notion of a default
+    /// network at all.
+    static let seededDefaultName = "default"
+
     func prepare(on database: Database) async throws {
         try await database.schema("logical_networks")
             .id()
@@ -63,7 +74,7 @@ struct CreateLogicalNetwork: AsyncMigration {
             .columns("id", "name", "subnet", "gateway")
             .values(
                 SQLBind(UUID()),
-                SQLBind(LogicalNetwork.defaultNetworkName),
+                SQLBind(CreateLogicalNetwork.seededDefaultName),
                 SQLBind(subnet),
                 SQLBind(gateway)
             )

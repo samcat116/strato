@@ -29,8 +29,9 @@ struct CedarPolicyAssemblyTests {
 
         #expect(text.contains("@id(\"platform-system-admin\")"))
         #expect(text.contains("when { principal.systemAdmin };"))
-        #expect(text.contains("@id(\"platform-open-network-read\")"))
-        #expect(text.contains("resource is Network"))
+        // The one principal-unscoped permit — global networks were readable by
+        // everyone — is gone with global networks (issue #765).
+        #expect(!text.contains("platform-open-network-read"))
         #expect(text.contains("@id(\"org-membership\")"))
         #expect(text.contains("action in [Action::\"org:read\", Action::\"project:create\"]"))
         #expect(text.contains("when { resource in principal.memberOfOrgs };"))

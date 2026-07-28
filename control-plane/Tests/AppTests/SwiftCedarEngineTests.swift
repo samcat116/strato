@@ -49,9 +49,6 @@ struct SwiftCedarEngineTests {
         let resource = CedarEntityUID(type: resourceType, id: resourceID)
 
         var attrs = resourceAttrs
-        if resourceType == .network, attrs["openToAllUsers"] == nil {
-            attrs["openToAllUsers"] = .bool(false)
-        }
         if resourceType == .user {
             // `User` is a resource type as well as a principal type, and its
             // schema attributes are required in both roles — the same rule the
@@ -163,16 +160,15 @@ struct SwiftCedarEngineTests {
         #expect(!update.allowed)
     }
 
-    @Test("A global network is readable by anyone; a project one is not")
-    func openNetworkRead() throws {
-        let open = try evaluate(
-            action: "network:read", resourceType: .network,
-            resourceAttrs: ["openToAllUsers": .bool(true)])
-        #expect(open.allowed)
-        #expect(open.determiningPolicyIDs == ["platform-open-network-read"])
+    @Test("A network read takes a grant like any other project resource")
+    func networkReadNeedsAGrant() throws {
+        // No principal-unscoped permit survives: global networks, and the
+        // policy that made them world-readable, are gone (issue #765).
+        let ungranted = try evaluate(action: "network:read", resourceType: .network)
+        #expect(!ungranted.allowed)
 
-        let closed = try evaluate(action: "network:read", resourceType: .network)
-        #expect(!closed.allowed)
+        let granted = try evaluate(action: "network:read", resourceType: .network, role: .viewer)
+        #expect(granted.allowed)
     }
 
     @Test("A guardrail forbid beats a grant and the decision names the ceiling")
