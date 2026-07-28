@@ -114,7 +114,13 @@ export interface ObservedInterfaceAddress {
 
 export interface VMNetworkInterface {
   id?: string;
-  network: string;
+  /** The logical network this NIC attaches to. */
+  networkId: string;
+  /**
+   * Display name of that network. Present only when the response eager-loaded
+   * it; names are unique per project, so the id is the reference.
+   */
+  network?: string;
   macAddress: string;
   /** All addresses on the NIC, one per family on a dual-stack network. */
   addresses?: InterfaceAddress[];

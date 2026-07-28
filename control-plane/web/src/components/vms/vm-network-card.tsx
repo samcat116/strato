@@ -222,7 +222,9 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                   <TableCell className="text-foreground/80 font-mono text-sm">
                     {nic.deviceName}
                   </TableCell>
-                  <TableCell className="text-foreground/80">{nic.network}</TableCell>
+                  <TableCell className="text-foreground/80">
+                    {nic.network ?? nic.networkId}
+                  </TableCell>
                   <TableCell className="text-foreground/80 font-mono text-sm">
                     {nic.macAddress}
                   </TableCell>
