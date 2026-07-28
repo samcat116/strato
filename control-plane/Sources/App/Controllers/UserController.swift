@@ -95,6 +95,20 @@ struct UserController: RouteCollection {
         return user.asPublic()
     }
 
+    /// Takes a transaction-scoped advisory lock covering the "does this
+    /// installation have any users?" question, so everything that decides
+    /// whether an account is the bootstrap account serializes: this endpoint
+    /// and `App bootstrap`, across replicas.
+    ///
+    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// transaction ends (see `IPAMService.lockAllocations` for the same
+    /// pattern). Registration is rare and rate-limited, so the contention this
+    /// adds is nil.
+    static func lockRegistration(on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "user-registration")))").run()
+    }
+
     /// Whether the login page should offer account creation, and whether doing
     /// so would bootstrap the installation. Public and unauthenticated — this
     /// is asked before any session exists.
@@ -111,41 +125,52 @@ struct UserController: RouteCollection {
     func register(req: Request) async throws -> User.Public {
         let createUser = try req.content.decode(CreateUserRequest.self)
 
-        // Check if this is the first user (should be system admin)
-        let isFirstUser = try await User.isFirstUser(on: req.db)
+        // The bootstrap decision and the insert that invalidates it have to be
+        // one atomic step. "No users exist" is a predicate over rows that do
+        // not exist yet, so no row lock can hold it: two concurrent requests
+        // could each read an empty table, each pass a *disabled* gate on the
+        // bootstrap exemption, and each be saved as a system admin. Inside the
+        // lock the loser re-reads a table that now contains the winner.
+        let user = try await req.db.transaction { db -> User in
+            try await Self.lockRegistration(on: db)
 
-        // Refuse before touching the account table when the operator has closed
-        // self-registration: the conflict check below distinguishes taken names
-        // from free ones, and an install that isn't accepting sign-ups should
-        // not answer that question for an anonymous caller. Bootstrap is exempt
-        // — see `RegistrationPolicy`.
-        guard req.registrationPolicy.allowsRegistration(bootstrapRequired: isFirstUser) else {
-            throw Abort(
-                .forbidden,
-                reason: "Self-registration is disabled. Ask an administrator to create your account."
-            )
-        }
+            // Check if this is the first user (should be system admin)
+            let isFirstUser = try await User.isFirstUser(on: db)
 
-        // Check if username or email already exists
-        let existingUser = try await User.query(on: req.db)
-            .group(.or) { group in
-                group.filter(\.$username == createUser.username)
-                group.filter(\.$email == createUser.email)
+            // Refuse before touching the account table when the operator has
+            // closed self-registration: the conflict check below distinguishes
+            // taken names from free ones, and an install that isn't accepting
+            // sign-ups should not answer that question for an anonymous caller.
+            // Bootstrap is exempt — see `RegistrationPolicy`.
+            guard req.registrationPolicy.allowsRegistration(bootstrapRequired: isFirstUser) else {
+                throw Abort(
+                    .forbidden,
+                    reason: "Self-registration is disabled. Ask an administrator to create your account."
+                )
             }
-            .first()
 
-        if existingUser != nil {
-            throw Abort(.conflict, reason: "Username or email already exists")
+            // Check if username or email already exists
+            let existingUser = try await User.query(on: db)
+                .group(.or) { group in
+                    group.filter(\.$username == createUser.username)
+                    group.filter(\.$email == createUser.email)
+                }
+                .first()
+
+            if existingUser != nil {
+                throw Abort(.conflict, reason: "Username or email already exists")
+            }
+
+            let user = User(
+                username: createUser.username,
+                email: createUser.email,
+                displayName: createUser.displayName,
+                isSystemAdmin: isFirstUser
+            )
+
+            try await user.save(on: db)
+            return user
         }
-
-        let user = User(
-            username: createUser.username,
-            email: createUser.email,
-            displayName: createUser.displayName,
-            isSystemAdmin: isFirstUser
-        )
-
-        try await user.save(on: req.db)
 
         // Bind the account's first passkey enrollment to the browser session
         // that created it: /auth/register/begin only issues a challenge for

@@ -5,6 +5,20 @@ import VaporTesting
 
 @testable import App
 
+/// Free function so the concurrency test can fire requests from a task group
+/// without capturing the (non-Sendable) test case.
+private func registerConcurrently(_ app: Application, username: String) async throws -> HTTPStatus {
+    var status = HTTPStatus.internalServerError
+    try await app.test(.POST, "/api/users/register") { req in
+        try req.content.encode(
+            CreateUserRequest(
+                username: username, email: "\(username)@example.com", displayName: username))
+    } afterResponse: { res in
+        status = res.status
+    }
+    return status
+}
+
 @Suite("Self-registration policy", .serialized)
 final class RegistrationPolicyTests: BaseTestCase {
 
@@ -139,6 +153,34 @@ final class RegistrationPolicyTests: BaseTestCase {
             #expect(created != nil)
             // Not the first account, so no free system-admin bit.
             #expect(created?.isSystemAdmin == false)
+        }
+    }
+
+    /// The bootstrap exemption is a predicate over rows that do not exist yet,
+    /// so it cannot be held by a row lock: without serializing the check with
+    /// the insert, concurrent requests each read an empty table, each pass a
+    /// *disabled* gate, and each land as a system admin.
+    @Test("concurrent bootstrap registrations produce exactly one account")
+    func testConcurrentBootstrapRegistrationsSerialize() async throws {
+        try await withApp { app in
+            app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
+
+            let attempts = 8
+            let statuses = try await withThrowingTaskGroup(of: HTTPStatus.self) { group in
+                for index in 0..<attempts {
+                    group.addTask { try await registerConcurrently(app, username: "racer\(index)") }
+                }
+                var collected: [HTTPStatus] = []
+                for try await status in group { collected.append(status) }
+                return collected
+            }
+
+            #expect(statuses.filter { $0 == .ok }.count == 1)
+            #expect(statuses.filter { $0 == .forbidden }.count == attempts - 1)
+
+            let users = try await User.query(on: app.db).all()
+            #expect(users.count == 1)
+            #expect(users.first?.isSystemAdmin == true)
         }
     }
 

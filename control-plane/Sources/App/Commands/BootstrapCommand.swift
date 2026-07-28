@@ -73,6 +73,13 @@ struct BootstrapCommand: AsyncCommand {
         let fullKey = APIKey.generateAPIKey()
 
         let project = try await app.db.transaction { db -> Project in
+            // Re-ask under the registration lock. The check above is a
+            // courtesy that fails the command with a readable message; this is
+            // the one that holds, because a concurrent self-registration could
+            // have created the first user in between.
+            try await UserController.lockRegistration(on: db)
+            guard try await User.isFirstUser(on: db) else { throw RefusedError() }
+
             try await user.save(on: db)
             let userID = try user.requireID()
 
