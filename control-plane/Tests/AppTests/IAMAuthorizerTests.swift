@@ -62,7 +62,7 @@ final class IAMAuthorizerTests {
         cache: IAMRequestCache? = nil
     ) async throws -> Bool {
         try await IAMAuthorizer.checkLegacyVocabulary(
-            userID: user.id!,
+            principal: .user(user.id!),
             permission: permission,
             resourceType: resourceType,
             resourceID: resourceID,

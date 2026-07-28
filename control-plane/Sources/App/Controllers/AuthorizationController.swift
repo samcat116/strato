@@ -76,9 +76,9 @@ struct AuthorizationController: RouteCollection {
     /// short-circuiting to "true" could report an allow the evaluator would
     /// refuse.
     func check(req: Request) async throws -> CheckResponse {
-        guard let user = req.auth.get(User.self), let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
+        // "May I?" is asked about the request's acting principal — a user, or
+        // the service account / workload a JWT-SVID resolved to (issue #495).
+        let actingPrincipal = try req.requireActingPrincipal()
 
         let payload = try req.content.decode(CheckRequest.self)
 
@@ -131,7 +131,7 @@ struct AuthorizationController: RouteCollection {
                 // `untranslated`. Routed through the per-check path so there is
                 // one place that decides what an unmapped pair means.
                 results[item.key] = try await IAMAuthorizer.checkLegacyVocabulary(
-                    userID: userID,
+                    principal: actingPrincipal,
                     permission: item.permission,
                     resourceType: item.resourceType,
                     resourceID: item.resourceId,
@@ -154,7 +154,7 @@ struct AuthorizationController: RouteCollection {
         var decisions: [String: [IAMNode: CedarCheckDecision]] = [:]
         for (action, nodes) in nodesByAction {
             decisions[action] = try await IAMAuthorizer.authorize(
-                principal: .user(userID),
+                principal: actingPrincipal,
                 action: action,
                 nodes: nodes,
                 legacyEquivalents: legacyEquivalents[action] ?? [:],

@@ -108,9 +108,9 @@ struct SandboxController: RouteCollection {
 
     /// Every sandbox the caller may read, newest first, ready for slicing.
     func visibleSandboxes(req: Request) async throws -> [SandboxDetailResponse] {
-        guard req.auth.has(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        // Any authenticated principal, as in VMController.visibleVMs — which
+        // sandboxes it may see is the `canFilter` answer below (issue #495).
+        _ = try req.requireActingPrincipal()
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
@@ -144,13 +144,13 @@ struct SandboxController: RouteCollection {
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
-        _ = try req.auth.require(User.self)
+        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         return SandboxDetailResponse(from: sandbox)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
-        _ = try req.auth.require(User.self)
+        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
 
         // The database row *is* the observed state: the owning agent's
@@ -160,7 +160,7 @@ struct SandboxController: RouteCollection {
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
-        _ = try req.auth.require(User.self)
+        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         let sandboxID = try sandbox.requireID()
 
@@ -179,9 +179,7 @@ struct SandboxController: RouteCollection {
     // MARK: - Create
 
     func create(req: Request) async throws -> Response {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.requireActingUser("Creating a sandbox")
 
         struct CreateSandboxRequest: Content {
             let name: String
@@ -528,7 +526,7 @@ struct SandboxController: RouteCollection {
     // MARK: - Update
 
     func update(req: Request) async throws -> SandboxDetailResponse {
-        _ = try req.auth.require(User.self)
+        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "update")
 
         struct UpdateSandboxRequest: Content {
@@ -557,7 +555,7 @@ struct SandboxController: RouteCollection {
     // MARK: - Lifecycle
 
     func start(req: Request) async throws -> Response {
-        let user = try req.auth.require(User.self)
+        let user = try req.requireActingUser("Mutating a sandbox")
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "start")
 
         guard sandbox.canStart else {
@@ -579,7 +577,7 @@ struct SandboxController: RouteCollection {
     }
 
     func stop(req: Request) async throws -> Response {
-        let user = try req.auth.require(User.self)
+        let user = try req.requireActingUser("Mutating a sandbox")
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "stop")
 
         guard sandbox.canStop else {
@@ -601,7 +599,7 @@ struct SandboxController: RouteCollection {
     }
 
     func restart(req: Request) async throws -> Response {
-        let user = try req.auth.require(User.self)
+        let user = try req.requireActingUser("Mutating a sandbox")
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "restart")
 
         guard sandbox.isRunning else {
@@ -640,7 +638,7 @@ struct SandboxController: RouteCollection {
     /// the single-replica limitation is documented in
     /// `docs/architecture/sandboxes.md`).
     func exec(req: Request) async throws -> Response {
-        let user = try req.auth.require(User.self)
+        let user = try req.requireActingUser("Mutating a sandbox")
 
         struct ExecRequest: Content {
             let command: [String]
@@ -726,7 +724,7 @@ struct SandboxController: RouteCollection {
     // MARK: - Delete
 
     func delete(req: Request) async throws -> Response {
-        let user = try req.auth.require(User.self)
+        let user = try req.requireActingUser("Mutating a sandbox")
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "delete")
 
         // Deletion via state sync, exactly like VMs: desired becomes

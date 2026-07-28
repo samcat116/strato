@@ -3,6 +3,7 @@ import GRPCCore
 import GRPCNIOTransportHTTP2Posix
 import GRPCProtobuf
 import Logging
+import SwiftProtobuf
 import X509
 
 // MARK: - Workload API SPIFFE Client
@@ -33,6 +34,21 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
     private static let fetchX509BundlesDescriptor = MethodDescriptor(
         service: ServiceDescriptor(fullyQualifiedService: "SpiffeWorkloadAPI"),
         method: "FetchX509Bundles"
+    )
+
+    private static let fetchJWTSVIDDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "SpiffeWorkloadAPI"),
+        method: "FetchJWTSVID"
+    )
+
+    private static let fetchJWTBundlesDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "SpiffeWorkloadAPI"),
+        method: "FetchJWTBundles"
+    )
+
+    private static let validateJWTSVIDDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "SpiffeWorkloadAPI"),
+        method: "ValidateJWTSVID"
     )
 
     /// Initialize with socket path
@@ -97,6 +113,96 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
                     return try WorkloadAPIConversion.makeTrustBundles(from: message)
                 }
                 throw SPIFFEError.trustBundleUnavailable
+            }
+        }
+    }
+
+    // MARK: JWT-SVID profile (issue #495)
+
+    public func fetchJWTSVID(audience: [String], spiffeID: SPIFFEIdentity?) async throws -> JWTSVID {
+        // An audience-less JWT-SVID would be valid against every relying
+        // party — exactly the replay the profile exists to prevent. SPIRE
+        // rejects the request too; failing here names the reason.
+        guard !audience.isEmpty else {
+            throw SPIFFEError.jwtSVIDValidationFailed("A JWT-SVID must be requested for at least one audience")
+        }
+
+        let request: Workload_JWTSVIDRequest = {
+            var request = Workload_JWTSVIDRequest()
+            request.audience = audience
+            if let spiffeID {
+                request.spiffeID = spiffeID.uri
+            }
+            return request
+        }()
+
+        let svid = try await withWorkloadAPIClient(socketPath: socketPath) { client in
+            try await client.unary(
+                request: ClientRequest(message: request, metadata: Self.securityMetadata),
+                descriptor: Self.fetchJWTSVIDDescriptor,
+                serializer: ProtobufSerializer<Workload_JWTSVIDRequest>(),
+                deserializer: ProtobufDeserializer<Workload_JWTSVIDResponse>(),
+                options: .defaults
+            ) { response in
+                try WorkloadAPIConversion.makeJWTSVID(from: try response.message)
+            }
+        }
+
+        logger.info(
+            "Fetched JWT-SVID from Workload API",
+            metadata: [
+                "spiffeID": .string(svid.spiffeID.uri),
+                "audience": .string(svid.audience.joined(separator: ",")),
+                "expiresAt": .string(svid.expiresAt.description),
+            ])
+
+        return svid
+    }
+
+    public func fetchJWTBundles() async throws -> [String: JWTBundle] {
+        try await withWorkloadAPIClient(socketPath: socketPath) { client in
+            try await client.serverStreaming(
+                request: ClientRequest(message: Workload_JWTBundlesRequest(), metadata: Self.securityMetadata),
+                descriptor: Self.fetchJWTBundlesDescriptor,
+                serializer: ProtobufSerializer<Workload_JWTBundlesRequest>(),
+                deserializer: ProtobufDeserializer<Workload_JWTBundlesResponse>(),
+                options: .defaults
+            ) { response in
+                // Like FetchX509Bundles, a long-lived stream whose first
+                // message carries the current bundles.
+                for try await message in response.messages {
+                    return WorkloadAPIConversion.makeJWTBundles(from: message)
+                }
+                throw SPIFFEError.trustBundleUnavailable
+            }
+        }
+    }
+
+    public func validateJWTSVID(token: String, audience: String) async throws -> ValidatedJWTSVID {
+        let request: Workload_ValidateJWTSVIDRequest = {
+            var request = Workload_ValidateJWTSVIDRequest()
+            request.svid = token
+            request.audience = audience
+            return request
+        }()
+
+        return try await withWorkloadAPIClient(socketPath: socketPath) { client in
+            do {
+                return try await client.unary(
+                    request: ClientRequest(message: request, metadata: Self.securityMetadata),
+                    descriptor: Self.validateJWTSVIDDescriptor,
+                    serializer: ProtobufSerializer<Workload_ValidateJWTSVIDRequest>(),
+                    deserializer: ProtobufDeserializer<Workload_ValidateJWTSVIDResponse>(),
+                    options: .defaults
+                ) { response in
+                    try WorkloadAPIConversion.makeValidatedJWTSVID(
+                        from: try response.message, audience: audience)
+                }
+            } catch let error as RPCError {
+                // A rejected token is an ordinary answer from this RPC, not a
+                // transport failure: surface it as a validation failure so
+                // callers can tell "not a valid token" from "SPIRE is down".
+                throw SPIFFEError.jwtSVIDValidationFailed("\(error.code): \(error.message)")
             }
         }
     }
@@ -246,6 +352,70 @@ enum WorkloadAPIConversion {
             )
         }
         return bundles
+    }
+
+    /// Convert a JWTSVIDResponse to the agent's JWT-SVID type. As with X.509,
+    /// the first entry is the default identity when the workload is entitled
+    /// to several.
+    static func makeJWTSVID(from response: Workload_JWTSVIDResponse) throws -> JWTSVID {
+        guard let proto = response.svids.first else {
+            throw SPIFFEError.noJWTSVIDAvailable
+        }
+
+        guard let spiffeID = SPIFFEIdentity(uri: proto.spiffeID) else {
+            throw SPIFFEError.invalidSPIFFEID(proto.spiffeID)
+        }
+
+        return try JWTSVID.fromWorkloadAPI(
+            token: proto.svid,
+            spiffeID: spiffeID,
+            hint: proto.hint.isEmpty ? nil : proto.hint
+        )
+    }
+
+    /// Convert a JWTBundlesResponse (JWKS documents keyed by trust-domain
+    /// SPIFFE ID) to the agent's JWT bundle type.
+    static func makeJWTBundles(from response: Workload_JWTBundlesResponse) -> [String: JWTBundle] {
+        var bundles: [String: JWTBundle] = [:]
+        for (trustDomainID, jwks) in response.bundles {
+            let trustDomain = SPIFFEIdentity(uri: trustDomainID)?.trustDomain ?? trustDomainID
+            bundles[trustDomainID] = JWTBundle(trustDomain: trustDomain, jwksJSON: jwks)
+        }
+        return bundles
+    }
+
+    /// Convert a ValidateJWTSVIDResponse to the validated-identity type,
+    /// flattening the protobuf `Struct` claims to strings for logging and
+    /// diagnostics. The claims are never consulted for authorization.
+    static func makeValidatedJWTSVID(
+        from response: Workload_ValidateJWTSVIDResponse,
+        audience: String
+    ) throws -> ValidatedJWTSVID {
+        guard let spiffeID = SPIFFEIdentity(uri: response.spiffeID) else {
+            throw SPIFFEError.invalidSPIFFEID(response.spiffeID)
+        }
+
+        var claims: [String: String] = [:]
+        if response.hasClaims {
+            for (name, value) in response.claims.fields {
+                claims[name] = describe(value)
+            }
+        }
+
+        return ValidatedJWTSVID(spiffeID: spiffeID, audience: audience, claims: claims)
+    }
+
+    /// A protobuf `Value` rendered as a plain string. Nested structures are
+    /// rendered as their JSON text — these values are only ever logged.
+    private static func describe(_ value: Google_Protobuf_Value) -> String {
+        switch value.kind {
+        case .stringValue(let string): return string
+        case .numberValue(let number): return "\(number)"
+        case .boolValue(let flag): return "\(flag)"
+        case .nullValue: return "null"
+        case .structValue, .listValue, .none:
+            return (try? value.jsonString()) ?? ""
+        }
     }
 
     /// Split a buffer of back-to-back DER-encoded values (as the Workload API

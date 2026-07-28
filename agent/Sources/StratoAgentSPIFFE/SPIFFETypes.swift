@@ -112,9 +112,14 @@ public struct X509SVID: Sendable {
     }
 }
 
-// MARK: - JWT SVID (for future use)
+// MARK: - JWT SVID
 
-/// A JWT SPIFFE Verifiable Identity Document
+/// A JWT SPIFFE Verifiable Identity Document (issue #495).
+///
+/// Unlike an X.509 SVID, a JWT-SVID is a bearer credential: it survives hops
+/// that cannot carry a client certificate (load balancers, ingress that
+/// terminates TLS), which is the whole reason it exists for programmatic
+/// callers — and also why it is minted per audience and kept short-lived.
 public struct JWTSVID: Sendable {
     /// The SPIFFE ID
     public let spiffeID: SPIFFEIdentity
@@ -128,21 +133,99 @@ public struct JWTSVID: Sendable {
     /// Audience claims
     public let audience: [String]
 
+    /// Hint for identifying this SVID (optional)
+    public let hint: String?
+
     public init(
         spiffeID: SPIFFEIdentity,
         token: String,
         expiresAt: Date,
-        audience: [String]
+        audience: [String],
+        hint: String? = nil
     ) {
         self.spiffeID = spiffeID
         self.token = token
         self.expiresAt = expiresAt
         self.audience = audience
+        self.hint = hint
+    }
+
+    /// Build an SVID from a token the Workload API just issued.
+    ///
+    /// The response carries no expiry or audience fields, so both are read
+    /// from the token's own claims — unverified, which is sound here only
+    /// because the local SPIRE agent minted it (see `JWTSVIDToken`).
+    ///
+    /// - Parameter spiffeID: the identity the Workload API reported. It is
+    ///   cross-checked against the token's `sub`: a mismatch means the agent
+    ///   and the token disagree about who this is, which is never a token to
+    ///   act on.
+    public static func fromWorkloadAPI(
+        token: String,
+        spiffeID: SPIFFEIdentity,
+        hint: String? = nil
+    ) throws -> JWTSVID {
+        let claims = try JWTSVIDToken.decodeUnverifiedClaims(token)
+        guard claims.subject == spiffeID.uri else {
+            throw SPIFFEError.parseError(
+                "JWT-SVID subject '\(claims.subject)' does not match the reported identity '\(spiffeID.uri)'")
+        }
+        return JWTSVID(
+            spiffeID: spiffeID,
+            token: token,
+            expiresAt: claims.expiresAt,
+            audience: claims.audience,
+            hint: hint
+        )
     }
 
     /// Check if the token is expired
     public var isExpired: Bool {
         Date() >= expiresAt
+    }
+
+    /// Check if the token will expire within the given duration
+    public func willExpire(within duration: TimeInterval) -> Bool {
+        Date().addingTimeInterval(duration) >= expiresAt
+    }
+}
+
+/// The result of asking the Workload API to validate a JWT-SVID.
+///
+/// Carries the identity the token names and the claims the agent read out of
+/// it. The claims are **descriptive only**: what the identity may do is looked
+/// up against the workload registry, never parsed out of the token
+/// (docs/architecture/iam.md).
+public struct ValidatedJWTSVID: Sendable {
+    /// The SPIFFE ID of the validated token.
+    public let spiffeID: SPIFFEIdentity
+
+    /// The audience the token was validated against.
+    public let audience: String
+
+    /// The token's claims, as the Workload API reported them, flattened to
+    /// their JSON-ish string forms.
+    public let claims: [String: String]
+
+    public init(spiffeID: SPIFFEIdentity, audience: String, claims: [String: String] = [:]) {
+        self.spiffeID = spiffeID
+        self.audience = audience
+        self.claims = claims
+    }
+}
+
+/// A trust domain's JWT signing keys, as the Workload API delivers them: a
+/// JWKS document per trust domain.
+public struct JWTBundle: Sendable {
+    /// The trust domain this bundle is for.
+    public let trustDomain: String
+
+    /// The raw JWKS document (RFC 7517), as served by the Workload API.
+    public let jwksJSON: Data
+
+    public init(trustDomain: String, jwksJSON: Data) {
+        self.trustDomain = trustDomain
+        self.jwksJSON = jwksJSON
     }
 }
 
@@ -210,6 +293,13 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
     case connectionFailed(String)
     case attestationFailed(String)
     case parseError(String)
+    /// The Workload API returned no JWT-SVID for the requested audience.
+    case noJWTSVIDAvailable
+    /// The Workload API rejected a JWT-SVID as invalid for the audience.
+    case jwtSVIDValidationFailed(String)
+    /// The SVID source cannot perform this operation (a file-based source
+    /// cannot mint or validate JWT-SVIDs — only a Workload API can).
+    case unsupportedOperation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -229,6 +319,12 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
             return "Workload attestation failed: \(reason)"
         case .parseError(let details):
             return "Failed to parse SPIFFE data: \(details)"
+        case .noJWTSVIDAvailable:
+            return "No JWT-SVID available from SPIRE for the requested audience"
+        case .jwtSVIDValidationFailed(let reason):
+            return "JWT-SVID validation failed: \(reason)"
+        case .unsupportedOperation(let reason):
+            return "Unsupported SPIFFE operation: \(reason)"
         }
     }
 }

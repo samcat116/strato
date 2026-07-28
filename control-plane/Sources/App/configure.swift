@@ -720,6 +720,13 @@ public func configure(_ app: Application) async throws {
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)
     app.configureSPIREIssuanceMetrics()
 
+    // JWT-SVIDs as programmatic credentials (issue #495): registered workloads
+    // and service accounts authenticate to the HTTP API with a short-lived
+    // bearer token instead of an API key. Opt-in, and needs the SPIRE server
+    // API for the trust domain's JWT authorities. Registered after
+    // `configureSPIRERegistration` above, which it reads its source from.
+    app.configureJWTSVIDAuthentication()
+
     // The agent service's heartbeat monitor must not outlive the application:
     // the handler cancels it at shutdown (if the service was ever created).
     app.lifecycle.use(AgentServiceLifecycleHandler())

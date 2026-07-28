@@ -271,6 +271,18 @@ spec:
             - name: SPIFFE_ENDPOINT_SOCKET
               value: "unix://{{ .Values.spire.controlPlane.workloadApi.socketPath }}"
             {{- end }}
+            {{- if .Values.spire.controlPlane.jwtSvidAuth.enabled }}
+            # JWT-SVIDs as programmatic credentials (issue #495): registered
+            # service accounts and workloads authenticate to the HTTP API with
+            # a short-lived bearer token. The SPIFFE ID is a lookup key into
+            # the workload registry; role bindings decide what it may do.
+            - name: SPIFFE_JWT_SVID_AUTH_ENABLED
+              value: "true"
+            - name: SPIFFE_JWT_AUDIENCE
+              value: {{ .Values.spire.controlPlane.jwtSvidAuth.audience | default (printf "spiffe://%s/control-plane" .Values.spire.trustDomain) | quote }}
+            - name: SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL
+              value: "{{ .Values.spire.controlPlane.jwtSvidAuth.bundleRefreshInterval }}"
+            {{- end }}
             {{- if .Values.spire.controlPlane.serverPublicAddress }}
             # Public address remote nodes dial for attestation (explicit override).
             - name: SPIRE_SERVER_PUBLIC_ADDRESS
