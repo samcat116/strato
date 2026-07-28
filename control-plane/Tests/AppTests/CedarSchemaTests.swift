@@ -183,7 +183,9 @@ struct CedarSchemaTests {
         for entity in CedarEntityType.nodeTypes {
             #expect(text.contains("entity \(entity.rawValue) "), "missing entity declaration for \(entity.rawValue)")
         }
-        #expect(text.contains("\"openToAllUsers\": Bool"))
+        // No entity is world-readable: `openToAllUsers` went away with global
+        // networks themselves (issue #765).
+        #expect(!text.contains("openToAllUsers"))
     }
 
     @Test("Grants fields for user-created roles ride alongside the seeded ones")

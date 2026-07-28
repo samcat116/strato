@@ -244,10 +244,10 @@ final class ProjectVisibilityTests {
         }
     }
 
-    // MARK: - Global networks
+    // MARK: - Networks
 
-    @Test("Global networks stay visible to a caller who reaches no project")
-    func globalNetworksSurviveScoping() async throws {
+    @Test("A caller who reaches no project sees no networks at all")
+    func networksAreInvisibleWithoutProjectAccess() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Global Net Org")
@@ -258,22 +258,18 @@ final class ProjectVisibilityTests {
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
             let token = try await member.generateAPIKey(on: app.db)
 
-            let global = LogicalNetwork(
-                name: "global-net", subnet: "10.50.0.0/24", gateway: "10.50.0.1",
-                projectID: nil, createdByID: nil)
-            try await global.save(on: app.db)
-            let scoped = LogicalNetwork(
-                name: "scoped-net", subnet: "10.51.0.0/24", gateway: "10.51.0.1",
-                projectID: project.id!, createdByID: nil)
-            try await scoped.save(on: app.db)
+            // Every network belongs to a project (issue #765), so bare org
+            // membership — which grants no project read — reaches none of them.
+            // There is no longer a project-less network to leak.
+            try await builder.createNetwork(
+                name: "scoped-net", project: project, subnet: "10.51.0.0/24", gateway: "10.51.0.1")
 
             try await app.test(.GET, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok, "\(res.status): \(res.body.string)")
                 let names = try res.content.decode(PagedResponse<NetworkResponse>.self).items.map(\.name)
-                #expect(names.contains("global-net"))
-                #expect(!names.contains("scoped-net"))
+                #expect(names.isEmpty)
             }
         }
     }

@@ -4,25 +4,22 @@ import Vapor
 /// A logical network VMs attach to, and the unit of IPAM ownership: the control
 /// plane allocates NIC addresses from a network's subnet and pushes them down to
 /// agents in the `VMSpec` (issue #212). Agents realize the network on their
-/// platform (OVN logical switch on Linux, user-mode on macOS) by name.
+/// platform (OVN logical switch on Linux, user-mode on macOS), naming their
+/// objects after the row id.
 ///
-/// Names are globally unique — `VMNetworkInterface` rows, the IPAM uniqueness
-/// index, and agent realization all key on the name string, not the row id.
-/// Networks with a nil `project` are global (the seeded "default" network);
-/// per-project name scoping would require migrating NIC references to an FK
-/// and is deferred.
+/// Every network belongs to exactly one project, and everything that identifies
+/// one — NIC rows, address rows, the IPAM uniqueness index and lock, the agent's
+/// OVN object names — keys on the row id (issue #765). The name is a display
+/// label, unique only within its project, so two tenants can each own a network
+/// called "default" without sharing an L2 domain or an IP pool.
 final class LogicalNetwork: Model, @unchecked Sendable {
     static let schema = "logical_networks"
-
-    /// Name of the network every VM's default NIC lands on. Seeded at migration
-    /// time; the subnet/gateway match what agents historically hardcoded so
-    /// existing deployments keep their addressing.
-    static let defaultNetworkName = "default"
 
     @ID(key: .id)
     var id: UUID?
 
-    /// Unique name agents use to find or create the network.
+    /// Display name, unique within the owning project. Not an identifier: use
+    /// the row id to reference a network.
     @Field(key: "name")
     var name: String
 
@@ -83,10 +80,11 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Field(key: "generation")
     var generation: Int
 
-    /// Project this network belongs to; nil means global (visible to everyone,
-    /// managed by system admins only).
-    @OptionalParent(key: "project_id")
-    var project: Project?
+    /// Project that owns this network. Required since issue #765: a network is
+    /// a tenant-scoped resource, and the project is what its name, its IP pool
+    /// and its logical router are scoped by.
+    @Parent(key: "project_id")
+    var project: Project
 
     /// Site (availability zone) this network is pinned to. A pinned network's
     /// VMs may only place on that site's agents, where the shared OVN
@@ -115,7 +113,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         gateway: String? = nil,
         subnet6: String? = nil,
         gateway6: String? = nil,
-        projectID: UUID? = nil,
+        projectID: UUID,
         createdByID: UUID? = nil,
         dhcpEnabled: Bool = true,
         dnsServers: [String] = [],
@@ -143,9 +141,10 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     }
 
     /// The identity of the logical router this network attaches to on agents.
-    /// Per-project so a project's networks share one router (cross-switch
-    /// east-west); a project-less (global) network keys on its own id and gets a
-    /// dedicated router. Opaque to agents — see `DesiredNetworkState.routerKey`.
+    /// Per-project, so a project's networks share one router (cross-switch
+    /// east-west) and no two tenants ever share one — which is what makes it
+    /// safe for two projects to use the same subnet. Opaque to agents — see
+    /// `DesiredNetworkState.routerKey`.
     ///
     /// Split by `externalAccess`: a project's egress networks share one router
     /// (with the uplink), and its no-egress networks share a separate `-internal`
@@ -155,11 +154,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// routers, so they don't route to each other (per-network egress policy that
     /// preserves that east-west is a follow-up).
     var routerKey: String {
-        if let projectID = $project.id {
-            let scope = externalAccess ? "" : "-internal"
-            return "project-\(projectID.uuidString)\(scope)"
-        }
-        return "network-\(id?.uuidString ?? name)"
+        let scope = externalAccess ? "" : "-internal"
+        return "project-\($project.id.uuidString)\(scope)"
     }
 
     /// Parsed DNS resolver list, backed by the comma-separated `dns_servers` column.
@@ -292,8 +288,7 @@ struct NetworkResponse: Content {
     let gateway: String?
     let subnet6: String?
     let gateway6: String?
-    let projectId: UUID?
-    let isDefault: Bool
+    let projectId: UUID
     let attachedInterfaceCount: Int
     let dhcpEnabled: Bool
     let dnsServers: [String]
@@ -312,7 +307,6 @@ struct NetworkResponse: Content {
         self.subnet6 = network.subnet6
         self.gateway6 = network.gateway6
         self.projectId = network.$project.id
-        self.isDefault = network.name == LogicalNetwork.defaultNetworkName
         self.attachedInterfaceCount = attachedInterfaceCount
         self.dhcpEnabled = network.dhcpEnabled
         self.dnsServers = network.dnsServers

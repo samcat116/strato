@@ -1,3 +1,4 @@
+import Foundation
 import StratoShared
 
 /// One allocated address row on a NIC, as `VMInterfaceAddress` and
@@ -19,8 +20,10 @@ protocol InterfaceAddressRow {
 protocol NetworkAddressable {
     associatedtype AddressRow: InterfaceAddressRow
 
-    /// Logical network name the NIC attaches to.
-    var network: String { get }
+    /// Id of the logical network the NIC attaches to; the row itself is looked
+    /// up by the caller, since names identify a network only within a project
+    /// (issue #765).
+    var logicalNetworkID: UUID { get }
     var macAddress: String { get }
     var mtu: Int? { get }
     /// The allocated address rows; requires `addresses` to be eager-loaded.

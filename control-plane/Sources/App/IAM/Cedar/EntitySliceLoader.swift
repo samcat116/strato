@@ -432,17 +432,10 @@ enum EntitySliceLoader {
         }
 
         // The chain is complete when it terminates at an organization — the
-        // root every guardrail attach node resolves through. Two shapes are
-        // rootless *by design* and stay complete: the organization itself, and
-        // a global network (no project, no site), which is deliberately
-        // project-less as the VM-create fallback (`platform-open-network-read`).
+        // root every guardrail attach node resolves through. The organization
+        // itself is rootless by design and stays complete.
         var chainComplete = chain.last?.type == .organization
-        if !chainComplete, node.type == .network, chain.count == 1 {
-            // A network row we could not read leaves both facts nil, which
-            // reads here as "not the global network" — incomplete, denied.
-            chainComplete = resolution.leaf.networkHasProject == false && resolution.leaf.networkHasSite == false
-        }
-        // A user record is the third rootless-by-design shape: it has no
+        // A user record is the second rootless-by-design shape: it has no
         // parent at all (see `IAMNodeType.user`), so its one-element chain is
         // as complete as it will ever be. Leaving it incomplete would make the
         // authorizer deny every identity-plane check outright.
@@ -503,11 +496,6 @@ enum EntitySliceLoader {
             if chainNode == node {
                 if let environment = resolution.leaf.environment {
                     attrs["environment"] = .string(environment)
-                }
-                if node.type == .network {
-                    // Missing row → false: an unreadable network must not
-                    // become world-readable.
-                    attrs["openToAllUsers"] = .bool(resolution.leaf.networkHasProject == false)
                 }
                 if node.type == .agent, let hostsForeignWorkloads {
                     attrs["hostsForeignWorkloads"] = .bool(hostsForeignWorkloads)

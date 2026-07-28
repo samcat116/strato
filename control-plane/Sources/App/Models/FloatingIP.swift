@@ -88,6 +88,9 @@ struct FloatingIPResponse: Content {
     let interfaceId: UUID?
     let vmId: UUID?
     let fixedIP: String?
+    /// The attached NIC's network: the id references it, the name is a display
+    /// label present only when the caller eager-loaded the relation (issue #765).
+    let networkId: UUID?
     let networkName: String?
     let createdAt: Date?
 
@@ -99,7 +102,8 @@ struct FloatingIPResponse: Content {
         self.interfaceId = floatingIP.$interface.id
         self.vmId = interface?.$vm.id
         self.fixedIP = interface?.ipv4Address?.address
-        self.networkName = interface?.network
+        self.networkId = interface?.$logicalNetwork.id
+        self.networkName = interface?.$logicalNetwork.value?.name
         self.createdAt = floatingIP.createdAt
     }
 }

@@ -264,7 +264,22 @@ public enum WireProtocol {
     /// "tear down all port groups" — and a nil per-NIC list marks the port
     /// unmanaged: it joins no groups, drop group included, so legacy traffic
     /// keeps flowing during a mixed-version rollout.
-    public static let currentVersion = 20
+    ///
+    /// Version 21: per-project network isolation (issue #765). Logical network
+    /// names stop being globally unique — two projects may each own a network
+    /// called `default`, on the same subnet — so `NetworkSpec.networkId`
+    /// becomes **required** and the agent keys its managed `DHCP_Options` rows
+    /// on a `network-id` external-id instead of `(network-name, cidr)`. The
+    /// name survives on the wire as a human label for logs and external-ids
+    /// only; nothing may match on it. Unlike v20's additive fields this is not
+    /// nil-tolerant in either direction: a pre-#342 control plane that omits
+    /// `networkId` now fails the spec decode outright (far outside supported
+    /// skew), and a pre-v21 agent would silently merge two same-named
+    /// networks' DHCP rows. That hazard is not confined to VM placement —
+    /// topology convergence programs DHCP for *every* network the authority
+    /// realizes — so the gate lives at network create, not at placement (see
+    /// `supportsProjectNetworkIsolation(_:)`).
+    public static let currentVersion = 21
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -464,6 +479,23 @@ public enum WireProtocol {
     /// `currentVersion`.
     public static func supportsSecurityGroups(_ version: Int) -> Bool {
         version >= securityGroupsMinimumVersion
+    }
+
+    /// The lowest protocol version that identifies a logical network by id
+    /// everywhere it matters — the OVN switch *and* the `DHCP_Options` rows
+    /// (see `currentVersion` version 21 notes).
+    public static let projectNetworkIsolationMinimumVersion = 21
+
+    /// Whether an agent registered with `version` can safely realize two
+    /// networks that share a name. A pre-v21 agent keys its managed
+    /// `DHCP_Options` rows on `(network-name, cidr)`, so two same-named
+    /// networks with the same subnet — exactly what per-project isolation
+    /// makes legal — would share one row: DNS/lease edits on one would land on
+    /// the other, and disabling DHCP on one would delete the other's row. The
+    /// control plane must therefore refuse to *create* a colliding name at a
+    /// site any of whose agents is pre-v21.
+    public static func supportsProjectNetworkIsolation(_ version: Int) -> Bool {
+        version >= projectNetworkIsolationMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

@@ -70,7 +70,7 @@ struct VMSpecBuilderTests {
     }
 
     func createTestInterface(
-        network: String = "default",
+        logicalNetworkID: UUID = UUID(),
         macAddress: String = "52:54:00:12:34:56",
         ipAddress: String? = "192.168.1.10",
         netmask: String? = "255.255.255.0",
@@ -82,7 +82,7 @@ struct VMSpecBuilderTests {
         let interface = VMNetworkInterface(
             id: UUID(),
             vmID: UUID(),
-            network: network,
+            logicalNetworkID: logicalNetworkID,
             macAddress: macAddress,
             mtu: mtu,
             deviceName: deviceName,
@@ -95,7 +95,7 @@ struct VMSpecBuilderTests {
             interface.$addresses.value = [
                 VMInterfaceAddress(
                     interfaceID: interface.id!,
-                    network: network,
+                    logicalNetworkID: logicalNetworkID,
                     family: .ipv4,
                     address: ipAddress,
                     prefixLength: prefix,
@@ -106,6 +106,33 @@ struct VMSpecBuilderTests {
             interface.$addresses.value = []
         }
         return interface
+    }
+
+    /// The network index `networkSpecs` renders a NIC through. Since issue #765
+    /// a NIC references its network by id, so the builder needs the row itself —
+    /// there is no name to fall back on.
+    func networkIndex(
+        for interface: VMNetworkInterface,
+        name: String = "default",
+        subnet: String = "192.168.1.0/24",
+        gateway: String? = "192.168.1.1",
+        dhcpEnabled: Bool = false,
+        dnsServers: [String] = [],
+        domainName: String? = nil,
+        leaseTime: Int? = nil
+    ) -> [UUID: LogicalNetwork] {
+        let network = LogicalNetwork(
+            id: interface.logicalNetworkID,
+            name: name,
+            subnet: subnet,
+            gateway: gateway,
+            projectID: UUID(),
+            dhcpEnabled: dhcpEnabled,
+            dnsServers: dnsServers,
+            domainName: domainName,
+            leaseTime: leaseTime
+        )
+        return [interface.logicalNetworkID: network]
     }
 
     struct TestAbort: Error {}
@@ -305,10 +332,13 @@ struct VMSpecBuilderTests {
             netmask: "255.255.255.0"
         )
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [interface])
+        let spec = VMSpecBuilder.buildVMSpec(
+            from: vm, image: image, networkInterfaces: [interface],
+            networks: networkIndex(for: interface))
 
         #expect(spec.networks.count == 1)
         #expect(spec.networks.first?.network == "default")
+        #expect(spec.networks.first?.networkId == interface.logicalNetworkID)
         #expect(spec.networks.first?.macAddress == "52:54:00:12:34:56")
         #expect(spec.networks.first?.ipAddress == "192.168.1.10")
         #expect(spec.networks.first?.netmask == "255.255.255.0")
@@ -320,25 +350,21 @@ struct VMSpecBuilderTests {
         let vm = createTestVM()
         let interface = createTestInterface(gateway: "192.168.1.1")
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [interface])
+        let spec = VMSpecBuilder.buildVMSpec(
+            from: vm, image: image, networkInterfaces: [interface],
+            networks: networkIndex(for: interface))
 
         #expect(spec.networks.first?.gateway == "192.168.1.1")
     }
 
     @Test("networkSpecs populates DHCP/DNS from the matching logical network")
     func testDHCPConfigFromNetwork() throws {
-        let interface = createTestInterface(network: "default")
-        let network = LogicalNetwork(
-            name: "default",
-            subnet: "192.168.1.0/24",
-            gateway: "192.168.1.1",
-            dhcpEnabled: true,
-            dnsServers: ["1.1.1.1", "8.8.8.8"],
-            domainName: "corp.example.com",
-            leaseTime: 7200
-        )
+        let interface = createTestInterface()
+        let networks = networkIndex(
+            for: interface, dhcpEnabled: true, dnsServers: ["1.1.1.1", "8.8.8.8"],
+            domainName: "corp.example.com", leaseTime: 7200)
 
-        let specs = VMSpecBuilder.networkSpecs(from: [interface], networks: ["default": network])
+        let specs = VMSpecBuilder.networkSpecs(from: [interface], networks: networks)
 
         #expect(specs.first?.dhcpEnabled == true)
         #expect(specs.first?.dnsServers == ["1.1.1.1", "8.8.8.8"])
@@ -346,16 +372,16 @@ struct VMSpecBuilderTests {
         #expect(specs.first?.leaseTime == 7200)
     }
 
-    @Test("networkSpecs defaults DHCP off when no network is supplied")
-    func testDHCPDefaultsOffWithoutNetwork() throws {
-        let interface = createTestInterface(network: "default")
+    @Test("networkSpecs emits nothing for a NIC whose network was not loaded")
+    func testNICWithoutLoadedNetworkIsSkipped() throws {
+        // A NIC's network row is guaranteed by a foreign key, so an absent
+        // entry means the caller under-fetched. Emitting a half-configured
+        // spec would put the port on the wrong switch (issue #765).
+        let interface = createTestInterface()
 
         let specs = VMSpecBuilder.networkSpecs(from: [interface])
 
-        #expect(specs.first?.dhcpEnabled == false)
-        #expect(specs.first?.dnsServers == [])
-        #expect(specs.first?.domainName == nil)
-        #expect(specs.first?.leaseTime == nil)
+        #expect(specs.isEmpty)
     }
 
     @Test("VMSpecBuilder does not fabricate an IP when none is assigned")
@@ -364,7 +390,9 @@ struct VMSpecBuilderTests {
         let vm = createTestVM()
         let interface = createTestInterface(ipAddress: nil, netmask: nil)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [interface])
+        let spec = VMSpecBuilder.buildVMSpec(
+            from: vm, image: image, networkInterfaces: [interface],
+            networks: networkIndex(for: interface))
 
         #expect(spec.networks.first?.ipAddress == nil)
         #expect(spec.networks.first?.netmask == nil)
@@ -385,7 +413,6 @@ struct VMSpecBuilderTests {
         let image = createTestImage()
         let vm = createTestVM()
         let second = createTestInterface(
-            network: "backend",
             macAddress: "52:54:00:00:00:02",
             deviceName: "net1",
             orderIndex: 1
@@ -395,9 +422,12 @@ struct VMSpecBuilderTests {
             deviceName: "net0",
             orderIndex: 0
         )
+        let networks = networkIndex(for: first)
+            .merging(networkIndex(for: second, name: "backend")) { current, _ in current }
 
         // Passed out of order; the builder must sort.
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [second, first])
+        let spec = VMSpecBuilder.buildVMSpec(
+            from: vm, image: image, networkInterfaces: [second, first], networks: networks)
 
         #expect(spec.networks.count == 2)
         #expect(spec.networks.first?.macAddress == "52:54:00:00:00:01")
@@ -469,7 +499,9 @@ struct VMSpecBuilderTests {
         )
         let interface = createTestInterface(ipAddress: "192.168.1.100")
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [interface])
+        let spec = VMSpecBuilder.buildVMSpec(
+            from: vm, image: image, networkInterfaces: [interface],
+            networks: networkIndex(for: interface))
         let boot = try directKernel(spec)
 
         #expect(spec.cpus == 4)

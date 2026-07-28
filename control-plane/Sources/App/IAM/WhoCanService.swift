@@ -440,23 +440,19 @@ enum WhoCanService {
     }
 
     /// Whether `action` on `node` is open to every authenticated user with no
-    /// grant of any kind behind it — the reverse-lookup rendering of the
-    /// `platform-open-network-read` tier-1 permit, which the enumeration needs
+    /// grant of any kind behind it — the reverse-lookup rendering of a tier-1
+    /// permit whose principal is unconstrained, which the enumeration needs
     /// because "everyone" cannot be a list (`WhoCanResult.openToAllAuthenticatedUsers`).
     ///
-    /// Today this is exactly one rule: a global network — a `LogicalNetwork`
-    /// with no project — is readable by anyone, because it is the fallback
-    /// every VM create can land on (`NetworkController.fetchNetworkWithPermission`).
-    /// The rule keys on the *project* alone, matching that handler and the
-    /// permit's `openToAllUsers` attribute; a site-scoped network still has no
-    /// project and so is still openly readable, even though the tree walk can
-    /// climb it to an org.
+    /// No such rule exists today. The one that did — a project-less network was
+    /// readable by anyone, being the fallback every VM create landed on — went
+    /// away with global networks themselves (issue #765). The hook and the
+    /// result field stay so the next unconstrained permit has somewhere to
+    /// render, and so the API shape does not churn.
     static func isOpenToAllAuthenticatedUsers(
         action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {
-        guard node.type == .network, action == "network:read" else { return false }
-        guard let network = try await LogicalNetwork.find(node.id, on: db) else { return false }
-        return network.$project.id == nil
+        false
     }
 
     /// The `role_bindings.role` values (role-definition ids in uuidString
@@ -702,9 +698,12 @@ enum WhoCanService {
 
     /// Whether the principal can reach the evaluator at all: its row exists,
     /// and (for a user) the account is not disabled. This has to precede the
-    /// decision — the compiled set contains permits over *any* principal
-    /// (`platform-open-network-read`), so an id nobody can authenticate as
-    /// would otherwise be reported able to act.
+    /// decision, because the compiled set may contain permits over *any*
+    /// principal — an id nobody can authenticate as would otherwise be
+    /// reported able to act. (No such permit exists today: the one that did,
+    /// `platform-open-network-read`, went away with global networks in issue
+    /// #765. The guard stays, since the next unconstrained permit must not
+    /// silently reintroduce the hole.)
     private static func principalMayAct(_ principal: IAMPrincipal, on db: any Database) async throws -> Bool {
         switch principal.type {
         case .user:

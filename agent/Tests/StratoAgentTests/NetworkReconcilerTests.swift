@@ -205,6 +205,60 @@ struct NetworkReconcilerTests {
         let a = network(name: "a", subnet: "10.0.1.0/24", gateway: "10.0.1.1", routerKey: "p")
         let b = network(name: "b", subnet: "10.0.2.0/24", gateway: "10.0.2.1", routerKey: "p")
         #expect(NetworkReconciler.plan(networks: [a, b]) == NetworkReconciler.plan(networks: [b, a]))
+
+        // Names alone are not a total order since issue #765, and Swift's sort
+        // is not stable — two same-named networks would otherwise plan in
+        // arbitrary order.
+        let twinA = network(name: "default", subnet: "10.0.3.0/24", gateway: "10.0.3.1", routerKey: "p1")
+        let twinB = network(name: "default", subnet: "10.0.4.0/24", gateway: "10.0.4.1", routerKey: "p2")
+        #expect(
+            NetworkReconciler.plan(networks: [twinA, twinB])
+                == NetworkReconciler.plan(networks: [twinB, twinA]))
+    }
+
+    @Test("Two projects' same-named networks plan as fully separate topology")
+    func sameNamedNetworksAreIndependent() {
+        // The acceptance criterion of issue #765, at the OVN layer: same name,
+        // same subnet, different projects.
+        let cidr = "192.168.1.0/24"
+        let gateway = "192.168.1.1"
+        let a = network(name: "default", subnet: cidr, gateway: gateway, routerKey: "project-A")
+        let b = network(name: "default", subnet: cidr, gateway: gateway, routerKey: "project-B")
+
+        let plan = NetworkReconciler.plan(networks: [a, b])
+
+        // Distinct switches, named by id rather than by the shared name.
+        #expect(plan.switches.count == 2)
+        #expect(Set(plan.switches.map(\.name)).count == 2)
+        #expect(plan.switches.contains { $0.name == OVNNaming.switchName(networkId: a.networkId) })
+        #expect(plan.switches.contains { $0.name == OVNNaming.switchName(networkId: b.networkId) })
+
+        // One router each, so their identical subnets never meet — and each
+        // SNATs that subnet on its own router.
+        #expect(plan.routers.count == 2)
+        #expect(Set(plan.routers.map(\.name)).count == 2)
+        #expect(plan.routers.allSatisfy { $0.snatSubnets == [cidr] })
+        let snatKeys = Set(plan.expectedTopology.snatRules)
+        #expect(snatKeys.count == 2)
+    }
+
+    @Test("A name shared by two networks yields no legacy-rename hint for either")
+    func duplicateNamesWithholdLegacyRename() {
+        // `legacyName` is how the actuator finds a pre-#342 name-based switch
+        // and renames it in place. With two claimants, which one inherits the
+        // existing switch (and its live ports) would come down to plan order,
+        // so neither may claim it.
+        let a = network(name: "default", subnet: "10.0.1.0/24", gateway: "10.0.1.1", routerKey: "project-A")
+        let b = network(name: "default", subnet: "10.0.2.0/24", gateway: "10.0.2.1", routerKey: "project-B")
+        let unique = network(name: "solo", subnet: "10.0.3.0/24", gateway: "10.0.3.1", routerKey: "project-A")
+
+        let plan = NetworkReconciler.plan(networks: [a, b, unique])
+
+        let byName = Dictionary(uniqueKeysWithValues: plan.switches.map { ($0.name, $0) })
+        #expect(byName[OVNNaming.switchName(networkId: a.networkId)]?.legacyName == "")
+        #expect(byName[OVNNaming.switchName(networkId: b.networkId)]?.legacyName == "")
+        // An unambiguous name still migrates.
+        #expect(byName[OVNNaming.switchName(networkId: unique.networkId)]?.legacyName == "solo")
     }
 
     // MARK: - Teardown / idempotency

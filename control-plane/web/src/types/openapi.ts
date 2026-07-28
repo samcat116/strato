@@ -4797,9 +4797,10 @@ export interface components {
             cmdline?: string;
             /**
              * Format: uuid
-             * @description Mutually exclusive with `networkName`.
+             * @description Logical network for the VM's NIC, within the VM's own project. Exactly one of `networkId` or `networkName` is required — there is no default network to fall back to.
              */
             networkId?: string;
+            /** @description Name of that network within the project. Mutually exclusive with `networkId`. */
             networkName?: string;
             sshPublicKey?: string;
             /** @description cloud-init user data. */
@@ -4872,7 +4873,13 @@ export interface components {
         NetworkInterface: {
             /** Format: uuid */
             id?: string;
-            network: string;
+            /**
+             * Format: uuid
+             * @description The logical network this NIC attaches to.
+             */
+            networkId: string;
+            /** @description Display name of the network. Present only when the response eager-loaded it; names are unique per project, so the id is the reference. */
+            network?: string;
             macAddress: string;
             addresses: components["schemas"]["InterfaceAddress"][];
             mtu?: number;
@@ -4912,6 +4919,12 @@ export interface components {
             };
             workingDir?: string;
             ttlSeconds?: number;
+            /**
+             * Format: uuid
+             * @description Logical network for the sandbox's NIC, within its own project. Mutually exclusive with `networkName`; omitting both attaches no NIC, since sandbox guest networking is not implemented yet.
+             */
+            networkId?: string;
+            networkName?: string;
         };
         UpdateSandboxRequest: {
             name?: string;
@@ -5231,14 +5244,15 @@ export interface components {
         Network: {
             /** Format: uuid */
             id?: string;
+            /** @description Unique within the owning project, not globally. */
             name: string;
             subnet: string;
             gateway?: string;
             subnet6?: string;
             gateway6?: string;
             /** Format: uuid */
-            projectId?: string;
-            isDefault: boolean;
+            projectId: string;
+            /** @description VM and sandbox interfaces attached to this network. */
             attachedInterfaceCount: number;
             dhcpEnabled: boolean;
             dnsServers: string[];
@@ -5310,6 +5324,12 @@ export interface components {
             /** Format: uuid */
             vmId?: string;
             fixedIP?: string;
+            /**
+             * Format: uuid
+             * @description Network of the attached NIC.
+             */
+            networkId?: string;
+            /** @description Display name of that network, present only when the response eager-loaded it. */
             networkName?: string;
             /** Format: date-time */
             createdAt?: string;

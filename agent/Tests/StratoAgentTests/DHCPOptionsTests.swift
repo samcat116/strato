@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import StratoAgentCore
@@ -80,5 +81,81 @@ struct DHCPOptionsTests {
         let firstOctet = UInt8(a.split(separator: ":").first!, radix: 16)!
         #expect(firstOctet & 0x02 == 0x02)
         #expect(firstOctet & 0x01 == 0x00)
+    }
+}
+
+/// Which `DHCP_Options` row belongs to which network (issue #765). This is the
+/// rule that keeps two projects' same-named networks from sharing one row.
+@Suite("DHCP row identity")
+struct DHCPRowIdentityTests {
+
+    @Test("A managed row carries the network's id, its name as a label, and the marker")
+    func externalIDsStamping() {
+        let networkId = UUID()
+        let ids = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: "default")
+
+        #expect(ids[DHCPRowIdentity.networkIDKey] == networkId.uuidString.lowercased())
+        #expect(ids[DHCPRowIdentity.networkNameKey] == "default")
+        #expect(ids[DHCPRowIdentity.managedKey] == DHCPRowIdentity.managedValue)
+    }
+
+    @Test("Two same-named networks on the same subnet match disjointly")
+    func sameNameSameSubnetDoesNotCollide() {
+        // The configuration per-project isolation creates: both projects call
+        // their network "default" and both use 192.168.1.0/24.
+        let cidr = "192.168.1.0/24"
+        let projectA = UUID()
+        let projectB = UUID()
+        let rowA = DHCPRowIdentity.externalIDs(networkId: projectA, networkName: "default")
+        let rowB = DHCPRowIdentity.externalIDs(networkId: projectB, networkName: "default")
+
+        #expect(DHCPRowIdentity.isOwn(rowA, rowCIDR: cidr, cidr: cidr, networkId: projectA))
+        #expect(DHCPRowIdentity.isOwn(rowB, rowCIDR: cidr, cidr: cidr, networkId: projectB))
+        // Neither may claim the other's row — the regression this guards.
+        #expect(!DHCPRowIdentity.isOwn(rowA, rowCIDR: cidr, cidr: cidr, networkId: projectB))
+        #expect(!DHCPRowIdentity.isOwn(rowB, rowCIDR: cidr, cidr: cidr, networkId: projectA))
+    }
+
+    @Test("A row for another CIDR, or one no one manages, is never claimed")
+    func nonMatchingRowsRejected() {
+        let networkId = UUID()
+        let ids = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: "default")
+
+        // Right network, wrong subnet: a renumbered network's stale row.
+        #expect(!DHCPRowIdentity.isOwn(ids, rowCIDR: "10.0.0.0/24", cidr: "192.168.1.0/24", networkId: networkId))
+        // An operator's hand-made row for the same prefix is never adopted.
+        let operatorRow = [DHCPRowIdentity.networkIDKey: networkId.uuidString.lowercased()]
+        #expect(!DHCPRowIdentity.isOwn(operatorRow, rowCIDR: "10.0.0.0/24", cidr: "10.0.0.0/24", networkId: networkId))
+        #expect(!DHCPRowIdentity.isOwn(nil, rowCIDR: "10.0.0.0/24", cidr: "10.0.0.0/24", networkId: networkId))
+    }
+
+    @Test("A pre-upgrade row with only a name is adoptable once, by that name")
+    func legacyAdoption() {
+        let cidr = "192.168.1.0/24"
+        let legacy = [
+            DHCPRowIdentity.networkNameKey: "default",
+            DHCPRowIdentity.managedKey: DHCPRowIdentity.managedValue,
+        ]
+
+        #expect(DHCPRowIdentity.isAdoptableLegacy(legacy, rowCIDR: cidr, cidr: cidr, networkName: "default"))
+        // Not another network's row...
+        #expect(!DHCPRowIdentity.isAdoptableLegacy(legacy, rowCIDR: cidr, cidr: cidr, networkName: "other"))
+        // ...nor one already stamped, which belongs to whichever id it names.
+        let stamped = DHCPRowIdentity.externalIDs(networkId: UUID(), networkName: "default")
+        #expect(!DHCPRowIdentity.isAdoptableLegacy(stamped, rowCIDR: cidr, cidr: cidr, networkName: "default"))
+    }
+
+    @Test("A DHCP-disable teardown also claims the network's unstamped legacy rows")
+    func legacyTeardown() {
+        let legacy = [
+            DHCPRowIdentity.networkNameKey: "default",
+            DHCPRowIdentity.managedKey: DHCPRowIdentity.managedValue,
+        ]
+        // Otherwise a network whose DHCP was turned off before its first
+        // post-upgrade converge would keep answering leases from this row.
+        #expect(DHCPRowIdentity.isLegacyOwned(legacy, networkName: "default"))
+        #expect(!DHCPRowIdentity.isLegacyOwned(legacy, networkName: "other"))
+        let stamped = DHCPRowIdentity.externalIDs(networkId: UUID(), networkName: "default")
+        #expect(!DHCPRowIdentity.isLegacyOwned(stamped, networkName: "default"))
     }
 }

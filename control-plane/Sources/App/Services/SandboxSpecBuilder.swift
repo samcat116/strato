@@ -22,13 +22,15 @@ enum SandboxSpecBuilder {
     /// `guestNetworkingSupported`). `interface.addresses` must be eager-loaded —
     /// the per-family address rows are the source of NIC addressing.
     ///
-    /// `network` supplies the DHCP/DNS configuration agents program into OVN;
-    /// nil (network row absent) leaves DHCP disabled, matching the VM path.
+    /// `network` is the row the NIC's foreign key points at, supplying the name
+    /// and the DHCP/DNS configuration agents program into OVN. Nil means the
+    /// assembly could not load it, which yields no spec at all rather than a
+    /// half-configured NIC.
     static func networkSpec(
         from interface: SandboxNetworkInterface?,
         network: LogicalNetwork?
     ) -> NetworkSpec? {
-        guard guestNetworkingSupported, let interface else { return nil }
+        guard guestNetworkingSupported, let interface, let network else { return nil }
         return NetworkSpec.build(interface: interface, network: network)
     }
 }

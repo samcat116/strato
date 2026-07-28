@@ -196,26 +196,6 @@ struct MessageOrderingTests {
         #expect(!Set(attachKeys).isDisjoint(with: vmActionKeys))
     }
 
-    @Test("Network attach serializes against both the VM and the named network")
-    func networkAttachSpansVMAndNetworkLanes() {
-        let vmId = UUID().uuidString
-        let attachKeys = MessageEnvelope.serializationKeys(
-            type: .networkAttach,
-            payload: payload(["vmId": vmId, "networkName": "net0"])
-        )
-        // Must serialize against an adjacent create/delete of the same network...
-        let netCreateKeys = MessageEnvelope.serializationKeys(
-            type: .networkCreate, payload: payload(["networkName": "net0"])
-        )
-        // ...and against an action on the same VM.
-        let vmActionKeys = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": vmId])
-        )
-        #expect(Set(attachKeys) == Set([vmId, "network:net0"]))
-        #expect(!Set(attachKeys).isDisjoint(with: netCreateKeys))
-        #expect(!Set(attachKeys).isDisjoint(with: vmActionKeys))
-    }
-
     @Test("Volume clone serializes against both its source and target volume lanes")
     func volumeCloneSpansBothVolumeLanes() {
         let sourceId = UUID().uuidString
@@ -243,35 +223,9 @@ struct MessageOrderingTests {
         #expect(!cloneKeys.contains(MessageEnvelope.unkeyedSerializationLane))
     }
 
-    @Test("Named network create/delete share the per-name lane and the visibility lane")
-    func networkMutationsKeyedByNameAndVisibility() {
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .networkCreate, payload: payload(["networkName": "net0"])
-        )
-        let deleteKeys = MessageEnvelope.serializationKeys(
-            type: .networkDelete, payload: payload(["networkName": "net0"])
-        )
-        #expect(Set(createKeys) == Set(deleteKeys))
-        #expect(createKeys.contains("network:net0"))
-        #expect(createKeys.contains(MessageEnvelope.networkVisibilityLane))
-    }
-
-    @Test("Network list shares the visibility lane with create/delete so it can't read stale state")
-    func networkListSharesVisibilityLane() {
-        let listKeys = MessageEnvelope.serializationKeys(
-            type: .networkList, payload: payload(["requestId": "r1"])
-        )
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .networkCreate, payload: payload(["networkName": "net0"])
-        )
-        let deleteKeys = MessageEnvelope.serializationKeys(
-            type: .networkDelete, payload: payload(["networkName": "net9"])
-        )
-        #expect(listKeys == [MessageEnvelope.networkVisibilityLane])
-        // A list serializes after a create/delete of *any* network via the shared lane.
-        #expect(!Set(listKeys).isDisjoint(with: createKeys))
-        #expect(!Set(listKeys).isDisjoint(with: deleteKeys))
-    }
+    // The network-frame lanes are gone with the imperative network path itself
+    // (issue #765): topology is level-triggered from the desired-state sync,
+    // which rides `reconcileLane`.
 
     @Test("Sandbox exec frames for one session share a per-session lane")
     func sandboxExecFramesShareSessionLane() {

@@ -224,19 +224,18 @@ public struct VolumeSpec: Codable, Sendable {
 
 // MARK: - Network Specification
 
-/// A NIC attached to a logical network, referenced by name. The agent realizes
+/// A NIC attached to a logical network, referenced by id. The agent realizes
 /// the attachment (tap interface, user-mode SLIRP, ...) according to its platform.
 public struct NetworkSpec: Codable, Sendable {
-    /// Logical network name — a human reference used for the OVN `network-name`
-    /// external-id, DHCP labeling, and logging. NOT the OVN switch name: agents
-    /// derive that from `networkId` so user-chosen names never enter the OVN
-    /// namespace (issue #342).
+    /// Logical network name — a *human label only*, used for the OVN
+    /// `network-name` external-id and logging. Never an identifier: names are
+    /// unique per project, so two networks on one chassis may share one
+    /// (issue #765). Nothing may be matched or keyed on it.
     public let network: String
-    /// The network's stable id. Agents derive the OVN logical switch name from it
-    /// (`OVNNaming.switchName`), matching the switch the network reconciler
-    /// creates. Optional so specs from a control plane that predates it still
-    /// decode; the agent then falls back to naming the switch after `network`.
-    public let networkId: UUID?
+    /// The network's stable id: the only thing that identifies it. Agents derive
+    /// every OVN object name from it (`OVNNaming.switchName`, the DHCP row's
+    /// `network-id` external-id), matching what the network reconciler creates.
+    public let networkId: UUID
     public let macAddress: String?
     /// Static IP assignment, when the control plane has allocated one.
     public let ipAddress: String?
@@ -279,7 +278,7 @@ public struct NetworkSpec: Codable, Sendable {
 
     public init(
         network: String,
-        networkId: UUID? = nil,
+        networkId: UUID,
         macAddress: String? = nil,
         ipAddress: String? = nil,
         netmask: String? = nil,
@@ -320,11 +319,13 @@ public struct NetworkSpec: Codable, Sendable {
 
     /// Tolerates specs from an older control plane that predates the DHCP fields:
     /// missing keys fall back to the static-config defaults rather than failing
-    /// the whole decode.
+    /// the whole decode. `networkId` is the exception — required since wire v21
+    /// (issue #765), because without it a NIC cannot be placed on the right
+    /// switch and the name is no longer a safe fallback.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.network = try container.decode(String.self, forKey: .network)
-        self.networkId = try container.decodeIfPresent(UUID.self, forKey: .networkId)
+        self.networkId = try container.decode(UUID.self, forKey: .networkId)
         self.macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)
         self.ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
         self.netmask = try container.decodeIfPresent(String.self, forKey: .netmask)

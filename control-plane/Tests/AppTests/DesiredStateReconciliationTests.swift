@@ -14,6 +14,26 @@ import StratoShared
 @Suite("Desired State Reconciliation Tests", .serialized)
 final class DesiredStateReconciliationTests {
 
+    /// A network in the VM's project for a NIC to reference, created on first
+    /// use. Nothing provisions one with a project (issue #765), and these tests
+    /// only need the NIC to point somewhere real.
+    private func network(app: Application, vm: VM, named name: String = "default") async throws
+        -> LogicalNetwork
+    {
+        let projectID = vm.$project.id
+        if let existing = try await LogicalNetwork.query(on: app.db)
+            .filter(\.$project.$id == projectID)
+            .filter(\.$name == name)
+            .first()
+        {
+            return existing
+        }
+        let network = LogicalNetwork(
+            name: name, subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID)
+        try await network.save(on: app.db)
+        return network
+    }
+
     /// Same harness as `VMOperationTests`: full middleware stack, API-key
     /// auth, one VM.
     private func withVMTestApp(
@@ -272,7 +292,8 @@ final class DesiredStateReconciliationTests {
             )
             try await network.save(on: app.db)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "app-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: try network.requireID(),
+                macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -305,10 +326,11 @@ final class DesiredStateReconciliationTests {
                 projectID: vm.$project.id, externalAccess: true)
             try await network.save(on: app.db)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "fip-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: try network.requireID(),
+                macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
-                interfaceID: nic.id!, network: "fip-net", family: .ipv4,
+                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
             ).save(on: app.db)
 
@@ -352,10 +374,11 @@ final class DesiredStateReconciliationTests {
                 projectID: vm.$project.id, externalAccess: true)
             try await network.save(on: app.db)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "fip-old-net", macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: try network.requireID(),
+                macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
-                interfaceID: nic.id!, network: "fip-old-net", family: .ipv4,
+                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "10.31.0.5", prefixLength: 24, gateway: "10.31.0.1"
             ).save(on: app.db)
             let pool = FloatingIPPool(name: "edge-old", cidr: "198.51.100.0/24")
@@ -739,7 +762,8 @@ final class DesiredStateReconciliationTests {
 
             // A NIC to attribute the guest's addresses to, by MAC.
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+                vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
+                macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
             try await nic.save(on: app.db)
 
             let guestInfo = GuestInfo(
@@ -787,7 +811,8 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+                vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
+                macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
             try await nic.save(on: app.db)
 
             func send(_ guestInfo: GuestInfo?) async throws {
@@ -835,7 +860,8 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, network: "default", macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
+                vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
+                macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
             try await nic.save(on: app.db)
 
             func send(status: VMStatus, guestInfo: GuestInfo?) async throws {

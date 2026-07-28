@@ -15,9 +15,10 @@ final class SandboxNetworkInterface: Model, @unchecked Sendable {
     @Parent(key: "sandbox_id")
     var sandbox: Sandbox
 
-    /// Logical network reference; agents use this to find or create the network.
-    @Field(key: "network")
-    var network: String
+    /// The logical network this NIC attaches to. A real FK (issue #765): the
+    /// name is a per-project display label and cannot identify a network.
+    @Parent(key: "logical_network_id")
+    var logicalNetwork: LogicalNetwork
 
     @Field(key: "mac_address")
     var macAddress: String
@@ -46,14 +47,14 @@ final class SandboxNetworkInterface: Model, @unchecked Sendable {
     init(
         id: UUID? = nil,
         sandboxID: UUID,
-        network: String = "default",
+        logicalNetworkID: UUID,
         macAddress: String,
         mtu: Int? = nil,
         deviceName: String = "net0"
     ) {
         self.id = id
         self.$sandbox.id = sandboxID
-        self.network = network
+        self.$logicalNetwork.id = logicalNetworkID
         self.macAddress = macAddress
         self.mtu = mtu
         self.deviceName = deviceName

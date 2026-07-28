@@ -117,18 +117,18 @@ final class ListCountBatchingTests {
             let project = try await builder.createProject(
                 name: "Network Count Project", description: "d", organization: org)
             /// NICs on the first network only: the grouped count has to put
-            /// them under that name and leave every other network at zero. One
+            /// them under that network and leave every other one at zero. One
             /// VM per NIC — a VM's interfaces are unique by device name.
             func addNetwork(_ index: Int, nics: Int = 0) async throws {
-                let network = LogicalNetwork(
+                let network = try await builder.createNetwork(
                     name: "net-\(String(format: "%03d", index))",
+                    project: project,
                     subnet: "10.\(index).0.0/24", gateway: "10.\(index).0.1",
-                    projectID: project.id, externalAccess: false)
-                try await network.save(on: app.db)
+                    externalAccess: false)
                 for nic in 0..<nics {
                     let vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
                     try await VMNetworkInterface(
-                        vmID: vm.id!, network: network.name,
+                        vmID: vm.id!, logicalNetworkID: try network.requireID(),
                         macAddress: VMNetworkInterface.generateMACAddress()
                     ).save(on: app.db)
                 }
@@ -137,8 +137,6 @@ final class ListCountBatchingTests {
 
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/networks") { req in
-                    // The seeded default network rides along in the page; the
-                    // assertions are about the ones this test made.
                     let networks = try await NetworkController().visibleNetworks(req: req)
                         .filter { $0.name.hasPrefix("net-") }
                     #expect(networks.count == expected)

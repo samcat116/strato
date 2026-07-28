@@ -462,6 +462,8 @@ struct FloatingIPController: RouteCollection {
         let interfaces = try await VMNetworkInterface.query(on: req.db)
             .filter(\.$vm.$id == request.vmId)
             .with(\.$addresses)
+            // The response reports the NIC's network by name as well as id.
+            .with(\.$logicalNetwork)
             .sort(\.$orderIndex)
             .all()
         let interface: VMNetworkInterface
@@ -492,12 +494,8 @@ struct FloatingIPController: RouteCollection {
         guard interface.ipv4Address != nil else {
             throw Abort(.conflict, reason: "Interface has no IPv4 address to NAT to")
         }
-        guard
-            let network = try await LogicalNetwork.query(on: req.db)
-                .filter(\.$name == interface.network)
-                .first()
-        else {
-            throw Abort(.conflict, reason: "Interface's network '\(interface.network)' no longer exists")
+        guard let network = try await LogicalNetwork.find(interface.$logicalNetwork.id, on: req.db) else {
+            throw Abort(.conflict, reason: "Interface's network no longer exists")
         }
         guard network.externalAccess else {
             throw Abort(
@@ -581,9 +579,12 @@ struct FloatingIPController: RouteCollection {
         // Bump the (former) network's generation for the same replay-safety
         // reason as attach; the NAT rule drops out of the desired state and
         // the agent tears it down.
-        let network = try await LogicalNetwork.query(on: req.db)
-            .filter(\.$name == interface?.network ?? "")
-            .first()
+        let network: LogicalNetwork?
+        if let networkID = interface?.$logicalNetwork.id {
+            network = try await LogicalNetwork.find(networkID, on: req.db)
+        } else {
+            network = nil
+        }
         network?.generation += 1
         try await req.db.transaction { db in
             try await floatingIP.save(on: db)
@@ -709,6 +710,8 @@ struct FloatingIPController: RouteCollection {
         return try await VMNetworkInterface.query(on: db)
             .filter(\.$id == interfaceId)
             .with(\.$addresses)
+            // The response reports the NIC's network by name as well as id.
+            .with(\.$logicalNetwork)
             .first()
     }
 }

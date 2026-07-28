@@ -22,6 +22,7 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
     case connectionLost
     case invalidResponse(String)
     case unsupportedProtocolVersion(agentName: String, version: Int)
+    case cannotIsolateSameNamedNetworks(agentName: String, version: Int, names: [String])
     case missingOrganizationScope(agentName: String)
 
     var errorDescription: String? {
@@ -44,6 +45,13 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
             return
                 "Agent '\(agentName)' registered with wire protocol version \(version), which predates "
                 + "desired-state sync. The imperative message path was removed (issue #261); upgrade the agent."
+        case .cannotIsolateSameNamedNetworks(let agentName, let version, let names):
+            return
+                "Agent '\(agentName)' registered with wire protocol version \(version), which keys OVN DHCP "
+                + "rows on the network name — but networks it would realize share a name across projects "
+                + "(\(names.sorted().joined(separator: ", "))). Those tenants' DHCP configuration would be "
+                + "merged (issue #765). Upgrade the agent to protocol "
+                + "v\(WireProtocol.projectNetworkIsolationMinimumVersion) or rename the networks."
         case .missingOrganizationScope(let agentName):
             return
                 "Agent '\(agentName)' is new but its registration token carries no organization; "
