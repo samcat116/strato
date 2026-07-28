@@ -65,7 +65,12 @@ struct AuditMiddleware: AsyncMiddleware {
             AuditRecord(
                 eventType: AuditEventType.apiRequest.rawValue,
                 userID: user?.id,
-                username: user?.username,
+                // A JWT-SVID request has no user record, so `user_id` stays
+                // nil — but the row must still name who acted. The verified
+                // SPIFFE ID goes in `username`, which is free text, rather
+                // than inventing a user id for a machine principal (#495).
+                // Without this, workload requests would audit as nobody.
+                username: user?.username ?? request.authenticatedWorkload?.spiffeID.uri,
                 apiKeyID: request.apiKey?.id,
                 organizationID: resource.organizationID ?? user?.currentOrganizationId,
                 method: request.method.rawValue,
