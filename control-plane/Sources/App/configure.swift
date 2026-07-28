@@ -243,6 +243,16 @@ public func configure(_ app: Application) async throws {
         relyingPartyOrigin: relyingPartyOrigin
     )
 
+    // Whether visitors may create their own accounts. Read once at boot: the
+    // login page asks for the effective answer over /api/public/registration.
+    app.registrationPolicy = .fromEnvironment()
+    if !app.registrationPolicy.selfRegistrationEnabled {
+        app.logger.info(
+            "Self-registration is disabled; only the first (bootstrap) account may be self-created",
+            metadata: ["setting": .string(RegistrationPolicy.environmentKey)]
+        )
+    }
+
     // Register the authorization middleware in every environment — including
     // .testing. It used to be skipped under .testing, which meant every controller
     // test ran with authorization off and no test could catch an authz regression

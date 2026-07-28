@@ -277,6 +277,10 @@ services:
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
+      # Whether visitors may self-register. False hides the sign-in screen's
+      # "Create one" link and refuses /api/users/register — except for the very
+      # first account, which is always allowed so a fresh install can be set up.
+      SELF_REGISTRATION_ENABLED: ${SELF_REGISTRATION_ENABLED:-true}
       # Agent-facing host:port — the Envoy mTLS listener, NOT the browser proxy.
       # setup.sh sets this to <hostname>:<AGENT_MTLS_PORT>. The control plane
       # derives the SPIRE node address from it as <hostname>:8085.

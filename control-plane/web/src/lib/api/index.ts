@@ -17,6 +17,7 @@ export { apiKeysApi } from "./api-keys";
 export { oauthApi } from "./oauth";
 export { scimTokensApi } from "./scim-tokens";
 export { oidcProvidersApi } from "./oidc-providers";
+export { registrationApi } from "./registration";
 export { ssfStreamsApi } from "./ssf-streams";
 export { webhooksApi } from "./webhooks";
 export { groupsApi } from "./groups";
