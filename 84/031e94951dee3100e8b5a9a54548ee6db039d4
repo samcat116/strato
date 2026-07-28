@@ -1,0 +1,44 @@
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_40a1763d801b6a::t_4123087552948c 410-459
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_40a1763d801b6a::t_c9aa5ed879d859 173-174
+  s_40a1763d801b6a::t_80fc3f3d19014d 87-91,95-96,101-110
+  s_40a1763d801b6a::t_09c2efc07691a5 203
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_40a1763d801b6a::t_53302437a1da9e 25
+  s_40a1763d801b6a::t_158644f55ef27c 48-54
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_40a1763d801b6a::t_77b770dae5bd8b 462-464,466-471
+  s_40a1763d801b6a::t_d07b0f96ffceb1 217-223
+  s_40a1763d801b6a::t_94b4079544ebb0 558-562
+  s_40a1763d801b6a::t_8d400bb02eab5d 461,465
+  s_40a1763d801b6a::t_86a2d3e00c942d 289-290
+  s_40a1763d801b6a::t_b9b44a21c63e46 280-283,292
+control-plane/Sources/App/Services/LogicalNetworkService.swift
+  s_40a1763d801b6a::t_9126ebc077c780 54-92
+  s_40a1763d801b6a::t_ac9c2ae07ab3bf 3-4
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_40a1763d801b6a::t_6f5211613d6297 103-104
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_40a1763d801b6a::t_39a1753a58b251 701-706
+control-plane/Sources/App/Services/AgentService.swift
+  s_40a1763d801b6a::t_b61d542d887714 494-510
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_40a1763d801b6a::t_7e7e278fbc3446 302-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "84031e94951dee3100e8b5a9a54548ee6db039d4",
+  "prompts": {},
+  "sessions": {
+    "s_40a1763d801b6a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "351c15e4-3338-4553-974f-d2e807a13075",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
