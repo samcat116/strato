@@ -376,6 +376,15 @@ struct VolumeController: RouteCollection {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
 
+        // Permission on both sides isn't enough: a caller holding rights in two
+        // projects could otherwise move a volume's data across the project
+        // boundary, leaving quota attributed to one project and the consuming
+        // workload in another. Same containment rule as VM create applies to
+        // networks and security groups (issue #766).
+        guard volume.$project.id == vm.$project.id else {
+            throw Abort(.badRequest, reason: "Volume belongs to a different project than the VM")
+        }
+
         // IMPORTANT: Check that VM is QEMU type - volumes not supported for Firecracker
         guard vm.hypervisorType == .qemu else {
             throw Abort(

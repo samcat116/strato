@@ -226,6 +226,15 @@ online QEMU-capable agents (attachment goes through QEMU's block layer), and
 attachment requires the VM's agent to be able to reach the volume's data —
 for a local pool, the same agent that holds it.
 
+Attachment is also contained by project: a volume may only be attached to a VM
+in its own project, and a cross-project attempt is refused with `400` even when
+the caller holds `attach` on the volume and `update` on the VM. Permission on
+both sides is not enough — a caller with rights in two projects would otherwise
+move a volume's data across the boundary silently, leaving the storage quota
+attributed to the volume's project while the workload consuming it lived in
+another. This is the same containment VM create applies to networks and
+security groups.
+
 ### Pools and replicas (data model)
 
 Placement is expressed through the phase-1 data model from
