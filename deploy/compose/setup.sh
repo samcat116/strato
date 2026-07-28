@@ -131,6 +131,11 @@ BASE_URL=${ORIGIN}
 WEBAUTHN_RELYING_PARTY_ID=${HOSTNAME_ARG}
 WEBAUTHN_RELYING_PARTY_NAME=Strato
 WEBAUTHN_RELYING_PARTY_ORIGIN=${ORIGIN}
+# Whether visitors may create their own accounts from the sign-in screen. Set
+# to false once your users are provisioned (admin invites or SSO) — the "Create
+# one" link disappears and /api/users/register is refused. The first account is
+# always creatable, so this is safe to turn off before the initial setup.
+SELF_REGISTRATION_ENABLED=true
 
 # --- Service settings ---
 HTTP_PORT=${PORT_ARG}

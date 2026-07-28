@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/providers";
+import { useRegistrationPolicy } from "@/lib/hooks";
 import { oidcProvidersApi } from "@/lib/api/oidc-providers";
 import type { PublicOIDCProvider } from "@/types/api";
 import { toast } from "sonner";
@@ -27,6 +28,12 @@ export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const ssoFailed = searchParams.get("error") === "oidc_failed";
+
+  // Operators can close self-registration; a deployment with no users yet
+  // always allows it, since that first account is how anyone gets in. The
+  // footer stays absent while the answer is unknown (loading, or the endpoint
+  // unreachable) rather than offering a link that may 403.
+  const { data: registration } = useRegistrationPolicy();
 
   // SSO discovery state: hidden → org-name input → provider buttons
   const [ssoOpen, setSsoOpen] = useState(false);
@@ -280,14 +287,20 @@ export function LoginForm() {
           </form>
         )}
       </CardContent>
-      <CardFooter className="flex justify-center">
-        <p className="text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <Link href="/register" className="text-blue-600 hover:text-blue-700">
-            Create one
-          </Link>
-        </p>
-      </CardFooter>
+      {registration?.selfRegistrationEnabled && (
+        <CardFooter className="flex justify-center">
+          <p className="text-sm text-muted-foreground">
+            {registration.bootstrapRequired
+              ? "No accounts exist yet. "
+              : "Don't have an account? "}
+            <Link href="/register" className="text-blue-600 hover:text-blue-700">
+              {registration.bootstrapRequired
+                ? "Create the first one"
+                : "Create one"}
+            </Link>
+          </p>
+        </CardFooter>
+      )}
     </Card>
   );
 }
