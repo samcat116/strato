@@ -1,0 +1,21 @@
+control-plane/web/src/types/api.ts
+  s_40a1763d801b6a::t_d2f9d091875bc5 117-123
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_40a1763d801b6a::t_639e32532c78b8 225-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "a2e4001c9fcda1817c5791ac0327f8ec7431ec7b",
+  "prompts": {},
+  "sessions": {
+    "s_40a1763d801b6a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "351c15e4-3338-4553-974f-d2e807a13075",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
