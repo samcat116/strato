@@ -1,0 +1,19 @@
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_701b6d317ba5a2::t_1c1188d836deb2 68-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "bec0bad1aa7cb11c59a0c40a8024155227aea95e",
+  "prompts": {},
+  "sessions": {
+    "s_701b6d317ba5a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "04c87a35-c6c1-4e65-8dbd-ef09f28d0eac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
