@@ -244,6 +244,41 @@ struct JWTSVIDAuthenticationTests {
         #expect(verified.spiffeID.uri == "spiffe://strato.local/ci/builder")
     }
 
+    @Test("A cold cache under load dials SPIRE once, not once per request")
+    func collapsesConcurrentFetches() async throws {
+        let signer = try TestJWTSVIDSigner()
+        let source = MutableJWTAuthoritySource(trustDomain: Self.trustDomain, jwks: signer.jwks)
+        let store = JWTSVIDAuthorityStore(
+            source: source,
+            audience: Self.audience,
+            logger: Logger(label: "test.jwt-svid"),
+            refreshInterval: 3600
+        )
+
+        // Hold the first fetch open so the others arrive while it is still in
+        // flight — the exact window the actor's re-entrancy used to leave open.
+        await source.closeGate()
+
+        let token = try await signer.sign(
+            subject: "spiffe://strato.local/ci/builder", audience: [Self.audience])
+
+        let verifications = (0..<8).map { _ in
+            Task { try await store.verify(token: token) }
+        }
+        // Let them all reach the store and queue behind the in-flight fetch.
+        try await Task.sleep(for: .milliseconds(100))
+        await source.openGate()
+
+        for verification in verifications {
+            let verified = try await verification.value
+            #expect(verified.spiffeID.uri == "spiffe://strato.local/ci/builder")
+        }
+
+        // Eight concurrent cold verifications, one call to SPIRE.
+        let fetchCount = await source.fetchCount
+        #expect(fetchCount == 1)
+    }
+
     @Test("An unknown key id that a refresh does not explain is still rejected")
     func rejectsUnexplainedUnknownKey() async throws {
         let known = try TestJWTSVIDSigner(keyID: "key-1")
@@ -451,6 +486,15 @@ private actor MutableJWTAuthoritySource: JWTAuthoritySource {
     nonisolated let trustDomain: String
     private var jwks: Data
 
+    /// How many times the store actually dialed us — the observable the
+    /// single-flight test asserts on.
+    private(set) var fetchCount = 0
+
+    /// When set, every fetch waits on this before answering, holding the
+    /// store's in-flight window open so concurrent callers pile up behind it.
+    private var gate: AsyncStream<Void>.Continuation?
+    private var gateStream: AsyncStream<Void>?
+
     init(trustDomain: String, jwks: Data) {
         self.trustDomain = trustDomain
         self.jwks = jwks
@@ -460,7 +504,27 @@ private actor MutableJWTAuthoritySource: JWTAuthoritySource {
         self.jwks = jwks
     }
 
-    func fetchJWKS() async throws -> Data { jwks }
+    /// Make fetches block until `openGate()` is called.
+    func closeGate() {
+        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+        gateStream = stream
+        gate = continuation
+    }
+
+    func openGate() {
+        gate?.finish()
+        gate = nil
+        gateStream = nil
+    }
+
+    func fetchJWKS() async throws -> Data {
+        fetchCount += 1
+        if let gateStream {
+            // Suspends until openGate() finishes the stream.
+            for await _ in gateStream {}
+        }
+        return jwks
+    }
 }
 
 /// Mints real ES256-signed JWT-SVIDs and publishes the matching JWKS through

@@ -197,7 +197,7 @@ enum JWTSVIDVerification {
 /// would accept tokens pointing at unknown or already-rotated keys. Here a
 /// JWT-SVID must always name a known `kid` — SPIRE always sets one, so unlike
 /// the OIDC path there is no kid-less single-key case to accommodate.
-struct JWTSVIDVerifiers {
+struct JWTSVIDVerifiers: Sendable {
     let keys: JWTKeyCollection
     let knownKeyIDs: Set<String>
 

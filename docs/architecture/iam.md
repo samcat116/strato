@@ -542,9 +542,13 @@ construction:
 
 - **Verification** (`JWTSVIDVerification`, `JWTSVIDAuthorityStore`): the
   signature must chain to the trust domain's *current* JWT authorities, read
-  from the SPIRE server's bundle API and refreshed on a timer — plus on
-  demand, rate-limited, when a token names a `kid` we do not hold, which is
-  how key rotation is picked up without a restart. Only asymmetric algorithms
+  from the SPIRE server's bundle API and cached for
+  `SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL`. There is no background refresh task:
+  the cached set expires and the next request re-fetches it, and a token
+  naming a `kid` we do not hold forces an immediate re-fetch (rate-limited),
+  which is how key rotation is picked up without a restart. Concurrent
+  fetches collapse onto one in-flight request, so a cold cache under load
+  dials SPIRE once rather than once per request. Only asymmetric algorithms
   are accepted; an HMAC "signature" would be forgeable by anyone holding the
   public JWKS.
 - **Audience**: the token must name this control plane (`SPIFFE_JWT_AUDIENCE`,

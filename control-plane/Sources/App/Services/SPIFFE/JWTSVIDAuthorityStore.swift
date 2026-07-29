@@ -44,12 +44,18 @@ struct SPIREServerJWTAuthoritySource: JWTAuthoritySource {
 /// Caches a trust domain's JWT verification keys and verifies JWT-SVIDs
 /// against them (issue #495).
 ///
-/// SPIRE rotates its JWT signing keys, so the cache is refreshed on a timer
-/// *and* on demand: a token naming a `kid` the cached set doesn't know triggers
-/// one immediate re-fetch (rate-limited, so an attacker replaying junk `kid`s
-/// cannot turn the authenticator into a load generator against the SPIRE
-/// server). Every failure path denies — an unavailable authority set means
-/// "cannot verify", never "accept".
+/// SPIRE rotates its JWT signing keys, so the cached set expires and is
+/// re-fetched — lazily, on the first request past `refreshInterval`; there is
+/// no background refresh task. A token naming a `kid` the cached set doesn't
+/// know also triggers one immediate re-fetch (rate-limited, so an attacker
+/// replaying junk `kid`s cannot turn the authenticator into a load generator
+/// against the SPIRE server). Every failure path denies — an unavailable
+/// authority set means "cannot verify", never "accept".
+///
+/// Concurrent fetches collapse onto one in-flight request. Without that, the
+/// actor's re-entrancy at the `await` means a cold cache under load lets every
+/// concurrent first-request see `cached == nil` and dial SPIRE, so a restart
+/// would fan out one `getBundle()` per in-flight request.
 actor JWTSVIDAuthorityStore {
     private let source: any JWTAuthoritySource
     private let logger: Logger
@@ -57,7 +63,8 @@ actor JWTSVIDAuthorityStore {
     /// This control plane's audience name. A JWT-SVID must name it exactly.
     let audience: String
 
-    /// How long a fetched authority set is served before a scheduled refresh.
+    /// How long a fetched authority set is served before the next request
+    /// re-fetches it.
     private let refreshInterval: TimeInterval
 
     /// Floor between unknown-`kid`-triggered refreshes.
@@ -65,6 +72,10 @@ actor JWTSVIDAuthorityStore {
 
     private var cached: (verifiers: JWTSVIDVerifiers, fetchedAt: Date)?
     private var lastUnknownKeyRefresh: Date?
+
+    /// The fetch currently in flight, if any, so concurrent callers join it
+    /// instead of starting their own.
+    private var inFlightFetch: Task<JWTSVIDVerifiers, any Error>?
 
     init(
         source: any JWTAuthoritySource,
@@ -156,9 +167,32 @@ actor JWTSVIDAuthorityStore {
         return verifiers
     }
 
+    /// Fetch the authority set, collapsing concurrent callers onto one request.
+    ///
+    /// The actor suspends at the `await` below, so without the in-flight handle
+    /// every caller that arrived while a fetch was outstanding would start
+    /// another one — a cold cache under load would fan out one `getBundle()`
+    /// per request. Joiners await the same task and therefore share its
+    /// outcome, including its failure.
+    ///
+    /// An unstructured `Task` rather than a detached one: it inherits the task
+    /// locals carrying the tracing context, so the SPIRE call stays inside the
+    /// span of whichever request happened to trigger it.
     private func fetchVerifiers() async throws -> JWTSVIDVerifiers {
-        let jwks = try await source.fetchJWKS()
-        let verifiers = try await JWTSVIDVerification.makeVerifiers(jwksJSON: jwks, logger: logger)
+        if let existing = inFlightFetch {
+            return try await existing.value
+        }
+
+        let source = self.source
+        let logger = self.logger
+        let task = Task<JWTSVIDVerifiers, any Error> {
+            let jwks = try await source.fetchJWKS()
+            return try await JWTSVIDVerification.makeVerifiers(jwksJSON: jwks, logger: logger)
+        }
+        inFlightFetch = task
+        defer { inFlightFetch = nil }
+
+        let verifiers = try await task.value
         cached = (verifiers, Date())
         return verifiers
     }

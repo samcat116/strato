@@ -895,8 +895,9 @@ spire:
       # Audience a token must name to be accepted. Empty defaults to the
       # control plane's own SPIFFE ID, spiffe://<trustDomain>/control-plane.
       audience: ""
-      # How often the JWT authorities are refreshed, in seconds. Rotation is
-      # also picked up on demand when a token names an unknown key.
+      # How long the JWT authorities are cached, in seconds, before the next
+      # request re-fetches them (there is no background refresh task).
+      # Rotation is also picked up on demand when a token names an unknown key.
       bundleRefreshInterval: 300
 
   # Envoy sidecar configuration for mTLS termination
