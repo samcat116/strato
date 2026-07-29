@@ -166,3 +166,7 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Code review
+
+Checklist of what to evaluate in a diff — correctness, standards, security, performance, error handling, tests, architecture. See `docs/agents/code-review.md`.
