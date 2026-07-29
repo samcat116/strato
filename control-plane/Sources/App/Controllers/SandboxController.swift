@@ -322,6 +322,14 @@ struct SandboxController: RouteCollection {
         guard memory > 0 else {
             throw Abort(.badRequest, reason: "'memory' must be positive")
         }
+        // Bounded like a VM's (issue #826): a sandbox's memory is also the
+        // estimate its snapshots reserve storage against, so an unbounded
+        // value reached the quota arithmetic as an overflow operand.
+        guard memory <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
+        }
         if let ttl = createRequest.ttlSeconds, ttl <= 0 {
             throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
         }

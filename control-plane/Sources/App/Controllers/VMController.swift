@@ -302,8 +302,18 @@ struct VMController: RouteCollection {
         guard memoryValue > 0 else {
             throw Abort(.badRequest, reason: "'memory' must be positive")
         }
+        guard memoryValue <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
+        }
         guard diskValue > 0 else {
             throw Abort(.badRequest, reason: "'disk' must be positive")
+        }
+        guard diskValue <= WorkloadSizeLimits.maxDiskBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'disk' must not exceed \(WorkloadSizeLimits.maxDiskBytes) bytes")
         }
 
         // Hot-add headroom (issue #568). The ceilings bound what a later
@@ -320,6 +330,11 @@ struct VMController: RouteCollection {
         }
         guard maxMemoryValue >= memoryValue else {
             throw Abort(.badRequest, reason: "'maxMemory' must be at least 'memory'")
+        }
+        guard maxMemoryValue <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'maxMemory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
         }
         let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
@@ -665,6 +680,13 @@ struct VMController: RouteCollection {
         guard newMemory > 0 else { throw Abort(.badRequest, reason: "'memory' must be positive") }
         guard newCPU <= Self.maxHotpluggableCPUs else {
             throw Abort(.badRequest, reason: "'cpu' must not exceed \(Self.maxHotpluggableCPUs)")
+        }
+        // A stopped VM raises its own `maxMemory` to the new sizing below, so
+        // this one bound covers the ceiling too.
+        guard newMemory <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
         }
         if let target = newBalloonTarget {
             // A target is a reclaim floor within the grant, so it is bounded

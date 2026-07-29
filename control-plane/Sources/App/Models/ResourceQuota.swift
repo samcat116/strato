@@ -343,11 +343,17 @@ extension ResourceQuota {
 
     /// Check whether `bytes` of sandbox-snapshot storage fits (issue #426).
     /// Snapshots draw from the same storage pool as VM disks.
+    ///
+    /// Like the sibling checks above, overflow is treated as "does not fit"
+    /// rather than trapping the process: `bytes` is caller-influenced (it is
+    /// seeded from the sandbox's guest memory), so a plain `+` here was a
+    /// remotely reachable crash (issue #826).
     func canAccommodateSnapshotStorage(_ bytes: Int64) -> (allowed: Bool, reason: String?) {
         if !isEnabled {
             return (true, nil)
         }
-        if reservedStorage + bytes > maxStorage {
+        let (newStorage, storageOverflowed) = reservedStorage.addingReportingOverflow(bytes)
+        if storageOverflowed || newStorage > maxStorage {
             let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
             let requestedGB = Double(bytes) / 1024 / 1024 / 1024
             return (
@@ -359,12 +365,20 @@ extension ResourceQuota {
     }
 
     /// Reserve sandbox-snapshot storage (issue #426).
+    ///
+    /// The add is saturating rather than trapping (issue #826). A passing
+    /// check already rules out overflow on an *enabled* quota, but a disabled
+    /// one never blocks and still tracks the reservation, so the unbounded
+    /// operand reaches this add. Clamping is the right failure mode for a
+    /// counter that is only a cache of measured usage — it is resynced to real
+    /// usage before every admission check.
     func reserveSnapshotStorage(_ bytes: Int64) throws {
         let check = canAccommodateSnapshotStorage(bytes)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        reservedStorage += bytes
+        let (newStorage, overflowed) = reservedStorage.addingReportingOverflow(bytes)
+        reservedStorage = overflowed ? (bytes > 0 ? .max : .min) : newStorage
     }
 }
 
