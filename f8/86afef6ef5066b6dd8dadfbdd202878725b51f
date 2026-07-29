@@ -1,0 +1,30 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e1fc0825c223a6::t_df5344decbf9b2 334-338
+  s_e1fc0825c223a6::t_f4f0562608c96b 317,684-690
+  s_e1fc0825c223a6::t_ce154c8dc23c16 305-309,313-316
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_e1fc0825c223a6::t_64b2b560ad47c5 368-374,380-381
+  s_e1fc0825c223a6::t_1c85ed061ab220 346-350,355-356
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_e1fc0825c223a6::t_99cd0ff984b3ea 325-332
+control-plane/Sources/App/Models/WorkloadSizeLimits.swift
+  s_e1fc0825c223a6::t_92d36d181b4772 1-22
+control-plane/Tests/AppTests/WorkloadSizeValidationTests.swift
+  s_e1fc0825c223a6::t_53da7ce2de5e00 1-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "f886afef6ef5066b6dd8dadfbdd202878725b51f",
+  "prompts": {},
+  "sessions": {
+    "s_e1fc0825c223a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5622fdeb-2da3-478d-9d07-f44406ef9932",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
