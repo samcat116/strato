@@ -224,7 +224,10 @@ services:
   # it shares that namespace, its listener ports (8443 mTLS, 9901 admin) are
   # published on the control-plane service, not here.
   envoy:
-    image: envoyproxy/envoy:v1.31.0
+    # v1.39.0+ required: earlier releases vendor a BoringSSL without the
+    # X25519MLKEM768 group used for hybrid post-quantum key exchange in
+    # spiffe/envoy.yaml.
+    image: envoyproxy/envoy:v1.39.0
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
     network_mode: "service:control-plane"
     volumes:

@@ -32,8 +32,9 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
-        // X.509 parsing and chain verification (SPIFFE SVID validation)
-        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
+        // X.509 parsing and chain verification (SPIFFE SVID validation). Keep in
+        // lockstep with agent/ and shared/.
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
         // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
@@ -57,8 +58,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         // TLS primitives for the SPIRE server mTLS verification callback
-        // (already in the graph transitively via grpc-swift-nio-transport)
-        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
+        // (already in the graph transitively via grpc-swift-nio-transport).
+        // 2.37.1+ leads its default TLS group list with X25519MLKEM768, giving
+        // hybrid post-quantum key exchange. Do not lower this floor.
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
         // ☁️ S3-compatible object storage for images (IMAGE_STORAGE_BACKEND=s3).
         // Any S3 API implementation works — AWS, MinIO, Garage, R2, Ceph RGW —
         // via IMAGE_S3_ENDPOINT; we don't bundle a service.

@@ -886,7 +886,10 @@ spire:
     enabled: true
     image:
       repository: envoyproxy/envoy
-      tag: "v1.31.0"
+      # v1.39.0+ required: earlier releases vendor a BoringSSL without the
+      # X25519MLKEM768 group used for hybrid post-quantum key exchange in
+      # templates/envoy-sidecar-configmap.yaml.
+      tag: "v1.39.0"
       pullPolicy: IfNotPresent
     # Port for agent mTLS connections
     agentPort: 8443

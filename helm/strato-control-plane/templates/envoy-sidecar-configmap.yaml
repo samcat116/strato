@@ -27,6 +27,20 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
                   require_client_certificate: true
                   common_tls_context:
+                    # Offer hybrid post-quantum key exchange first. Agents dial
+                    # with swift-nio-ssl >= 2.37.1, whose default group list
+                    # leads with X25519MLKEM768, so the control channel gets
+                    # ML-KEM-768 confidentiality against "harvest now, decrypt
+                    # later" while the classical X25519 half keeps it safe if
+                    # ML-KEM is ever broken. Not the CNSA compliance_policies
+                    # presets: those mandate ML-KEM-1024, which swift-nio-ssl
+                    # does not implement.
+                    tls_params:
+                      tls_minimum_protocol_version: TLSv1_2
+                      ecdh_curves:
+                        - X25519MLKEM768
+                        - X25519
+                        - P-256
                     # Server certificate from SPIRE via SDS
                     tls_certificate_sds_secret_configs:
                       - name: "spiffe://{{ .Values.spire.trustDomain }}/control-plane"
