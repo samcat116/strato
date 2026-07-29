@@ -125,6 +125,8 @@ struct VMController: RouteCollection {
             .with(\.$networkInterfaces) {
                 $0.with(\.$addresses)
                 $0.with(\.$observedAddresses)
+                // The response reports each NIC's network by name as well as id.
+                $0.with(\.$logicalNetwork)
             }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
@@ -167,6 +169,8 @@ struct VMController: RouteCollection {
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
+            // The response reports the NIC's network by name as well as id.
+            try await interface.$logicalNetwork.load(on: req.db)
         }
 
         return VMDetailResponse(from: vm)
@@ -251,42 +255,12 @@ struct VMController: RouteCollection {
         )
         let projectId = try project.requireID()
 
-        // Resolve which logical network the VM's NIC attaches to. Omitting both
-        // fields keeps the historical default-network behavior (including the
-        // degrade-to-addressless-NIC fallback when the row is missing); an
-        // explicit selection is a hard requirement that never degrades.
+        // The NIC's logical network is resolved inside the create transaction
+        // (`LogicalNetworkService.resolveForWorkloadCreate`), scoped to this
+        // VM's project. Validate the mutually-exclusive selectors up front so a
+        // malformed request fails before any quota or placement work.
         if createRequest.networkId != nil && createRequest.networkName != nil {
             throw Abort(.badRequest, reason: "Specify either 'networkId' or 'networkName', not both")
-        }
-
-        let resolvedNetworkName: String
-        let networkExplicitlyRequested: Bool
-        if createRequest.networkId != nil || createRequest.networkName != nil {
-            let network: LogicalNetwork?
-            if let networkId = createRequest.networkId {
-                network = try await LogicalNetwork.find(networkId, on: req.db)
-            } else {
-                network = try await LogicalNetwork.query(on: req.db)
-                    .filter(\.$name == createRequest.networkName!)
-                    .first()
-            }
-            guard let network else {
-                throw Abort(.badRequest, reason: "Network not found")
-            }
-
-            // The caller already proved membership in this VM's project above, so
-            // no extra permission check is needed: a global network (nil project) is
-            // usable by anyone, and a project-scoped network is usable only by the
-            // project it belongs to.
-            if let networkProjectId = network.$project.id, networkProjectId != projectId {
-                throw Abort(.forbidden, reason: "Network belongs to a different project")
-            }
-
-            resolvedNetworkName = network.name
-            networkExplicitlyRequested = true
-        } else {
-            resolvedNetworkName = LogicalNetwork.defaultNetworkName
-            networkExplicitlyRequested = false
         }
 
         // Resolve the NIC's security groups. Explicit ids must exist, belong
@@ -497,34 +471,28 @@ struct VMController: RouteCollection {
                     // Update VM with generated paths
                     try await vm.update(on: db)
 
-                    // Every VM starts with one NIC on the resolved network (the default
-                    // network unless the caller picked one). The control plane owns IPAM
-                    // (issue #212): allocate the NIC's address from the logical network
-                    // here so agents receive it in the spec instead of inventing one.
-                    // For the implicit default, a missing network row (pre-migration
-                    // data) degrades to an address-less NIC, matching the old behavior;
-                    // an explicitly requested network must exist, so its absence fails.
-                    let networkName = resolvedNetworkName
-                    var allocation: IPAMService.Allocation?
-                    var allocation6: IPAMService.Allocation6?
-                    var networkGateway: String?
-                    var networkGateway6: String?
-                    if let logicalNetwork = try await LogicalNetwork.query(on: db)
-                        .filter(\.$name == networkName)
-                        .first()
-                    {
-                        allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
-                        networkGateway = logicalNetwork.gateway
-                        // Dual-stack network: the NIC gets one address per family.
-                        allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
-                        networkGateway6 = logicalNetwork.gateway6
-                    } else if networkExplicitlyRequested {
-                        throw Abort(.badRequest, reason: "Network '\(networkName)' no longer exists")
-                    }
+                    // Every VM starts with one NIC on the network the caller named,
+                    // resolved here — inside the transaction — so the row that IPAM
+                    // allocates from is the one the NIC's foreign key then pins
+                    // (issue #765). The control plane owns IPAM (issue #212): the
+                    // address is allocated here so agents receive it in the spec
+                    // instead of inventing one.
+                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
+                        requestedID: createRequest.networkId,
+                        requestedName: createRequest.networkName,
+                        projectID: projectId,
+                        on: db
+                    )
+                    let logicalNetworkID = try logicalNetwork.requireID()
+                    let allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+                    let networkGateway = logicalNetwork.gateway
+                    // Dual-stack network: the NIC gets one address per family.
+                    let allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
+                    let networkGateway6 = logicalNetwork.gateway6
 
                     let networkInterface = VMNetworkInterface(
                         vmID: vmID,
-                        network: networkName,
+                        logicalNetworkID: logicalNetworkID,
                         macAddress: VMNetworkInterface.generateMACAddress()
                     )
                     try await networkInterface.save(on: db)
@@ -547,21 +515,19 @@ struct VMController: RouteCollection {
                         ).save(on: db)
                     }
 
-                    if let allocation {
-                        let address = VMInterfaceAddress(
-                            interfaceID: try networkInterface.requireID(),
-                            network: networkName,
-                            family: .ipv4,
-                            address: allocation.ipAddress,
-                            prefixLength: allocation.prefixLength,
-                            gateway: networkGateway
-                        )
-                        try await address.save(on: db)
-                    }
+                    let address = VMInterfaceAddress(
+                        interfaceID: try networkInterface.requireID(),
+                        logicalNetworkID: logicalNetworkID,
+                        family: .ipv4,
+                        address: allocation.ipAddress,
+                        prefixLength: allocation.prefixLength,
+                        gateway: networkGateway
+                    )
+                    try await address.save(on: db)
                     if let allocation6 {
                         let address6 = VMInterfaceAddress(
                             interfaceID: try networkInterface.requireID(),
-                            network: networkName,
+                            logicalNetworkID: logicalNetworkID,
                             family: .ipv6,
                             address: allocation6.ipAddress,
                             prefixLength: allocation6.prefixLength,

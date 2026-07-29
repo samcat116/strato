@@ -57,6 +57,17 @@ struct WireProtocolTests {
         #expect(WireProtocol.supportsSandboxFork(WireProtocol.currentVersion))
     }
 
+    @Test("per-project network isolation gate starts at wire protocol v21")
+    func projectNetworkIsolationGate() {
+        // A pre-v21 agent keys its DHCP rows on the network *name*, so two
+        // same-named networks would share one row (issue #765). The control
+        // plane refuses to create such a name against a fleet this old.
+        #expect(WireProtocol.projectNetworkIsolationMinimumVersion == 21)
+        #expect(!WireProtocol.supportsProjectNetworkIsolation(20))
+        #expect(WireProtocol.supportsProjectNetworkIsolation(21))
+        #expect(WireProtocol.supportsProjectNetworkIsolation(WireProtocol.currentVersion))
+    }
+
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {
         #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))

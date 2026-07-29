@@ -67,12 +67,6 @@ extension MessageEnvelope {
     /// They still run in arrival order relative to one another.
     public static let unkeyedSerializationLane = "__strato_unkeyed__"
 
-    /// Shared lane joined by every operation that reads or mutates the *set* of networks
-    /// (create/delete and the global list query), so a `network_list` observes any
-    /// create/delete that arrived before it. Distinct from the `network:<name>` namespace so
-    /// it can't collide with a real network name.
-    public static let networkVisibilityLane = "__strato_networks__"
-
     /// Lane for desired-state syncs (reconciliation phase 2). Successive syncs diff and
     /// enqueue in arrival order; the per-VM work they fan out runs on the VM lanes, so a
     /// sync is never blocked behind a long convergence action.
@@ -105,21 +99,6 @@ extension MessageEnvelope {
             raws = [fields?.volumeId, fields?.vmId]
         case .volumeCreate, .volumeDelete, .volumeResize, .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
             raws = [fields?.volumeId]
-        case .networkAttach:
-            // Attaching a VM to a network acts on both the VM and the named network (the
-            // handler may find-or-create the logical switch), so serialize against both.
-            raws = [fields?.vmId, fields?.networkName.map { "network:\($0)" }]
-        case .networkCreate, .networkDelete:
-            // Named-network lane orders same-network operations; the shared visibility lane
-            // orders these mutations against a global `network_list` read (and each other).
-            raws = [fields?.networkName.map { "network:\($0)" }, Self.networkVisibilityLane]
-        case .networkList:
-            // Reads the whole set of networks, so serialize after any pending create/delete.
-            raws = [Self.networkVisibilityLane]
-        case .networkInfo:
-            // Reads a single named network; the per-name lane already orders it after that
-            // network's create/delete.
-            raws = [fields?.networkName.map { "network:\($0)" }]
         case .desiredState:
             // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
             // they get their own lane: ordered among themselves, never stuck behind a VM.
@@ -157,7 +136,6 @@ extension MessageEnvelope {
         let volumeId: String?
         let sourceVolumeId: String?
         let targetVolumeId: String?
-        let networkName: String?
         let sessionId: String?
     }
 }

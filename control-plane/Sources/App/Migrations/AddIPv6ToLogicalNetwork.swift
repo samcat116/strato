@@ -95,7 +95,7 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
         try await sql.update("logical_networks")
             .set("subnet6", to: SQLBind(subnet6.description))
             .set("gateway6", to: SQLBind(gateway6.description))
-            .where("name", .equal, SQLBind(LogicalNetwork.defaultNetworkName))
+            .where("name", .equal, SQLBind(CreateLogicalNetwork.seededDefaultName))
             .run()
     }
 

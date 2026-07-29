@@ -71,7 +71,15 @@ struct MigrationRoundTripTests {
             ).all()
             let present = Set(try rows.map { try $0.decode(column: "indexname", as: String.self) })
 
-            for index in AddHotPathIndexes.indexes + AddFolderPathIndex.indexes {
+            // `idx_vm_network_interfaces_network` is deliberately absent: its
+            // column went away with the name→id re-key, and
+            // `RekeyInterfacesToLogicalNetworkID` replaced it with the
+            // id-keyed indexes below (issue #765).
+            let retired: Set<String> = ["idx_vm_network_interfaces_network"]
+            let expected =
+                (AddHotPathIndexes.indexes + AddFolderPathIndex.indexes)
+                .filter { !retired.contains($0.name) } + RekeyInterfacesToLogicalNetworkID.indexes
+            for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")
             }

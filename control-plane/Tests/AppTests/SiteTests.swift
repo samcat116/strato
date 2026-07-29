@@ -91,15 +91,35 @@ final class SiteTests {
     }
 
     private func placeVM(
-        app: Application, project: Project, named name: String, onAgent agentId: String, network: String
+        app: Application, project: Project, named name: String, onAgent agentId: String,
+        network: LogicalNetwork
     ) async throws {
         let builder = TestDataBuilder(db: app.db)
         let vm = try await builder.createVM(name: name, project: project)
         vm.hypervisorId = agentId
         try await vm.save(on: app.db)
         let nic = VMNetworkInterface(
-            vmID: vm.id!, network: network, macAddress: VMNetworkInterface.generateMACAddress())
+            vmID: vm.id!, logicalNetworkID: try network.requireID(),
+            macAddress: VMNetworkInterface.generateMACAddress())
         try await nic.save(on: app.db)
+    }
+
+    /// The project's network of that name, created on first use. Nothing
+    /// provisions one with a project (issue #765), and these tests only care
+    /// that VMs share or don't share a network — not which one.
+    private func network(
+        app: Application, project: Project, named name: String = "default",
+        subnet: String = "192.168.1.0/24", gateway: String = "192.168.1.1"
+    ) async throws -> LogicalNetwork {
+        if let existing = try await LogicalNetwork.query(on: app.db)
+            .filter(\.$project.$id == project.requireID())
+            .filter(\.$name == name)
+            .first()
+        {
+            return existing
+        }
+        return try await TestDataBuilder(db: app.db).createNetwork(
+            name: name, project: project, subnet: subnet, gateway: gateway)
     }
 
     // MARK: - Sites API
@@ -324,7 +344,8 @@ final class SiteTests {
             let oldId = try await self.registerAgent(
                 app: app, named: "fip-old", siteID: site.id, protocolVersion: 11)
             try await self.placeVM(
-                app: app, project: project, named: "fip-gate-vm", onAgent: currentId, network: "default")
+                app: app, project: project, named: "fip-gate-vm", onAgent: currentId,
+                network: try await self.network(app: app, project: project))
 
             // An attached floating IP on the site's VM (rows built directly —
             // the attach API's own gates are covered elsewhere).
@@ -494,7 +515,7 @@ final class SiteTests {
             let agentId = try await self.registerAgent(app: app, named: "loaded", siteID: oldSite.id)
             try await self.placeVM(
                 app: app, project: project, named: "resident-vm", onAgent: agentId,
-                network: LogicalNetwork.defaultNetworkName)
+                network: try await self.network(app: app, project: project))
 
             // Moving it would drop its VMs' networks out of the old site's
             // shared NB while the VMs keep running.
@@ -772,16 +793,15 @@ final class SiteTests {
 
             // One network referenced only by a VM on the peer, one pinned to
             // the site with no VMs at all.
-            let peerNet = LogicalNetwork(
-                name: "peer-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
-                projectID: project.id)
-            try await peerNet.save(on: app.db)
+            let peerNet = try await self.network(
+                app: app, project: project, named: "peer-net", subnet: "10.30.0.0/24",
+                gateway: "10.30.0.1")
             let pinnedNet = LogicalNetwork(
                 name: "pinned-net", subnet: "10.31.0.0/24", gateway: "10.31.0.1",
-                projectID: project.id, siteID: site.id!)
+                projectID: try project.requireID(), siteID: site.id!)
             try await pinnedNet.save(on: app.db)
             try await self.placeVM(
-                app: app, project: project, named: "peer-vm", onAgent: peerId, network: "peer-net")
+                app: app, project: project, named: "peer-vm", onAgent: peerId, network: peerNet)
 
             // Controller: authoritative, sees the peer's network and the
             // pinned-but-unused one — even with no VMs of its own.
@@ -812,7 +832,7 @@ final class SiteTests {
             try await site.save(on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "lone-vm", onAgent: agentId,
-                network: LogicalNetwork.defaultNetworkName)
+                network: try await self.network(app: app, project: project))
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(!sync.networksAuthoritative)
@@ -835,11 +855,11 @@ final class SiteTests {
                 app: app, named: "old-binary", siteID: site.id, protocolVersion: 3)
             try await self.placeVM(
                 app: app, project: project, named: "old-vm", onAgent: oldAgentId,
-                network: LogicalNetwork.defaultNetworkName)
+                network: try await self.network(app: app, project: project))
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: oldAgentId)
             #expect(sync.networksAuthoritative)
-            #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
+            #expect(sync.networks.contains { $0.name == "default" })
         }
     }
 
@@ -849,11 +869,11 @@ final class SiteTests {
             let agentId = try await self.registerAgent(app: app, named: "legacy-agent")
             try await self.placeVM(
                 app: app, project: project, named: "legacy-vm", onAgent: agentId,
-                network: LogicalNetwork.defaultNetworkName)
+                network: try await self.network(app: app, project: project))
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(sync.networksAuthoritative)
-            #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
+            #expect(sync.networks.contains { $0.name == "default" })
         }
     }
 
@@ -941,7 +961,7 @@ final class SiteTests {
 
             try await self.placeVM(
                 app: app, project: project, named: "stalled-vm", onAgent: agentId,
-                network: LogicalNetwork.defaultNetworkName)
+                network: try await self.network(app: app, project: project))
             let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "stalled-vm").first())
             let vmID = try #require(vm.id)
 
@@ -1026,8 +1046,9 @@ final class SiteTests {
             // Placement: the only schedulable agent, on an unpinned network.
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "legacy-vm", project: project)
+            let unpinned = try await self.network(app: app, project: project)
             let nic = VMNetworkInterface(
-                vmID: try vm.requireID(), network: LogicalNetwork.defaultNetworkName,
+                vmID: try vm.requireID(), logicalNetworkID: try unpinned.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
             try await app.agentService.createVM(vm: vm, db: app.db)
@@ -1055,13 +1076,12 @@ final class SiteTests {
             // A network pinned to the site confines placement to its agents,
             // so the scheduler can only land on the controllerless host.
             let builder = TestDataBuilder(db: app.db)
-            let pinned = LogicalNetwork(
-                name: "place-guard-net", subnet: "10.62.0.0/24", gateway: "10.62.0.1",
-                projectID: project.id, siteID: siteID)
-            try await pinned.save(on: app.db)
+            let pinned = try await builder.createNetwork(
+                name: "place-guard-net", project: project, subnet: "10.62.0.0/24",
+                gateway: "10.62.0.1", site: site)
             let vm = try await builder.createVM(name: "unplaceable-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: try vm.requireID(), network: "place-guard-net",
+                vmID: try vm.requireID(), logicalNetworkID: try pinned.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
 

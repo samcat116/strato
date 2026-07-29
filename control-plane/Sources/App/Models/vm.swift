@@ -391,7 +391,11 @@ struct ObservedInterfaceAddressResponse: Content {
 
 struct NetworkInterfaceResponse: Content {
     let id: UUID?
-    let network: String
+    /// The network this NIC attaches to. The id is the reference; the name is a
+    /// display label, present only when the caller eager-loaded the relation
+    /// (issue #765).
+    let networkId: UUID
+    let network: String?
     let macAddress: String
     let addresses: [InterfaceAddressResponse]
     /// Guest-reported addresses (issue #563), distinct from the allocated
@@ -403,7 +407,8 @@ struct NetworkInterfaceResponse: Content {
 
     init(from nic: VMNetworkInterface) {
         self.id = nic.id
-        self.network = nic.network
+        self.networkId = nic.$logicalNetwork.id
+        self.network = nic.$logicalNetwork.value?.name
         self.macAddress = nic.macAddress
         // ipv4-first for a stable, familiar ordering.
         self.addresses = (nic.$addresses.value ?? [])

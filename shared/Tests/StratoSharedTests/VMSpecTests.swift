@@ -57,9 +57,9 @@ struct VMSpecTests {
             ],
             networks: [
                 NetworkSpec(
-                    network: "default", macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5",
+                    network: "default", networkId: UUID(), macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5",
                     netmask: "255.255.255.0", mtu: 9000),
-                NetworkSpec(network: "storage"),
+                NetworkSpec(network: "storage", networkId: UUID()),
             ],
             console: ConsoleSpec(console: .off, serial: .null)
         )
@@ -221,6 +221,7 @@ struct VMSpecTests {
     @Test func dualStackNetworkSpecRoundTrip() throws {
         let spec = NetworkSpec(
             network: "default",
+            networkId: UUID(),
             macAddress: "52:54:00:00:00:01",
             ipAddress: "10.0.0.5",
             netmask: "255.255.255.0",
@@ -240,7 +241,8 @@ struct VMSpecTests {
     /// agent must decode it to nils (rolling-upgrade skew).
     @Test func networkSpecWithoutIPv6KeysDecodesToNil() throws {
         let json = """
-            {"network":"default","macAddress":"52:54:00:00:00:01",
+            {"network":"default","networkId":"\(UUID().uuidString)",
+             "macAddress":"52:54:00:00:00:01",
              "ipAddress":"10.0.0.5","netmask":"255.255.255.0","gateway":"10.0.0.1"}
             """
         let decoded = try decodeJSON(NetworkSpec.self, from: json)
@@ -284,6 +286,35 @@ struct VMSpecTests {
         let decoded = try decodeJSON(MachineProfile.self, from: #"{"tpm":true}"#)
         #expect(decoded.tpm)
         #expect(!decoded.secureBoot)
+    }
+
+    /// `networkId` is the one NIC field with no tolerant fallback (wire v21,
+    /// issue #765): without it the agent cannot tell which switch the port
+    /// belongs on, and the name — unique only within a project — cannot stand
+    /// in. A spec that omits it must fail rather than land on a guess.
+    @Test func networkSpecRequiresNetworkId() {
+        let json = #"{"network":"default","dhcpEnabled":false,"dnsServers":[]}"#
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(NetworkSpec.self, from: json)
+        }
+    }
+
+    /// Two NICs on same-named networks in different projects stay distinct on
+    /// the wire, because the id is what carries the identity.
+    @Test func sameNamedNetworksKeepDistinctIds() throws {
+        let first = UUID()
+        let second = UUID()
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil),
+            volumes: [],
+            networks: [
+                NetworkSpec(network: "default", networkId: first),
+                NetworkSpec(network: "default", networkId: second),
+            ])
+
+        let decoded = try roundTrip(spec)
+        #expect(decoded.networks.map(\.network) == ["default", "default"])
+        #expect(decoded.networks.map(\.networkId) == [first, second])
     }
 
     /// An unknown boot-source case from a newer peer must fail loudly (there

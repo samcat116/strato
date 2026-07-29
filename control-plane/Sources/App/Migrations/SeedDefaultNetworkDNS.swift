@@ -71,14 +71,14 @@ struct SeedDefaultNetworkDNS: AsyncMigration {
             let row = try await sql.select()
                 .column("dns_servers")
                 .from("logical_networks")
-                .where("name", .equal, SQLBind(LogicalNetwork.defaultNetworkName))
+                .where("name", .equal, SQLBind(CreateLogicalNetwork.seededDefaultName))
                 .first(decoding: DNSRow.self),
             LogicalNetwork.splitDNS(row.dnsServers).isEmpty
         else { return }
 
         try await sql.update("logical_networks")
             .set("dns_servers", to: SQLBind(resolvers.joined(separator: ",")))
-            .where("name", .equal, SQLBind(LogicalNetwork.defaultNetworkName))
+            .where("name", .equal, SQLBind(CreateLogicalNetwork.seededDefaultName))
             .run()
     }
 

@@ -35,8 +35,9 @@ struct NetworkController: RouteCollection {
         _ = try req.auth.require(User.self)
 
         // The projects to narrow the row query to, or nil for no narrowing at
-        // all (a system admin). Global networks are outside it either way:
-        // they carry no project and are readable by everyone, by tier-1 policy.
+        // all (a system admin). Every network belongs to a project (issue
+        // #765), so the scope is the whole story — there is no project-less
+        // network readable outside it.
         let projectScope: [UUID]?
         var visibility: ProjectVisibility?
         if let projectIdString = req.query[String.self, at: "project_id"],
@@ -59,12 +60,8 @@ struct NetworkController: RouteCollection {
 
         var query = LogicalNetwork.query(on: req.db)
         if let projectScope {
-            query = query.group(.or) { group in
-                group.filter(\.$project.$id == nil)
-                if !projectScope.isEmpty {
-                    group.filter(\.$project.$id ~~ projectScope)
-                }
-            }
+            // An empty scope reaches no project, and therefore no network.
+            query = query.filter(\.$project.$id ~~ projectScope)
         }
         let networks =
             try await query
@@ -75,19 +72,22 @@ struct NetworkController: RouteCollection {
         var visible = networks
         if let visibility {
             let readable = try await visibility.readableProjects(
-                among: networks.compactMap { $0.$project.id }, on: req)
-            visible = networks.filter { network in
-                guard let projectID = network.$project.id else { return true }
-                return readable.contains(projectID)
-            }
+                among: networks.map { $0.$project.id }, on: req)
+            visible = networks.filter { readable.contains($0.$project.id) }
         }
 
-        // NICs name their network rather than referencing it, so the page's
-        // attachment counts come from one grouped count over those names.
-        let counts = try await VMNetworkInterface.counts(
-            groupedBy: \.$network, in: visible.map(\.name), on: req.db)
+        // Attachment counts come from one grouped count per NIC table; both
+        // count, since either kind of interface pins the network against
+        // rename and delete.
+        let visibleIDs = visible.compactMap(\.id)
+        let vmCounts = try await VMNetworkInterface.counts(
+            groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
+        let sandboxCounts = try await SandboxNetworkInterface.counts(
+            groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
         return visible.map { network in
-            NetworkResponse(from: network, attachedInterfaceCount: counts[network.name] ?? 0)
+            let id = network.id
+            let attached = (id.map { vmCounts[$0] ?? 0 } ?? 0) + (id.map { sandboxCounts[$0] ?? 0 } ?? 0)
+            return NetworkResponse(from: network, attachedInterfaceCount: attached)
         }
     }
 
@@ -214,6 +214,13 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
+                // Inside the transaction, under a name lock: two concurrent
+                // cross-project creates of the same name would otherwise both
+                // observe "no collision" and both commit, since the unique
+                // index is per project.
+                try await LogicalNetworkService.lockName(name, on: db)
+                try await Self.assertNameSafeForFleet(
+                    name: name, projectId: projectId, siteId: request.siteId, on: db)
                 try await network.save(on: db)
                 try await RoleBindingService.grant(
                     principalType: .user,
@@ -267,22 +274,22 @@ struct NetworkController: RouteCollection {
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
 
+        // Renaming an in-use network is safe since issue #765: NICs, addresses
+        // and the agent's OVN objects all key on the row id, so the name is a
+        // display label nothing resolves through.
+        //
+        // Set only when the name actually changes, so an unrelated edit that
+        // echoes the current name back doesn't get held to the collision guard.
+        var renamedTo: String?
         if let newName = request.name, newName != network.name {
-            guard network.name != LogicalNetwork.defaultNetworkName else {
-                throw Abort(.conflict, reason: "The default network cannot be renamed")
-            }
-            guard interfaceCount == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Network is in use by \(interfaceCount) interface(s); renaming would orphan them"
-                )
-            }
             let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 throw Abort(.badRequest, reason: "Network name must not be empty")
             }
+            // Renaming *into* a collision is the same hazard as creating one;
+            // the guard runs with the save, under the name lock.
             network.name = trimmed
+            renamedTo = trimmed
         }
 
         // Track changes that alter how agents realize the network's L3, so the
@@ -329,10 +336,16 @@ struct NetworkController: RouteCollection {
         // The in-use guard counts allocated v6 addresses, not interfaces — a
         // network full of pre-IPv6 NICs has no v6 addresses to invalidate, so
         // *adding* IPv6 is always safe; existing NICs simply stay v4.
-        let v6AddressCount = try await VMInterfaceAddress.query(on: req.db)
-            .filter(\.$network == network.name)
+        let networkID = try network.requireID()
+        let v6AddressCount =
+            try await VMInterfaceAddress.query(on: req.db)
+            .filter(\.$logicalNetwork.$id == networkID)
             .filter(\.$family == IPFamily.ipv6.rawValue)
             .count()
+            + (try await SandboxInterfaceAddress.query(on: req.db)
+                .filter(\.$logicalNetwork.$id == networkID)
+                .filter(\.$family == IPFamily.ipv6.rawValue)
+                .count())
 
         if request.ipv6Enabled == false {
             guard request.subnet6 == nil, request.gateway6 == nil else {
@@ -405,7 +418,7 @@ struct NetworkController: RouteCollection {
             // dependency explicit: detach first.
             if !externalAccess && network.externalAccess {
                 let attachedFloatingIPs = try await Self.attachedFloatingIPCount(
-                    networkName: network.name, on: req.db)
+                    networkID: networkID, on: req.db)
                 guard attachedFloatingIPs == 0 else {
                     throw Abort(
                         .conflict,
@@ -445,7 +458,17 @@ struct NetworkController: RouteCollection {
         }
 
         do {
-            try await network.save(on: req.db)
+            let pendingRename = renamedTo
+            try await req.db.transaction { db in
+                // A rename into a cross-project collision needs the same
+                // in-transaction check under the same name lock as create.
+                if let renamedTo = pendingRename {
+                    try await LogicalNetworkService.lockName(renamedTo, on: db)
+                    try await Self.assertNameSafeForFleet(
+                        name: renamedTo, projectId: network.$project.id, siteId: network.$site.id, on: db)
+                }
+                try await network.save(on: db)
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
@@ -469,17 +492,14 @@ struct NetworkController: RouteCollection {
 
     // MARK: - Delete Network
 
-    /// Delete a network. The default network is never deletable; networks with
-    /// attached VM interfaces are rejected with 409.
+    /// Delete a network. Networks with attached VM or sandbox interfaces are
+    /// rejected with 409 — and the NIC foreign key (`ON DELETE RESTRICT`)
+    /// backstops the check at the database.
     /// DELETE /api/networks/:networkId
     @Sendable
     func deleteNetwork(req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
         let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "delete")
-
-        guard network.name != LogicalNetwork.defaultNetworkName else {
-            throw Abort(.conflict, reason: "The default network cannot be deleted")
-        }
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
         guard interfaceCount == 0 else {
@@ -509,16 +529,60 @@ struct NetworkController: RouteCollection {
 
     // MARK: - Helper Methods
 
-    /// How many floating IPs are attached to NICs on the named network.
+    /// How many floating IPs are attached to NICs on the network.
     ///
     /// Joined rather than intersected in Swift: the set this counts is a
     /// handful of rows, but the reduction used to load every NIC on the
     /// network and the whole `floating_ips` table to find them.
-    static func attachedFloatingIPCount(networkName: String, on db: Database) async throws -> Int {
+    static func attachedFloatingIPCount(networkID: UUID, on db: Database) async throws -> Int {
         try await FloatingIP.query(on: db)
             .join(parent: \.$interface)
-            .filter(VMNetworkInterface.self, \.$network == networkName)
+            .filter(VMNetworkInterface.self, \.$logicalNetwork.$id == networkID)
             .count()
+    }
+
+    /// Refuses a network name that another project already uses, when any agent
+    /// that would realize it is too old to tell the two apart.
+    ///
+    /// A pre-v21 agent keys its managed `DHCP_Options` rows on
+    /// `(network-name, cidr)` rather than on the network's id, so two
+    /// same-named networks would share one row: DNS or lease edits on one would
+    /// land on the other, and disabling DHCP on one would delete the other's.
+    /// The check lives at *create* rather than at VM placement because topology
+    /// convergence programs DHCP for every network the authority realizes,
+    /// whether or not a VM ever lands on it.
+    ///
+    /// Scoped to the fleet that could realize the network: its site's agents
+    /// when pinned, otherwise every agent (an unpinned network can be realized
+    /// on any host a VM lands on).
+    ///
+    /// This is one half of the guard. It cannot see an agent that joins *later*
+    /// — a rollback to an older binary, or a newly-enrolled one — so
+    /// `AgentService.registerAgent` runs the mirror check and refuses such a
+    /// registration.
+    static func assertNameSafeForFleet(
+        name: String, projectId: UUID, siteId: UUID?, on db: Database
+    ) async throws {
+        let collides = try await LogicalNetwork.query(on: db)
+            .filter(\.$name == name)
+            .filter(\.$project.$id != projectId)
+            .count()
+        guard collides > 0 else { return }
+
+        var query = Agent.query(on: db)
+        if let siteId { query = query.filter(\.$site.$id == siteId) }
+        let stale = try await query.all()
+            .filter { !WireProtocol.supportsProjectNetworkIsolation($0.wireProtocolVersion ?? 0) }
+        guard let oldest = stale.min(by: { ($0.wireProtocolVersion ?? 0) < ($1.wireProtocolVersion ?? 0) })
+        else { return }
+
+        throw Abort(
+            .conflict,
+            reason: "Another project already has a network named '\(name)', and agent "
+                + "'\(oldest.name)' speaks protocol v\(oldest.wireProtocolVersion ?? 0) — too old to keep "
+                + "two same-named networks' DHCP configuration apart (needs "
+                + "v\(WireProtocol.projectNetworkIsolationMinimumVersion)). Upgrade the agent or choose "
+                + "a different name.")
     }
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
@@ -706,20 +770,24 @@ struct NetworkController: RouteCollection {
         }
     }
 
-    /// Number of VM interfaces attached to the network. NICs reference networks
-    /// by name string (no FK), so this is the in-use check for delete/rename.
+    /// Number of interfaces attached to the network, VM and sandbox alike —
+    /// the in-use check for subnet changes and delete. Both kinds count: a
+    /// sandbox NIC holds an address from the same pool, so a network carrying
+    /// only sandboxes is not idle.
     private func attachedInterfaceCount(for network: LogicalNetwork, on db: Database) async throws -> Int {
-        try await VMNetworkInterface.query(on: db)
-            .filter(\.$network == network.name)
+        let networkID = try network.requireID()
+        let vmInterfaces = try await VMNetworkInterface.query(on: db)
+            .filter(\.$logicalNetwork.$id == networkID)
             .count()
+        let sandboxInterfaces = try await SandboxNetworkInterface.query(on: db)
+            .filter(\.$logicalNetwork.$id == networkID)
+            .count()
+        return vmInterfaces + sandboxInterfaces
     }
 
-    /// Fetch a network and check permission. Global networks (no project) are
-    /// readable by all authenticated users but mutable only by system admins —
-    /// both rules live in the evaluator now: the tier-1
-    /// `platform-open-network-read` policy grants the read, and with no parent
-    /// scope to hold bindings, nothing short of the tier-1 system-admin policy
-    /// can grant a mutation.
+    /// Fetch a network and check permission. Access derives entirely from the
+    /// owning project: every network has one (issue #765), so the evaluator
+    /// resolves the network's parent scope and the bindings there decide.
     private func fetchNetworkWithPermission(req: Request, user: User, permission: String) async throws
         -> LogicalNetwork
     {

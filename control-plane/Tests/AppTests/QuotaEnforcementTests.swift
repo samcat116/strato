@@ -21,6 +21,9 @@ final class QuotaEnforcementTests {
         let cpu: Int?
         let memory: Int64?
         let disk: Int64?
+        /// VM create names its network explicitly (issue #765). Only the
+        /// success paths need one — a quota rejection fires first.
+        var networkName: String? = nil
     }
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
@@ -44,6 +47,7 @@ final class QuotaEnforcementTests {
 
             let project = try await builder.createProject(
                 name: "Quota Project", description: "p", organization: org)
+            try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let token = try await user.generateAPIKey(on: app.db)
 
@@ -537,7 +541,8 @@ final class QuotaEnforcementTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "fits", imageId: image.id, projectId: project.id,
-                        environment: "development", cpu: 2, memory: gb(4), disk: gb(20)))
+                        environment: "development", cpu: 2, memory: gb(4), disk: gb(20),
+                        networkName: "default"))
             } afterResponse: { res in
                 // Creation is asynchronous (issue #259): the endpoint commits the
                 // VM row + quota reservation, then accepts with an operation record.

@@ -4,11 +4,11 @@ import Vapor
 
 /// One IP address allocated to a sandbox NIC, the sandbox analogue of
 /// `VMInterfaceAddress` (issue #416). A dual-stack NIC carries one row per
-/// family. `network` is denormalized from the owning interface so IPAM's
+/// family. `logicalNetwork` is denormalized from the owning interface so IPAM's
 /// used-set query and spec building need no joins, and so its per-network
-/// `(network, address)` unique index can serve as the sandbox-side concurrency
-/// backstop — IPAM unions this table with `vm_interface_addresses` when reading
-/// the used set.
+/// `(logical_network_id, address)` unique index can serve as the sandbox-side
+/// concurrency backstop — IPAM unions this table with `vm_interface_addresses`
+/// when reading the used set.
 final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     static let schema = "sandbox_interface_addresses"
 
@@ -18,10 +18,11 @@ final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     @Parent(key: "interface_id")
     var interface: SandboxNetworkInterface
 
-    /// Logical network name, denormalized from the owning interface so the
-    /// IPAM uniqueness index `(network, address)` needs no join.
-    @Field(key: "network")
-    var network: String
+    /// The logical network the address came from, denormalized from the owning
+    /// interface so the IPAM uniqueness index `(logical_network_id, address)`
+    /// needs no join.
+    @Parent(key: "logical_network_id")
+    var logicalNetwork: LogicalNetwork
 
     /// Address family, stored as `IPFamily.rawValue`.
     @Field(key: "family")
@@ -50,7 +51,7 @@ final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     init(
         id: UUID? = nil,
         interfaceID: UUID,
-        network: String,
+        logicalNetworkID: UUID,
         family: IPFamily,
         address: String,
         prefixLength: Int,
@@ -58,7 +59,7 @@ final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     ) {
         self.id = id
         self.$interface.id = interfaceID
-        self.network = network
+        self.$logicalNetwork.id = logicalNetworkID
         self.family = family.rawValue
         self.address = address
         self.prefixLength = prefixLength
@@ -76,4 +77,5 @@ extension SandboxInterfaceAddress: InterfaceAddressRow {}
 /// come from `NetworkAddressable`, shared with the VM NIC.
 extension SandboxNetworkInterface: NetworkAddressable {
     var allocatedAddresses: [SandboxInterfaceAddress] { $addresses.value ?? [] }
+    var logicalNetworkID: UUID { $logicalNetwork.id }
 }

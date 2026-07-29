@@ -9,8 +9,8 @@ import Vapor
 ///
 /// `address` is stored in canonical text form — dotted quad for IPv4,
 /// RFC 5952 for IPv6 — because the per-network uniqueness index compares
-/// strings. `network` and `gateway` are denormalized at allocation time so
-/// IPAM's used-set query and spec building need no joins.
+/// strings. `logicalNetwork` and `gateway` are denormalized at allocation time
+/// so IPAM's used-set query and spec building need no joins.
 final class VMInterfaceAddress: Model, @unchecked Sendable {
     static let schema = "vm_interface_addresses"
 
@@ -20,10 +20,11 @@ final class VMInterfaceAddress: Model, @unchecked Sendable {
     @Parent(key: "interface_id")
     var interface: VMNetworkInterface
 
-    /// Logical network name, denormalized from the owning interface so the
-    /// IPAM uniqueness index `(network, address)` needs no join.
-    @Field(key: "network")
-    var network: String
+    /// The logical network the address came from, denormalized from the owning
+    /// interface so the IPAM uniqueness index `(logical_network_id, address)`
+    /// needs no join.
+    @Parent(key: "logical_network_id")
+    var logicalNetwork: LogicalNetwork
 
     /// Address family, stored as `IPFamily.rawValue`.
     @Field(key: "family")
@@ -52,7 +53,7 @@ final class VMInterfaceAddress: Model, @unchecked Sendable {
     init(
         id: UUID? = nil,
         interfaceID: UUID,
-        network: String,
+        logicalNetworkID: UUID,
         family: IPFamily,
         address: String,
         prefixLength: Int,
@@ -60,7 +61,7 @@ final class VMInterfaceAddress: Model, @unchecked Sendable {
     ) {
         self.id = id
         self.$interface.id = interfaceID
-        self.network = network
+        self.$logicalNetwork.id = logicalNetworkID
         self.family = family.rawValue
         self.address = address
         self.prefixLength = prefixLength
@@ -78,4 +79,5 @@ extension VMInterfaceAddress: InterfaceAddressRow {}
 /// come from `NetworkAddressable`, shared with the sandbox NIC.
 extension VMNetworkInterface: NetworkAddressable {
     var allocatedAddresses: [VMInterfaceAddress] { $addresses.value ?? [] }
+    var logicalNetworkID: UUID { $logicalNetwork.id }
 }

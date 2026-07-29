@@ -491,6 +491,23 @@ actor AgentService {
             }
         }
 
+        // The mirror of `NetworkController.assertNameSafeForFleet`, which can
+        // only see the fleet as it stood when a network was created. An older
+        // agent joining afterwards — a rolled-back binary, or a node enrolled
+        // from an old image — would key its OVN DHCP rows on the network name
+        // and merge two tenants' configuration (issue #765). Refused for the
+        // same reason a pre-state-sync agent is: it would register and then
+        // quietly do the wrong thing.
+        if !WireProtocol.supportsProjectNetworkIsolation(protocolVersion) {
+            let shared = try await LogicalNetworkService.namesSharedAcrossProjects(
+                siteID: agent.$site.id, on: db)
+            if !shared.isEmpty {
+                Telemetry.agentRegistrationFailed(reason: "same_named_networks_unsupported")
+                throw AgentServiceError.cannotIsolateSameNamedNetworks(
+                    agentName: agentName, version: protocolVersion, names: Array(shared))
+            }
+        }
+
         try await agent.save(on: db)
 
         // A site with no designated network controller reconciles no topology
@@ -2195,11 +2212,11 @@ actor AgentService {
         let nics = try await VMNetworkInterface.query(on: db)
             .filter(\.$vm.$id == vmID)
             .all()
-        let names = Set(nics.map(\.network))
-        guard !names.isEmpty else { return nil }
+        let networkIDs = Set(nics.map(\.logicalNetworkID))
+        guard !networkIDs.isEmpty else { return nil }
 
         let networks = try await LogicalNetwork.query(on: db)
-            .filter(\.$name ~~ names)
+            .filter(\.$id ~~ Array(networkIDs))
             .all()
         let siteIDs = Set(networks.compactMap { $0.$site.id })
         guard siteIDs.count <= 1 else {

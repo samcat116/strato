@@ -76,24 +76,42 @@ struct VMSpecBuilder {
     /// have `addresses` eager-loaded — the per-family address rows are the
     /// source of NIC addressing (the legacy single-address columns are dead).
     ///
-    /// `networks` maps logical-network name → its model, supplying the DHCP/DNS
-    /// configuration agents program into OVN. It defaults empty (DHCP disabled)
-    /// so callers that don't care about DHCP — and tests — need not fetch it.
+    /// `networks` maps logical-network id → its model, supplying the network's
+    /// name and the DHCP/DNS configuration agents program into OVN. A NIC whose
+    /// network is absent from the map emits no spec at all: the row it points
+    /// at is guaranteed by a foreign key, so a miss means the caller under-
+    /// fetched, and a half-built spec would put the port on the wrong switch.
     /// `securityGroupsByInterface` maps NIC id → its security-group ids;
     /// missing entries emit nil (unmanaged), which is also the default so
     /// callers that predate security groups — and tests — need not fetch it.
+    ///
+    /// `logger`, when supplied, records a dropped NIC. A miss is only reachable
+    /// through an assembly bug, but dropping one silently costs a VM a NIC with
+    /// no symptom anywhere — so the sync paths pass a logger and the pure
+    /// callers (tests) need not.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
-        networks: [String: LogicalNetwork] = [:],
-        securityGroupsByInterface: [UUID: [UUID]] = [:]
+        networks: [UUID: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        logger: Logger? = nil
     ) -> [NetworkSpec] {
         interfaces
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
-            .map {
-                NetworkSpec.build(
-                    interface: $0,
-                    network: networks[$0.network],
-                    securityGroupIds: $0.id.flatMap { id in securityGroupsByInterface[id] })
+            .compactMap { interface in
+                guard let network = networks[interface.logicalNetworkID] else {
+                    logger?.error(
+                        "NIC's logical network was not loaded; omitting it from the VM spec",
+                        metadata: [
+                            "interfaceId": .string(interface.id?.uuidString ?? "unsaved"),
+                            "networkId": .string(interface.logicalNetworkID.uuidString),
+                            "deviceName": .string(interface.deviceName),
+                        ])
+                    return nil
+                }
+                return NetworkSpec.build(
+                    interface: interface,
+                    network: network,
+                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] })
             }
     }
 
@@ -114,7 +132,7 @@ struct VMSpecBuilder {
     /// sent unless the VM carries a legacy disk path.
     static func buildVMSpec(
         from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface],
-        networks: [String: LogicalNetwork] = [:]
+        networks: [UUID: LogicalNetwork] = [:]
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -151,8 +169,9 @@ struct VMSpecBuilder {
     ///   - networkInterfaces: The VM's network interfaces
     static func buildVMSpecWithVolumes(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
-        networks: [String: LogicalNetwork] = [:],
-        securityGroupsByInterface: [UUID: [UUID]] = [:]
+        networks: [UUID: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        logger: Logger? = nil
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -181,7 +200,7 @@ struct VMSpecBuilder {
             volumes: volumes,
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
-                securityGroupsByInterface: securityGroupsByInterface),
+                securityGroupsByInterface: securityGroupsByInterface, logger: logger),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData

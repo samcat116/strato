@@ -299,7 +299,11 @@ struct AgentWebSocketController: RouteCollection {
                         // (treated as transient; the agent retries with backoff).
                         let errorCode: String?
                         switch error {
-                        case AgentServiceError.unsupportedProtocolVersion:
+                        case AgentServiceError.unsupportedProtocolVersion,
+                            AgentServiceError.cannotIsolateSameNamedNetworks:
+                            // Both are permanent until the binary is upgraded:
+                            // the second is a node too old to keep two
+                            // same-named networks' DHCP apart (issue #765).
                             errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
                         case AgentServiceError.missingOrganizationScope:
                             // Permanent until an operator acts: this node has no

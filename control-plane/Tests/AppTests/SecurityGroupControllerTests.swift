@@ -73,8 +73,11 @@ final class SecurityGroupControllerTests {
     ) async throws -> (VM, VMNetworkInterface) {
         let builder = TestDataBuilder(db: app.db)
         let vm = try await builder.createVM(name: "sg-vm-\(UUID().uuidString.prefix(8))", project: project)
+        let network = try await builder.createNetwork(
+            name: "sg-net-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
-            vmID: vm.id!, network: "default", macAddress: VMNetworkInterface.generateMACAddress())
+            vmID: vm.id!, logicalNetworkID: try network.requireID(),
+            macAddress: VMNetworkInterface.generateMACAddress())
         try await nic.save(on: app.db)
         if let protocolVersion {
             let message = AgentRegisterMessage(
@@ -467,9 +470,13 @@ final class SecurityGroupControllerTests {
                 let cpu: Int?
                 let memory: Int64?
                 let disk: Int64?
+                var networkId: UUID? = nil
                 var securityGroupIds: [UUID]? = nil
             }
             let gb = Int64(1) << 30
+            // VM create names its network explicitly (issue #765).
+            let network = try await builder.createNetwork(name: "sg-net", project: project)
+            let networkID = try network.requireID()
 
             // No groups specified → the project default group.
             try await app.test(.POST, "/api/vms") { req in
@@ -477,7 +484,7 @@ final class SecurityGroupControllerTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "sg-default-vm", imageId: image.id, projectId: project.id,
-                        cpu: 1, memory: gb, disk: 10 * gb))
+                        cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
@@ -500,7 +507,7 @@ final class SecurityGroupControllerTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "sg-explicit-vm", imageId: image.id, projectId: project.id,
-                        cpu: 1, memory: gb, disk: 10 * gb, securityGroupIds: [web.id]))
+                        cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID, securityGroupIds: [web.id]))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
@@ -523,7 +530,7 @@ final class SecurityGroupControllerTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "sg-foreign-vm", imageId: image.id, projectId: project.id,
-                        cpu: 1, memory: gb, disk: 10 * gb, securityGroupIds: [foreign.id!]))
+                        cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID, securityGroupIds: [foreign.id!]))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }

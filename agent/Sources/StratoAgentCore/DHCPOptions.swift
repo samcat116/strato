@@ -72,3 +72,77 @@ public enum OVNDHCPOptionsBuilder {
         return octets.map { String(format: "%02x", $0) }.joined(separator: ":")
     }
 }
+
+/// Which `DHCP_Options` row belongs to which network.
+///
+/// Rows are matched on `(strato-managed, network-id, cidr)` — never on the CIDR
+/// alone and never on the *name*. Two networks may legitimately share a prefix
+/// (overlap checks are project-scoped) and, since issue #765, may also share a
+/// name: names are unique only within a project. Matching on either would let
+/// one project's DNS/lease edits land on another's row, and one project's
+/// DHCP-disable delete the other's. Operator-created rows (no managed marker)
+/// are never adopted.
+///
+/// Lives here rather than beside the OVN client because only `StratoAgentCore`
+/// is unit-testable, and this is the rule the whole scheme rests on.
+public enum DHCPRowIdentity {
+    public static let managedKey = "strato-managed"
+    public static let managedValue = "true"
+    public static let networkIDKey = "network-id"
+    /// Write-only human label, so `ovn-nbctl list dhcp_options` stays legible
+    /// when every other column is a UUID. Nothing reads it.
+    public static let networkNameKey = "network-name"
+
+    /// The external-ids a managed row carries.
+    public static func externalIDs(networkId: UUID, networkName: String) -> [String: String] {
+        [
+            networkIDKey: canonical(networkId),
+            networkNameKey: networkName,
+            managedKey: managedValue,
+        ]
+    }
+
+    /// Whether a row is the one `networkId` owns for `cidr`.
+    public static func isOwn(
+        _ externalIDs: [String: String]?, rowCIDR: String, cidr: String, networkId: UUID
+    ) -> Bool {
+        rowCIDR == cidr
+            && externalIDs?[networkIDKey] == canonical(networkId)
+            && externalIDs?[managedKey] == managedValue
+    }
+
+    /// Whether a row predates `network-id` stamping and can be adopted as this
+    /// network's row for `cidr`.
+    ///
+    /// Adoption — rather than leaving the row orphaned and creating a fresh one
+    /// — matters because existing VM ports still reference the old row through
+    /// their `dhcpv4_options` column: guests would keep leasing from a row no
+    /// later edit ever reaches. Updating it in place keeps the OVSDB row UUID,
+    /// so live port bindings stay valid (the same argument `ensureSwitch` makes
+    /// for renaming a legacy switch).
+    ///
+    /// Unambiguous by construction: names were globally unique when any such
+    /// row was written, so at most one legacy row can match.
+    public static func isAdoptableLegacy(
+        _ externalIDs: [String: String]?, rowCIDR: String, cidr: String, networkName: String
+    ) -> Bool {
+        rowCIDR == cidr
+            && externalIDs?[managedKey] == managedValue
+            && externalIDs?[networkIDKey] == nil
+            && externalIDs?[networkNameKey] == networkName
+    }
+
+    /// Whether a row is a legacy managed row this network owns, at any CIDR —
+    /// what a DHCP-disable teardown must also remove, or a network disabled
+    /// before its first post-upgrade converge would keep answering leases.
+    public static func isLegacyOwned(_ externalIDs: [String: String]?, networkName: String) -> Bool {
+        externalIDs?[managedKey] == managedValue
+            && externalIDs?[networkIDKey] == nil
+            && externalIDs?[networkNameKey] == networkName
+    }
+
+    /// Lowercased, matching `OVNNaming`'s treatment of ids in object names.
+    private static func canonical(_ networkId: UUID) -> String {
+        networkId.uuidString.lowercased()
+    }
+}

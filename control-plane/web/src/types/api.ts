@@ -114,7 +114,13 @@ export interface ObservedInterfaceAddress {
 
 export interface VMNetworkInterface {
   id?: string;
-  network: string;
+  /** The logical network this NIC attaches to. */
+  networkId: string;
+  /**
+   * Display name of that network. Present only when the response eager-loaded
+   * it; names are unique per project, so the id is the reference.
+   */
+  network?: string;
   macAddress: string;
   /** All addresses on the NIC, one per family on a dual-stack network. */
   addresses?: InterfaceAddress[];
@@ -1540,10 +1546,9 @@ export interface Network {
   /** IPv6 subnet (always a /64) when the network is dual-stack. */
   subnet6?: string;
   gateway6?: string;
-  projectId?: string;
-  /** The seeded global "default" network, which cannot be renamed or deleted. */
-  isDefault: boolean;
-  /** Number of VM interfaces attached; a network in use cannot be deleted. */
+  /** Owning project. Network names are unique per project, not globally. */
+  projectId: string;
+  /** VM and sandbox interfaces attached; a network in use cannot be deleted. */
   attachedInterfaceCount: number;
   /** Whether agents program OVN's DHCP responder to configure guests. */
   dhcpEnabled: boolean;

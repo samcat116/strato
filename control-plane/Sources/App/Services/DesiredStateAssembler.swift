@@ -19,7 +19,7 @@ struct DesiredStateAssembler {
     let app: Application
 
     private struct NetworkAssemblyScope {
-        let networkNames: Set<String>
+        let networkIDs: Set<UUID>
         let authoritative: Bool
         let floatingIPAgentIDs: Set<String>
         /// VMs whose topology this agent authors. These are already loaded
@@ -68,13 +68,12 @@ struct DesiredStateAssembler {
 
         // DHCP/DNS config lives on the logical-network row. Query exactly the
         // union used by local workload specs and authoritative topology.
-        let ownVMNetworkNames = Set(vms.flatMap { $0.networkInterfaces.map(\.network) })
-        let sandboxNetworkNames = Set(
-            sandboxes.flatMap { $0.networkInterfaces.map(\.network) })
-        let requiredNetworkNames =
-            ownVMNetworkNames.union(sandboxNetworkNames).union(scope.networkNames)
-        let networksByName = try await logicalNetworksByName(
-            names: requiredNetworkNames, on: db)
+        let ownVMNetworkIDs = Set(vms.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
+        let sandboxNetworkIDs = Set(
+            sandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
+        let requiredNetworkIDs =
+            ownVMNetworkIDs.union(sandboxNetworkIDs).union(scope.networkIDs)
+        let networksByID = try await logicalNetworks(ids: requiredNetworkIDs, on: db)
 
         // NIC → security-group membership for the specs (and, below, the
         // group definitions the topology authority realizes). Omitted
@@ -100,8 +99,9 @@ struct DesiredStateAssembler {
                 image: image,
                 volumes: vm.volumes,
                 networkInterfaces: vm.networkInterfaces,
-                networks: networksByName,
-                securityGroupsByInterface: securityGroupsByInterface
+                networks: networksByID,
+                securityGroupsByInterface: securityGroupsByInterface,
+                logger: app.logger
             )
 
             // Image download info lets the agent materialize a VM it doesn't
@@ -153,23 +153,25 @@ struct DesiredStateAssembler {
         // (issue #343); see `networkAssemblyScope`.
         // Floating IPs attached to NICs of VMs the receiving agent's topology
         // writes cover (issue #344): its own VMs for a site-less agent, every
-        // site VM for the site's controller. Keyed by network name, matching
+        // site VM for the site's controller. Keyed by network id, matching
         // how the NAT rule lands on that network's router. Omitted entirely
         // for pre-v12 agents — they would decode and silently ignore the
         // field, so sending it only misstates what the sync achieved; the
         // attach API refuses new attachments against such agents.
-        let floatingIPsByNetwork: [String: [DesiredFloatingIP]]
+        let floatingIPsByNetwork: [UUID: [DesiredFloatingIP]]
         if agent.map({ WireProtocol.supportsFloatingIPs($0.wireProtocolVersion ?? 0) }) ?? true {
             floatingIPsByNetwork = try await desiredFloatingIPs(
                 forAgentIDs: scope.floatingIPAgentIDs, on: db)
         } else {
             floatingIPsByNetwork = [:]
         }
+        // Sorted by id: names are no longer unique, so only the id gives the
+        // topology list a stable, total order.
         let networkStates =
-            scope.networkNames
-            .sorted()
-            .compactMap { name -> DesiredNetworkState? in
-                guard let network = networksByName[name], let networkId = network.id else { return nil }
+            scope.networkIDs
+            .sorted { $0.uuidString < $1.uuidString }
+            .compactMap { networkId -> DesiredNetworkState? in
+                guard let network = networksByID[networkId] else { return nil }
                 return DesiredNetworkState(
                     networkId: networkId,
                     name: network.name,
@@ -184,7 +186,7 @@ struct DesiredStateAssembler {
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
                     generation: Int64(network.generation),
-                    floatingIPs: floatingIPsByNetwork[name]
+                    floatingIPs: floatingIPsByNetwork[networkId]
                 )
             }
 
@@ -267,7 +269,7 @@ struct DesiredStateAssembler {
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
-                network: interface.flatMap { networksByName[$0.network] })
+                network: interface.flatMap { networksByID[$0.logicalNetworkID] })
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
@@ -341,18 +343,17 @@ struct DesiredStateAssembler {
         }
     }
 
-    /// Load a name-indexed logical-network slice without ever issuing an
+    /// Load an id-indexed logical-network slice without ever issuing an
     /// unbounded table scan. Empty scopes intentionally produce no query.
-    private func logicalNetworksByName(
-        names: Set<String>, on db: any Database
-    ) async throws -> [String: LogicalNetwork] {
-        guard !names.isEmpty else { return [:] }
+    private func logicalNetworks(
+        ids: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: LogicalNetwork] {
+        guard !ids.isEmpty else { return [:] }
         return Dictionary(
-            try await LogicalNetwork.query(on: db)
-                .filter(\.$name ~~ Array(names))
+            uniqueKeysWithValues: try await LogicalNetwork.query(on: db)
+                .filter(\.$id ~~ Array(ids))
                 .all()
-                .map { ($0.name, $0) },
-            uniquingKeysWith: { first, _ in first })
+                .compactMap { network in network.id.map { ($0, network) } })
     }
 
     /// Per-sandbox registry work at sync assembly (issue #414): pins an
@@ -511,8 +512,8 @@ struct DesiredStateAssembler {
     ) async throws -> NetworkAssemblyScope {
         // A network referenced by either a VM or a sandbox on this host must be
         // realized here (issue #416).
-        var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
-        ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.network) })
+        var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
+        ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
 
         guard let agent,
             let agentUUID = agent.id,
@@ -520,7 +521,7 @@ struct DesiredStateAssembler {
             let site = try await Site.find(siteID, on: db)
         else {
             return NetworkAssemblyScope(
-                networkNames: ownReferences,
+                networkIDs: ownReferences,
                 authoritative: true,
                 floatingIPAgentIDs: [agentId],
                 coveredVMs: ownVMs)
@@ -540,7 +541,7 @@ struct DesiredStateAssembler {
                     "protocolVersion": .stringConvertible(agent.wireProtocolVersion ?? 0),
                 ])
             return NetworkAssemblyScope(
-                networkNames: ownReferences,
+                networkIDs: ownReferences,
                 authoritative: true,
                 floatingIPAgentIDs: [agentId],
                 coveredVMs: ownVMs)
@@ -554,14 +555,14 @@ struct DesiredStateAssembler {
                 "Site has no network controller; its networks will not be reconciled",
                 metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
             return NetworkAssemblyScope(
-                networkNames: [],
+                networkIDs: [],
                 authoritative: false,
                 floatingIPAgentIDs: [],
                 coveredVMs: [])
         }
         guard controllerID == agentUUID else {
             return NetworkAssemblyScope(
-                networkNames: [],
+                networkIDs: [],
                 authoritative: false,
                 floatingIPAgentIDs: [],
                 coveredVMs: [])
@@ -575,20 +576,20 @@ struct DesiredStateAssembler {
             .filter(\.$hypervisorId ~~ siteAgentIDs)
             .with(\.$networkInterfaces)
             .all()
-        var names = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.network) })
+        var ids = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         // Sandboxes placed anywhere in the site reference networks the
         // controller must realize too (issue #416).
         let siteSandboxes = try await Sandbox.query(on: db)
             .filter(\.$hypervisorId ~~ siteAgentIDs)
             .with(\.$networkInterfaces)
             .all()
-        names.formUnion(siteSandboxes.flatMap { $0.networkInterfaces.map(\.network) })
+        ids.formUnion(siteSandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         let pinned = try await LogicalNetwork.query(on: db)
             .filter(\.$site.$id == siteID)
             .all()
-        names.formUnion(pinned.map(\.name))
+        ids.formUnion(pinned.compactMap(\.id))
         return NetworkAssemblyScope(
-            networkNames: names,
+            networkIDs: ids,
             authoritative: true,
             floatingIPAgentIDs: Set(siteAgentIDs),
             coveredVMs: siteVMs)
@@ -677,7 +678,7 @@ struct DesiredStateAssembler {
     /// agent never NATs for a VM on some other node's private NB.
     private func desiredFloatingIPs(
         forAgentIDs agentIDs: Set<String>, on db: any Database
-    ) async throws -> [String: [DesiredFloatingIP]] {
+    ) async throws -> [UUID: [DesiredFloatingIP]] {
         guard !agentIDs.isEmpty else { return [:] }
         let attached = try await FloatingIP.query(on: db)
             .filter(\.$interface.$id != nil)
@@ -700,7 +701,7 @@ struct DesiredStateAssembler {
             uniquingKeysWith: { first, _ in first }
         )
 
-        var byNetwork: [String: [DesiredFloatingIP]] = [:]
+        var byNetwork: [UUID: [DesiredFloatingIP]] = [:]
         for floatingIP in attached {
             guard let interface = floatingIP.interface,
                 let vm = vmsByID[interface.$vm.id],
@@ -717,7 +718,7 @@ struct DesiredStateAssembler {
                     metadata: ["address": .string(floatingIP.address)])
                 continue
             }
-            byNetwork[interface.network, default: []].append(
+            byNetwork[interface.logicalNetworkID, default: []].append(
                 DesiredFloatingIP(
                     externalIP: floatingIP.address,
                     logicalIP: logicalIP,

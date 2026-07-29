@@ -296,8 +296,10 @@ final class SandboxTests {
             source.workingDir = "/srv"
             try await source.save(on: app.db)
 
+            let sourceNetwork = try await self.projectNetwork(project: project, on: app.db)
             let sourceNIC = SandboxNetworkInterface(
                 sandboxID: source.id!,
+                logicalNetworkID: try sourceNetwork.requireID(),
                 macAddress: "52:54:00:00:00:01")
             try await sourceNIC.save(on: app.db)
 
@@ -322,6 +324,7 @@ final class SandboxTests {
                     "name": "worker-fork",
                     "restoreFrom": snapshot.id!.uuidString,
                     "projectId": project.id!.uuidString,
+                    "networkId": try sourceNetwork.requireID().uuidString,
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
@@ -877,19 +880,25 @@ final class SandboxTests {
 
     // MARK: - NIC + IPAM integration (issue #416)
 
-    /// The default logical network the app seeds at migration time
-    /// (`192.168.1.0/24`, gateway `.1`, v4-only) — the network the sandbox
-    /// create path attaches to.
-    private func defaultNetwork(on db: any Database) async throws -> LogicalNetwork {
-        try #require(
-            await LogicalNetwork.query(on: db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName)
-                .first())
+    /// A network in the sandbox's project (`192.168.1.0/24`, gateway `.1`,
+    /// v4-only), created on first use. Nothing provisions one with a project
+    /// (issue #765), so a sandbox only gets a NIC when the caller names one.
+    private func projectNetwork(project: Project, on db: any Database) async throws -> LogicalNetwork {
+        if let existing = try await LogicalNetwork.query(on: db)
+            .filter(\.$project.$id == project.requireID())
+            .filter(\.$name == "default")
+            .first()
+        {
+            return existing
+        }
+        return try await TestDataBuilder(db: db).createNetwork(name: "default", project: project)
     }
 
-    @Test("Creating a sandbox allocates one NIC with an IPv4 address on the default network")
+    @Test("Creating a sandbox on a named network allocates one NIC with an IPv4 address")
     func createAllocatesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+
             var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -897,6 +906,7 @@ final class SandboxTests {
                     "name": "netbox",
                     "image": "ghcr.io/acme/worker:v3",
                     "projectId": project.id!.uuidString,
+                    "networkId": try network.requireID().uuidString,
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
@@ -910,7 +920,7 @@ final class SandboxTests {
                 .all()
             #expect(interfaces.count == 1)
             let nic = try #require(interfaces.first)
-            #expect(nic.network == LogicalNetwork.defaultNetworkName)
+            #expect(nic.logicalNetworkID == network.id)
             #expect(nic.deviceName == "net0")
             #expect(nic.macAddress.hasPrefix("00:0c:29:"))
 
@@ -921,15 +931,13 @@ final class SandboxTests {
         }
     }
 
-    @Test("A missing default network degrades to an address-less NIC")
-    func createDegradesWithoutNetwork() async throws {
+    @Test("Naming no network creates the sandbox with no NIC at all")
+    func createWithoutNetworkAttachesNoNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            // Remove the seeded default network so the create path has no subnet
-            // to allocate from and must degrade to an address-less NIC.
-            try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == LogicalNetwork.defaultNetworkName)
-                .delete()
-
+            // Sandbox guest networking does not exist yet, so a sandbox in a
+            // project with no network — or one whose caller named none — is
+            // created without a NIC rather than refused (issue #765). No
+            // phantom address is reserved.
             var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -946,37 +954,35 @@ final class SandboxTests {
             let sandboxID = try #require(operation).resourceId
             let interfaces = try await SandboxNetworkInterface.query(on: app.db)
                 .filter(\.$sandbox.$id == sandboxID)
-                .with(\.$addresses)
                 .all()
-            #expect(interfaces.count == 1)
-            #expect(try #require(interfaces.first).addresses.isEmpty)
+            #expect(interfaces.isEmpty)
         }
     }
 
     @Test("IPAM's used set unions VM and sandbox addresses on the same network")
     func ipamUnionsVMAndSandboxAddresses() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.defaultNetwork(on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.db)
 
             // A VM holds .2 and a sandbox holds .3 on the same network. The next
             // allocation must skip both — proving the used set unions the two
             // address tables.
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "peer-vm", project: project)
             let vmNIC = VMNetworkInterface(
-                vmID: try vm.requireID(), network: network.name,
+                vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await vmNIC.save(on: app.db)
             try await VMInterfaceAddress(
-                interfaceID: try vmNIC.requireID(), network: network.name, family: .ipv4,
+                interfaceID: try vmNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.2", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
             let sbNIC = SandboxNetworkInterface(
-                sandboxID: try sandbox.requireID(), network: network.name,
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await sbNIC.save(on: app.db)
             try await SandboxInterfaceAddress(
-                interfaceID: try sbNIC.requireID(), network: network.name, family: .ipv4,
+                interfaceID: try sbNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.3", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
@@ -987,17 +993,17 @@ final class SandboxTests {
 
     @Test("the desired-state assembly omits the NIC from the wire spec until guest networking lands")
     func assemblyOmitsNICSpec() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, _ in
-            let network = try await self.defaultNetwork(on: app.db)
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             // Attach a NIC with an allocated address directly.
             let nic = SandboxNetworkInterface(
-                sandboxID: try sandbox.requireID(), network: network.name,
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:ef")
             try await nic.save(on: app.db)
             try await SandboxInterfaceAddress(
-                interfaceID: try nic.requireID(), network: network.name, family: .ipv4,
+                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
@@ -1017,6 +1023,7 @@ final class SandboxTests {
     @Test("A freshly created sandbox's wire spec has no network, so it can boot")
     func createdSandboxWireSpecHasNoNetwork() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
+            let network = try await self.projectNetwork(project: project, on: app.db)
             var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1024,6 +1031,7 @@ final class SandboxTests {
                     "name": "bootable",
                     "image": "ghcr.io/acme/worker:v3",
                     "projectId": project.id!.uuidString,
+                    "networkId": try network.requireID().uuidString,
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
@@ -1060,6 +1068,7 @@ final class SandboxTests {
     @Test("Deleting a sandbox cascades its NIC and address rows")
     func deleteCascadesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
+            let network = try await self.projectNetwork(project: project, on: app.db)
             var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1067,6 +1076,7 @@ final class SandboxTests {
                     "name": "doomed",
                     "image": "ghcr.io/acme/worker:v3",
                     "projectId": project.id!.uuidString,
+                    "networkId": try network.requireID().uuidString,
                 ])
             } afterResponse: { res in
                 operation = try res.content.decode(OperationResponse.self)

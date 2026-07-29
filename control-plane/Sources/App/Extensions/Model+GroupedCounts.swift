@@ -34,7 +34,7 @@ extension Model {
     }
 
     /// Counts rows per value of a plain `@Field` — for the references that are
-    /// a stored value rather than a relation, like a NIC's network name.
+    /// a stored value rather than a relation.
     static func counts<Value: Codable & Hashable & Sendable>(
         groupedBy field: KeyPath<Self, FieldProperty<Self, Value>>,
         in values: [Value],

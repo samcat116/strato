@@ -194,10 +194,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         var ip6Address = config.ip6Address
 
         // The OVN switch is named after the network's id (matching the network
-        // reconciler), never its user-chosen name, so user names can't collide
-        // with Strato-managed switches. Falls back to the name for specs from a
-        // control plane that predates `networkId` (issue #342).
-        let switchName = config.networkId.map { OVNNaming.switchName(networkId: $0) } ?? config.networkName
+        // reconciler), never its user-chosen name — which cannot identify a
+        // network anyway, being unique only within a project (issue #765).
+        let switchName = OVNNaming.switchName(networkId: config.networkId)
 
         // Find or create the logical switch. A non-authoritative agent must
         // not create it — on a shared site NB the switch belongs to the
@@ -292,14 +291,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                     ])
                 try await ovnManager?.deleteLogicalSwitchPort(named: portName)
                 portUUID = try await createAttachedLogicalSwitchPort(
-                    portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
-                    macAddress: macAddress, ipAddresses: desiredIPs,
+                    portName: portName, vmId: vmId, switchName: switchName, networkId: config.networkId,
+                    networkName: config.networkName, macAddress: macAddress, ipAddresses: desiredIPs,
                     dhcpOptionsUUID: dhcpOptionsUUID, dhcpV6OptionsUUID: dhcpV6OptionsUUID)
             }
         } else {
             portUUID = try await createAttachedLogicalSwitchPort(
-                portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
-                macAddress: macAddress, ipAddresses: [ipAddress, ip6Address].compactMap { $0 },
+                portName: portName, vmId: vmId, switchName: switchName, networkId: config.networkId,
+                networkName: config.networkName, macAddress: macAddress,
+                ipAddresses: [ipAddress, ip6Address].compactMap { $0 },
                 dhcpOptionsUUID: dhcpOptionsUUID, dhcpV6OptionsUUID: dhcpV6OptionsUUID)
         }
 
@@ -360,15 +360,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         #endif
     }
 
-    func attachVMToNetwork(vmId: String, networkName: String, macAddress: String? = nil) async throws -> VMNetworkInfo {
-        let config = VMNetworkConfig(
-            networkName: networkName,
-            macAddress: macAddress,
-            subnet: "192.168.1.0/24"  // Default subnet, should be configurable
-        )
-        return try await createVMNetwork(vmId: vmId, nicIndex: 0, config: config)
-    }
-
     func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
         #if os(Linux)
         guard isConnected else {
@@ -422,141 +413,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Development mode
         logger.info("Detaching mock VM from network (development mode)", metadata: ["vmId": .string(vmId)])
         mockVMNetworks.removeValue(forKey: vmId)
-        #endif
-    }
-
-    func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo? {
-        #if os(Linux)
-        guard isConnected, let ovnManager = ovnManager else {
-            throw NetworkError.notConnected("Network service is not connected")
-        }
-
-        let portName = Self.portName(vmId: vmId, nicIndex: 0)
-        guard let port = try await ovnManager.getLogicalSwitchPort(named: portName) else {
-            return nil
-        }
-
-        // OVN addresses are entries like "<mac> <ip>..." (or just "<mac>", or "dynamic").
-        let (macAddress, ips) = Self.parsePortAddress(port.addresses)
-
-        return VMNetworkInfo(
-            vmId: vmId,
-            networkName: port.external_ids?["network-name"] ?? "default",
-            portName: portName,
-            portUUID: port.uuid,
-            attachment: .tap(interface: tapInterfaceName(for: vmId)),
-            macAddress: macAddress,
-            ipAddress: ips.first { IPv4Address($0) != nil },
-            ip6Address: ips.first { IPv6Address($0) != nil }
-        )
-        #else
-        // Development mode
-        if let mockAttachment = mockVMNetworks[vmId] {
-            return VMNetworkInfo(
-                vmId: vmId,
-                networkName: mockAttachment.networkName,
-                portName: "mock-vm-\(vmId)",
-                portUUID: UUID().uuidString,
-                attachment: .tap(interface: "tap-\(vmId)"),
-                macAddress: mockAttachment.macAddress,
-                ipAddress: mockAttachment.ipAddress
-            )
-        }
-        return nil
-        #endif
-    }
-
-    // MARK: - Network Topology Management
-
-    func createLogicalNetwork(name: String, subnet: String, gateway: String? = nil) async throws -> UUID {
-        #if os(Linux)
-        guard ovnManager != nil else {
-            throw NetworkError.notConnected("OVN manager not connected")
-        }
-
-        logger.info("Creating logical network", metadata: ["name": .string(name), "subnet": .string(subnet)])
-
-        let logicalSwitch = OVNLogicalSwitch(
-            name: name,
-            external_ids: [
-                "subnet": subnet,
-                "gateway": gateway ?? "",
-                "description": "Strato managed network",
-            ]
-        )
-
-        let switchUUIDString = try await ovnManager!.createLogicalSwitch(logicalSwitch)
-
-        guard let switchUUID = UUID(uuidString: switchUUIDString) else {
-            throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(switchUUIDString)")
-        }
-
-        // Pre-create the network's DHCP_Options row so the responder is ready
-        // before any VM attaches. DNS/lease are filled in per-network when VMs
-        // attach with their spec's config (see resolveDHCPOptions).
-        if let gateway = gateway {
-            _ = try await ensureDHCPOptions(
-                networkName: name, subnet: subnet, gateway: gateway,
-                dnsServers: [], domainName: nil, leaseTime: nil)
-        }
-
-        logger.info(
-            "Logical network created successfully",
-            metadata: ["name": .string(name), "uuid": .string(switchUUID.uuidString)])
-
-        return switchUUID
-        #else
-        // Development mode
-        logger.info("Creating mock logical network (development mode)", metadata: ["name": .string(name)])
-        let mockNetwork = MockNetwork(name: name, subnet: subnet, gateway: gateway)
-        mockNetworks[name] = mockNetwork
-        return UUID()
-        #endif
-    }
-
-    func deleteLogicalNetwork(name: String) async throws {
-        #if os(Linux)
-        guard ovnManager != nil else {
-            throw NetworkError.notConnected("OVN manager not connected")
-        }
-
-        logger.info("Deleting logical network", metadata: ["name": .string(name)])
-
-        try await ovnManager!.deleteLogicalSwitch(named: name)
-
-        logger.info("Logical network deleted successfully", metadata: ["name": .string(name)])
-        #else
-        // Development mode
-        logger.info("Deleting mock logical network (development mode)", metadata: ["name": .string(name)])
-        mockNetworks.removeValue(forKey: name)
-        #endif
-    }
-
-    func listLogicalNetworks() async throws -> [NetworkInfo] {
-        #if os(Linux)
-        guard let ovnManager = ovnManager else {
-            throw NetworkError.notConnected("OVN manager not connected")
-        }
-
-        let switches = try await ovnManager.getLogicalSwitches()
-        return switches.map { logicalSwitch in
-            NetworkInfo(
-                name: logicalSwitch.name,
-                uuid: logicalSwitch.uuid ?? "",
-                subnet: logicalSwitch.external_ids?["subnet"] ?? "",
-                gateway: logicalSwitch.external_ids?["gateway"]
-            )
-        }
-        #else
-        // Development mode
-        return mockNetworks.values.map { mockNetwork in
-            NetworkInfo(
-                name: mockNetwork.name,
-                uuid: UUID().uuidString,
-                subnet: mockNetwork.subnet,
-                gateway: mockNetwork.gateway
-            )
-        }
         #endif
     }
 
@@ -747,7 +603,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
     /// never diverge or the port is an orphan ovn-northd ignores.
     private func createAttachedLogicalSwitchPort(
-        portName: String, vmId: String, switchName: String, networkName: String, macAddress: String,
+        portName: String, vmId: String, switchName: String, networkId: UUID, networkName: String,
+        macAddress: String,
         ipAddresses: [String], dhcpOptionsUUID: String? = nil, dhcpV6OptionsUUID: String? = nil
     ) async throws -> String? {
         let logicalPort = OVNLogicalSwitchPort(
@@ -756,9 +613,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             port_security: [Self.portSecurityEntry(mac: macAddress, ips: ipAddresses)],
             dhcpv4_options: dhcpOptionsUUID,
             dhcpv6_options: dhcpV6OptionsUUID,
+            // The name is a label for humans reading `ovn-nbctl list`; the id is
+            // what identifies the network (issue #765). Ports are found by port
+            // name, so neither is ever matched on.
             external_ids: [
                 "vm-id": vmId,
-                "network-name": networkName,
+                DHCPRowIdentity.networkIDKey: networkId.uuidString.lowercased(),
+                DHCPRowIdentity.networkNameKey: networkName,
                 "description": "VM network interface",
             ]
         )
@@ -985,14 +846,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             // schema, so the deletion clears the binding on every port of the
             // network at once — a port update cannot do it (the row encoder
             // omits nil fields, so nil can never overwrite a stale binding).
-            try await removeDHCPOptions(networkName: config.networkName)
+            try await removeDHCPOptions(networkId: config.networkId, networkName: config.networkName)
             return (nil, nil)
         }
 
         let v4: String?
         if let subnet = config.subnet, let gateway = config.gateway {
             v4 = try await ensureDHCPOptions(
-                networkName: config.networkName, subnet: subnet, gateway: gateway,
+                networkId: config.networkId, networkName: config.networkName, subnet: subnet,
+                gateway: gateway,
                 dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
         } else {
             logger.warning(
@@ -1004,7 +866,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let v6: String?
         if let subnet6 = config.subnet6 {
             v6 = try await ensureDHCPOptions6(
-                networkName: config.networkName, subnet6: subnet6,
+                networkId: config.networkId, networkName: config.networkName, subnet6: subnet6,
                 dnsServers: config.dnsServers, domainName: config.domainName)
         } else {
             v6 = nil
@@ -1017,31 +879,52 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// network's name (both families, and any stale-subnet leftovers).
     /// Matching by the external-id rather than CIDR means renumbered networks
     /// are cleaned up too, and rows other networks own are never touched.
-    private func removeDHCPOptions(networkName: String) async throws {
+    private func removeDHCPOptions(networkId: UUID, networkName: String) async throws {
         guard let ovnManager else { return }
-        for row in try await ovnManager.getDHCPOptions()
-        where row.external_ids?["network-name"] == networkName
-            && row.external_ids?[Self.managedKey] == Self.managedValue
-        {
-            if let uuid = row.uuid {
-                try await ovnManager.deleteDHCPOptions(uuid: uuid)
-                logger.info(
-                    "Removed DHCP options for network with DHCP disabled",
-                    metadata: ["network": .string(networkName), "cidr": .string(row.cidr)])
-            }
+        let ownedID = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)[
+            DHCPRowIdentity.networkIDKey]
+        for row in try await ovnManager.getDHCPOptions() {
+            // Rows this network owns at any CIDR, plus any pre-upgrade row of
+            // its own that was never stamped with an id — otherwise a network
+            // whose DHCP was disabled before its first post-upgrade converge
+            // would keep answering leases from a row nothing tracks.
+            let owned =
+                row.external_ids?[DHCPRowIdentity.managedKey] == DHCPRowIdentity.managedValue
+                && row.external_ids?[DHCPRowIdentity.networkIDKey] == ownedID
+            let legacy = DHCPRowIdentity.isLegacyOwned(row.external_ids, networkName: networkName)
+            guard owned || legacy, let uuid = row.uuid else { continue }
+            try await ovnManager.deleteDHCPOptions(uuid: uuid)
+            logger.info(
+                "Removed DHCP options for network with DHCP disabled",
+                metadata: [
+                    "network": .string(networkName),
+                    "networkId": .string(networkId.uuidString),
+                    "cidr": .string(row.cidr),
+                ])
         }
     }
 
-    /// Whether a `DHCP_Options` row is the one this network owns for `cidr`.
-    /// Rows are matched by (managed, network-name, cidr), never CIDR alone:
-    /// two networks may legitimately use the same prefix (overlap checks are
-    /// project-scoped), and sharing a row would bleed DNS/search settings
-    /// between them — and let one network's DHCP-disable delete the other's
-    /// row. Operator-created rows (no managed marker) are never adopted.
-    private static func isOwnDHCPRow(_ row: OVNDHCPOptions, networkName: String, cidr: String) -> Bool {
-        row.cidr == cidr
-            && row.external_ids?["network-name"] == networkName
-            && row.external_ids?[managedKey] == managedValue
+    /// This network's `DHCP_Options` row for `cidr`, adopting a pre-upgrade row
+    /// that carries only the network's name. See `DHCPRowIdentity` for why the
+    /// match is on the id and why adoption beats orphaning.
+    private static func ownDHCPRow(
+        in rows: [OVNDHCPOptions], networkId: UUID, networkName: String, cidr: String
+    ) -> OVNDHCPOptions? {
+        if let own = rows.first(where: {
+            DHCPRowIdentity.isOwn($0.external_ids, rowCIDR: $0.cidr, cidr: cidr, networkId: networkId)
+        }) {
+            return own
+        }
+        // Deterministic if a malformed NB somehow holds two candidates: taking
+        // the lowest row UUID beats skipping, which would strand a row live
+        // ports still reference.
+        return
+            rows
+            .filter {
+                DHCPRowIdentity.isAdoptableLegacy(
+                    $0.external_ids, rowCIDR: $0.cidr, cidr: cidr, networkName: networkName)
+            }
+            .min { ($0.uuid ?? "") < ($1.uuid ?? "") }
     }
 
     /// Find-or-update this network's `DHCP_Options` row for `subnet` and
@@ -1049,7 +932,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// network's existing row for the same CIDR is updated in place (so
     /// DNS/lease edits converge) rather than duplicated.
     private func ensureDHCPOptions(
-        networkName: String, subnet: String, gateway: String,
+        networkId: UUID, networkName: String, subnet: String, gateway: String,
         dnsServers: [String], domainName: String?, leaseTime: Int?
     ) async throws -> String? {
         guard let ovnManager else {
@@ -1058,15 +941,18 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
             subnet: subnet)
-        let dhcp = OVNDHCPOptions(
-            cidr: subnet, options: options,
-            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
+        let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
+        let dhcp = OVNDHCPOptions(cidr: subnet, options: options, external_ids: externalIDs)
 
-        if let existing = try await ovnManager.getDHCPOptions()
-            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet) }),
+        if let existing = Self.ownDHCPRow(
+            in: try await ovnManager.getDHCPOptions(), networkId: networkId, networkName: networkName,
+            cidr: subnet),
             let uuid = existing.uuid
         {
-            if existing.options != options {
+            // The external-ids are part of what converges, not just the
+            // options: an adopted legacy row needs stamping with its
+            // `network-id`, and a renamed network needs its label refreshed.
+            if existing.options != options || existing.external_ids != externalIDs {
                 try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
             }
             return uuid
@@ -1079,22 +965,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// row — so the mechanics are identical; only the option grammar differs
     /// (see `OVNDHCPOptionsBuilder.v6Options`).
     private func ensureDHCPOptions6(
-        networkName: String, subnet6: String, dnsServers: [String], domainName: String?
+        networkId: UUID, networkName: String, subnet6: String, dnsServers: [String], domainName: String?
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v6Options(
             dnsServers: dnsServers, domainName: domainName, subnet6: subnet6)
-        let dhcp = OVNDHCPOptions(
-            cidr: subnet6, options: options,
-            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
+        let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
+        let dhcp = OVNDHCPOptions(cidr: subnet6, options: options, external_ids: externalIDs)
 
-        if let existing = try await ovnManager.getDHCPOptions()
-            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet6) }),
+        if let existing = Self.ownDHCPRow(
+            in: try await ovnManager.getDHCPOptions(), networkId: networkId, networkName: networkName,
+            cidr: subnet6),
             let uuid = existing.uuid
         {
-            if existing.options != options {
+            if existing.options != options || existing.external_ids != externalIDs {
                 try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
             }
             return uuid
@@ -1215,13 +1101,14 @@ extension NetworkServiceLinux {
         #if os(Linux)
         do {
             if !dhcpEnabled {
-                try await removeDHCPOptions(networkName: network.name)
+                try await removeDHCPOptions(networkId: network.networkId, networkName: network.name)
                 return
             }
             if let gateway = network.gateway, let cidr = IPv4CIDR(network.subnet) {
                 // Masked, so the row key matches what the NIC path derives
                 // from ip+netmask (the stored subnet may carry host bits).
                 _ = try await ensureDHCPOptions(
+                    networkId: network.networkId,
                     networkName: network.name,
                     subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
                     gateway: gateway,
@@ -1230,7 +1117,7 @@ extension NetworkServiceLinux {
             }
             if let subnet6 = network.subnet6 {
                 _ = try await ensureDHCPOptions6(
-                    networkName: network.name, subnet6: subnet6,
+                    networkId: network.networkId, networkName: network.name, subnet6: subnet6,
                     dnsServers: network.dnsServers ?? [], domainName: network.domainName)
             }
         } catch {
@@ -1238,6 +1125,7 @@ extension NetworkServiceLinux {
                 "DHCP options convergence failed for network",
                 metadata: [
                     "network": .string(network.name),
+                    "networkId": .string(network.networkId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }

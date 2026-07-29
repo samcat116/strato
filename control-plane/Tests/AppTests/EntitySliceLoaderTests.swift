@@ -121,28 +121,24 @@ final class EntitySliceLoaderTests {
         }
     }
 
-    @Test("A global network is marked open to all users; a project network is not")
-    func openNetworkAttribute() async throws {
+    @Test("A network's slice climbs to its project, carrying no open-to-all attribute")
+    func networkSliceClimbsToProject() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let tree = try await buildTree(builder, prefix: "Net")
             let user = try await builder.createUser(username: "net-user", email: "net@example.com")
 
-            let globalNetwork = LogicalNetwork(name: "global-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1")
-            try await globalNetwork.save(on: app.db)
-            let projectNetwork = LogicalNetwork(
-                name: "proj-net", subnet: "10.91.0.0/24", gateway: "10.91.0.1", projectID: tree.project.id!)
-            try await projectNetwork.save(on: app.db)
+            let network = try await builder.createNetwork(
+                name: "proj-net", project: tree.project, subnet: "10.91.0.0/24", gateway: "10.91.0.1")
 
-            let globalSlice = try await EntitySliceLoader.load(
-                userID: user.id!, node: IAMNode(type: .network, id: globalNetwork.id!), on: app.db)
-            let projectSlice = try await EntitySliceLoader.load(
-                userID: user.id!, node: IAMNode(type: .network, id: projectNetwork.id!), on: app.db)
+            let slice = try await EntitySliceLoader.load(
+                userID: user.id!, node: IAMNode(type: .network, id: network.id!), on: app.db)
 
-            let globalEntity = entity(globalSlice, CedarEntityUID(type: .network, id: globalNetwork.id!))
-            let projectEntity = entity(projectSlice, CedarEntityUID(type: .network, id: projectNetwork.id!))
-            #expect(globalEntity?.attrs["openToAllUsers"] == .bool(true))
-            #expect(projectEntity?.attrs["openToAllUsers"] == .bool(false))
+            // `openToAllUsers` is gone with global networks themselves (issue
+            // #765): a network is reachable only through its project's chain.
+            let networkEntity = entity(slice, CedarEntityUID(type: .network, id: network.id!))
+            #expect(networkEntity?.attrs["openToAllUsers"] == nil)
+            #expect(networkEntity?.parents.contains(CedarEntityUID(type: .project, id: tree.project.id!)) == true)
         }
     }
 
