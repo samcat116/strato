@@ -57,7 +57,7 @@ struct PersistedEnumConstraintTests {
             )
             try await app.db.schema(constraint.table)
                 // Reproduce the legacy migrations' accidentally quoted SQL
-                // default so both engines exercise its repair path.
+                // default so the migration's repair path is exercised.
                 .field(.string(constraint.column), .string, .required, .sql(.default("'Running'")))
                 .create()
 
