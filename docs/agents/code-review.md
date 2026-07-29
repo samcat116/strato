@@ -137,6 +137,12 @@ from what it started doing.
   Run the full suite once before opening or updating a PR, not just `--filter`.
 - Test names describe the behavior under test, so a failure name alone tells
   you what broke.
+- **Before sending an author after a red CI run, check it's their fault.** A
+  failing "Test Control Plane (Postgres)" step that doesn't reproduce locally
+  may be the documented `ServeCommand did not shutdown before deinit` teardown
+  flake — rerun the failed jobs first. Likewise, unexplained missing-symbol
+  errors in Swift CI are usually a stale build cache on the runner, not the
+  diff.
 
 ## 8. Architecture and blast radius
 
@@ -155,6 +161,11 @@ from what it started doing.
   behavior change with no doc update is an incomplete change.
 - What else in the codebase assumed the old behavior? Grep for it. Leftover
   comments and helpers referencing a removed subsystem are a common tail.
+- **Is the base still current?** Parallel sessions land PRs within hours here,
+  so a branch reviewed against a stale `main` can be correct in isolation and
+  wrong once merged. Confirm the author ran `git fetch origin main && git merge
+  origin/main` recently, and re-check anything that touches a file another
+  in-flight PR is also changing.
 - Is this the smallest change that solves the problem, or is a larger cleanup
   being smuggled in? Separate commits, and say so in the PR body.
 
