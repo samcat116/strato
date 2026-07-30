@@ -50,7 +50,7 @@ let package = Package(
         // unavailable and breaks the build.
         .package(
             url: "https://github.com/samcat116/swift-ovn.git",
-            revision: "591681fad2eb3b09f7f1e30d742662ceecd462c9"),
+            revision: "50843804ae82bf44cb684d508b48539cf17dd74d"),
     ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)

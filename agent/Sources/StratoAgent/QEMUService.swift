@@ -48,6 +48,22 @@ actor QEMUService: HypervisorService {
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
+    // VMs this process spawned (with `-S`, per the create contract) and has not
+    // started yet.
+    //
+    // SwiftQEMU reports QEMU's `prelaunch` run state as `.paused`, the same
+    // value it reports for a VM the operator paused after it was running. The
+    // two are different desired states here — a freshly created VM must satisfy
+    // `.shutdown`, a paused one must satisfy `.paused` — so the distinction
+    // QEMU does draw (`prelaunch` vs `paused`) has to be recovered from what
+    // this service knows: whether it has ever issued `start()`. Without it every
+    // create hangs, because `.paused` never satisfies a new VM's `.shutdown`
+    // desired state and the operation waits out its budget.
+    //
+    // Only ever holds VMs spawned here. Re-adopted VMs are absent by
+    // construction, which is correct: `AdoptedQEMUVM` reads the run state
+    // itself and still maps `prelaunch` to `.creating`.
+    private var awaitingFirstStart: Set<String> = []
 
     init(
         logger: Logger,
@@ -232,7 +248,7 @@ actor QEMUService: HypervisorService {
             ])
         do {
             try await qemuManager.createVM(
-                config: qemuConfig, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
+                config: qemuConfig, timeout: .seconds(StageBudget.hypervisorSpawnSeconds))
         } catch {
             // QEMU announces a rejected argument or an unreadable disk image on
             // stderr and exits during setup — after its first -qmp socket
@@ -259,6 +275,7 @@ actor QEMUService: HypervisorService {
         vmSpecs[vmId] = spec
         vmSpawnSizing[vmId] = Self.spawnSizing(for: spec)
         vmConfigs[vmId] = qemuConfig
+        awaitingFirstStart.insert(vmId)
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -330,12 +347,16 @@ actor QEMUService: HypervisorService {
             }
             let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
             try await manager.createVM(
-                config: config, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
+                config: config, timeout: .seconds(StageBudget.hypervisorSpawnSeconds))
             activeVMs[vmId] = manager
             try await controlled("qmp-start-respawned", vmId: vmId) {
                 try await manager.start()
             }
         }
+
+        // Past this point `.paused` from the handle means a real pause, not the
+        // `-S` the process was spawned under.
+        awaitingFirstStart.remove(vmId)
 
         // A fresh QEMU process starts with a fully deflated balloon, so a VM
         // whose spec carries an operator target must have it re-applied here
@@ -444,6 +465,7 @@ actor QEMUService: HypervisorService {
         vmSpecs.removeValue(forKey: vmId)
         vmSpawnSizing.removeValue(forKey: vmId)
         vmConfigs.removeValue(forKey: vmId)
+        awaitingFirstStart.remove(vmId)
 
         // Clean up console socket
         if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
@@ -563,7 +585,7 @@ actor QEMUService: HypervisorService {
             ) {
                 try await qemuManager.getStatus()
             }
-            return Self.vmStatus(from: qemuStatus)
+            return Self.vmStatus(from: qemuStatus, awaitingFirstStart: awaitingFirstStart.contains(vmId))
         } catch is StageBudgetError {
             logger.warning("VM status query timed out; reporting unknown", metadata: ["vmId": .string(vmId)])
             return .unknown
@@ -575,12 +597,20 @@ actor QEMUService: HypervisorService {
 
     /// The single SwiftQEMU `QEMUVMStatus` → `VMStatus` mapping, shared by
     /// status queries and re-adoption so the two can never drift apart.
-    static func vmStatus(from qemuStatus: QEMUVMStatus) -> VMStatus {
+    ///
+    /// - Parameter awaitingFirstStart: whether this VM was spawned by this
+    ///   service and has not been started yet. SwiftQEMU folds QEMU's
+    ///   `prelaunch` into `.paused`, so without this a just-created VM is
+    ///   indistinguishable from an operator-paused one — and reports a status
+    ///   its `.shutdown` desired state can never be satisfied by. Defaults to
+    ///   false, which is right for re-adopted VMs: `AdoptedQEMUVM` reads the run
+    ///   state itself and maps `prelaunch` to `.creating`.
+    static func vmStatus(from qemuStatus: QEMUVMStatus, awaitingFirstStart: Bool = false) -> VMStatus {
         switch qemuStatus {
         case .running:
             return .running
         case .paused:
-            return .paused
+            return awaitingFirstStart ? .created : .paused
         case .stopped, .shuttingDown:
             return .shutdown
         case .creating, .unknown:
@@ -1366,17 +1396,18 @@ actor QEMUService: HypervisorService {
         // to TCG emulation (slow, but useful for dev/test on unaccelerated hosts).
         #if os(Linux)
         // KVM on Linux
-        qemuConfig.enableKVM = hardwareAccelerationEnabled
+        qemuConfig.accelerator = hardwareAccelerationEnabled ? .kvm : .tcg
         if hardwareAccelerationEnabled {
             logger.debug("Enabling KVM acceleration")
         } else {
             logger.info("KVM acceleration disabled by configuration (enable_kvm=false); using TCG emulation")
         }
         #elseif os(macOS)
-        // KVM is never available on macOS; Hypervisor.framework (HVF) is the accelerator.
-        qemuConfig.enableKVM = false
+        // KVM is never available on macOS; Hypervisor.framework (HVF) is the
+        // accelerator. SwiftQEMU emits `-accel <name>` from this, so it no
+        // longer has to be appended by hand.
+        qemuConfig.accelerator = hardwareAccelerationEnabled ? .hvf : .tcg
         if hardwareAccelerationEnabled {
-            qemuConfig.additionalArgs.append(contentsOf: ["-accel", "hvf"])
             logger.debug("Enabling Hypervisor.framework (HVF) acceleration")
         } else {
             logger.info("HVF acceleration disabled by configuration (enable_hvf=false); using TCG emulation")
