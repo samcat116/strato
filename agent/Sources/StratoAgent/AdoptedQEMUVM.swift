@@ -181,13 +181,19 @@ actor AdoptedQEMUVM: QEMUVMHandle {
 
         try await qmp.blockdevAdd(nodeName: nodeName, filename: path, readOnly: readOnly)
 
-        var lastError: any Error = QMPError.invalidConfiguration
+        // The *first* failure is the one worth reporting. Walking the list is
+        // normal — an occupied port is how a busy pool answers — so the last
+        // error is whatever the machine-default attempt said, which is the
+        // least informative of the candidates. A real fault (a bad path, a
+        // dropped connection, a duplicate device id) shows up on the first
+        // attempt and would otherwise be buried by four follow-on rejections.
+        var firstError: (any Error)?
         for candidate in candidates {
             do {
                 try await qmp.deviceAdd(deviceId: deviceName, driveId: nodeName, bus: candidate)
                 return
             } catch {
-                lastError = error
+                if firstError == nil { firstError = error }
                 logger.debug(
                     "Hot-plug port rejected the disk; trying the next one",
                     metadata: [
@@ -199,7 +205,7 @@ actor AdoptedQEMUVM: QEMUVMHandle {
         }
 
         try? await qmp.blockdevDel(nodeName: nodeName)
-        throw lastError
+        throw firstError ?? QMPError.invalidConfiguration
     }
 
     func detachDisk(deviceName: String, timeout: Duration) async throws {

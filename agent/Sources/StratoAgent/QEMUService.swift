@@ -423,6 +423,14 @@ actor QEMUService: HypervisorService {
             try await vm.pause()
         }
 
+        // An explicit pause is past first start by definition, and it is the one
+        // route to `paused` that need not pass a status query first — so the
+        // observed-`.running` clear above cannot be relied on to have run.
+        // Without this the pause reports `.created`, and the reconciler answers
+        // that with `[.boot, .pause]`: the guest is un-paused and re-paused
+        // before the operator's intent sticks.
+        awaitingFirstStart.remove(vmId)
+
         logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
     }
 
@@ -584,6 +592,15 @@ actor QEMUService: HypervisorService {
                 seconds: StageBudget.statusQuerySeconds, stage: "qmp-status", onTimeout: .abandon
             ) {
                 try await qemuManager.getStatus()
+            }
+            // Seeing the guest execute settles it, whatever happened to the call
+            // that got it there: `bootVM` rethrows an ambiguous `qmp-start`
+            // timeout without reaching its own clear, and the guest behind that
+            // wedged channel may be running perfectly well. Clearing here makes
+            // the flag self-correcting rather than dependent on `bootVM`
+            // returning.
+            if qemuStatus == .running {
+                awaitingFirstStart.remove(vmId)
             }
             return Self.vmStatus(from: qemuStatus, awaitingFirstStart: awaitingFirstStart.contains(vmId))
         } catch is StageBudgetError {
