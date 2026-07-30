@@ -54,10 +54,10 @@ enum PersistedEnumConstraintMigrationError: Error, CustomStringConvertible, Send
 /// 1. Known values with casing drift are rewritten to the canonical raw value.
 /// 2. Any genuinely unknown existing value aborts startup with a diagnostic
 ///    naming the table, column, and value, before application code can load it.
-/// 3. PostgreSQL receives `CHECK` constraints for all string-backed columns.
-///    Its native `agent_status` enum already provides the same guarantee.
-/// 4. SQLite receives equivalent insert/update validation triggers because it
-///    cannot add `CHECK` constraints to existing tables.
+/// 3. Every string-backed column receives a `CHECK` constraint, except those
+///    backed by the native `agent_status` enum, whose type already provides
+///    the same guarantee. `PersistedEnumConstraintTests` asserts that type
+///    still matches `AgentStatus`, since no `CHECK` guards it.
 struct EnforcePersistedEnumValues: AsyncMigration {
     static let constraints: [PersistedEnumConstraint] = [
         .init(
@@ -169,7 +169,7 @@ struct EnforcePersistedEnumValues: AsyncMigration {
 
     func prepare(on database: Database) async throws {
         let sql = try Self.sqlDatabase(database)
-        let constraints = Self.constraints.filter { Self.shouldInstall($0, dialect: sql.dialect.name) }
+        let constraints = Self.constraints.filter(Self.shouldInstall)
 
         // Normalize every column before validating any of them. If validation
         // finds a truly unknown value, no constraints have been partially
@@ -187,18 +187,17 @@ struct EnforcePersistedEnumValues: AsyncMigration {
 
     func revert(on database: Database) async throws {
         let sql = try Self.sqlDatabase(database)
-        for constraint in Self.constraints.reversed()
-        where Self.shouldInstall(constraint, dialect: sql.dialect.name) {
+        for constraint in Self.constraints.reversed() where Self.shouldInstall(constraint) {
             try await Self.uninstall(constraint, on: sql)
         }
     }
 
     /// Applies one constraint through the same normalize/validate/install flow.
-    /// Kept internal so migration tests can exercise both database engines with
-    /// an isolated table and a deliberately mis-cased pre-migration value.
+    /// Kept internal so migration tests can exercise it with an isolated table
+    /// and a deliberately mis-cased pre-migration value.
     static func prepare(_ constraint: PersistedEnumConstraint, on database: Database) async throws {
         let sql = try sqlDatabase(database)
-        guard shouldInstall(constraint, dialect: sql.dialect.name) else { return }
+        guard shouldInstall(constraint) else { return }
         try await normalize(constraint, on: sql)
         try await validateExistingValues(constraint, on: sql)
         try await install(constraint, on: sql)
@@ -206,7 +205,7 @@ struct EnforcePersistedEnumValues: AsyncMigration {
 
     static func revert(_ constraint: PersistedEnumConstraint, on database: Database) async throws {
         let sql = try sqlDatabase(database)
-        guard shouldInstall(constraint, dialect: sql.dialect.name) else { return }
+        guard shouldInstall(constraint) else { return }
         try await uninstall(constraint, on: sql)
     }
 
@@ -214,14 +213,16 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         guard let sql = database as? any SQLDatabase else {
             throw PersistedEnumConstraintMigrationError.unsupportedDatabase("non-SQL")
         }
-        guard sql.dialect.name == "postgresql" || sql.dialect.name == "sqlite" else {
+        guard sql.dialect.name == "postgresql" else {
             throw PersistedEnumConstraintMigrationError.unsupportedDatabase(sql.dialect.name)
         }
         return sql
     }
 
-    private static func shouldInstall(_ constraint: PersistedEnumConstraint, dialect: String) -> Bool {
-        !(dialect == "postgresql" && constraint.usesPostgresNativeEnum)
+    /// Columns backed by a native Postgres enum are already constrained by their
+    /// type, so a redundant `CHECK` buys nothing.
+    private static func shouldInstall(_ constraint: PersistedEnumConstraint) -> Bool {
+        !constraint.usesPostgresNativeEnum
     }
 
     private static func normalize(_ constraint: PersistedEnumConstraint, on sql: any SQLDatabase) async throws {
@@ -266,80 +267,30 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         let name = identifier(constraint.name)
         let allowed = constraint.allowedValues.map(literal).joined(separator: ", ")
 
-        switch sql.dialect.name {
-        case "postgresql":
-            if let defaultValue = constraint.defaultValue {
-                try await execute(
-                    "ALTER TABLE \(table) ALTER COLUMN \(column) SET DEFAULT \(literal(defaultValue))",
-                    on: sql
-                )
-            }
-            // Make a retry safe if a previous non-transactional migration run
-            // installed some constraints before being interrupted.
-            try await execute("ALTER TABLE \(table) DROP CONSTRAINT IF EXISTS \(name)", on: sql)
+        if let defaultValue = constraint.defaultValue {
+            // Older migrations accidentally encoded defaults as strings
+            // containing quote characters (for example, `'ready'`); resetting
+            // the default repairs that in place.
             try await execute(
-                "ALTER TABLE \(table) ADD CONSTRAINT \(name) CHECK (\(column) IN (\(allowed)))",
+                "ALTER TABLE \(table) ALTER COLUMN \(column) SET DEFAULT \(literal(defaultValue))",
                 on: sql
             )
-        case "sqlite":
-            let message = literal("invalid enum value for \(constraint.table).\(constraint.column)")
-            for operation in ["insert", "update"] {
-                let triggerName = identifier("\(constraint.name)_\(operation)")
-                try await execute("DROP TRIGGER IF EXISTS \(triggerName)", on: sql)
-                let event = operation == "insert" ? "INSERT" : "UPDATE OF \(column)"
-                let legacyDefaultException: String
-                if operation == "insert", let defaultValue = constraint.defaultValue {
-                    legacyDefaultException =
-                        " AND LOWER(NEW.\(column)) != LOWER(\(literal("'\(defaultValue)'"))) "
-                } else {
-                    legacyDefaultException = ""
-                }
-                try await execute(
-                    "CREATE TRIGGER \(triggerName) BEFORE \(event) ON \(table) FOR EACH ROW "
-                        + "WHEN NEW.\(column) IS NOT NULL AND NEW.\(column) NOT IN (\(allowed)) "
-                        + legacyDefaultException
-                        + "BEGIN SELECT RAISE(ABORT, \(message)); END",
-                    on: sql
-                )
-            }
-            if let defaultValue = constraint.defaultValue {
-                // Older migrations accidentally encoded defaults as strings
-                // containing quote characters (for example, `'ready'`).
-                // SQLite cannot alter a column default in place, so normalize
-                // that legacy default immediately after an omitted-field insert.
-                let triggerName = identifier("\(constraint.name)_normalize_default")
-                try await execute("DROP TRIGGER IF EXISTS \(triggerName)", on: sql)
-                try await execute(
-                    "CREATE TRIGGER \(triggerName) AFTER INSERT ON \(table) FOR EACH ROW "
-                        + "WHEN LOWER(NEW.\(column)) = LOWER(\(literal("'\(defaultValue)'"))) "
-                        + "BEGIN UPDATE \(table) SET \(column) = \(literal(defaultValue)) "
-                        + "WHERE rowid = NEW.rowid; END",
-                    on: sql
-                )
-            }
-        default:
-            throw PersistedEnumConstraintMigrationError.unsupportedDatabase(sql.dialect.name)
         }
+        // Make a retry safe if a previous non-transactional migration run
+        // installed some constraints before being interrupted.
+        try await execute("ALTER TABLE \(table) DROP CONSTRAINT IF EXISTS \(name)", on: sql)
+        try await execute(
+            "ALTER TABLE \(table) ADD CONSTRAINT \(name) CHECK (\(column) IN (\(allowed)))",
+            on: sql
+        )
     }
 
     private static func uninstall(_ constraint: PersistedEnumConstraint, on sql: any SQLDatabase) async throws {
-        switch sql.dialect.name {
-        case "postgresql":
-            try await execute(
-                "ALTER TABLE \(identifier(constraint.table)) DROP CONSTRAINT IF EXISTS "
-                    + identifier(constraint.name),
-                on: sql
-            )
-        case "sqlite":
-            for operation in ["insert", "update", "normalize_default"] {
-                try await execute(
-                    "DROP TRIGGER IF EXISTS \(identifier("\(constraint.name)_\(operation)"))",
-                    on: sql
-                )
-            }
-        default:
-            throw PersistedEnumConstraintMigrationError.unsupportedDatabase(sql.dialect.name)
-        }
+        try await execute(
+            "ALTER TABLE \(identifier(constraint.table)) DROP CONSTRAINT IF EXISTS "
+                + identifier(constraint.name),
+            on: sql
+        )
     }
 
     private static func identifier(_ value: String) -> String {
