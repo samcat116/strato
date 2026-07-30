@@ -1,0 +1,22 @@
+agent/Package.swift
+  s_f5876c85f52ac4::t_7a264b013fcde0 53
+  s_f5876c85f52ac4::t_631eb5496d5773 45-50
+agent/Package.resolved
+  s_f5876c85f52ac4::t_25f7d0657a7647 2,207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "124fd13bc0cb25ab28d702d9a6c2e847bd726a06",
+  "prompts": {},
+  "sessions": {
+    "s_f5876c85f52ac4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e3f1a729-0f85-436e-bcb2-83838456a6ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
