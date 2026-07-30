@@ -60,6 +60,12 @@ public struct SPIRERegistrationService: Sendable {
         try await api.listFederationRelationships()
     }
 
+    /// The trust domain's own bundle, including the JWT authorities that verify
+    /// JWT-SVIDs issued in it (issue #495). Read-only.
+    public func getBundle() async throws -> SPIREBundle {
+        try await api.getBundle()
+    }
+
     /// Provision a node in SPIRE: mint a join token and create the workload
     /// entry. An entry identical to an existing one is reused (idempotent
     /// re-issue after a token expired unredeemed).

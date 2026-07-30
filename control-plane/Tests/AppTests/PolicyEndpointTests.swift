@@ -128,7 +128,8 @@ final class PolicyEndpointTests {
         _ app: Application, user: User, permission: String, resourceType: String, resourceID: String
     ) async throws -> Bool {
         try await IAMAuthorizer.checkLegacyVocabulary(
-            userID: user.id!, permission: permission, resourceType: resourceType, resourceID: resourceID,
+            principal: .user(user.id!), permission: permission, resourceType: resourceType,
+            resourceID: resourceID,
             context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: "policy-test"),
             state: nil, app: app, db: app.db)
     }

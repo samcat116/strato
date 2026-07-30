@@ -293,6 +293,16 @@ private final class MockSPIFFEClient: SPIFFEClientProtocol, Sendable {
 
     nonisolated func watchX509SVID() -> AsyncStream<X509SVID> { stream }
 
+    func fetchJWTSVID(audience: [String], spiffeID: SPIFFEIdentity?) async throws -> JWTSVID {
+        throw SPIFFEError.unsupportedOperation("mock")
+    }
+
+    func fetchJWTBundles() async throws -> [String: JWTBundle] { [:] }
+
+    func validateJWTSVID(token: String, audience: String) async throws -> ValidatedJWTSVID {
+        throw SPIFFEError.unsupportedOperation("mock")
+    }
+
     func close() async {}
 
     func pushRotation(_ svid: X509SVID) {

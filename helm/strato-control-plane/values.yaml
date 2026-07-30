@@ -881,6 +881,25 @@ spire:
       enabled: true
       socketPath: /var/run/spire/sockets/workload.sock
 
+    # JWT-SVIDs as programmatic credentials (issue #495). When enabled,
+    # registered service accounts and workloads authenticate to the HTTP API
+    # with a short-lived JWT-SVID bearer token instead of an API key; the
+    # SPIFFE ID is a lookup key into the workload registry and access is
+    # decided by ordinary role bindings.
+    #
+    # Off by default: it widens the credential surface from mTLS-only to
+    # bearer tokens accepted. Requires spire.enabled and the server API
+    # address above (the trust domain's JWT authorities come from there).
+    jwtSvidAuth:
+      enabled: false
+      # Audience a token must name to be accepted. Empty defaults to the
+      # control plane's own SPIFFE ID, spiffe://<trustDomain>/control-plane.
+      audience: ""
+      # How long the JWT authorities are cached, in seconds, before the next
+      # request re-fetches them (there is no background refresh task).
+      # Rotation is also picked up on demand when a token names an unknown key.
+      bundleRefreshInterval: 300
+
   # Envoy sidecar configuration for mTLS termination
   envoy:
     enabled: true

@@ -340,6 +340,15 @@ services:
       # loopback (never exposed to the compose network).
       SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
       SPIRE_TRUST_BUNDLE_PATH: /run/spire/handoff/bundle.pem
+      # JWT-SVIDs as programmatic credentials (issue #495). Uncomment to let
+      # registered service accounts and workloads authenticate to the HTTP API
+      # with a short-lived JWT-SVID bearer token instead of an API key. Off by
+      # default because it widens the credential surface from mTLS-only to
+      # bearer tokens accepted; see docs/architecture/iam.md.
+      # SPIFFE_JWT_SVID_AUTH_ENABLED: "true"
+      # Audience a token must name. Defaults to the control plane's own SPIFFE
+      # ID, which is what a workload naturally mints a token for.
+      # SPIFFE_JWT_AUDIENCE: spiffe://strato.local/control-plane
       # Workload Identity "Issuance" panel: read SPIRE's SVID-signing counters
       # from the compose Prometheus over a rolling 24h window. Unset this to
       # leave the panel unavailable. Metric names default to SPIRE's server CA
