@@ -1,33 +1,8 @@
 import Foundation
 import Logging
-
-#if os(Linux)
-import Glibc
-#else
-import Darwin
-#endif
-
-/// Closes a raw file descriptor via the platform C library, avoiding any clash
-/// with ``VsockConnection/close()``.
-private func closeFD(_ fd: Int32) {
-    #if os(Linux)
-    _ = Glibc.close(fd)
-    #else
-    _ = Darwin.close(fd)
-    #endif
-}
-
-/// Shuts down both directions of a connected socket via the platform C
-/// library. Unlike `close(2)`, `shutdown(2)` wakes any thread parked in a
-/// blocking `read(2)` on the same fd (the read returns 0/EOF), which is what
-/// lets ``VsockConnection/close()`` unblock an in-flight read.
-private func shutdownFD(_ fd: Int32) {
-    #if os(Linux)
-    _ = Glibc.shutdown(fd, Int32(SHUT_RDWR))
-    #else
-    _ = Darwin.shutdown(fd, SHUT_RDWR)
-    #endif
-}
+import NIOCore
+import NIOExtras
+import NIOPosix
 
 /// A host-initiated connection to a guest vsock port, established through a
 /// Firecracker vsock device's Unix-domain socket.
@@ -38,14 +13,19 @@ private func shutdownFD(_ fd: Int32) {
 /// replies `OK <host_port>\n` once the guest accepts, after which the socket is
 /// a raw bidirectional byte stream to the guest application.
 ///
-/// ``connect(udsPath:port:timeout:retryInterval:logger:)`` wraps that handshake
-/// with retry/timeout, because at boot the UDS may not exist yet and the guest
-/// application may not be listening yet — both surface as transient failures
-/// that clear once the guest is up.
+/// ``connect(udsPath:port:timeout:retryInterval:logger:group:)`` wraps that
+/// handshake with retry/timeout, because at boot the UDS may not exist yet and
+/// the guest application may not be listening yet — both surface as transient
+/// failures that clear once the guest is up.
+///
+/// The transport is SwiftNIO. Nothing here holds a raw file descriptor across a
+/// suspension point: the channel owns the descriptor, so a `close()` racing an
+/// in-flight read can no longer read from a recycled fd. Reads are
+/// demand-driven (`autoRead` is off), so a guest that floods the channel cannot
+/// grow an unbounded buffer in the host.
 public actor VsockConnection {
-    /// The connected socket file descriptor. Owned by this connection until
-    /// ``close()``; do not close it directly.
-    private var fd: Int32?
+    private let channel: Channel
+    private let inbound: VsockInboundBridge
     private let logger: Logger
 
     /// The host-side port Firecracker assigned to this connection, parsed from
@@ -53,8 +33,9 @@ public actor VsockConnection {
     /// awaiting the actor.
     public nonisolated let assignedHostPort: UInt32
 
-    private init(fd: Int32, assignedHostPort: UInt32, logger: Logger) {
-        self.fd = fd
+    private init(channel: Channel, inbound: VsockInboundBridge, assignedHostPort: UInt32, logger: Logger) {
+        self.channel = channel
+        self.inbound = inbound
         self.assignedHostPort = assignedHostPort
         self.logger = logger
     }
@@ -71,28 +52,41 @@ public actor VsockConnection {
     ///     within this budget.
     ///   - retryInterval: Delay between attempts.
     ///   - logger: Logger for diagnostics.
+    ///   - group: Event loop group to run the connection on. Defaults to NIO's
+    ///     process-wide singleton.
     /// - Throws: ``FirecrackerError/timeout`` if no attempt succeeds before the
-    ///   budget elapses, wrapping the last underlying error.
+    ///   budget elapses, wrapping the last underlying error. Propagates
+    ///   `CancellationError` promptly if the calling task is cancelled.
     public static func connect(
         udsPath: String,
         port: UInt32,
         timeout: TimeInterval = 10.0,
         retryInterval: TimeInterval = 0.1,
-        logger: Logger = Logger(label: "SwiftFirecracker.Vsock")
+        logger: Logger = Logger(label: "SwiftFirecracker.Vsock"),
+        group: EventLoopGroup? = nil
     ) async throws -> VsockConnection {
-        let deadline = Date().addingTimeInterval(timeout)
+        let group = group ?? UDSChannel.defaultGroup
+        // Monotonic: a wall-clock deadline can be moved by an NTP step
+        // mid-boot, turning a bounded retry into an unbounded one (or an
+        // instant give-up).
+        let deadline = ContinuousClock.now + .seconds(timeout)
         var lastError: Error?
 
-        while Date() < deadline {
+        while ContinuousClock.now < deadline {
             do {
-                let (fd, hostPort) = try await attempt(udsPath: udsPath, port: port)
+                let (channel, bridge, hostPort) = try await attempt(
+                    udsPath: udsPath, port: port, group: group)
                 logger.debug(
                     "Connected to guest vsock port",
                     metadata: ["uds": "\(udsPath)", "port": "\(port)", "host_port": "\(hostPort)"])
-                return VsockConnection(fd: fd, assignedHostPort: hostPort, logger: logger)
+                return VsockConnection(
+                    channel: channel, inbound: bridge, assignedHostPort: hostPort, logger: logger)
             } catch {
                 lastError = error
-                try? await Task.sleep(nanoseconds: UInt64(retryInterval * 1_000_000_000))
+                // `try` rather than `try?`: swallowing the CancellationError
+                // here would leave a cancelled caller spinning through connect
+                // attempts at full speed until the budget elapsed.
+                try await Task.sleep(for: .seconds(retryInterval))
             }
         }
 
@@ -101,188 +95,308 @@ public actor VsockConnection {
         )
     }
 
-    /// Sends data to the guest, looping over short writes.
+    /// Sends data to the guest.
     public func write(_ data: Data) async throws {
-        guard let fd else { throw FirecrackerError.notConnected }
-        try await VsockSocketIO.writeAll(fd: fd, data: data)
+        guard channel.isActive else { throw FirecrackerError.notConnected }
+        var buffer = channel.allocator.buffer(capacity: data.count)
+        buffer.writeBytes(data)
+        try await channel.writeAndFlush(buffer).get()
     }
 
-    /// Reads up to `maxLength` bytes from the guest; an empty result signals the
-    /// guest closed the connection.
-    public func read(maxLength: Int = 4096) async throws -> Data {
-        guard let fd else { throw FirecrackerError.notConnected }
-        return try await VsockSocketIO.read(fd: fd, maxLength: maxLength)
-    }
-
-    /// Closes the underlying socket. Idempotent.
+    /// Returns the next newline-delimited line from the guest, or `nil` once the
+    /// guest closes the connection.
     ///
-    /// The socket is shut down (`SHUT_RDWR`) before it is closed: a bare
-    /// `close(2)` does not wake a thread already parked in a blocking
-    /// `read(2)` on the same fd (the in-flight syscall holds its own file
-    /// reference), whereas `shutdown(2)` forces that read to return EOF.
-    /// Callers therefore may rely on `close()` to unblock a concurrent
-    /// ``read(maxLength:)``.
-    public func close() {
-        if let fd {
-            shutdownFD(fd)
-            closeFD(fd)
-            self.fd = nil
-        }
+    /// The line's trailing newline is stripped. Reads are issued on demand, so
+    /// nothing is buffered ahead of what a caller has asked for.
+    ///
+    /// - Parameter timeout: How long to wait for a line before throwing
+    ///   ``FirecrackerError/timeout``. `nil` waits indefinitely — correct for a
+    ///   long-lived streaming reader, which is ended by ``close()`` rather than
+    ///   by a deadline. A guest that accepts the connection and then wedges
+    ///   without sending a full line is exactly what this bounds.
+    public func nextLine(timeout: TimeInterval? = nil) async throws -> String? {
+        try await inbound.next(
+            on: channel.eventLoop,
+            timeout: timeout.map { .nanoseconds(Int64($0 * 1_000_000_000)) }
+        ).get()
+    }
+
+    /// Closes the underlying channel. Idempotent.
+    ///
+    /// Unlike the previous raw-descriptor implementation, a `close()` racing an
+    /// in-flight ``nextLine()`` is safe: NIO owns the descriptor and will not
+    /// release it while the channel is still servicing reads. A pending
+    /// `nextLine()` completes with `nil` rather than reading from whatever the
+    /// kernel handed the recycled fd to next.
+    public func close() async {
+        try? await channel.close().get()
     }
 
     // MARK: - Handshake
 
     /// One connection attempt: open the UDS, perform the `CONNECT`/`OK`
-    /// handshake, and return the live fd plus the assigned host port. Any
-    /// failure closes the fd before throwing so a retry starts clean.
-    private static func attempt(udsPath: String, port: UInt32) async throws -> (fd: Int32, hostPort: UInt32) {
-        let fd = try openUnixStream(to: udsPath)
+    /// handshake in the pipeline, and return the live channel plus the assigned
+    /// host port. Any failure closes the channel before throwing so a retry
+    /// starts clean.
+    private static func attempt(
+        udsPath: String, port: UInt32, group: EventLoopGroup
+    ) async throws -> (Channel, VsockInboundBridge, UInt32) {
+        // Pin the channel and its handshake promise to one loop (an EventLoop
+        // is itself an EventLoopGroup), so completing the promise from the
+        // handler never costs a cross-loop hop.
+        let loop = group.next()
+        let handshakePromise = loop.makePromise(of: UInt32.self)
+        let bridge = VsockInboundBridge()
+
+        let channel: Channel
         do {
-            try await VsockSocketIO.writeAll(fd: fd, data: Data("CONNECT \(port)\n".utf8))
-            let hostPort = try await readHandshakeReply(fd: fd)
-            return (fd, hostPort)
+            channel = try await UDSChannel.connect(path: udsPath, group: loop) { channel in
+                do {
+                    // Reads are demand-driven; the bridge asks for more only
+                    // when a consumer is waiting.
+                    try channel.syncOptions?.setOption(.autoRead, value: false)
+                    try channel.pipeline.syncOperations.addHandlers([
+                        VsockHandshakeHandler(port: port, promise: handshakePromise),
+                        ByteToMessageHandler(LineBasedFrameDecoder()),
+                        bridge,
+                    ])
+                    return channel.eventLoop.makeSucceededVoidFuture()
+                } catch {
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
         } catch {
-            closeFD(fd)
+            // The pipeline never came up, so nothing will ever complete the
+            // promise. Fail it explicitly — a promise dropped uncompleted trips
+            // NIO's leak check, and the connect retry loop hits this path on
+            // every attempt while the guest is still booting.
+            handshakePromise.fail(error)
             throw error
         }
-    }
 
-    /// Reads the single `OK <host_port>\n` reply line and parses the assigned
-    /// host port. Firecracker resets the connection (EOF, no line) when the
-    /// guest is not listening on the requested port.
-    private static func readHandshakeReply(fd: Int32) async throws -> UInt32 {
-        var buffer = Data()
-        // The reply is one short line; cap the read loop so a misbehaving peer
-        // that never sends a newline can't spin forever within an attempt.
-        while buffer.count < 64 {
-            let chunk = try await VsockSocketIO.read(fd: fd, maxLength: 64)
-            if chunk.isEmpty {
-                throw FirecrackerError.connectionFailed("vsock handshake closed before reply")
-            }
-            buffer.append(chunk)
-            if let newline = buffer.firstIndex(of: 0x0A) {
-                let line = String(decoding: buffer[..<newline], as: UTF8.self)
-                    .trimmingCharacters(in: .whitespaces)
-                // Firecracker replies "OK <assigned_host_port>" on success and
-                // resets the socket on failure, so any non-OK line is an error.
-                guard line.hasPrefix("OK ") else {
-                    throw FirecrackerError.connectionFailed("vsock handshake rejected: \(line)")
-                }
-                guard let hostPort = UInt32(line.dropFirst(3).trimmingCharacters(in: .whitespaces)) else {
-                    throw FirecrackerError.deserializationError("Unparseable vsock handshake reply: \(line)")
-                }
-                return hostPort
-            }
-        }
-        throw FirecrackerError.connectionFailed("vsock handshake reply exceeded 64 bytes without a newline")
-    }
-
-    /// Opens a blocking AF_UNIX stream socket connected to `path`. Shares the
-    /// `sun_path` overflow guard used by the API HTTP client.
-    private static func openUnixStream(to path: String) throws -> Int32 {
-        #if os(Linux)
-        let sock = Glibc.socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
-        #else
-        let sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        #endif
-        guard sock >= 0 else {
-            throw FirecrackerError.connectionFailed("Failed to create vsock UDS socket: \(errno)")
-        }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
-        // A jailed VM's vsock UDS can exceed sun_path under a long storage
-        // directory; UnixSocketPath falls back to a /proc/self/fd alias.
-        let connectable: UnixSocketPath.Connectable
         do {
-            connectable = try UnixSocketPath.connectable(path: path, capacity: capacity)
+            let hostPort = try await handshakePromise.futureResult.get()
+            return (channel, bridge, hostPort)
         } catch {
-            closeFD(sock)
+            try? await channel.close().get()
             throw error
         }
-        defer { connectable.closeDirFD() }
-        connectable.path.withCString { ptr in
-            withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-                sunPath.withMemoryRebound(to: CChar.self, capacity: capacity) { dest in
-                    strncpy(dest, ptr, capacity - 1)
-                    dest[capacity - 1] = 0
-                }
-            }
-        }
-
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                #if os(Linux)
-                Glibc.connect(sock, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-                #else
-                Darwin.connect(sock, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-                #endif
-            }
-        }
-        guard result == 0 else {
-            closeFD(sock)
-            throw FirecrackerError.connectionFailed("Failed to connect to vsock UDS \(path): \(errno)")
-        }
-        return sock
     }
 }
 
-/// Blocking socket reads/writes for vsock streams, dispatched off the Swift
-/// concurrency cooperative pool. Mirrors the `SocketIO` helper the API HTTP
-/// client uses (kept separate so neither file has to expose its internals).
-private enum VsockSocketIO {
-    static func writeAll(fd: Int32, data: Data) async throws {
-        try await runBlocking {
-            try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-                guard let base = raw.baseAddress else { return }
-                var offset = 0
-                while offset < raw.count {
-                    let written = write(fd, base + offset, raw.count - offset)
-                    if written < 0 {
-                        if errno == EINTR { continue }
-                        throw FirecrackerError.connectionFailed("vsock write failed: \(errno)")
-                    }
-                    if written == 0 {
-                        throw FirecrackerError.connectionFailed("vsock write returned 0 (connection closed)")
-                    }
-                    offset += written
+/// Performs the `CONNECT <port>` / `OK <host_port>` handshake, then removes
+/// itself from the pipeline so the raw guest stream flows to the framing
+/// handlers behind it.
+private final class VsockHandshakeHandler: ChannelInboundHandler, RemovableChannelHandler {
+    typealias InboundIn = ByteBuffer
+    typealias InboundOut = ByteBuffer
+    typealias OutboundOut = ByteBuffer
+
+    private let port: UInt32
+    private let promise: EventLoopPromise<UInt32>
+    private var buffer = ByteBuffer()
+    private var completed = false
+
+    /// The reply is one short line; cap the buffer so a misbehaving peer that
+    /// never sends a newline cannot grow it without bound.
+    private static let maxReplyBytes = 64
+
+    init(port: UInt32, promise: EventLoopPromise<UInt32>) {
+        self.port = port
+        self.promise = promise
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        var out = context.channel.allocator.buffer(capacity: 24)
+        out.writeString("CONNECT \(port)\n")
+        context.writeAndFlush(self.wrapOutboundOut(out), promise: nil)
+        // autoRead is off, so ask for the reply explicitly.
+        context.read()
+        context.fireChannelActive()
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        guard !completed else {
+            context.fireChannelRead(data)
+            return
+        }
+
+        var incoming = self.unwrapInboundIn(data)
+        buffer.writeBuffer(&incoming)
+
+        guard let newlineIndex = buffer.readableBytesView.firstIndex(of: 0x0A) else {
+            if buffer.readableBytes > Self.maxReplyBytes {
+                fail(
+                    context: context,
+                    error: FirecrackerError.connectionFailed(
+                        "vsock handshake reply exceeded \(Self.maxReplyBytes) bytes without a newline"))
+            } else {
+                context.read()  // need more before we can decide
+            }
+            return
+        }
+
+        let lineLength = newlineIndex - buffer.readableBytesView.startIndex
+        let line =
+            buffer.readString(length: lineLength)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        buffer.moveReaderIndex(forwardBy: 1)  // consume the newline
+
+        // Firecracker replies "OK <assigned_host_port>" on success and resets
+        // the socket on failure, so any non-OK line is an error.
+        guard line.hasPrefix("OK ") else {
+            fail(
+                context: context,
+                error: FirecrackerError.connectionFailed("vsock handshake rejected: \(line)"))
+            return
+        }
+        guard let hostPort = UInt32(line.dropFirst(3).trimmingCharacters(in: .whitespaces)) else {
+            fail(
+                context: context,
+                error: FirecrackerError.deserializationError(
+                    "Unparseable vsock handshake reply: \(line)"))
+            return
+        }
+
+        completed = true
+        promise.succeed(hostPort)
+
+        // Anything the guest already sent after the reply belongs downstream.
+        let leftover = buffer
+        buffer = ByteBuffer()
+        if leftover.readableBytes > 0 {
+            context.fireChannelRead(self.wrapInboundOut(leftover))
+        }
+        context.pipeline.syncOperations.removeHandler(context: context, promise: nil)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        if !completed {
+            promise.fail(
+                FirecrackerError.connectionFailed("vsock handshake closed before reply"))
+            completed = true
+        }
+        context.fireChannelInactive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        if !completed {
+            promise.fail(error)
+            completed = true
+        }
+        context.fireErrorCaught(error)
+    }
+
+    private func fail(context: ChannelHandlerContext, error: Error) {
+        completed = true
+        promise.fail(error)
+        context.close(promise: nil)
+    }
+}
+
+/// Bridges decoded inbound lines to async consumers, with demand-driven reads.
+///
+/// All state is touched only on the channel's event loop: the handler callbacks
+/// run there by definition, and ``next(on:)`` hops onto it before inspecting
+/// anything.
+private final class VsockInboundBridge: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = ByteBuffer
+
+    private struct Waiter {
+        let id: UInt64
+        let promise: EventLoopPromise<String?>
+        let timeoutTask: Scheduled<Void>?
+    }
+
+    private var pending: [String] = []
+    private var waiters: [Waiter] = []
+    private var nextWaiterID: UInt64 = 0
+    private var failure: Error?
+    private var closed = false
+    private var context: ChannelHandlerContext?
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        self.context = context
+    }
+
+    func handlerRemoved(context: ChannelHandlerContext) {
+        self.context = nil
+    }
+
+    /// The next line, `nil` once the peer has closed.
+    func next(on eventLoop: EventLoop, timeout: TimeAmount?) -> EventLoopFuture<String?> {
+        eventLoop.flatSubmit {
+            if !self.pending.isEmpty {
+                return eventLoop.makeSucceededFuture(self.pending.removeFirst())
+            }
+            if let failure = self.failure {
+                return eventLoop.makeFailedFuture(failure)
+            }
+            if self.closed {
+                return eventLoop.makeSucceededFuture(nil)
+            }
+
+            let id = self.nextWaiterID
+            self.nextWaiterID += 1
+            let promise = eventLoop.makePromise(of: String?.self)
+
+            // Time out this one read rather than tearing down the whole
+            // connection to escape a wedged guest.
+            let timeoutTask = timeout.map { budget in
+                eventLoop.scheduleTask(in: budget) {
+                    guard let index = self.waiters.firstIndex(where: { $0.id == id }) else { return }
+                    self.waiters.remove(at: index)
+                    promise.fail(
+                        FirecrackerError.timeout("Waiting for a line from the guest vsock port"))
                 }
             }
+
+            self.waiters.append(Waiter(id: id, promise: promise, timeoutTask: timeoutTask))
+            // Demand one more read now that someone is actually waiting.
+            self.context?.read()
+            return promise.futureResult
         }
     }
 
-    static func read(fd: Int32, maxLength: Int) async throws -> Data {
-        try await runBlocking {
-            var buffer = [UInt8](repeating: 0, count: maxLength)
-            while true {
-                let count = buffer.withUnsafeMutableBytes { ptr in
-                    #if os(Linux)
-                    Glibc.read(fd, ptr.baseAddress, maxLength)
-                    #else
-                    Darwin.read(fd, ptr.baseAddress, maxLength)
-                    #endif
-                }
-                if count < 0 {
-                    if errno == EINTR { continue }
-                    throw FirecrackerError.connectionFailed("vsock read failed: \(errno)")
-                }
-                return Data(buffer.prefix(count))
-            }
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let buffer = self.unwrapInboundIn(data)
+        let line = String(decoding: buffer.readableBytesView, as: UTF8.self)
+        if waiters.isEmpty {
+            pending.append(line)
+        } else {
+            let waiter = waiters.removeFirst()
+            waiter.timeoutTask?.cancel()
+            waiter.promise.succeed(line)
         }
     }
 
-    private static func runBlocking<T: Sendable>(
-        _ work: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
+    func channelReadComplete(context: ChannelHandlerContext) {
+        // Still someone waiting and nothing buffered? Keep the demand alive.
+        if !waiters.isEmpty && pending.isEmpty {
+            context.read()
         }
+        context.fireChannelReadComplete()
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        closed = true
+        let waiting = waiters
+        waiters = []
+        waiting.forEach {
+            $0.timeoutTask?.cancel()
+            $0.promise.succeed(nil)
+        }
+        context.fireChannelInactive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        failure = error
+        let waiting = waiters
+        waiters = []
+        waiting.forEach {
+            $0.timeoutTask?.cancel()
+            $0.promise.fail(error)
+        }
+        context.close(promise: nil)
     }
 }

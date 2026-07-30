@@ -1,312 +1,224 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 import Logging
+import NIOCore
+import NIOHTTP1
+import NIOPosix
 
-#if os(Linux)
-import Glibc
-#else
-import Darwin
-#endif
-
-/// HTTP client that communicates over a Unix domain socket
-/// Used to interact with the Firecracker API
+/// HTTP client that communicates over a Unix domain socket.
+/// Used to interact with the Firecracker API.
+///
+/// One channel per client, with round trips paired by a FIFO promise queue
+/// inside the pipeline. That pairing is what makes concurrent callers safe: the
+/// previous hand-rolled implementation released its actor at each `await`, so
+/// two overlapping requests could both write and then race to read the socket —
+/// delivering one caller's response to the other, or discarding a response
+/// entirely when one read pulled in both.
+///
+/// Response framing (`Content-Length`, chunked encoding, pipelined boundaries)
+/// is `NIOHTTP1`'s job now rather than hand-rolled string splitting.
 public actor UnixSocketHTTPClient {
+    /// Ceiling on a single response body. Firecracker's API returns small JSON
+    /// documents; this only exists so a bogus `Content-Length` cannot make the
+    /// client buffer without bound.
+    private static let maxResponseBytes = 8 * 1024 * 1024
+
     private let socketPath: String
     private let logger: Logger
-    private var socketFD: Int32?
+    private let group: EventLoopGroup
+    private var channel: Channel?
+    private var roundTrip: HTTPRoundTripHandler?
 
-    public init(socketPath: String, logger: Logger = Logger(label: "SwiftFirecracker.HTTPClient")) {
+    public init(
+        socketPath: String,
+        logger: Logger = Logger(label: "SwiftFirecracker.HTTPClient"),
+        group: EventLoopGroup? = nil
+    ) {
         self.socketPath = socketPath
         self.logger = logger
+        self.group = group ?? UDSChannel.defaultGroup
     }
 
     /// Connects to the Unix socket
     public func connect() async throws {
         logger.debug("Connecting to socket", metadata: ["path": "\(socketPath)"])
 
-        // Verify socket exists
         guard FileManager.default.fileExists(atPath: socketPath) else {
             throw FirecrackerError.invalidSocketPath(socketPath)
         }
 
-        // Create socket
-        #if os(Linux)
-        let sock = Glibc.socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
-        #else
-        let sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        #endif
-        guard sock >= 0 else {
-            throw FirecrackerError.connectionFailed("Failed to create socket: \(errno)")
-        }
-
-        // Connect to Unix socket
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-
-        // sun_path is a fixed-size C buffer (108 bytes on Linux, 104 on macOS).
-        // Paths that don't fit — a jailed VM's in-chroot socket under a long
-        // storage directory — are connected through a short /proc/self/fd
-        // alias instead (see UnixSocketPath).
-        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
-        let connectable: UnixSocketPath.Connectable
-        do {
-            connectable = try UnixSocketPath.connectable(path: socketPath, capacity: sunPathCapacity)
-        } catch {
-            close(sock)
-            throw error
-        }
-        defer { connectable.closeDirFD() }
-
-        connectable.path.withCString { ptr in
-            withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-                sunPath.withMemoryRebound(to: CChar.self, capacity: sunPathCapacity) { dest in
-                    // Bounded copy: strncpy never writes past `sunPathCapacity - 1`,
-                    // and `connectable` guarantees the source fits with a NUL.
-                    strncpy(dest, ptr, sunPathCapacity - 1)
-                    dest[sunPathCapacity - 1] = 0
-                }
+        let handler = HTTPRoundTripHandler()
+        // Pin to one loop so the handler's promises never hop.
+        let loop = group.next()
+        let channel = try await UDSChannel.connect(path: socketPath, group: loop) { channel in
+            do {
+                try channel.pipeline.syncOperations.addHTTPClientHandlers()
+                try channel.pipeline.syncOperations.addHandlers([
+                    NIOHTTPClientResponseAggregator(maxContentLength: Self.maxResponseBytes),
+                    handler,
+                ])
+                return channel.eventLoop.makeSucceededVoidFuture()
+            } catch {
+                return channel.eventLoop.makeFailedFuture(error)
             }
         }
 
-        let connectResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                #if os(Linux)
-                Glibc.connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-                #else
-                Darwin.connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-                #endif
-            }
-        }
-
-        guard connectResult == 0 else {
-            close(sock)
-            throw FirecrackerError.connectionFailed("Failed to connect: \(errno)")
-        }
-
-        self.socketFD = sock
+        self.channel = channel
+        self.roundTrip = handler
         logger.info("Connected to Firecracker socket", metadata: ["path": "\(socketPath)"])
     }
 
     /// Disconnects from the socket
-    public func disconnect() {
-        if let fd = socketFD {
-            close(fd)
-            socketFD = nil
+    public func disconnect() async {
+        if let channel {
+            try? await channel.close().get()
         }
+        channel = nil
+        roundTrip = nil
         logger.debug("Disconnected from socket")
     }
 
-    /// Sends an HTTP request and returns the response
+    /// Sends an HTTP request and returns the response.
+    ///
+    /// Safe to call concurrently: each round trip is queued in pipeline order,
+    /// so a response is always delivered to the caller that sent the matching
+    /// request.
     public func request(
         method: HTTPMethod,
         path: String,
         body: Data? = nil
     ) async throws -> HTTPResponse {
-        guard let fd = socketFD else {
+        guard let channel, let roundTrip, channel.isActive else {
             throw FirecrackerError.notConnected
         }
 
-        // Build HTTP request
-        var request = "\(method.rawValue) \(path) HTTP/1.1\r\n"
-        request += "Host: localhost\r\n"
-        request += "Accept: application/json\r\n"
+        var head = HTTPRequestHead(
+            version: .http1_1,
+            method: .init(rawValue: method.rawValue),
+            uri: path)
+        head.headers.add(name: "Host", value: "localhost")
+        head.headers.add(name: "Accept", value: "application/json")
 
-        if let body = body {
-            request += "Content-Type: application/json\r\n"
-            request += "Content-Length: \(body.count)\r\n"
+        var buffer: ByteBuffer?
+        if let body {
+            head.headers.add(name: "Content-Type", value: "application/json")
+            head.headers.add(name: "Content-Length", value: String(body.count))
+            var out = channel.allocator.buffer(capacity: body.count)
+            out.writeBytes(body)
+            buffer = out
         }
 
-        request += "\r\n"
+        logger.debug(
+            "Sending request",
+            metadata: [
+                "method": "\(method.rawValue)",
+                "path": "\(path)",
+                "bodySize": "\(body?.count ?? 0)",
+            ])
 
-        logger.debug("Sending request", metadata: [
-            "method": "\(method.rawValue)",
-            "path": "\(path)",
-            "bodySize": "\(body?.count ?? 0)"
-        ])
+        let response = try await roundTrip.send(
+            head: head, body: buffer, on: channel.eventLoop
+        ).get()
 
-        // Send request
-        var requestData = Data(request.utf8)
-        if let body = body {
-            requestData.append(body)
-        }
-
-        try await SocketIO.writeAll(fd: fd, data: requestData)
-
-        // Read response
-        let response = try await readHTTPResponse(fd: fd)
-
-        logger.debug("Received response", metadata: [
-            "statusCode": "\(response.statusCode)",
-            "bodySize": "\(response.body?.count ?? 0)"
-        ])
+        logger.debug(
+            "Received response",
+            metadata: [
+                "statusCode": "\(response.statusCode)",
+                "bodySize": "\(response.body?.count ?? 0)",
+            ])
 
         return response
     }
-
-    /// Reads an HTTP response from the socket
-    private func readHTTPResponse(fd: Int32) async throws -> HTTPResponse {
-        var responseData = Data()
-        var headerComplete = false
-        var contentLength = 0
-
-        // Read response in chunks
-        while true {
-            let chunk = try await SocketIO.read(fd: fd, maxLength: 4096)
-            if chunk.isEmpty {
-                break
-            }
-            responseData.append(chunk)
-
-            // Check if we've received complete headers
-            if !headerComplete {
-                if let headerEnd = responseData.range(of: Data("\r\n\r\n".utf8)) {
-                    headerComplete = true
-                    let headerData = responseData[..<headerEnd.lowerBound]
-                    if let headerString = String(data: headerData, encoding: .utf8) {
-                        contentLength = parseContentLength(from: headerString)
-                    }
-
-                    let bodyStart = headerEnd.upperBound
-                    let currentBodyLength = responseData.count - bodyStart
-                    if currentBodyLength >= contentLength {
-                        break
-                    }
-                }
-            } else {
-                // Check if we have the full body
-                if let headerEnd = responseData.range(of: Data("\r\n\r\n".utf8)) {
-                    let bodyStart = headerEnd.upperBound
-                    let currentBodyLength = responseData.count - bodyStart
-                    if currentBodyLength >= contentLength {
-                        break
-                    }
-                }
-            }
-        }
-
-        return try parseHTTPResponse(from: responseData)
-    }
-
-    /// Parses Content-Length from headers
-    private func parseContentLength(from headers: String) -> Int {
-        let lines = headers.components(separatedBy: "\r\n")
-        for line in lines {
-            if line.lowercased().hasPrefix("content-length:") {
-                let value = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
-                return Int(value) ?? 0
-            }
-        }
-        return 0
-    }
-
-    /// Parses HTTP response from raw data
-    private func parseHTTPResponse(from data: Data) throws -> HTTPResponse {
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw FirecrackerError.deserializationError("Invalid UTF-8 in response")
-        }
-
-        // Split headers and body
-        let parts = string.components(separatedBy: "\r\n\r\n")
-        guard parts.count >= 1 else {
-            throw FirecrackerError.deserializationError("Invalid HTTP response format")
-        }
-
-        let headerSection = parts[0]
-        let bodySection = parts.count > 1 ? parts.dropFirst().joined(separator: "\r\n\r\n") : nil
-
-        // Parse status line
-        let headerLines = headerSection.components(separatedBy: "\r\n")
-        guard let statusLine = headerLines.first else {
-            throw FirecrackerError.deserializationError("Missing status line")
-        }
-
-        let statusParts = statusLine.components(separatedBy: " ")
-        guard statusParts.count >= 2, let statusCode = Int(statusParts[1]) else {
-            throw FirecrackerError.deserializationError("Invalid status line: \(statusLine)")
-        }
-
-        // Parse headers
-        var headers: [String: String] = [:]
-        for line in headerLines.dropFirst() {
-            if let colonIndex = line.firstIndex(of: ":") {
-                let key = String(line[..<colonIndex]).trimmingCharacters(in: .whitespaces)
-                let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
-                headers[key.lowercased()] = value
-            }
-        }
-
-        let body = bodySection.flatMap { $0.isEmpty ? nil : Data($0.utf8) }
-
-        return HTTPResponse(statusCode: statusCode, headers: headers, body: body)
-    }
 }
 
-/// Blocking socket reads/writes moved off the Swift concurrency cooperative
-/// thread pool.
+/// Serialises request/response round trips over one channel.
 ///
-/// Raw `read(2)`/`write(2)` on a Unix socket block the calling thread until data
-/// is available or drained. Invoking them directly in an `async` method would tie
-/// up a cooperative-pool thread; instead each call is dispatched to a global queue
-/// and its result delivered through a continuation, so the awaiting task suspends
-/// rather than blocks. The socket file descriptor is a plain `Int32`, so it crosses
-/// the concurrency boundary without a `Sendable` concern.
-private enum SocketIO {
-    /// Writes the entire buffer, looping over short writes and retrying `EINTR`.
-    static func writeAll(fd: Int32, data: Data) async throws {
-        try await runBlocking {
-            try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-                guard let base = raw.baseAddress else { return }
-                var offset = 0
-                while offset < raw.count {
-                    let written = write(fd, base + offset, raw.count - offset)
-                    if written < 0 {
-                        if errno == EINTR { continue }
-                        throw FirecrackerError.connectionFailed("Socket write failed: \(errno)")
-                    }
-                    if written == 0 {
-                        throw FirecrackerError.connectionFailed("Socket write returned 0 (connection closed)")
-                    }
-                    offset += written
-                }
+/// Requests are enqueued and written in the same event-loop tick, so the queue
+/// order always matches the order the bytes hit the wire — which is what makes
+/// pairing responses back to callers correct for pipelined requests.
+///
+/// All state is touched only on the channel's event loop.
+private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = NIOHTTPClientResponseFull
+    typealias OutboundOut = HTTPClientRequestPart
+
+    private var waiters: [EventLoopPromise<HTTPResponse>] = []
+    private var context: ChannelHandlerContext?
+    private var failure: Error?
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        self.context = context
+    }
+
+    func handlerRemoved(context: ChannelHandlerContext) {
+        self.context = nil
+    }
+
+    func send(
+        head: HTTPRequestHead, body: ByteBuffer?, on eventLoop: EventLoop
+    ) -> EventLoopFuture<HTTPResponse> {
+        eventLoop.flatSubmit {
+            if let failure = self.failure {
+                return eventLoop.makeFailedFuture(failure)
             }
+            guard let context = self.context else {
+                return eventLoop.makeFailedFuture(FirecrackerError.notConnected)
+            }
+
+            let promise = eventLoop.makePromise(of: HTTPResponse.self)
+            self.waiters.append(promise)
+
+            context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            if let body {
+                context.write(self.wrapOutboundOut(.body(.byteBuffer(body))), promise: nil)
+            }
+            context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+
+            return promise.futureResult
         }
     }
 
-    /// Reads up to `maxLength` bytes; an empty result signals EOF.
-    static func read(fd: Int32, maxLength: Int) async throws -> Data {
-        try await runBlocking {
-            var buffer = [UInt8](repeating: 0, count: maxLength)
-            while true {
-                let count = buffer.withUnsafeMutableBytes { ptr in
-                    #if os(Linux)
-                    Glibc.read(fd, ptr.baseAddress, maxLength)
-                    #else
-                    Darwin.read(fd, ptr.baseAddress, maxLength)
-                    #endif
-                }
-                if count < 0 {
-                    if errno == EINTR { continue }
-                    throw FirecrackerError.connectionFailed("Socket read failed: \(errno)")
-                }
-                return Data(buffer.prefix(count))
-            }
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let full = self.unwrapInboundIn(data)
+
+        guard !waiters.isEmpty else {
+            // A response with nothing outstanding means the peer is not
+            // speaking the protocol we think it is; drop the connection rather
+            // than mis-attribute it to the next request.
+            let error = FirecrackerError.deserializationError(
+                "Received an HTTP response with no request outstanding")
+            failure = error
+            context.close(promise: nil)
+            return
         }
+
+        var headers: [String: String] = [:]
+        for header in full.head.headers {
+            headers[header.name.lowercased()] = header.value
+        }
+
+        let body = full.body.map { Data($0.readableBytesView) }
+        waiters.removeFirst().succeed(
+            HTTPResponse(
+                statusCode: Int(full.head.status.code),
+                headers: headers,
+                body: (body?.isEmpty ?? true) ? nil : body))
     }
 
-    private static func runBlocking<T: Sendable>(
-        _ work: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+    func channelInactive(context: ChannelHandlerContext) {
+        let error = failure ?? FirecrackerError.connectionFailed("Firecracker closed the API socket")
+        failure = error
+        let waiting = waiters
+        waiters = []
+        waiting.forEach { $0.fail(error) }
+        context.fireChannelInactive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        failure = error
+        let waiting = waiters
+        waiters = []
+        waiting.forEach { $0.fail(error) }
+        context.close(promise: nil)
     }
 }
 

@@ -195,8 +195,14 @@ public actor FirecrackerManager {
     /// Starts the VM
     /// All configuration (machine, boot, drives) must be set before calling this
     public func start() async throws {
-        guard vmState == .notStarted else {
-            throw FirecrackerError.vmAlreadyRunning("VM is already in state: \(vmState)")
+        if vmState != .notStarted {
+            // `vmState` is a local mirror, not the truth: a VM that crashed,
+            // rebooted, or was driven out of band leaves it stale. Confirm
+            // against the VMM before refusing.
+            await refreshState()
+            guard vmState == .notStarted else {
+                throw FirecrackerError.vmAlreadyRunning("VM is already in state: \(vmState)")
+            }
         }
 
         let action = VMAction(actionType: .instanceStart)
@@ -210,9 +216,7 @@ public actor FirecrackerManager {
 
     /// Pauses the VM
     public func pause() async throws {
-        guard vmState == .running else {
-            throw FirecrackerError.invalidState(current: vmState.rawValue, expected: InstanceState.running.rawValue)
-        }
+        try await requireState(.running)
 
         let stateChange = VMStateChange(state: .paused)
         let body = try encoder.encode(stateChange)
@@ -225,9 +229,7 @@ public actor FirecrackerManager {
 
     /// Resumes a paused VM
     public func resume() async throws {
-        guard vmState == .paused else {
-            throw FirecrackerError.invalidState(current: vmState.rawValue, expected: InstanceState.paused.rawValue)
-        }
+        try await requireState(.paused)
 
         let stateChange = VMStateChange(state: .resumed)
         let body = try encoder.encode(stateChange)
@@ -244,9 +246,7 @@ public actor FirecrackerManager {
     /// The VM must be paused; disk contents are NOT captured — copy the drive
     /// files while the VM is still paused for a consistent checkpoint.
     public func createSnapshot(_ config: SnapshotCreateConfig) async throws {
-        guard vmState == .paused else {
-            throw FirecrackerError.invalidState(current: vmState.rawValue, expected: InstanceState.paused.rawValue)
-        }
+        try await requireState(.paused)
 
         let body = try encoder.encode(config)
         let response = try await httpClient.request(method: .PUT, path: "/snapshot/create", body: body)
@@ -266,10 +266,7 @@ public actor FirecrackerManager {
     /// exist at the paths recorded in the vmstate. Leaves the VM paused unless
     /// `config.resumeVM` is true.
     public func loadSnapshot(_ config: SnapshotLoadConfig) async throws {
-        guard vmState == .notStarted else {
-            throw FirecrackerError.invalidState(
-                current: vmState.rawValue, expected: InstanceState.notStarted.rawValue)
-        }
+        try await requireState(.notStarted)
 
         let body = try encoder.encode(config)
         let response = try await httpClient.request(method: .PUT, path: "/snapshot/load", body: body)
@@ -308,6 +305,26 @@ public actor FirecrackerManager {
     }
 
     // MARK: - Helper Methods
+
+    /// Re-reads the VM's state from the VMM, refreshing the local mirror.
+    ///
+    /// Best effort: a failure here means the guard that called it falls back to
+    /// the cached value, which is no worse than not having asked.
+    private func refreshState() async {
+        _ = try? await getInstanceInfo()
+    }
+
+    /// Confirms the VM is in `expected`, re-reading from the VMM first if the
+    /// cached mirror disagrees, so a stale cache cannot produce a spurious
+    /// `invalidState`.
+    private func requireState(_ expected: InstanceState) async throws {
+        if vmState == expected { return }
+        await refreshState()
+        guard vmState == expected else {
+            throw FirecrackerError.invalidState(
+                current: vmState.rawValue, expected: expected.rawValue)
+        }
+    }
 
     /// Handles HTTP response and throws on error
     private func handleResponse(_ response: HTTPResponse) throws {

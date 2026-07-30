@@ -16,6 +16,48 @@ public actor FirecrackerClient {
 
     private var runningVMs: [String: RunningVM] = [:]
 
+    /// How a tracked PID was identified, so it can be re-verified immediately
+    /// before a signal is delivered.
+    ///
+    /// A PID discovered at spawn or adoption time is only a snapshot: if the
+    /// VMM exits and the host recycles its pid before `destroyVM` runs, a bare
+    /// `kill(pid, SIGTERM)` — and worse, the SIGKILL escalation — would land on
+    /// an unrelated process. Re-checking `/proc/<pid>/cmdline` against the
+    /// identity the pid was found by closes that window.
+    enum PIDIdentity: Sendable {
+        /// Discovered by the `--id <vmId>` argument (jailed VMs, which all
+        /// share one in-chroot socket path).
+        case vmId(String)
+        /// Discovered by the `--api-sock <path>` argument pair (unjailed VMs).
+        case socketPath(String)
+
+        /// Whether `pid` still names the process this identity was resolved
+        /// from. Returns false on any doubt — a missing or unreadable
+        /// `/proc/<pid>/cmdline` means the process is gone or not ours.
+        func matches(pid: Int32) -> Bool {
+            #if os(Linux)
+            guard let data = FileManager.default.contents(atPath: "/proc/\(pid)/cmdline") else {
+                return false
+            }
+            let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+            switch self {
+            case .vmId(let id):
+                guard let argv0 = args.first,
+                    !URL(fileURLWithPath: argv0).lastPathComponent.contains("jailer")
+                else { return false }
+                return FirecrackerClient.argvCarriesVMId(args, vmId: id)
+            case .socketPath(let path):
+                guard let i = args.firstIndex(of: "--api-sock"), i + 1 < args.count else {
+                    return false
+                }
+                return args[i + 1] == path
+            }
+            #else
+            return false
+            #endif
+        }
+    }
+
     /// Information about a running VM
     private struct RunningVM {
         /// The child process, when this client spawned it. `nil` for a VM
@@ -25,6 +67,17 @@ public actor FirecrackerClient {
         /// PID of a re-adopted Firecracker process, discovered from `/proc` at
         /// adoption time. `nil` for spawned VMs (use `process` instead).
         let adoptedPID: Int32?
+        /// How `adoptedPID` was identified, for re-verification before
+        /// signalling. `nil` when there is no adopted pid to signal.
+        let pidIdentity: PIDIdentity?
+        /// Fires when a spawned child exits, so teardown can suspend instead of
+        /// blocking a thread in `waitUntilExit()`. `nil` for adopted VMs.
+        let exitLatch: ExitLatch?
+        /// Continuous drains on the child's stdout/stderr. Retained for the
+        /// VM's lifetime: an undrained pipe wedges the VMM once its ~64KB
+        /// kernel buffer fills, and a released read end leaves it writing into
+        /// a broken pipe.
+        let drains: [OutputDrain]
         let socketPath: String
         /// The per-VM jail directory (`<chroot base>/<exec name>/<id>`) for a
         /// jailed VM (issue #425), removed on destroy. `nil` for unjailed VMs.
@@ -137,11 +190,18 @@ public actor FirecrackerClient {
             ]
         }
 
-        // Capture output for logging
+        // Capture output for logging. Both streams are drained continuously
+        // for the VM's lifetime (see `OutputDrain`) — a Firecracker logging at
+        // `Info` into a pipe nobody reads blocks in `write(2)` once the kernel
+        // buffer fills, taking the microVM down with it.
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
+
+        // Installed before `run()` so an immediate exit cannot be missed.
+        let exitLatch = ExitLatch()
+        process.terminationHandler = { _ in exitLatch.signal() }
 
         logger.info(
             "Starting Firecracker process",
@@ -158,33 +218,16 @@ public actor FirecrackerClient {
             throw FirecrackerError.processSpawnFailed(error.localizedDescription)
         }
 
+        let stdoutDrain = OutputDrain(
+            handle: outputPipe.fileHandleForReading, label: "stdout", logger: logger)
+        let stderrDrain = OutputDrain(
+            handle: errorPipe.fileHandleForReading, label: "stderr", logger: logger)
+        let drains = [stdoutDrain, stderrDrain]
+
         // With `--new-pid-ns` the jailer forks the VMM into the new namespace
         // and the parent exits 0 straight away, so a dead child handle is the
         // expected steady state rather than a spawn failure.
         let parentExitsOnSuccess = jail?.newPidNamespace == true
-
-        // Wait for socket to become available
-        do {
-            try await waitForSocket(path: socketPath, timeout: 5.0)
-        } catch {
-            // The jailer exits immediately on a setup failure (bad cgroup
-            // value, missing netns, unwritable chroot base); surface its
-            // stderr instead of an opaque socket timeout. A `--new-pid-ns`
-            // parent exiting 0 is normal, so only its *failure* status counts.
-            if !process.isRunning && !(parentExitsOnSuccess && process.terminationStatus == 0) {
-                let stderr = String(
-                    data: errorPipe.fileHandleForReading.availableData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                throw FirecrackerError.processSpawnFailed(
-                    "process exited before its API socket appeared"
-                        + ((stderr?.isEmpty ?? true) ? "" : ": \(stderr!)"))
-            }
-            throw error
-        }
-
-        // Create manager and connect
-        let manager = FirecrackerManager(socketPath: socketPath, logger: logger)
-        try await manager.connect()
 
         // Resolve which handle actually represents the VMM. Without
         // `--new-pid-ns` the jailer execs Firecracker in place, so the child
@@ -196,7 +239,44 @@ public actor FirecrackerClient {
         var trackedPID: Int32?
         if parentExitsOnSuccess {
             trackedProcess = nil
-            trackedPID = Self.discoverPID(vmId: vmId)
+        }
+
+        // Connect to the API socket, retrying until it answers. Retrying the
+        // connect *is* the readiness test: the socket file appearing does not
+        // mean Firecracker is listening yet, which is why this used to poll for
+        // the file and then sleep a flat 100ms hoping the race had settled.
+        let manager = FirecrackerManager(socketPath: socketPath, logger: logger)
+        do {
+            try await Self.connectWithRetry(manager: manager, socketPath: socketPath, timeout: .seconds(5))
+        } catch {
+            drains.forEach { $0.stop() }
+            // The jailer exits immediately on a setup failure (bad cgroup
+            // value, missing netns, unwritable chroot base); surface its
+            // stderr instead of an opaque socket timeout. A `--new-pid-ns`
+            // parent exiting 0 is normal, so only its *failure* status counts.
+            if !process.isRunning && !(parentExitsOnSuccess && process.terminationStatus == 0) {
+                // The drain is event-driven, so give it a moment to pick up
+                // what the dying child wrote before reporting.
+                try? await Task.sleep(for: .milliseconds(50))
+                let stderr = stderrDrain.recentText()
+                throw FirecrackerError.processSpawnFailed(
+                    "process exited before its API socket appeared"
+                        + (stderr.isEmpty ? "" : ": \(stderr)"))
+            }
+            // A live VMM that nothing is tracking yet would leak for the
+            // agent's lifetime, so tear it back down.
+            if let trackedProcess, trackedProcess.isRunning {
+                trackedProcess.terminate()
+            } else if parentExitsOnSuccess, let pid = await Self.offActor({ Self.discoverPID(vmId: vmId) }) {
+                Self.terminate(pid: pid)
+            }
+            throw error
+        }
+
+        // Discover the forked VMM's pid only once the API answers — before
+        // that the jailer may not have exec'd Firecracker yet.
+        if parentExitsOnSuccess {
+            trackedPID = await Self.offActor { Self.discoverPID(vmId: vmId) }
             if trackedPID == nil {
                 logger.error(
                     "Could not resolve the jailed VMM pid after spawn; the process will survive destroy",
@@ -208,6 +288,9 @@ public actor FirecrackerClient {
         runningVMs[vmId] = RunningVM(
             process: trackedProcess,
             adoptedPID: trackedPID,
+            pidIdentity: trackedPID.map { _ in .vmId(vmId) },
+            exitLatch: trackedProcess.map { _ in exitLatch },
+            drains: drains,
             socketPath: socketPath,
             jailDirectory: jail.map {
                 JailerOptions.jailDirectory(
@@ -289,11 +372,19 @@ public actor FirecrackerClient {
 
         // Learn the surviving process's PID so it can still be terminated on
         // delete despite this client never having spawned it.
-        let pid = jail != nil ? Self.discoverPID(vmId: vmId) : Self.discoverPID(socketPath: socketPath)
+        let pidIdentity: PIDIdentity = jail != nil ? .vmId(vmId) : .socketPath(socketPath)
+        let pid = await Self.offActor {
+            jail != nil ? Self.discoverPID(vmId: vmId) : Self.discoverPID(socketPath: socketPath)
+        }
 
         runningVMs[vmId] = RunningVM(
             process: nil,
             adoptedPID: pid,
+            pidIdentity: pid.map { _ in pidIdentity },
+            exitLatch: nil,
+            // An adopted VM's pipes belong to the process that spawned it,
+            // which is gone; there is nothing for this client to drain.
+            drains: [],
             socketPath: socketPath,
             jailDirectory: jail.map {
                 JailerOptions.jailDirectory(
@@ -349,27 +440,49 @@ public actor FirecrackerClient {
         if let process = vm.process {
             if process.isRunning {
                 process.terminate()
-                process.waitUntilExit()
-            }
-        } else if let pid = vm.adoptedPID {
-            Self.terminate(pid: pid)
-            for _ in 0..<50 where Self.processAlive(pid) {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            // Escalate rather than leak. A `--new-pid-ns` VMM is pid 1 of its
-            // namespace, and the kernel drops an ancestor's SIGTERM to a
-            // namespace init unless that process installed a handler — SIGKILL
-            // is always delivered, and takes the whole namespace with it.
-            if Self.processAlive(pid) {
-                logger.warning(
-                    "VMM ignored SIGTERM; escalating to SIGKILL",
-                    metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
-                Self.forceKill(pid: pid)
-                for _ in 0..<50 where Self.processAlive(pid) {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                // Suspend rather than block: `waitUntilExit()` would hold this
+                // actor — and a cooperative thread — for the whole teardown,
+                // queueing every other VM's operations behind it.
+                if let latch = vm.exitLatch {
+                    _ = await latch.wait(upTo: .seconds(5))
+                    if process.isRunning {
+                        logger.warning(
+                            "VMM ignored SIGTERM; escalating to SIGKILL",
+                            metadata: ["vm_id": "\(vmId)"])
+                        Self.forceKill(pid: process.processIdentifier)
+                        _ = await latch.wait(upTo: .seconds(5))
+                    }
                 }
             }
+        } else if let pid = vm.adoptedPID, let identity = vm.pidIdentity {
+            // Re-verify before every signal. The pid was resolved at spawn or
+            // adoption time; if the VMM has since exited and the host recycled
+            // its pid, signalling blind would kill an unrelated process — and
+            // the SIGKILL escalation below would make that unrecoverable.
+            if identity.matches(pid: pid) {
+                Self.terminate(pid: pid)
+                await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+                // Escalate rather than leak. A `--new-pid-ns` VMM is pid 1 of
+                // its namespace, and the kernel drops an ancestor's SIGTERM to
+                // a namespace init unless that process installed a handler —
+                // SIGKILL is always delivered, and takes the namespace with it.
+                if identity.matches(pid: pid) {
+                    logger.warning(
+                        "VMM ignored SIGTERM; escalating to SIGKILL",
+                        metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
+                    Self.forceKill(pid: pid)
+                    await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+                }
+            } else {
+                logger.info(
+                    "Tracked VMM pid no longer names this VM; skipping termination",
+                    metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
+            }
         }
+
+        // Stop draining only after the process is gone, so nothing it wrote on
+        // the way out can block it.
+        vm.drains.forEach { $0.stop() }
 
         // Remove socket
         if FileManager.default.fileExists(atPath: vm.socketPath) {
@@ -391,7 +504,11 @@ public actor FirecrackerClient {
         if let cgroupDirectory = vm.cgroupDirectory {
             for _ in 0..<10 {
                 if rmdir(cgroupDirectory) == 0 || errno == ENOENT { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    break  // cancelled — stop rather than spin through the retries
+                }
             }
         }
 
@@ -414,13 +531,26 @@ public actor FirecrackerClient {
         if let process = vm.process {
             return process.isRunning
         }
-        if let pid = vm.adoptedPID {
-            return Self.processAlive(pid)
+        // Identity check rather than `kill(pid, 0)`: a recycled pid would
+        // otherwise report a long-dead VM as still running.
+        if let pid = vm.adoptedPID, let identity = vm.pidIdentity {
+            return identity.matches(pid: pid)
         }
         return false
     }
 
     // MARK: - Adopted-process helpers
+
+    /// Runs a `/proc` scan off the actor.
+    ///
+    /// The scan reads every process's `cmdline`, which on a busy host is
+    /// hundreds of small blocking file reads. Performed inline it would hold
+    /// this actor — and so every other VM's operations — for its duration.
+    /// Bounded work, so parking a thread pool slot briefly is an acceptable
+    /// trade for releasing the actor.
+    private static func offActor<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await Task.detached(priority: .userInitiated) { work() }.value
+    }
 
     /// Finds the PID of the Firecracker process bound to `socketPath` by
     /// scanning `/proc` for the `--api-sock <socketPath>` argument pair the
@@ -502,37 +632,66 @@ public actor FirecrackerClient {
         #endif
     }
 
-    /// Liveness probe for a re-adopted process (`kill(pid, 0)`).
-    static func processAlive(_ pid: Int32) -> Bool {
-        #if os(Linux) || canImport(Darwin)
-        return kill(pid, 0) == 0
-        #else
-        return false
-        #endif
+    // A bare `kill(pid, 0)` liveness probe used to live here. It is deliberately
+    // gone: it reports a *recycled* pid as alive, which is the same blind spot
+    // that made signalling by remembered pid unsafe. Use
+    // `PIDIdentity.matches(pid:)`, which confirms the process is still the VMM
+    // it was resolved from.
+
+    /// Waits (bounded, cancellation-aware) for a signalled process to leave the
+    /// process table. Probes with the identity check rather than `kill(pid, 0)`
+    /// so a recycled pid reads as "exited" instead of "still alive".
+    static func waitForExit(pid: Int32, identity: PIDIdentity, timeout: Duration) async {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if !identity.matches(pid: pid) { return }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return  // cancelled — stop rather than spin
+            }
+        }
     }
 
-    /// Waits for a Unix socket to become available
-    private func waitForSocket(path: String, timeout: TimeInterval) async throws {
-        let startTime = Date()
-        let checkInterval: TimeInterval = 0.1
+    /// Connects to a freshly spawned VM's API socket, retrying with backoff
+    /// until it answers or the budget elapses.
+    private static func connectWithRetry(
+        manager: FirecrackerManager, socketPath: String, timeout: Duration
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        var delay = Duration.milliseconds(1)
+        var lastError: Error?
 
-        while Date().timeIntervalSince(startTime) < timeout {
-            if FileManager.default.fileExists(atPath: path) {
-                // Socket file exists, try to verify it's ready
-                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+        while ContinuousClock.now < deadline {
+            do {
+                try await manager.connect()
                 return
+            } catch {
+                lastError = error
+                try await Task.sleep(for: delay)
+                delay = min(delay * 2, .milliseconds(50))
             }
-            try await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))
         }
 
-        throw FirecrackerError.timeout("Waiting for socket at \(path)")
+        throw FirecrackerError.timeout(
+            "Waiting for API socket at \(socketPath)"
+                + (lastError.map { ": \($0.localizedDescription)" } ?? ""))
     }
 
     /// Cleans up all VMs (called on shutdown)
+    ///
+    /// Destroys concurrently: each teardown can spend seconds waiting for a
+    /// VMM to exit and its cgroup to empty, so doing them in series makes agent
+    /// shutdown scale with the number of VMs on the host.
     public func cleanup() async {
-        logger.info("Cleaning up all VMs", metadata: ["count": "\(runningVMs.count)"])
-        for vmId in runningVMs.keys {
-            try? await destroyVM(vmId: vmId)
+        let vmIds = Array(runningVMs.keys)
+        logger.info("Cleaning up all VMs", metadata: ["count": "\(vmIds.count)"])
+        await withTaskGroup(of: Void.self) { group in
+            for vmId in vmIds {
+                group.addTask { [weak self] in
+                    try? await self?.destroyVM(vmId: vmId)
+                }
+            }
         }
     }
 }
