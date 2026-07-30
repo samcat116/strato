@@ -23,23 +23,30 @@ struct QMPSnapshotClientTests {
     /// A `query-block` reply: a qcow2 boot disk, a qcow2 data disk, a raw
     /// read-only seed ISO, and a writable raw pflash variable store — the
     /// shape a UEFI VM with a cloud-init seed actually presents.
-    private static func queryBlockReply(snapshotTag: String? = nil, vmStateSize: Int64 = 2_147_483_648)
-        -> [UInt8]
-    {
-        let bootSnapshots =
-            snapshotTag.map {
-                #"[{"id": "1", "name": "\#($0)", "vm-state-size": \#(vmStateSize)}]"#
-            } ?? "[]"
-        let dataSnapshots =
-            snapshotTag.map { #"[{"id": "1", "name": "\#($0)", "vm-state-size": 0}]"# } ?? "[]"
+    ///
+    /// `vmStateNode` says which node carries the machine state; every other
+    /// tag-carrying node reports `vm-state-size: 0`, exactly as QEMU does. The
+    /// node order is *not* the vmstate-first order by default: `query-block`
+    /// lists backends in creation order, so a hot-plugged volume holding the
+    /// machine state is listed after the boot disk that does not.
+    private static func queryBlockReply(
+        snapshotTag: String? = nil,
+        vmStateNode: String = "#block100",
+        vmStateSize: Int64 = 2_147_483_648
+    ) -> [UInt8] {
+        func snapshots(_ node: String) -> String {
+            guard let snapshotTag else { return "[]" }
+            let size = node == vmStateNode ? vmStateSize : 0
+            return #"[{"id": "1", "name": "\#(snapshotTag)", "vm-state-size": \#(size)}]"#
+        }
         let body = """
             {"return": [
               {"device": "drive0", "inserted": {"node-name": "#block100", "drv": "qcow2",
                 "file": "/vms/vm-1/disk.qcow2", "ro": false,
-                "image": {"snapshots": \(bootSnapshots)}}},
+                "image": {"snapshots": \(snapshots("#block100"))}}},
               {"device": "drive1", "inserted": {"node-name": "#block200", "drv": "qcow2",
                 "file": "/vms/vm-1/data.qcow2", "ro": false,
-                "image": {"snapshots": \(dataSnapshots)}}},
+                "image": {"snapshots": \(snapshots("#block200"))}}},
               {"device": "drive2", "inserted": {"node-name": "#block300", "drv": "raw",
                 "file": "/vms/vm-1/seed.iso", "ro": true, "image": {"snapshots": []}}},
               {"device": "pflash1", "inserted": {"node-name": "#block400", "drv": "raw",
@@ -166,6 +173,51 @@ struct QMPSnapshotClientTests {
         // Manual-dismiss jobs linger until reaped; leaving one behind would
         // collide with the next checkpoint's job id.
         #expect(transport.executes.contains("job-dismiss"))
+    }
+
+    @Test("the size comes from the vmstate node even when QEMU lists it second")
+    func saveReadsSizeByNodeIdentity() async throws {
+        // The shape a VM with a hot-plugged volume presents: the volume's
+        // anonymous backend wins vmstate placement, but `query-block` still
+        // lists the boot disk — whose copy of the tag has `vm-state-size: 0` —
+        // first. Reading the first non-nil size would report 0, which is
+        // non-nil and would overwrite the admission estimate with "free".
+        let job = JobScript(jobId: "strato-save-abc", runningPolls: 0)
+        let tag = "strato-abc"
+        let transport = FakeQMPTransport(
+            handler: Self.handler(
+                job: job,
+                queryBlock: {
+                    Self.queryBlockReply(snapshotTag: tag, vmStateNode: "#block200")
+                }))
+
+        let size = try await Self.client(transport).saveSnapshot(
+            tag: tag, vmstateNode: "#block200", devices: ["#block100", "#block200"],
+            jobId: "strato-save-abc", pollInterval: .milliseconds(1))
+
+        #expect(size == 2_147_483_648)
+    }
+
+    @Test("a vmstate node reporting zero is unknown, not free")
+    func saveTreatsZeroSizeAsUnknown() async throws {
+        // A checkpoint always holds at least device state, so a zero is a size
+        // we failed to read. Reporting nil keeps the caller's estimate rather
+        // than charging the checkpoint nothing.
+        let job = JobScript(jobId: "strato-save-abc", runningPolls: 0)
+        let tag = "strato-abc"
+        let transport = FakeQMPTransport(
+            handler: Self.handler(
+                job: job,
+                queryBlock: {
+                    Self.queryBlockReply(
+                        snapshotTag: tag, vmStateNode: "#block100", vmStateSize: 0)
+                }))
+
+        let size = try await Self.client(transport).saveSnapshot(
+            tag: tag, vmstateNode: "#block100", devices: ["#block100"],
+            jobId: "strato-save-abc", pollInterval: .milliseconds(1))
+
+        #expect(size == nil)
     }
 
     @Test("a concluded job carrying an error fails the checkpoint")

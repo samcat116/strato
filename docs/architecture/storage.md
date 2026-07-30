@@ -258,8 +258,28 @@ checkpoint inside them, never left the host) and the restore loads into that,
 which is what makes checkpoint → stop → restart-agent → restore work with no
 extra machinery.
 
+Machine state is written to the VM's **boot disk**, not to whichever qcow2 disk
+sorts first. A hot-plugged volume's QMP backend is anonymous, so a positional
+rule picks it over the VM's own root disk — and then detaching that volume
+silently makes a `ready` checkpoint unrestorable, while a volume clone quietly
+carries a copy of the guest's RAM. Restore does not re-derive the choice: it
+finds the vmstate node by the tag, so a checkpoint stays restorable across disk
+hot-plug.
+
 Quota counts only the machine state (`VMSnapshot.size`), not the disks — those
 are already charged under the VM, and an internal snapshot does not copy them.
+
+Two operational consequences worth knowing before running this at scale:
+
+- **A checkpoint holds the VM's QMP stats monitor for the whole job** (up to
+  the 1200s agent budget). That monitor is single-client and is also where
+  balloon/guest-memory stats come from, so `memoryStats` returns nil for the
+  duration — and it swallows the failure, so the metrics gap looks like a guest
+  that stopped reporting rather than a self-inflicted hole.
+- **A checkpoint occupies the VM's one pending operation slot.** With an 1800s
+  operation budget, a large checkpoint can block start/stop/delete on that VM
+  for up to half an hour, and the only feedback is `ResourceOperation.begin`'s
+  bare `409`.
 
 ### Volume placement across agents
 

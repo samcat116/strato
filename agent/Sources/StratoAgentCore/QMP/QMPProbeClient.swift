@@ -250,8 +250,20 @@ public actor QMPProbeClient {
 
             // The size is read back on the same channel: a second connect
             // would race the next stats poll for the single-client monitor.
+            //
+            // Looked up by node identity, never by position. Every node in the
+            // checkpoint carries the tag and only `vmstateNode`'s copy has
+            // machine state attached, so scanning for the first non-nil size
+            // returns the disk-only participants' `0` whenever QEMU lists one
+            // of them first — a zero that means "wrong node", but reads
+            // downstream as a checkpoint that costs nothing.
             let nodes = try await self.readBlockNodes(channel, framer)
-            return nodes.compactMap { $0.snapshotVMStateSize(named: tag) }.first
+            let reported = nodes.first { $0.nodeName == vmstateNode }?.snapshotVMStateSize(named: tag)
+            // A checkpoint always holds at least device state, so a zero here
+            // is not a small checkpoint — it is a size we failed to read.
+            // Report it as unknown and let the caller keep its estimate, which
+            // is the direction that cannot under-charge storage quota.
+            return (reported ?? 0) > 0 ? reported : nil
         }
     }
 
@@ -337,8 +349,18 @@ public actor QMPProbeClient {
     /// A job id that is already live is *joined*, not duplicated: `snapshot-*`
     /// jobs are manual-dismiss, so a replayed request (agent reconnect, control
     /// plane retry) would otherwise either collide on the id or start a second
-    /// save against the same disks. Joining makes the whole operation
-    /// idempotent for as long as the QEMU process lives.
+    /// save against the same disks.
+    ///
+    /// That window closes once the job concludes and is dismissed — QEMU keeps
+    /// no record of it — so a replay *after* completion re-issues the command.
+    /// For a save that is not silent corruption: `qmp_snapshot_save` passes
+    /// `overwrite: false`, so an existing tag is refused with "Snapshot ...
+    /// already exists in one or more devices" and the caller sees a clean
+    /// failure against a checkpoint that is, in fact, already there. Nothing
+    /// retries automatically today, so this is reachable only by a deliberate
+    /// re-request; making it idempotent would mean treating "already exists"
+    /// as success, which is only safe because tags are per-snapshot UUIDs —
+    /// worth doing if an automatic retry ever lands, not before.
     private func runSnapshotJob<Arguments: Encodable>(
         _ channel: any QGAByteChannel, _ framer: QGAObjectFramer,
         execute: String, arguments: Arguments, jobId: String, pollInterval: Duration

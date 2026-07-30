@@ -1106,7 +1106,7 @@ actor QEMUService: HypervisorService {
             "Checkpointing QEMU VM",
             metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId), "tag": .string(tag)])
 
-        let targets = try await snapshotTargets(vmId: vmId, client: client)
+        let targets = try await captureTargets(vmId: vmId, client: client)
         let vmStateSize = try await StageBudget.run(
             seconds: StageBudget.checkpointSeconds, stage: "qmp-snapshot-save", onTimeout: .cancelAndWait
         ) {
@@ -1152,27 +1152,23 @@ actor QEMUService: HypervisorService {
             metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId), "tag": .string(tag)])
 
         // The checkpoint's disks are read through the *live* process's block
-        // layer, so the topology query doubles as the liveness check: a VM
-        // whose QEMU is gone fails here, before anything has been mutated.
-        var client = try requireProbeClient(vmId: vmId)
-        var targets: (vmstate: String, devices: [String])
+        // layer, so opening the monitor and querying it doubles as the liveness
+        // check: a VM whose QEMU is gone fails here, before anything has been
+        // mutated. Both steps are inside the `do` — a process that exited took
+        // its stats socket with it, so `requireProbeClient` failing is itself
+        // one of the dead-process signals and must not escape the respawn.
+        var client: QMPProbeClient
+        var targets: VMCheckpointTargets.Selection
         do {
+            client = try requireProbeClient(vmId: vmId)
             targets = try await tagTargets(vmId: vmId, client: client, tag: tag)
-        } catch {
-            // `notSupported` and `invalidConfiguration` are verdicts about the
-            // checkpoint itself (no stats monitor, tag absent), not a dead
-            // process — respawning would not change either answer.
-            switch error {
-            case HypervisorServiceError.notSupported, HypervisorServiceError.invalidConfiguration:
+        } catch let error where Self.indicatesDeadHypervisor(error) {
+            guard let manager = try await respawn(vmId: vmId, handle: vm, after: error) else {
                 throw error
-            default:
-                guard let manager = try await respawn(vmId: vmId, handle: vm, after: error) else {
-                    throw error
-                }
-                vm = manager
-                client = try requireProbeClient(vmId: vmId)
-                targets = try await tagTargets(vmId: vmId, client: client, tag: tag)
             }
+            vm = manager
+            client = try requireProbeClient(vmId: vmId)
+            targets = try await tagTargets(vmId: vmId, client: client, tag: tag)
         }
 
         let loadClient = client
@@ -1248,77 +1244,77 @@ actor QEMUService: HypervisorService {
         "strato-\(operation)-\(snapshotId.lowercased())"
     }
 
-    /// The nodes a *new* checkpoint writes to: `vmstate` holds the machine
-    /// state, `devices` are every disk snapshotted with it.
+    /// Whether an error means the VM's QEMU process is gone, and a restore
+    /// should respawn it rather than give up.
     ///
-    /// The UEFI variable store is deliberately excluded. It is a raw pflash
-    /// image, so it could not hold an internal snapshot in any case, but the
-    /// exclusion is a decision and not a workaround: boot order and enrolled
-    /// Secure Boot keys are firmware configuration, not guest run state, and a
-    /// checkpoint that refused to exist because of them would rule out every
-    /// UEFI VM — which is nearly all of them.
-    ///
-    /// Any *other* writable node in a format that cannot hold an internal
-    /// snapshot fails the checkpoint outright. Capturing the qcow2 disks and
-    /// silently letting a raw volume run on would produce a restore whose
-    /// memory and disks disagree, which is worse than no checkpoint at all.
-    private func snapshotTargets(
-        vmId: String, client: QMPProbeClient
-    ) async throws -> (vmstate: String, devices: [String]) {
-        let nodes = try await controlled("qmp-query-block", vmId: vmId) {
-            try await client.blockNodes()
+    /// Framed as "what proves the monitor is alive", because the cost of the
+    /// two mistakes is asymmetric: failing to respawn a dead process wastes a
+    /// restore, while respawning a live one destroys a running guest. So the
+    /// errors that positively describe a *reachable* monitor — or that are too
+    /// ambiguous to act on — keep the process, and everything else (a stats
+    /// socket that is gone, a channel at EOF, a connect refused on a stale
+    /// socket file) is taken as evidence the process exited.
+    private static func indicatesDeadHypervisor(_ error: any Error) -> Bool {
+        switch error {
+        case HypervisorServiceError.timeout:
+            // A budget overrun is not evidence of death. The stats monitor is
+            // single-client and shared with the balloon poller, so contention
+            // produces exactly this — and killing a healthy guest over a slow
+            // reply is the worse failure. Same reasoning as `bootVM`'s respawn.
+            return false
+        case is VMCheckpointTargets.SelectionError:
+            // A verdict about the checkpoint, reached by reading a monitor that
+            // answered. Respawning changes nothing.
+            return false
+        case QMPProbeClient.QMPProbeError.commandError,
+            QMPProbeClient.QMPProbeError.malformedResponse:
+            // QEMU replied, so it is alive; the reply was a rejection or was
+            // unparseable.
+            return false
+        default:
+            return true
         }
-        let nvram = Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId)
-        let candidates = nodes.filter { !$0.readonly && $0.filename != nvram }
-
-        let unsupported = candidates.filter { !$0.supportsInternalSnapshots }
-        guard unsupported.isEmpty else {
-            let described =
-                unsupported
-                .map { "\($0.filename ?? $0.nodeName) (\($0.format ?? "unknown format"))" }
-                .sorted()
-                .joined(separator: ", ")
-            throw HypervisorServiceError.notSupported(
-                "VM \(vmId) cannot be checkpointed: every writable disk must be qcow2 to hold machine state, "
-                    + "but these are not: \(described)")
-        }
-        guard !candidates.isEmpty else {
-            throw HypervisorServiceError.notSupported(
-                "VM \(vmId) cannot be checkpointed: it has no writable qcow2 disk to store machine state in")
-        }
-
-        // Deterministic vmstate placement so a checkpoint and its later
-        // restore agree even before the tag exists to look up.
-        let ordered = candidates.sorted {
-            ($0.device ?? "", $0.nodeName) < ($1.device ?? "", $1.nodeName)
-        }
-        return (vmstate: ordered[0].nodeName, devices: ordered.map(\.nodeName))
     }
 
-    /// The nodes an *existing* checkpoint lives on, found by the tag itself
-    /// rather than re-derived.
-    ///
-    /// Restore cannot reuse `snapshotTargets`' ordering: a disk hot-plugged
-    /// since the checkpoint would change which node sorts first, and loading
-    /// machine state from a node that does not carry it fails obscurely. The
-    /// tag is the authority — the vmstate node is the one whose copy of the
-    /// tag has machine state attached.
-    private func tagTargets(
-        vmId: String, client: QMPProbeClient, tag: String
-    ) async throws -> (vmstate: String, devices: [String]) {
+    /// The nodes a *new* checkpoint writes to. The rules live in
+    /// `VMCheckpointTargets.forCapture`; this supplies the two facts only the
+    /// service knows — where this VM's UEFI variable store is, and which disk is
+    /// its boot disk — and maps the pure verdict onto the hypervisor error
+    /// vocabulary.
+    private func captureTargets(
+        vmId: String, client: QMPProbeClient
+    ) async throws -> VMCheckpointTargets.Selection {
         let nodes = try await controlled("qmp-query-block", vmId: vmId) {
             try await client.blockNodes()
         }
-        let carrying = nodes.filter { $0.hasSnapshot(named: tag) }
-        guard !carrying.isEmpty else {
-            throw HypervisorServiceError.invalidConfiguration(
-                "VM \(vmId) has no checkpoint '\(tag)' on any of its disks")
+        do {
+            return try VMCheckpointTargets.forCapture(
+                nodes: nodes,
+                nvramPath: Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId),
+                // The first disk on the spawn command line is the boot disk;
+                // hot-plugged volumes are never in the stored configuration.
+                // Absent for a VM re-adopted from a previous agent incarnation,
+                // which falls back to deterministic placement.
+                bootDiskPath: vmConfigs[vmId]?.disks.first?.path)
+        } catch let error as VMCheckpointTargets.SelectionError {
+            throw HypervisorServiceError.notSupported(
+                "VM \(vmId) cannot be checkpointed: \(error.localizedDescription)")
         }
-        guard let vmstate = carrying.first(where: { ($0.snapshotVMStateSize(named: tag) ?? 0) > 0 }) else {
-            throw HypervisorServiceError.invalidConfiguration(
-                "checkpoint '\(tag)' on VM \(vmId) carries no machine state; it cannot be restored")
+    }
+
+    /// The nodes an *existing* checkpoint lives on, found by its tag. See
+    /// `VMCheckpointTargets.forTag`.
+    private func tagTargets(
+        vmId: String, client: QMPProbeClient, tag: String
+    ) async throws -> VMCheckpointTargets.Selection {
+        let nodes = try await controlled("qmp-query-block", vmId: vmId) {
+            try await client.blockNodes()
         }
-        return (vmstate: vmstate.nodeName, devices: carrying.map(\.nodeName))
+        do {
+            return try VMCheckpointTargets.forTag(nodes: nodes, tag: tag)
+        } catch let error as VMCheckpointTargets.SelectionError {
+            throw HypervisorServiceError.invalidConfiguration("VM \(vmId): \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Disk Hot-Plug Operations (Volume Support)

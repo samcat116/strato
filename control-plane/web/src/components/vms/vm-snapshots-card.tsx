@@ -23,14 +23,15 @@ import type { VM, VMSnapshot } from "@/types/api";
 
 /**
  * Machine-state size for one checkpoint. Separate from the dashboard's
- * GiB-rounding `formatBytes`: a checkpoint's state is often hundreds of MB, and
- * rounding that to "0 GiB" would read as empty.
+ * `formatBytes`, which rounds to whole GiB: a checkpoint's state is often
+ * hundreds of mebibytes, and rounding that to "0 GiB" would read as empty.
+ * Binary units, labelled as such — the divisor is 1024.
  */
 function formatStateSize(bytes: number): string {
-  const gb = bytes / 1024 ** 3;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / 1024 ** 2;
-  return `${Math.round(mb)} MB`;
+  const gib = bytes / 1024 ** 3;
+  if (gib >= 1) return `${gib.toFixed(1)} GiB`;
+  const mib = bytes / 1024 ** 2;
+  return `${Math.round(mib)} MiB`;
 }
 
 /**
@@ -46,6 +47,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [restoring, setRestoring] = useState<VMSnapshot | null>(null);
+  const [deleting, setDeleting] = useState<VMSnapshot | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // A checkpoint captures live machine state, so there has to be some: a
@@ -96,12 +98,15 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     }
   };
 
-  const deleteSnapshot = async (snapshot: VMSnapshot) => {
+  const submitDelete = async () => {
+    if (!deleting) return;
+    const snapshot = deleting;
     setBusyId(snapshot.id);
     try {
       const operation = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
       watch(operation, `${snapshot.name} delete`);
       toast.success(`Deleting “${snapshot.name}”`);
+      setDeleting(null);
     } catch (deleteError) {
       toast.error(
         deleteError instanceof Error
@@ -207,7 +212,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
                       disabled={
                         snapshot.status === "creating" || busyId === snapshot.id
                       }
-                      onClick={() => deleteSnapshot(snapshot)}
+                      onClick={() => setDeleting(snapshot)}
                       aria-label={`Delete checkpoint ${snapshot.name}`}
                     >
                       {busyId === snapshot.id ? (
@@ -271,6 +276,43 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleting != null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+      >
+        <DialogContent className="bg-card border-border text-foreground">
+          <DialogHeader>
+            <DialogTitle>Delete checkpoint</DialogTitle>
+            <DialogDescription>
+              “{deleting?.name}” is removed from the VM&apos;s disks. The
+              captured memory and device state are gone for good — this is as
+              irreversible as restoring, and there is no copy anywhere else.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleting(null)}
+              disabled={busyId != null}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={submitDelete}
+              disabled={busyId != null}
+            >
+              {busyId != null && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
