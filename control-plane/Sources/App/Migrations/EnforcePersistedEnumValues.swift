@@ -54,9 +54,10 @@ enum PersistedEnumConstraintMigrationError: Error, CustomStringConvertible, Send
 /// 1. Known values with casing drift are rewritten to the canonical raw value.
 /// 2. Any genuinely unknown existing value aborts startup with a diagnostic
 ///    naming the table, column, and value, before application code can load it.
-/// 3. Every string-backed column receives a `CHECK` constraint. The native
-///    `agent_status` enum already provides the same guarantee, so columns
-///    backed by it are skipped.
+/// 3. Every string-backed column receives a `CHECK` constraint, except those
+///    backed by the native `agent_status` enum, whose type already provides
+///    the same guarantee. `PersistedEnumConstraintTests` asserts that type
+///    still matches `AgentStatus`, since no `CHECK` guards it.
 struct EnforcePersistedEnumValues: AsyncMigration {
     static let constraints: [PersistedEnumConstraint] = [
         .init(

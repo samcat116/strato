@@ -45,6 +45,29 @@ struct PersistedEnumConstraintTests {
         #expect(actual == expected)
     }
 
+    /// `agents.status` is the one registry entry `EnforcePersistedEnumValues`
+    /// skips: its native `agent_status` type is supposed to provide the same
+    /// guarantee a `CHECK` would. Nothing else ties that hardcoded type (see
+    /// `CreateAgent`) to `AgentStatus`, so adding a case without an
+    /// `ALTER TYPE ... ADD VALUE` migration would otherwise pass every test
+    /// and then fail at insert time with `invalid input value for enum`.
+    @Test("Native agent_status type covers every AgentStatus case")
+    func nativeAgentStatusTypeMatchesModelEnum() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? any SQLDatabase)
+            let rows = try await sql.raw(
+                """
+                SELECT e.enumlabel AS value FROM pg_enum e
+                    JOIN pg_type t ON t.oid = e.enumtypid
+                WHERE t.typname = 'agent_status'
+                """
+            ).all()
+            let labels = try rows.map { try $0.decode(column: "value", as: String.self) }
+
+            #expect(Set(labels) == rawValues(AgentStatus.self))
+        }
+    }
+
     @Test("Migration normalizes casing and rejects future invalid writes")
     func normalizesThenRejectsInvalidWrites() async throws {
         try await withTestApp { app in
