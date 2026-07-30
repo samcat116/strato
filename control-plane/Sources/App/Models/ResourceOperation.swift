@@ -51,10 +51,22 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // the guest's own onlining (which the operation doesn't wait
                 // for).
                 return 120
-            case .snapshot, .snapshotDelete, .restore, .snapshotExport:
-                // Unreachable for VMs (no endpoint issues them — snapshots
-                // are a sandbox operation, issue #426) but the budget
-                // function stays total.
+            case .snapshot, .restore:
+                // Full-VM checkpoint / restore (issue #564): QEMU writes or
+                // reads the whole guest RAM through a background job, so the
+                // cost scales with the memory grant at disk speed. Sized like
+                // the sandbox checkpoint budget, and above the agent's own
+                // stage budget so the RPC verdict — not the sweep — decides
+                // the operation whenever the dispatching replica survives.
+                return 1800
+            case .snapshotDelete:
+                // Dropping a qcow2 internal snapshot rewrites metadata, not
+                // data.
+                return 120
+            case .snapshotExport:
+                // Unreachable for VMs: a checkpoint lives inside the VM's own
+                // disks, and moving one off-node is out of scope for v1
+                // (issue #564). The budget function stays total.
                 return 300
             }
         case .sandbox:

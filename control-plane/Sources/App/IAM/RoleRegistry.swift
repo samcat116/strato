@@ -65,6 +65,9 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
+    /// A full-VM checkpoint (issue #564) — RAM + device state, distinct from
+    /// the disk-only `volumeSnapshot`.
+    case vmSnapshot = "vm_snapshot"
     /// Org/folder-scoped infrastructure. Nothing binds directly to these yet —
     /// their access derives entirely from the container above — but they are
     /// real resources with `site:*` / `agent:*` actions in the registry, so
@@ -138,6 +141,11 @@ enum IAMRoleRegistry {
         ],
         .editor: [
             "vm:create", "vm:update", "vm:delete", "vm:viewConsole",
+            // Full-VM checkpoints (issue #564). Editor, matching
+            // `sandbox:snapshot`/`sandbox:restore`: taking one is cheap and
+            // non-destructive, but restoring rewinds the machine, so both sit
+            // above the operator's start/stop verbs.
+            "vm:snapshot", "vm:restore",
             "sandbox:create", "sandbox:update", "sandbox:delete",
             "sandbox:snapshot", "sandbox:restore", "sandbox:export",
             "volume:create", "volume:update", "volume:delete",

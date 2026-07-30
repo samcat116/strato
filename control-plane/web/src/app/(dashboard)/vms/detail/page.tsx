@@ -22,6 +22,7 @@ import {
   LogViewer,
   VMVolumesCard,
   VMNetworkCard,
+  VMSnapshotsCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
 
@@ -312,6 +313,9 @@ export default function VMDetailPage() {
 
           {/* Network interfaces */}
           <VMNetworkCard vm={vm} />
+
+          {/* Full-VM checkpoints (issue #564) */}
+          <VMSnapshotsCard vm={vm} />
         </TabsContent>
 
         <TabsContent value="console" className="mt-6">
