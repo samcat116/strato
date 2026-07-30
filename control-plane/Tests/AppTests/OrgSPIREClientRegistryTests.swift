@@ -15,10 +15,20 @@ import VaporTesting
 /// answer everywhere it used to be, and that a ready organization domain takes
 /// over — carrying the federation and the explicit control-plane pin an
 /// org-domain agent cannot derive for itself.
-@Suite("Org SPIRE Client Registry", .serialized)
-final class OrgSPIREClientRegistryTests {
+///
+/// The feature flags are passed to the registry as values rather than set in
+/// the process environment: `setenv` is process-global and swift-testing runs
+/// suites concurrently, so mutating it here would race
+/// `SPIRERegistrationFlowTests`, which asserts platform-domain behavior off the
+/// same two variables.
+@Suite("Org SPIRE Client Registry")
+struct OrgSPIREClientRegistryTests {
 
-    private static let platformTrustDomain = "strato.local"
+    /// Deliberately *not* the `SPIRE_TRUST_DOMAIN` default (`strato.local`).
+    /// Anything that derives the platform domain from the environment instead
+    /// of from the installed service will disagree with this and fail.
+    private static let platformTrustDomain = "platform.test"
+    private static let orgTrustDomain = "org-0123456789abcdef.platform.test"
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
@@ -48,6 +58,21 @@ final class OrgSPIREClientRegistryTests {
             api: FakeSPIREServerAPI(), config: config, logger: app.logger)
     }
 
+    private func makeRegistry(
+        on app: Application,
+        orgTrustDomainsEnabled: Bool = true,
+        legacyEnrollmentsAllowed: Bool = true
+    ) throws -> OrgSPIREClientRegistry {
+        let platform = try #require(app.spireRegistrationService)
+        return OrgSPIREClientRegistry(
+            platform: platform,
+            platformConfig: platform.registrationConfig,
+            logger: app.logger,
+            orgTrustDomainsEnabled: orgTrustDomainsEnabled,
+            legacyEnrollmentsAllowed: legacyEnrollmentsAllowed
+        )
+    }
+
     private func makeOrg(on db: Database) async throws -> UUID {
         let org = Organization(name: "TD Org", description: "org for trust domain tests")
         try await org.save(on: db)
@@ -60,7 +85,7 @@ final class OrgSPIREClientRegistryTests {
     private func makeReadyTrustDomain(
         on db: Database,
         organizationID: UUID,
-        trustDomain: String = "org-0123456789abcdef.strato.local"
+        trustDomain: String = OrgSPIREClientRegistryTests.orgTrustDomain
     ) async throws -> OrgTrustDomain {
         let row = OrgTrustDomain(organizationID: organizationID, trustDomain: trustDomain, phase: .active)
         row.nodeAddress = "spire-org.example.com:8081"
@@ -68,35 +93,6 @@ final class OrgSPIREClientRegistryTests {
         row.orgBundlePEM = Self.samplePEM
         try await row.save(on: db)
         return row
-    }
-
-    /// Runs `body` with the per-org trust domain feature flag on. The flag is
-    /// read from the environment on each access and the suite is `.serialized`,
-    /// so toggling in-process is safe.
-    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async rethrows -> T {
-        let previous = ProcessInfo.processInfo.environment["SPIRE_ORG_TRUST_DOMAINS_ENABLED"]
-        setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", 1)
-        defer {
-            if let previous {
-                setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", previous, 1)
-            } else {
-                unsetenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED")
-            }
-        }
-        return try await body()
-    }
-
-    private func withLegacyEnrollments<T>(_ allowed: Bool, _ body: () async throws -> T) async rethrows -> T {
-        let previous = ProcessInfo.processInfo.environment["SPIRE_LEGACY_ENROLLMENTS"]
-        setenv("SPIRE_LEGACY_ENROLLMENTS", allowed ? "true" : "false", 1)
-        defer {
-            if let previous {
-                setenv("SPIRE_LEGACY_ENROLLMENTS", previous, 1)
-            } else {
-                unsetenv("SPIRE_LEGACY_ENROLLMENTS")
-            }
-        }
-        return try await body()
     }
 
     // MARK: - Platform fallback
@@ -110,7 +106,7 @@ final class OrgSPIREClientRegistryTests {
             // the behavior — that is what makes the phase-2 rows ship dark.
             try await makeReadyTrustDomain(on: app.db, organizationID: org)
 
-            let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
+            let registry = try makeRegistry(on: app, orgTrustDomainsEnabled: false)
             let selection = try await registry.resolve(scope: .organization(org), on: app.db)
 
             #expect(selection.service.trustDomain == Self.platformTrustDomain)
@@ -125,15 +121,13 @@ final class OrgSPIREClientRegistryTests {
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
 
-            try await withFeatureFlagOn {
-                let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                let selection = try await registry.resolve(scope: .organization(org), on: app.db)
-                #expect(selection.service.trustDomain == Self.platformTrustDomain)
-                #expect(selection.federatesWith.isEmpty)
-                guard case .noTrustDomainClaimed = selection.platformFallback else {
-                    Issue.record("expected a no-trust-domain-claimed fallback")
-                    return
-                }
+            let registry = try makeRegistry(on: app)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            #expect(selection.service.trustDomain == Self.platformTrustDomain)
+            #expect(selection.federatesWith.isEmpty)
+            guard case .noTrustDomainClaimed = selection.platformFallback else {
+                Issue.record("expected a no-trust-domain-claimed fallback")
+                return
             }
         }
     }
@@ -144,20 +138,15 @@ final class OrgSPIREClientRegistryTests {
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
             // Claimed by org creation, not yet converged by the reconciler.
-            let row = OrgTrustDomain(
-                organizationID: org, trustDomain: "org-0123456789abcdef.strato.local")
+            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
             try await row.save(on: app.db)
 
-            try await withFeatureFlagOn {
-                try await withLegacyEnrollments(true) {
-                    let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                    let selection = try await registry.resolve(scope: .organization(org), on: app.db)
-                    #expect(selection.service.trustDomain == Self.platformTrustDomain)
-                    guard case .trustDomainNotReady = selection.platformFallback else {
-                        Issue.record("expected a trust-domain-not-ready fallback")
-                        return
-                    }
-                }
+            let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: true)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            #expect(selection.service.trustDomain == Self.platformTrustDomain)
+            guard case .trustDomainNotReady = selection.platformFallback else {
+                Issue.record("expected a trust-domain-not-ready fallback")
+                return
             }
         }
     }
@@ -167,17 +156,12 @@ final class OrgSPIREClientRegistryTests {
         try await withApp { app in
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
-            let row = OrgTrustDomain(
-                organizationID: org, trustDomain: "org-0123456789abcdef.strato.local")
+            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
             try await row.save(on: app.db)
 
-            try await withFeatureFlagOn {
-                try await withLegacyEnrollments(false) {
-                    let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                    await #expect(throws: (any Error).self) {
-                        _ = try await registry.resolve(scope: .organization(org), on: app.db)
-                    }
-                }
+            let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
+            await #expect(throws: (any Error).self) {
+                _ = try await registry.resolve(scope: .organization(org), on: app.db)
             }
         }
     }
@@ -190,19 +174,14 @@ final class OrgSPIREClientRegistryTests {
             // Provisioning got as far as `active` but the bundle never landed.
             // Minting an identity here would produce an agent the control plane
             // holds no roots for and refuses on the WebSocket.
-            let row = OrgTrustDomain(
-                organizationID: org, trustDomain: "org-0123456789abcdef.strato.local", phase: .active)
+            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain, phase: .active)
             row.nodeAddress = "spire-org.example.com:8081"
             row.serverAddress = "spire-org.example.com:8085"
             try await row.save(on: app.db)
 
-            try await withFeatureFlagOn {
-                try await withLegacyEnrollments(false) {
-                    let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                    await #expect(throws: (any Error).self) {
-                        _ = try await registry.resolve(scope: .organization(org), on: app.db)
-                    }
-                }
+            let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
+            await #expect(throws: (any Error).self) {
+                _ = try await registry.resolve(scope: .organization(org), on: app.db)
             }
         }
     }
@@ -216,21 +195,20 @@ final class OrgSPIREClientRegistryTests {
             let org = try await makeOrg(on: app.db)
             let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
 
-            try await withFeatureFlagOn {
-                let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            let registry = try makeRegistry(on: app)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
 
-                #expect(selection.platformFallback == nil)
-                #expect(selection.service.trustDomain == row.trustDomain)
-                // Without this the agent's Workload API hands it only its own
-                // domain's roots and it can never verify the control plane.
-                #expect(selection.federatesWith == [Self.platformTrustDomain])
-                // Agents dial the org's node API, not the platform server's.
-                #expect(
-                    selection.service.agentSPIFFEID(agentName: "hv-01") == "spiffe://\(row.trustDomain)/agent/hv-01")
-                // The control plane stays in the platform domain regardless.
-                #expect(selection.controlPlaneSPIFFEID == "spiffe://\(Self.platformTrustDomain)/control-plane")
-            }
+            #expect(selection.platformFallback == nil)
+            #expect(selection.service.trustDomain == row.trustDomain)
+            // Without this the agent's Workload API hands it only its own
+            // domain's roots and it can never verify the control plane.
+            #expect(selection.federatesWith == [Self.platformTrustDomain])
+            #expect(
+                selection.service.agentSPIFFEID(agentName: "hv-01") == "spiffe://\(row.trustDomain)/agent/hv-01")
+            // Both of these must come from the installed platform service, not
+            // from SPIRE_TRUST_DOMAIN — which is why the fake's domain above is
+            // deliberately not the environment default.
+            #expect(selection.controlPlaneSPIFFEID == "spiffe://\(Self.platformTrustDomain)/control-plane")
         }
     }
 
@@ -251,15 +229,12 @@ final class OrgSPIREClientRegistryTests {
             try await folder.save(on: app.db)
             let folderID = try folder.requireID()
 
-            try await withFeatureFlagOn {
-                let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                let selection = try await registry.resolve(
-                    scope: .organizationalUnit(folderID), on: app.db)
-                // A folder has no CA of its own — capacity delegated to it is
-                // still the organization's tenancy.
-                #expect(selection.service.trustDomain == row.trustDomain)
-                #expect(selection.platformFallback == nil)
-            }
+            let registry = try makeRegistry(on: app)
+            let selection = try await registry.resolve(scope: .organizationalUnit(folderID), on: app.db)
+            // A folder has no CA of its own — capacity delegated to it is
+            // still the organization's tenancy.
+            #expect(selection.service.trustDomain == row.trustDomain)
+            #expect(selection.platformFallback == nil)
         }
     }
 
@@ -272,11 +247,27 @@ final class OrgSPIREClientRegistryTests {
             let org = try await makeOrg(on: app.db)
             try await makeReadyTrustDomain(on: app.db, organizationID: org)
 
-            try await withFeatureFlagOn {
-                let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-                await #expect(throws: (any Error).self) {
-                    _ = try await registry.resolve(scope: .organization(org), on: app.db)
-                }
+            let registry = try makeRegistry(on: app)
+            await #expect(throws: (any Error).self) {
+                _ = try await registry.resolve(scope: .organization(org), on: app.db)
+            }
+        }
+    }
+
+    @Test("Enrollment still requires the node-attestation address the bootstrap command carries")
+    func enrollmentRequiresServerAddress() async throws {
+        try await withApp { app in
+            installPlatformSPIRE(on: app)
+            let org = try await makeOrg(on: app.db)
+            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            row.serverAddress = nil
+            try await row.save(on: app.db)
+
+            let registry = try makeRegistry(on: app)
+            // Handing back a bootstrap command with no address for the node to
+            // attest against would be worse than refusing.
+            await #expect(throws: (any Error).self) {
+                _ = try await registry.resolve(scope: .organization(org), on: app.db)
             }
         }
     }
@@ -290,33 +281,33 @@ final class OrgSPIREClientRegistryTests {
             let org = try await makeOrg(on: app.db)
             let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
 
-            let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
+            // Note the flags: deprovisioning must not consult them at all —
+            // entries issued while the feature was on stay revocable after it
+            // is switched off.
+            let registry = try makeRegistry(
+                on: app, orgTrustDomainsEnabled: false, legacyEnrollmentsAllowed: false)
 
-            // The platform domain resolves to the platform service...
-            let platform = try await registry.service(
-                forTrustDomain: Self.platformTrustDomain, on: app.db)
-            #expect(platform.trustDomain == Self.platformTrustDomain)
+            let platform = try await registry.service(forTrustDomain: Self.platformTrustDomain, on: app.db)
+            #expect(platform?.trustDomain == Self.platformTrustDomain)
 
-            // ...and an org domain to that org's instance, so a revocation
-            // reaches the server that actually issued the identity. Note this
-            // does not consult the feature flag: entries issued while it was on
-            // must stay revocable after it is switched off.
             let orgService = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
-            #expect(orgService.trustDomain == row.trustDomain)
+            #expect(orgService?.trustDomain == row.trustDomain)
         }
     }
 
-    @Test("Deprovisioning an unknown trust domain fails closed")
-    func deprovisionUnknownDomainFailsClosed() async throws {
+    @Test("An unknown trust domain reports no instance rather than throwing")
+    func deprovisionUnknownDomainReportsNoInstance() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
-            // Reporting success here would tell an operator a node was revoked
-            // when nothing was removed anywhere.
-            await #expect(throws: (any Error).self) {
-                _ = try await registry.service(
-                    forTrustDomain: "org-deadbeefdeadbeef.strato.local", on: app.db)
-            }
+            let registry = try makeRegistry(on: app)
+            // Distinct from "the server is unreachable": there is nothing to
+            // retry, so the caller has to decide whether to proceed rather than
+            // being handed an error that implies waiting will help. Returning
+            // nil is what lets `?skipSpireDeprovision=true` work at all — see
+            // AgentControllerDeprovisionTests.
+            let service = try await registry.service(
+                forTrustDomain: "org-deadbeefdeadbeef.platform.test", on: app.db)
+            #expect(service == nil)
         }
     }
 
@@ -329,12 +320,57 @@ final class OrgSPIREClientRegistryTests {
             row.phase = .deleting
             try await row.save(on: app.db)
 
-            let registry = try #require(OrgSPIREClientRegistry.fromApplication(app))
+            let registry = try makeRegistry(on: app)
             // Teardown is exactly when entries most need removing, so the
             // stricter `acceptsIdentities` gate must not apply here.
             let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
-            #expect(service.trustDomain == row.trustDomain)
+            #expect(service?.trustDomain == row.trustDomain)
         }
+    }
+
+    @Test("Revocation does not require the node-attestation address it never uses")
+    func revocationIgnoresServerAddress() async throws {
+        try await withApp { app in
+            installPlatformSPIRE(on: app)
+            let org = try await makeOrg(on: app.db)
+            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            // A half-provisioned or mid-teardown row: the reconciler never set,
+            // or has already cleared, the address agents dial. That address only
+            // ever feeds bootstrap commands, so demanding it here would fail
+            // revocation for exactly the rows that most need it.
+            row.serverAddress = nil
+            row.phase = .deleting
+            try await row.save(on: app.db)
+
+            let registry = try makeRegistry(on: app)
+            let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
+            #expect(service?.trustDomain == row.trustDomain)
+        }
+    }
+
+    // MARK: - Legacy-enrollment flag parsing
+
+    @Test(
+        "SPIRE_LEGACY_ENROLLMENTS disabling spellings are matched explicitly",
+        arguments: [
+            ("false", false), ("FALSE", false), (" false ", false),
+            ("0", false), ("no", false), ("off", false),
+            ("true", true), ("1", true), ("yes", true), ("banana", true),
+        ])
+    func legacyFlagParsing(raw: String, expected: Bool) {
+        // The default is "allowed", so the *disabling* spellings are the ones
+        // that must be enumerated — treating "anything that isn't true" as
+        // allowed would make `SPIRE_LEGACY_ENROLLMENTS=0` mean the opposite of
+        // what an operator writing it intends.
+        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: raw) == expected)
+    }
+
+    @Test("Legacy enrollments are allowed when the variable is unset or empty")
+    func legacyFlagDefaultsAllowed() {
+        // Switching per-org trust domains on must not brick enrollment for
+        // every organization the reconciler has yet to reach.
+        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: nil))
+        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: ""))
     }
 
     // MARK: - PEM splitting

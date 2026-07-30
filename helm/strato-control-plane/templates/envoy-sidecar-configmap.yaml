@@ -122,7 +122,16 @@ data:
                                                     # Single-quoted: YAML does no escape processing
                                                     # there, so the backslashes regexQuoteMeta emits
                                                     # reach RE2 intact.
-                                                    regex: 'spiffe://({{ regexQuoteMeta .Values.spire.trustDomain }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta .Values.spire.trustDomain }})/agent/.+'
+                                                    #
+                                                    # Lowercased to match what is actually in an SVID:
+                                                    # SPIFFE trust domain names are lowercase, and
+                                                    # OrgTrustDomain.trustDomain(forOrganization:) lowercases
+                                                    # the whole derived domain for exactly that reason. A
+                                                    # mixed-case spire.trustDomain would otherwise render an
+                                                    # org alternative that matches no SVID at all — and only
+                                                    # the /ingest/* routes would break, since the platform
+                                                    # alternative keeps working.
+                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
                             # Sandbox snapshot artifact transfer (issue #428):
                             # agents PUT exported checkpoint artifacts during an
                             # export and GET them back for cross-agent
@@ -152,7 +161,16 @@ data:
                                                     # Single-quoted: YAML does no escape processing
                                                     # there, so the backslashes regexQuoteMeta emits
                                                     # reach RE2 intact.
-                                                    regex: 'spiffe://({{ regexQuoteMeta .Values.spire.trustDomain }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta .Values.spire.trustDomain }})/agent/.+'
+                                                    #
+                                                    # Lowercased to match what is actually in an SVID:
+                                                    # SPIFFE trust domain names are lowercase, and
+                                                    # OrgTrustDomain.trustDomain(forOrganization:) lowercases
+                                                    # the whole derived domain for exactly that reason. A
+                                                    # mixed-case spire.trustDomain would otherwise render an
+                                                    # org alternative that matches no SVID at all — and only
+                                                    # the /ingest/* routes would break, since the platform
+                                                    # alternative keeps working.
+                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
                             - match:
                                 prefix: "/agent/"
                               route:

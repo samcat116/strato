@@ -866,9 +866,21 @@ write_telemetry_config
 # a fresh host the file must exist first. This is also the only place the
 # selected network mode is persisted — without it the agent defaults to OVN
 # even when installed with --network-mode user.
-# Replace `key = "..."` inside config.toml, or append it under [spiffe] when the
-# key is absent. Used for the handful of values a re-enrollment must refresh —
-# everything else in an existing config is left to the operator.
+# Replace `key = "..."` inside config.toml, or insert it directly under the
+# [spiffe] header when absent. Used for the handful of values a re-enrollment
+# must refresh — everything else in an existing config is left to the operator.
+#
+# awk rather than sed throughout: this only ever runs against a config the
+# operator may have hand-edited, and awk lets the value be passed as data
+# instead of interpolated into a sed replacement, where a `|` or `&` in the
+# value would corrupt the result. Both branches also stop after the first
+# match, so a key that appears twice is not rewritten twice.
+#
+# The value arrives through ENVIRON rather than `awk -v`, which expands
+# backslash escapes in its assignment (`a\db` would lose the `\d`). Neither a
+# trust domain nor a SPIFFE ID can contain a backslash, so this is belt and
+# braces — but it costs nothing and keeps the function honest about being a
+# verbatim writer.
 set_spiffe_key() {
   local key="$1" value="$2"
   if grep -q "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE"; then
@@ -876,14 +888,27 @@ set_spiffe_key() {
     current="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\".*/\1/p" "$CONFIG_FILE" | head -1)"
     [ "$current" != "$value" ] || return 0
     log "Updating ${key} in $CONFIG_FILE ($current -> $value)"
-    # Write through a temp file: in-place sed spelling differs GNU vs BSD.
-    sed "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = \"${value}\"|" \
-      "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    # Write through a temp file: in-place editing spelling differs GNU vs BSD.
+    SPIFFE_KEY="$key" SPIFFE_VALUE="$value" awk '
+      BEGIN { key = ENVIRON["SPIFFE_KEY"]; value = ENVIRON["SPIFFE_VALUE"] }
+      !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = \"" value "\""; done = 1; next }
+      { print }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   else
     log "Adding ${key} to $CONFIG_FILE"
-    # Append under [spiffe]; it is the last table install.sh writes, and a key
-    # placed after it belongs to it.
-    printf '%s = "%s"\n' "$key" "$value" >> "$CONFIG_FILE"
+    # Directly under the [spiffe] header rather than at EOF: this branch only
+    # runs for a config that already existed, so a table the operator added
+    # after [spiffe] would otherwise silently capture the key.
+    SPIFFE_KEY="$key" SPIFFE_VALUE="$value" awk '
+      BEGIN { key = ENVIRON["SPIFFE_KEY"]; value = ENVIRON["SPIFFE_VALUE"] }
+      { print }
+      !done && $0 ~ /^[[:space:]]*\[spiffe\][[:space:]]*$/ { print key " = \"" value "\""; done = 1 }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    # setup_spire already refuses a config with no [spiffe] section, so the
+    # insert above finds its anchor. Fall back to appending rather than
+    # silently dropping the key if that ever stops being true.
+    grep -q "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE" \
+      || printf '%s = "%s"\n' "$key" "$value" >> "$CONFIG_FILE"
   fi
 }
 

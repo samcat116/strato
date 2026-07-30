@@ -125,6 +125,33 @@ public struct SPIRERegistrationService: Sendable {
         let entryReused: Bool
         if case .alreadyExists = entryResult { entryReused = true } else { entryReused = false }
 
+        // A reused entry keeps whatever federation it was created with. SPIRE
+        // identifies an entry by (spiffeID, parentID, selectors) — `federatesWith`
+        // is *not* part of that identity — so an entry predating federation is
+        // reported as `alreadyExists` and our requested set is silently dropped.
+        // The damage lands far from here: the agent enrolls cleanly, receives an
+        // SVID carrying no platform roots, and then fails every handshake with
+        // `noRootsForTrustDomain`. Reconcile it explicitly.
+        if entryReused, !federatesWith.isEmpty {
+            do {
+                _ = try await api.updateEntries([
+                    SPIREEntryUpdate(id: entryResult.entryID, federatesWith: federatesWith)
+                ])
+            } catch {
+                // Fail the provisioning rather than hand back a bootstrap
+                // command for an identity that cannot verify the control plane.
+                logger.error(
+                    "Failed to reconcile federation on a reused SPIRE entry",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "entryID": .string(entryResult.entryID),
+                        "federatesWith": .string(federatesWith.joined(separator: ",")),
+                        "error": .string("\(error)"),
+                    ])
+                throw error
+            }
+        }
+
         logger.info(
             "Provisioned agent in SPIRE",
             metadata: [
@@ -132,6 +159,8 @@ public struct SPIRERegistrationService: Sendable {
                 "spiffeID": .string(spiffeID),
                 "entryID": .string(entryResult.entryID),
                 "entryReused": .string(entryReused ? "yes" : "no"),
+                // The set now in effect on the entry, not merely the one asked
+                // for — the reused case above is exactly when they can differ.
                 "federatesWith": .string(federatesWith.joined(separator: ",")),
             ])
 
