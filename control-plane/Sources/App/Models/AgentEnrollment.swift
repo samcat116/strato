@@ -128,7 +128,8 @@ struct AgentEnrollmentResponse: Content {
     init(
         from enrollment: AgentEnrollment,
         webSocketBaseURL: String,
-        spire: SPIREAgentProvisioning
+        spire: SPIREAgentProvisioning,
+        controlPlaneSPIFFEID: String
     ) throws {
         guard let id = enrollment.id else {
             throw Abort(.internalServerError, reason: "Agent enrollment missing ID")
@@ -145,6 +146,17 @@ struct AgentEnrollmentResponse: Content {
         // Alloy + spiffe-helper pushing to /ingest/* over mTLS). The agent name
         // is validated to SPIFFE path-segment characters before we get here, so
         // single-quoting it is safe.
+        //
+        // --spire-server-address and --trust-domain both come from the
+        // provisioning result rather than from any platform-wide setting: with
+        // per-org trust domains they name the organization's own SPIRE
+        // instance and domain (issue #615).
+        //
+        // --control-plane-spiffe-id is always passed explicitly. The agent
+        // would otherwise derive spiffe://<its own trust domain>/control-plane,
+        // which is right only while the two domains coincide — an org-domain
+        // agent must pin the control plane in the *platform* domain, and
+        // getting this wrong fails closed at every handshake (issue #552).
         self.bootstrapCommand =
             "curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh"
             + " | sudo bash -s --"
@@ -153,6 +165,7 @@ struct AgentEnrollmentResponse: Content {
             + " --spire-join-token '\(spire.joinToken)'"
             + " --spire-server-address '\(spire.serverAddress)'"
             + " --trust-domain '\(spire.trustDomain)'"
+            + " --control-plane-spiffe-id '\(controlPlaneSPIFFEID)'"
     }
 }
 

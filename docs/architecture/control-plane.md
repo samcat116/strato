@@ -282,9 +282,35 @@ becomes CA destruction.
   an organization created with the flag on and deleted with it off still records
   the intent to destroy its CA rather than orphaning the row.
 
+- **Enrollment resolves to the owning org's SPIRE instance**
+  (`Services/SPIFFE/OrgSPIREClientRegistry.swift`, issue #615).
+  `AgentController.createEnrollment` asks the registry which instance owns the
+  enrollment scope's organization; a folder-scoped enrollment resolves to its
+  root org, because a folder has no CA of its own. A ready domain (`active`
+  *and* holding a cached bundle — the same gate `SPIREService` verifies
+  against) provisions against that org's own server, with the workload entry
+  carrying `federatesWith: [platform-td]` so the node's Workload API hands the
+  agent the platform roots it needs to verify the control plane at all. The
+  bootstrap command then names the org's node-attestation address and passes
+  `--control-plane-spiffe-id` explicitly, since an org-domain agent cannot
+  derive `spiffe://<platform-td>/control-plane` from its own domain.
+  - Organizations whose domain is not ready yet fall back to the platform
+    domain while `SPIRE_LEGACY_ENROLLMENTS` is not `false` (the default), which
+    is what keeps enrollment working for every org the reconciler has yet to
+    reach. Setting it to `false` makes "no new platform-domain agents"
+    enforceable (phase 7).
+  - **Deprovisioning resolves by trust domain, not by current organization.**
+    The enrollment/agent row records the domain that was actually provisioned,
+    while an agent's org can be reassigned afterwards — resolving a revocation
+    by scope would aim at the wrong server, delete nothing, and report success.
+    It also ignores the feature flag and accepts any phase: entries issued
+    while the flag was on must stay revocable after it is switched off, and a
+    domain being torn down is exactly when its entries most need removing.
+
 Provisioning the SPIRE instances, establishing federation and caching bundles is
-the reconciler's job and has not shipped yet (issue #614); phase 2 only records
-the intent for it to converge on.
+the reconciler's job and has not shipped yet (issue #614); until it does, no row
+ever reaches `active`, so the enrollment path above always takes the platform
+fallback.
 
 ## Background work
 
