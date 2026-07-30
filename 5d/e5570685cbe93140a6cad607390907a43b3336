@@ -1,0 +1,48 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_15662ab5a21c2c::t_987db392531cd7 122-152
+  s_15662ab5a21c2c::t_b3b7978ecb3e15 485-490,492
+  s_15662ab5a21c2c::t_932bed92f1a4b6 650-653,655
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_15662ab5a21c2c::t_39daedefb5df4e 125-134,164-173
+control-plane/Tests/AppTests/SPIREFederationReconcileTests.swift
+  s_15662ab5a21c2c::t_7ae791ff8014ef 1-103
+deploy/agent/install.sh
+  s_15662ab5a21c2c::t_d952c102eedf4b 869-877,891,894-896,899-901,904-911
+  s_15662ab5a21c2c::t_78ca3424bf57f4 878-883,892-893,902-903
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_15662ab5a21c2c::t_1c04800053f6c7 128-154,162-163
+control-plane/Sources/App/Services/SPIFFE/OrgSPIREClientRegistry.swift
+  s_15662ab5a21c2c::t_32e8360efec75d 117
+  s_15662ab5a21c2c::t_b567d5bf78176d 28-42,46-47,64-69
+  s_15662ab5a21c2c::t_6526dbf6639814 82
+  s_15662ab5a21c2c::t_82793b444dfab7 150-167,174-177,179,183,189-190,207,214
+  s_15662ab5a21c2c::t_50ad05ca073f2c 191-206
+  s_15662ab5a21c2c::t_190eff0900c0a1 227-235,240,244,248-249,270,282-297,300,305
+  s_15662ab5a21c2c::t_a7646e8534eb88 70
+control-plane/Tests/AppTests/OrgSPIREClientRegistryTests.swift
+  s_15662ab5a21c2c::t_576979f3abaab1 356-358,365,368,372-373
+  s_15662ab5a21c2c::t_a596c0d1b08554 18-31,61-75,88,109,124-130,141,144-149,159,162-164,177,182-184,198-211,232-237,250-270,284-288,290-291,294,298-299,302-310,323,327-347,351-355,359-364,366-367,369-371,374
+  s_15662ab5a21c2c::t_56b828d661bdcf 375
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_15662ab5a21c2c::t_87acfa418abb48 838-841
+  s_15662ab5a21c2c::t_81b537096f4c96 878-880
+  s_15662ab5a21c2c::t_37ff3b57c9554d 337-411,414-434
+  s_15662ab5a21c2c::t_b45d456d386f95 808
+  s_15662ab5a21c2c::t_8c16de877bcb9d 412-413
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "5de5570685cbe93140a6cad607390907a43b3336",
+  "prompts": {},
+  "sessions": {
+    "s_15662ab5a21c2c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edf3df5b-c034-4d55-b2a6-0129850eb0b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
