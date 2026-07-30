@@ -905,8 +905,32 @@ spire:
     enabled: true
     image:
       repository: envoyproxy/envoy
-      tag: "v1.31.0"
+      # v1.39.0+ required: earlier releases vendor a BoringSSL without the
+      # X25519MLKEM768 group used for hybrid post-quantum key exchange in
+      # templates/envoy-sidecar-configmap.yaml.
+      tag: "v1.39.0"
       pullPolicy: IfNotPresent
+    # TLS parameters for the agent mTLS listener.
+    #
+    # ecdh_curves leads with X25519MLKEM768 so the control channel negotiates
+    # hybrid post-quantum key exchange: the ML-KEM-768 half defeats "harvest
+    # now, decrypt later" against recorded handshakes, and the classical
+    # X25519 half keeps the connection safe if ML-KEM is ever broken. Agents
+    # offer this group by default from swift-nio-ssl 2.37.1 onward.
+    #
+    # X25519MLKEM768 requires Envoy >= v1.39.0 — an older Envoy rejects the
+    # group name and the sidecar fails to start with "Failed to initialize
+    # ECDH curves", taking the listener down for every agent. If you pin
+    # image.tag below v1.39.0, drop X25519MLKEM768 from this list.
+    #
+    # Deliberately not Envoy's CNSA compliance_policies presets: those mandate
+    # ML-KEM-1024, which swift-nio-ssl does not implement.
+    tlsParams:
+      minimumProtocolVersion: TLSv1_2
+      ecdhCurves:
+        - X25519MLKEM768
+        - X25519
+        - P-256
     # Port for agent mTLS connections
     agentPort: 8443
     # Port for Envoy health checks

@@ -99,6 +99,23 @@ For more information about Strato, visit: https://github.com/samcat116/strato
      {{ .Release.Name }}-strato-credentials secret. The secret is kept on
      uninstall so a reinstall keeps matching any retained database volume.
 
+{{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+{{- if has "X25519MLKEM768" .Values.spire.envoy.tlsParams.ecdhCurves }}
+
+🔒 Post-quantum key exchange:
+   The Envoy mTLS sidecar prefers X25519MLKEM768 (hybrid ML-KEM-768) for
+   agent connections, so recorded handshakes stay confidential against a
+   future quantum attacker. Agents negotiate it automatically from
+   swift-nio-ssl 2.37.1 onward; older agents fall back to X25519 and keep
+   working.
+
+   This group requires Envoy >= v1.39.0 (configured tag: {{ .Values.spire.envoy.image.tag }}).
+   On an older Envoy the sidecar fails to start with "Failed to initialize
+   ECDH curves" and agents lose the control channel — in that case remove
+   X25519MLKEM768 from spire.envoy.tlsParams.ecdhCurves.
+{{- end }}
+{{- end }}
+
 ⚠️  SECURITY NOTICE:
    - Configure proper ingress/TLS for external access
    - Set strato.webauthn.relyingPartyOrigin to the exact URL users will visit

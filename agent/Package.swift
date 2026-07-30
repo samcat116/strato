@@ -14,7 +14,10 @@ let package = Package(
         .package(path: "../SwiftFirecracker"),
         .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
+        // 2.37.1+ leads its default TLS group list with X25519MLKEM768, so the
+        // agent's outbound mTLS negotiates hybrid post-quantum key exchange
+        // wherever the peer supports it. Do not lower this floor.
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
         // mTLS artifact downloads: URLSession cannot present a NIOSSL client
         // certificate, so image/update fetches from the control plane's SPIFFE
         // listener go through AsyncHTTPClient with the SVID-backed TLS config.
@@ -29,8 +32,11 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-        // X.509 parsing (SVID expiry, DER -> PEM conversion)
-        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
+        // X.509 parsing (SVID expiry, DER -> PEM conversion). Keep the floor in
+        // lockstep with shared/ and control-plane/: all three verify SPIFFE SVID
+        // chains, and a stale floor here silently resolved to 1.15.1 while the
+        // other two were on 1.19.x.
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
         // SwiftOVN: Linux only at build time (OVN/OVS not available on macOS), but the
         // dependency is declared unconditionally so the package graph — and therefore
         // Package.resolved — is identical on every host. Linking is gated per-target
@@ -38,7 +44,7 @@ let package = Package(
         // update` on macOS can't silently move the pin. Bump by editing this revision.
         .package(
             url: "https://github.com/samcat116/swift-ovn.git",
-            revision: "d474198c454b87b62d6af68fa15241e8d1ed9bd5"),
+            revision: "5b31b8da93c10fbd371216e77937be27e4db8ac2"),
     ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
