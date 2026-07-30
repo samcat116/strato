@@ -848,58 +848,57 @@ public struct AgentConfig: Codable {
 
     public static let fallbackConfigPath = "./config.toml"
 
-    public static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
-        // Try to load from default path first
-        do {
-            return try load(from: defaultConfigPath, logger: logger)
-        } catch {
-            logger?.warning("Failed to load config from \(defaultConfigPath): \(error)")
-        }
+    /// Paths `loadDefaultConfig` probes, in order: the platform config location
+    /// first, then a working-directory file for development.
+    public static var defaultConfigSearchPaths: [String] {
+        [defaultConfigPath, fallbackConfigPath]
+    }
 
-        // Try fallback path for development
-        do {
-            return try load(from: fallbackConfigPath, logger: logger)
-        } catch {
-            logger?.warning("Failed to load config from \(fallbackConfigPath): \(error)")
+    /// Loads the first config file that parses out of `searchPaths`, falling
+    /// back to the built-in defaults. `searchPaths` is injectable so tests can
+    /// pin the search (or skip it entirely) instead of reading whatever the
+    /// host operator installed.
+    public static func loadDefaultConfig(
+        searchPaths: [String] = defaultConfigSearchPaths,
+        logger: Logger? = nil
+    ) -> AgentConfig {
+        for path in searchPaths {
+            do {
+                return try load(from: path, logger: logger)
+            } catch {
+                logger?.warning("Failed to load config from \(path): \(error)")
+            }
         }
 
         // Return default configuration if no config file found
         logger?.info("Using default configuration")
+        return builtinDefaults
+    }
 
+    /// The compiled-in configuration used when no config file is found. Paths
+    /// delegate to the dedicated `default*` properties rather than repeating
+    /// them, so this can't drift from the fallbacks the CLI applies when a
+    /// config file leaves a key unset.
+    public static var builtinDefaults: AgentConfig {
         #if os(Linux)
-        #if arch(arm64)
-        let defaultQemuPath = "/usr/bin/qemu-system-aarch64"
+        let networkMode = NetworkMode.ovn
+        let enableHVF = false
+        let enableKVM = true
         #else
-        let defaultQemuPath = "/usr/bin/qemu-system-x86_64"
+        let networkMode = NetworkMode.user
+        let enableHVF = true
+        let enableKVM = false
         #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "/var/run/qemu",
+            qemuSocketDir: defaultQemuSocketDir,
             logLevel: "info",
-            networkMode: .ovn,
-            enableHVF: false,
-            enableKVM: true,
-            vmStoragePath: "/var/lib/strato/vms",
-            qemuBinaryPath: defaultQemuPath
+            networkMode: networkMode,
+            enableHVF: enableHVF,
+            enableKVM: enableKVM,
+            vmStoragePath: defaultVMStoragePath,
+            qemuBinaryPath: defaultQemuBinaryPath
         )
-        #else
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        #if arch(arm64)
-        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-aarch64"
-        #else
-        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-x86_64"
-        #endif
-        return AgentConfig(
-            controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "\(home)/Library/Application Support/strato/qemu-sockets",
-            logLevel: "info",
-            networkMode: .user,
-            enableHVF: true,
-            enableKVM: false,
-            vmStoragePath: "\(home)/Library/Application Support/strato/vms",
-            qemuBinaryPath: defaultQemuPath
-        )
-        #endif
     }
 
     /// Default VM storage path (platform-specific)
@@ -1029,13 +1028,20 @@ public struct AgentConfig: Codable {
         return "/var/lib/strato/sandbox/guest"
     }
 
+    /// Well-known jailer install locations probed after the Firecracker sibling.
+    public static let wellKnownSandboxJailerPaths = ["/usr/local/bin/jailer", "/usr/bin/jailer"]
+
     /// Default jailer binary path (Linux only). The jailer ships in the same
     /// release tarball as Firecracker, so look beside the resolved Firecracker
-    /// binary first, then the same well-known locations.
-    public static func defaultSandboxJailerBinaryPath(firecrackerBinaryPath: String) -> String {
+    /// binary first, then the same well-known locations. `wellKnownPaths` is
+    /// injectable so tests can probe a fixture instead of the host's installs.
+    public static func defaultSandboxJailerBinaryPath(
+        firecrackerBinaryPath: String,
+        wellKnownPaths: [String] = wellKnownSandboxJailerPaths
+    ) -> String {
         let sibling = URL(fileURLWithPath: firecrackerBinaryPath)
             .deletingLastPathComponent().appendingPathComponent("jailer").path
-        let candidates = [sibling, "/usr/local/bin/jailer", "/usr/bin/jailer"]
+        let candidates = [sibling] + wellKnownPaths
         return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? sibling
     }
 
