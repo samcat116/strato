@@ -163,7 +163,7 @@ struct AgentController: RouteCollection {
         // SPIRE server means there is no way to enroll an agent at all. Fail
         // naming the missing configuration rather than with an opaque 502 out
         // of the provisioning call below.
-        guard let spire = req.application.spireRegistrationService else {
+        guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
             throw Abort(
                 .serviceUnavailable,
                 reason:
@@ -176,6 +176,21 @@ struct AgentController: RouteCollection {
         let scope = try createRequest.organizationScope()
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
+
+        // Which SPIRE instance owns this organization's identities. With
+        // per-org trust domains (issue #615) that is the organization's own
+        // instance; otherwise — and while its domain is still being
+        // provisioned, if legacy enrollments are allowed — the platform one.
+        let selection = try await registry.resolve(scope: scope, on: req.db)
+        let spire = selection.service
+        if let fallback = selection.platformFallback {
+            req.logger.info(
+                "Enrolling into the platform trust domain",
+                metadata: [
+                    "agentName": .string(createRequest.agentName),
+                    "reason": .string(fallback.label),
+                ])
+        }
 
         // Names are unique per trust domain, not globally (issue #613): with a
         // trust domain per organization, two organizations may each enroll an
@@ -250,7 +265,8 @@ struct AgentController: RouteCollection {
         do {
             provisioning = try await spire.provisionAgent(
                 named: createRequest.agentName,
-                joinTokenTTLSeconds: Int32(expirationHours * 3600)
+                joinTokenTTLSeconds: Int32(expirationHours * 3600),
+                federatesWith: selection.federatesWith
             )
         } catch let error as SPIRERegistrationError {
             throw Abort(.badRequest, reason: error.localizedDescription)
@@ -323,7 +339,8 @@ struct AgentController: RouteCollection {
         return try AgentEnrollmentResponse(
             from: enrollment,
             webSocketBaseURL: webSocketBaseURL(req: req),
-            spire: provisioning
+            spire: provisioning,
+            controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
         )
     }
 
@@ -428,7 +445,17 @@ struct AgentController: RouteCollection {
             try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
         }
 
-        if enrollmentOwnsGrant, let spire = req.application.spireRegistrationService {
+        // Withdraw the grant from the SPIRE instance that actually issued it —
+        // the enrollment records its trust domain, which with per-org domains
+        // (issue #615) may not be the platform one. Deprovisioning against the
+        // wrong server deletes nothing and reports success, leaving the node
+        // able to keep renewing SVIDs.
+        if enrollmentOwnsGrant, let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+            // Resolved outside the catch below so "no SPIRE instance is known
+            // for this trust domain" reaches the operator as itself, rather
+            // than as a generic "retry when the server is reachable" — the
+            // remedies are different.
+            let spire = try await registry.service(forTrustDomain: enrollment.trustDomain, on: req.db)
             do {
                 try await spire.deprovisionAgent(named: enrollment.agentName)
             } catch {
@@ -583,7 +610,13 @@ struct AgentController: RouteCollection {
         // the registration API is not set up at all.
         try await requireSPIREDeprovisioningOrOverride(req, action: "agent")
 
-        if let spire = req.application.spireRegistrationService {
+        // Against the SPIRE instance that issued this agent's identity: the
+        // agent row records its trust domain, which with per-org domains
+        // (issue #615) may not be the platform one.
+        if let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+            // Resolved outside the catch below so an unknown trust domain is
+            // reported as itself rather than as an unreachable server.
+            let spire = try await registry.service(forTrustDomain: agent.trustDomain, on: req.db)
             do {
                 try await spire.deprovisionAgent(named: agent.name)
             } catch {

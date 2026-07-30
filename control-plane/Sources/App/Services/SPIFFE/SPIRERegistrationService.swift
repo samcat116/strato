@@ -42,6 +42,16 @@ public struct SPIRERegistrationService: Sendable {
     /// The trust domain SPIFFE IDs are issued under.
     public var trustDomain: String { config.trustDomain }
 
+    /// The configuration this service was built from.
+    ///
+    /// Exposed so a per-organization instance can inherit the settings that are
+    /// platform-wide rather than domain-specific — the attestation selectors,
+    /// the SVID TTL, and which Workload API socket supplies the control plane's
+    /// own SVID (`OrgSPIREClientRegistry`). Deriving those by re-reading the
+    /// environment instead would give the installed service and its org
+    /// siblings two different sources of truth.
+    public var registrationConfig: SPIRERegistrationConfig { config }
+
     /// List every workload registration entry known to the SPIRE server.
     /// Read-only; backs the Workload Identity view.
     public func listRegistrationEntries() async throws -> [SPIREEntry] {
@@ -69,9 +79,17 @@ public struct SPIRERegistrationService: Sendable {
     /// Provision a node in SPIRE: mint a join token and create the workload
     /// entry. An entry identical to an existing one is reused (idempotent
     /// re-issue after a token expired unredeemed).
-    public func provisionAgent(named agentName: String, joinTokenTTLSeconds: Int32) async throws
-        -> SPIREAgentProvisioning
-    {
+    ///
+    /// - Parameter federatesWith: Trust domains the workload entry federates
+    ///   with. For an agent in its organization's own trust domain this is the
+    ///   platform domain, and it is what makes the agent's Workload API deliver
+    ///   the platform roots alongside its SVID — without them the agent holds
+    ///   nothing that can verify the control plane (issue #615).
+    public func provisionAgent(
+        named agentName: String,
+        joinTokenTTLSeconds: Int32,
+        federatesWith: [String] = []
+    ) async throws -> SPIREAgentProvisioning {
         guard Self.isValidAgentName(agentName) else {
             throw SPIRERegistrationError.invalidAgentName(agentName)
         }
@@ -87,7 +105,9 @@ public struct SPIRERegistrationService: Sendable {
                 spiffeID: spiffeID,
                 parentID: nodeID,
                 selectors: config.agentSelectors,
-                x509SVIDTTLSeconds: Int32(config.svidTTLSeconds)
+                x509SVIDTTLSeconds: Int32(config.svidTTLSeconds),
+                federatesWith: federatesWith,
+                admin: false
             )
         } catch {
             // The minted join token cannot be revoked through the API; it is
@@ -112,6 +132,7 @@ public struct SPIRERegistrationService: Sendable {
                 "spiffeID": .string(spiffeID),
                 "entryID": .string(entryResult.entryID),
                 "entryReused": .string(entryReused ? "yes" : "no"),
+                "federatesWith": .string(federatesWith.joined(separator: ",")),
             ])
 
         return SPIREAgentProvisioning(
@@ -120,7 +141,8 @@ public struct SPIRERegistrationService: Sendable {
             spiffeID: spiffeID,
             nodeID: nodeID,
             trustDomain: config.trustDomain,
-            serverAddress: config.serverPublicAddress
+            serverAddress: config.serverPublicAddress,
+            federatesWith: federatesWith
         )
     }
 
@@ -226,6 +248,27 @@ public struct SPIREAgentProvisioning: Sendable {
     public let trustDomain: String
     /// The SPIRE server address (host:port) nodes dial for attestation.
     public let serverAddress: String
+    /// Foreign trust domains the workload entry federates with — the platform
+    /// domain when this node was provisioned in its organization's own domain.
+    public let federatesWith: [String]
+
+    public init(
+        joinToken: String,
+        joinTokenExpiresAt: Date,
+        spiffeID: String,
+        nodeID: String,
+        trustDomain: String,
+        serverAddress: String,
+        federatesWith: [String] = []
+    ) {
+        self.joinToken = joinToken
+        self.joinTokenExpiresAt = joinTokenExpiresAt
+        self.spiffeID = spiffeID
+        self.nodeID = nodeID
+        self.trustDomain = trustDomain
+        self.serverAddress = serverAddress
+        self.federatesWith = federatesWith
+    }
 }
 
 // MARK: - Configuration

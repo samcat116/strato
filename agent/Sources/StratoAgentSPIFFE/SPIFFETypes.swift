@@ -65,9 +65,26 @@ public struct X509SVID: Sendable {
     /// PEM-encoded private key
     public let privateKey: String
 
-    /// Trust bundle for validating peer certificates
-    /// PEM-encoded CA certificates
+    /// Trust bundle for validating peer certificates in this SVID's **own**
+    /// trust domain. PEM-encoded CA certificates.
     public let trustBundle: [String]
+
+    /// Roots for the foreign trust domains this SVID's registration entry
+    /// federates with, keyed by bare trust domain name (`strato.local`, not
+    /// `spiffe://strato.local`). PEM-encoded, as `trustBundle` is.
+    ///
+    /// Populated from `X509SVIDResponse.federated_bundles`. Once an agent
+    /// lives in its organization's own trust domain (issue #600) the control
+    /// plane is a *foreign* workload — its SVID is issued by the platform
+    /// domain's CA, which `trustBundle` knows nothing about — so these are the
+    /// only roots that can verify it.
+    ///
+    /// Deliberately kept separate from `trustBundle` rather than merged into
+    /// one pile: verification always selects the roots of the peer's own trust
+    /// domain (`roots(forTrustDomain:)`). A union would let any federated
+    /// domain's CA vouch for a peer in any other, which is exactly the
+    /// cross-tenant confusion per-org trust domains exist to prevent.
+    public let federatedBundles: [String: [String]]
 
     /// Certificate expiration time
     public let expiresAt: Date
@@ -80,6 +97,7 @@ public struct X509SVID: Sendable {
         certificateChain: [String],
         privateKey: String,
         trustBundle: [String],
+        federatedBundles: [String: [String]] = [:],
         expiresAt: Date,
         hint: String? = nil
     ) {
@@ -87,8 +105,23 @@ public struct X509SVID: Sendable {
         self.certificateChain = certificateChain
         self.privateKey = privateKey
         self.trustBundle = trustBundle
+        self.federatedBundles = federatedBundles
         self.expiresAt = expiresAt
         self.hint = hint
+    }
+
+    /// The PEM roots that may verify a peer in `trustDomain`: this SVID's own
+    /// bundle for its own domain, otherwise the federated bundle for that
+    /// domain.
+    ///
+    /// Returns nil when the domain is neither — the fail-closed case. A caller
+    /// that cannot name roots for its peer must refuse the connection rather
+    /// than fall back to the local bundle, which would never match a foreign
+    /// peer anyway and would only turn a configuration error into an opaque
+    /// handshake failure.
+    public func roots(forTrustDomain trustDomain: String) -> [String]? {
+        if trustDomain == spiffeID.trustDomain { return trustBundle }
+        return federatedBundles[trustDomain]
     }
 
     /// Check if the SVID is expired
@@ -300,6 +333,10 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
     /// The SVID source cannot perform this operation (a file-based source
     /// cannot mint or validate JWT-SVIDs — only a Workload API can).
     case unsupportedOperation(String)
+    /// The SVID carries no roots for a peer's trust domain: neither its own
+    /// domain nor any domain it federates with. Fail-closed counterpart of
+    /// `X509SVID.roots(forTrustDomain:)` returning nil.
+    case noRootsForTrustDomain(peerTrustDomain: String, ownTrustDomain: String, federated: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -325,6 +362,11 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
             return "JWT-SVID validation failed: \(reason)"
         case .unsupportedOperation(let reason):
             return "Unsupported SPIFFE operation: \(reason)"
+        case .noRootsForTrustDomain(let peer, let own, let federated):
+            let known = federated.isEmpty ? "none" : federated.sorted().joined(separator: ", ")
+            return
+                "No trust roots for peer trust domain '\(peer)': this SVID is issued in '\(own)' and federates with [\(known)]. "
+                + "Establish federation between the two trust domains, or correct the pinned peer identity."
         }
     }
 }

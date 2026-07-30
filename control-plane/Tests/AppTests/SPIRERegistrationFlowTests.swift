@@ -126,6 +126,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(command.contains("fake-join-token"))
                 #expect(command.contains("spire.example.com:8085"))
                 #expect(command.contains("--trust-domain 'strato.local'"))
+                // Always explicit, even in the single-trust-domain case (issue
+                // #615): the agent's own default derives the pin from *its*
+                // trust domain, which stops being the control plane's the
+                // moment per-org domains are switched on.
+                #expect(
+                    command.contains("--control-plane-spiffe-id 'spiffe://strato.local/control-plane'"))
             }
 
             // The join token lifetime matches the enrollment's expirationHours

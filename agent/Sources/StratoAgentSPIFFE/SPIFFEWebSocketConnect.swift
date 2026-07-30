@@ -33,6 +33,34 @@ public struct SPIFFEPeerPinning: Sendable {
         self.expectedSPIFFEID = expectedSPIFFEID
         self.trustRoots = try trustBundlePEM.map { try Certificate(pemEncoded: $0) }
     }
+
+    /// Pin `expectedSPIFFEID`, verified against the roots `svid` holds for
+    /// *that identity's own* trust domain.
+    ///
+    /// This is what makes the pin work across a federation boundary (issue
+    /// #600): with an agent in `org-<id>.strato.local` and a control plane in
+    /// the platform domain, the SVID's own bundle cannot verify the peer, but
+    /// its federated bundle for the platform domain can. In the single-domain
+    /// case the peer's domain *is* the SVID's, so this selects the same
+    /// `trustBundle` the bundle-only initializer above uses.
+    ///
+    /// Throws when the SVID holds no roots for the peer's domain, and when the
+    /// pinned ID is not a well-formed SPIFFE URI. Both are refusals to
+    /// connect, never a fallback to the local bundle — #552's pin is
+    /// fail-closed and stays that way.
+    public init(expectedSPIFFEID: String, svid: X509SVID) throws {
+        guard let peer = SPIFFEIdentity(uri: expectedSPIFFEID), !peer.trustDomain.isEmpty else {
+            throw SPIFFEError.invalidSPIFFEID(expectedSPIFFEID)
+        }
+        guard let rootsPEM = svid.roots(forTrustDomain: peer.trustDomain) else {
+            throw SPIFFEError.noRootsForTrustDomain(
+                peerTrustDomain: peer.trustDomain,
+                ownTrustDomain: svid.spiffeID.trustDomain,
+                federated: Array(svid.federatedBundles.keys)
+            )
+        }
+        try self.init(expectedSPIFFEID: expectedSPIFFEID, trustBundlePEM: rootsPEM)
+    }
 }
 
 // MARK: - Connector

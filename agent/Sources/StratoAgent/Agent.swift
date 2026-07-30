@@ -684,7 +684,16 @@ actor Agent {
 
         do {
             let spiffeClient = try createSPIFFEClient(config: spiffe)
-            svidManager = SVIDManager(client: spiffeClient, logger: logger)
+            // The control plane's trust domain, not necessarily our own: with
+            // per-org trust domains (issue #600) the agent is issued in
+            // `org-<id>.<platform>` while the control plane stays in the
+            // platform domain, so every peer verification has to select that
+            // domain's federated roots rather than the SVID's own bundle.
+            svidManager = SVIDManager(
+                client: spiffeClient,
+                logger: logger,
+                peerTrustDomain: SPIFFEIdentity(uri: spiffe.resolvedControlPlaneSPIFFEID)?.trustDomain
+            )
             try await svidManager?.start()
 
             // Get TLS configuration from SVID, and pin the control plane's
@@ -902,10 +911,12 @@ actor Agent {
         }
     }
 
-    /// Pinned control-plane identity built from the current SVID's trust
-    /// bundle and the configured (or trust-domain-derived) control-plane
-    /// SPIFFE ID. Rebuilt on every rotation so a rotated trust bundle is
-    /// picked up along with the SVID.
+    /// Pinned control-plane identity built from the configured (or
+    /// trust-domain-derived) control-plane SPIFFE ID and the roots the current
+    /// SVID holds for *that identity's* trust domain — the SVID's own bundle
+    /// in a single-domain deployment, its federated bundle for the platform
+    /// domain once the agent lives in its org's domain (issue #600). Rebuilt
+    /// on every rotation so rotated roots are picked up along with the SVID.
     private func makeControlPlanePinning(spiffe: SPIFFEConfig) async throws -> SPIFFEPeerPinning {
         guard let svidManager else {
             throw AgentError.spiffeConfigurationError("SVID manager not initialized")
@@ -913,7 +924,7 @@ actor Agent {
         let svid = try await svidManager.getSVID()
         return try SPIFFEPeerPinning(
             expectedSPIFFEID: spiffe.resolvedControlPlaneSPIFFEID,
-            trustBundlePEM: svid.trustBundle)
+            svid: svid)
     }
 
     /// The current SVID-backed client TLS configuration, looked up fresh so

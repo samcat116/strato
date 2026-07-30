@@ -333,9 +333,32 @@ enum WorkloadAPIConversion {
             certificateChain: certificateDERs.map { pemEncode(der: Data($0), label: "CERTIFICATE") },
             privateKey: pemEncode(der: proto.x509SvidKey, label: "PRIVATE KEY"),
             trustBundle: bundleDERs.map { pemEncode(der: Data($0), label: "CERTIFICATE") },
+            federatedBundles: try makeFederatedBundles(from: response),
             expiresAt: leaf.notValidAfter,
             hint: proto.hint.isEmpty ? nil : proto.hint
         )
+    }
+
+    /// The response's `federated_bundles` — roots for the foreign trust
+    /// domains the SVID's entry federates with — as PEM, keyed by bare trust
+    /// domain name.
+    ///
+    /// The map lives on the *response*, not on the individual SVID: SPIRE
+    /// sends the union of the federated bundles across every SVID in the
+    /// response, so it is read once here alongside the default identity.
+    ///
+    /// Keys arrive as trust domain SPIFFE IDs (`spiffe://strato.local`) and
+    /// are normalized to bare names so lookups can be keyed off a parsed
+    /// `SPIFFEIdentity.trustDomain`; a key that does not parse is kept
+    /// verbatim, matching `makeTrustBundles`.
+    static func makeFederatedBundles(from response: Workload_X509SVIDResponse) throws -> [String: [String]] {
+        var bundles: [String: [String]] = [:]
+        for (trustDomainID, der) in response.federatedBundles {
+            let trustDomain = SPIFFEIdentity(uri: trustDomainID)?.trustDomain ?? trustDomainID
+            bundles[trustDomain] = try splitConcatenatedDER(Array(der))
+                .map { pemEncode(der: Data($0), label: "CERTIFICATE") }
+        }
+        return bundles
     }
 
     /// Convert an X509BundlesResponse (bundles keyed by trust-domain SPIFFE ID)
