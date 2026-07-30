@@ -29,7 +29,32 @@ protocol QEMUVMHandle: Sendable {
     func detachDisk(deviceName: String) async throws
 }
 
-extension QEMUManager: QEMUVMHandle {}
+// Four of these methods grew extra defaulted parameters in
+// samcat116/swift-qemu#31/#37 (`Duration` timeouts, and a PCIe `bus` to attach
+// to), and a parameter the requirement does not name cannot witness the
+// requirement even when it has a default. These forwarders re-state the
+// library's own defaults, so the handle keeps the behaviour it had when the
+// signatures were argument-free: 30s to wait out an ACPI powerdown (which the
+// `qmp-shutdown` call site already budgets 60s for),
+// `QEMUProcess.defaultTerminationTimeout` before SIGKILL, and QEMU's own choice
+// of hot-plug bus.
+extension QEMUManager: QEMUVMHandle {
+    func shutdown() async throws {
+        try await shutdown(timeout: .seconds(30))
+    }
+
+    func destroy() async throws {
+        try await destroy(terminationTimeout: QEMUProcess.defaultTerminationTimeout)
+    }
+
+    func attachDisk(path: String, deviceName: String, readOnly: Bool) async throws {
+        try await attachDisk(path: path, deviceName: deviceName, readOnly: readOnly, bus: nil)
+    }
+
+    func detachDisk(deviceName: String) async throws {
+        try await detachDisk(deviceName: deviceName, timeout: .seconds(5))
+    }
+}
 
 /// A QEMU VM inherited from a previous agent incarnation, driven purely over
 /// its deterministic QMP socket. Unlike `QEMUManager` there is no `Process`

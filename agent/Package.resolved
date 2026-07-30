@@ -1,5 +1,5 @@
 {
-  "originHash" : "2b1d8745d843f155e1485767f2eb3ef1dbd966ccaf836f4ad17d39262580a53f",
+  "originHash" : "53ff6a445a1f9757223e8062b3e2c4fba4e84ecd7f3f3003f3d520684096cc1a",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -204,7 +204,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-ovn.git",
       "state" : {
-        "revision" : "591681fad2eb3b09f7f1e30d742662ceecd462c9"
+        "revision" : "e53651361eb3bd7e9a0de1f08e3ad9fd13f3341a"
       }
     },
     {
@@ -222,7 +222,7 @@
       "location" : "https://github.com/samcat116/swift-qemu",
       "state" : {
         "branch" : "main",
-        "revision" : "abcf505716f01b7959aafe74362194b419ec7289"
+        "revision" : "10a5057eb503248a58d5d7ef80a1469e971c3e40"
       }
     },
     {
@@ -244,6 +244,15 @@
       }
     },
     {
+      "identity" : "swift-subprocess",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-subprocess.git",
+      "state" : {
+        "revision" : "40243d063b41485e17501ccb9d434006bdf837a5",
+        "version" : "1.0.0-beta.1"
+      }
+    },
+    {
       "identity" : "swift-system",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-system.git",
@@ -258,7 +267,7 @@
       "location" : "https://github.com/samcat116/swift-toml.git",
       "state" : {
         "branch" : "master",
-        "revision" : "40cf79dae968d1b576a396142290a945e7a7389f"
+        "revision" : "90e754d90ea19550c45db973f1932235c239ff80"
       }
     },
     {

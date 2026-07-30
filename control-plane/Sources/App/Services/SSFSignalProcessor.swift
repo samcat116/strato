@@ -246,14 +246,11 @@ struct SSFSignalProcessor: SSFEventHandler {
         return try JSONDecoder().decode([SubjectIdentifier].self, from: data)
     }
 
-    private func decodeSubject(_ value: AnyCodable?) -> SubjectIdentifier? {
-        guard let value,
-            let data = try? JSONEncoder().encode(value),
-            let subject = try? JSONDecoder().decode(SubjectIdentifier.self, from: data)
-        else {
-            return nil
-        }
-        return subject
+    // swift-ssf#16 replaced the untyped `AnyCodable` event claims with
+    // `JSONValue`, which carries its own JSON round-trip.
+    private func decodeSubject(_ value: JSONValue?) -> SubjectIdentifier? {
+        guard let value else { return nil }
+        return try? value.decode(as: SubjectIdentifier.self)
     }
 
     // MARK: - Stream row updates

@@ -514,10 +514,13 @@ public struct AgentConfig: Codable {
         // Parse NB TLS material from the [ovn_northbound_tls] section. It only
         // makes sense with an ssl: endpoint, so any other pairing is rejected —
         // an operator who wrote cert paths must not silently get cleartext.
-        // (`table(_:)` returns an empty scoped view even for an absent section,
-        // so presence must be tested with `hasTable`.)
+        // (`table(_:)` returns nil for an absent section as of swift-toml#5, so
+        // `if let` is the presence test. It also answers non-nil for a section
+        // written as dotted keys — `ovn_northbound_tls.client_cert = "..."` —
+        // which `hasTable` misses, and those settings must not be ignored
+        // either.)
         let ovnNorthboundTLS: OVNNorthboundTLSConfig?
-        if tomlData.hasTable("ovn_northbound_tls"), let tlsTable = tomlData.table("ovn_northbound_tls") {
+        if let tlsTable = tomlData.table("ovn_northbound_tls") {
             guard let ovnNorthbound, ovnNorthbound.hasPrefix("ssl:") else {
                 throw AgentConfigError.invalidConfiguration(
                     "[ovn_northbound_tls] requires ovn_northbound to be an ssl:<host>:<port> endpoint, "
