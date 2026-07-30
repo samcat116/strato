@@ -68,6 +68,36 @@ final class WorkloadSizeValidationTests {
         #expect(quota.reservedStorage == Int64.max)
     }
 
+    @Test("A disabled quota saturates the VM and sandbox counters too, rather than trapping")
+    func disabledQuotaSaturatesWorkloadCounters() async throws {
+        let vmQuota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
+        vmQuota.reservedVCPUs = Int.max - 1
+        vmQuota.reservedMemory = Int64.max - 10
+        try vmQuota.reserveResources(vcpus: Int.max, memory: Int64.max, storage: Int64.max)
+        #expect(vmQuota.reservedVCPUs == Int.max)
+        #expect(vmQuota.reservedMemory == Int64.max)
+        #expect(vmQuota.reservedStorage == Int64.max)
+        #expect(vmQuota.vmCount == 1)
+
+        let sandboxQuota = quota(reservedStorage: 0, isEnabled: false)
+        sandboxQuota.reservedVCPUs = Int.max - 1
+        sandboxQuota.reservedMemory = Int64.max - 10
+        try sandboxQuota.reserveSandboxResources(vcpus: Int.max, memory: Int64.max)
+        #expect(sandboxQuota.reservedVCPUs == Int.max)
+        #expect(sandboxQuota.reservedMemory == Int64.max)
+        #expect(sandboxQuota.sandboxCount == 1)
+    }
+
+    @Test("A negative snapshot size floors the counter at zero rather than going negative")
+    func negativeSnapshotSizeFloorsAtZero() async throws {
+        // The export path reserves an agent-reported size, so a negative
+        // operand is not hypothetical; a negative reservation is meaningless
+        // for a counter that caches measured usage.
+        let quota = quota(reservedStorage: gb(1))
+        try quota.reserveSnapshotStorage(gb(-5))
+        #expect(quota.reservedStorage == 0)
+    }
+
     @Test("A snapshot that fits is still admitted and reserved")
     func snapshotWithinQuotaIsAdmitted() async throws {
         let quota = quota(reservedStorage: gb(10))
@@ -75,6 +105,16 @@ final class WorkloadSizeValidationTests {
         #expect(check.allowed)
         try quota.reserveSnapshotStorage(gb(5))
         #expect(quota.reservedStorage == gb(15))
+    }
+
+    @Test("A snapshot exactly filling the remaining storage is admitted")
+    func snapshotAtLimitIsAdmitted() async throws {
+        let quota = quota(reservedStorage: gb(40))
+        let remaining = quota.maxStorage - quota.reservedStorage
+        let check = quota.canAccommodateSnapshotStorage(remaining)
+        #expect(check.allowed)
+        try quota.reserveSnapshotStorage(remaining)
+        #expect(quota.reservedStorage == quota.maxStorage)
     }
 
     // MARK: - Admission through the service
@@ -109,6 +149,22 @@ final class WorkloadSizeValidationTests {
         var maxMemory: Int64? = nil
     }
 
+    struct CreateSandboxBody: Content {
+        let name: String
+        let image: String
+        let projectId: UUID?
+        let cpus: Int?
+        let memory: Int64?
+    }
+
+    /// Asserts a rejection came from the new size guard rather than from any
+    /// other 400 those routes can produce (a decode failure, a missing network,
+    /// an image problem).
+    private func expectSizeRejection(_ res: TestingHTTPResponse) {
+        #expect(res.status == .badRequest)
+        #expect(res.body.string.range(of: "must not exceed", options: .caseInsensitive) != nil)
+    }
+
     @Test(
         "POST /api/vms rejects an oversized 'memory' with 400",
         arguments: [Int64.max, WorkloadSizeLimits.maxMemoryBytes + 1]
@@ -124,7 +180,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 // Before the fix this size was committed to the row, and the
                 // snapshot path later trapped the process on it.
-                #expect(res.status == .badRequest)
+                self.expectSizeRejection(res)
             }
             let count = try await VM.query(on: app.db).count()
             #expect(count == 0)
@@ -144,7 +200,7 @@ final class WorkloadSizeValidationTests {
                         name: "too-much-disk", imageId: image.id, projectId: project.id,
                         networkName: "default", disk: disk))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                self.expectSizeRejection(res)
             }
             let count = try await VM.query(on: app.db).count()
             #expect(count == 0)
@@ -161,10 +217,43 @@ final class WorkloadSizeValidationTests {
                         name: "too-much-headroom", imageId: image.id, projectId: project.id,
                         networkName: "default", memory: self.gb(1), maxMemory: Int64.max))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                self.expectSizeRejection(res)
             }
             let count = try await VM.query(on: app.db).count()
             #expect(count == 0)
+        }
+    }
+
+    @Test("POST /api/vms accepts a workload sized exactly at every limit")
+    func vmCreateAcceptsSizesAtTheLimit() async throws {
+        try await withApp { app, project, image, token in
+            var createdVMID: UUID?
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "exactly-at-the-limit", imageId: image.id, projectId: project.id,
+                        networkName: "default", cpu: WorkloadSizeLimits.maxVCPUs,
+                        memory: WorkloadSizeLimits.maxMemoryBytes,
+                        disk: WorkloadSizeLimits.maxDiskBytes,
+                        maxMemory: WorkloadSizeLimits.maxMemoryBytes))
+            } afterResponse: { res in
+                // The bounds are inclusive: an off-by-one in any of the three
+                // comparisons, or a later tightening of a constant, fails here.
+                #expect(res.status == .accepted)
+                createdVMID = try res.content.decode(OperationResponse.self).resourceId
+            }
+
+            let vmID = try #require(createdVMID)
+            let created = try #require(await VM.find(vmID, on: app.db))
+            #expect(created.cpu == WorkloadSizeLimits.maxVCPUs)
+            #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
+            #expect(created.disk == WorkloadSizeLimits.maxDiskBytes)
+            #expect(created.maxMemory == WorkloadSizeLimits.maxMemoryBytes)
+
+            // The background create dispatch fails (no agents run in tests);
+            // let it reach a terminal state before teardown.
+            try await waitForNoPendingOperations(resourceID: vmID, on: app.db)
         }
     }
 
@@ -180,11 +269,34 @@ final class WorkloadSizeValidationTests {
                 req.body = ByteBuffer(
                     data: try JSONSerialization.data(withJSONObject: ["memory": Int64.max]))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                self.expectSizeRejection(res)
             }
 
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.memory == vm.memory)
+        }
+    }
+
+    @Test("PUT /api/vms/:id accepts a resize to exactly the memory limit")
+    func vmResizeAcceptsMemoryAtTheLimit() async throws {
+        try await withApp { app, project, _, token in
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "resize-to-limit", project: project)
+
+            try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(
+                    data: try JSONSerialization.data(
+                        withJSONObject: ["memory": WorkloadSizeLimits.maxMemoryBytes]))
+            } afterResponse: { res in
+                // A stopped VM resizes inline, so this is a 200 with the VM.
+                #expect(res.status == .ok)
+            }
+
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.memory == WorkloadSizeLimits.maxMemoryBytes)
+            #expect(refreshed?.maxMemory == WorkloadSizeLimits.maxMemoryBytes)
         }
     }
 
@@ -195,14 +307,6 @@ final class WorkloadSizeValidationTests {
         arguments: [Int64.max, WorkloadSizeLimits.maxMemoryBytes + 1]
     )
     func sandboxCreateRejectsOversizedMemory(memory: Int64) async throws {
-        struct CreateSandboxBody: Content {
-            let name: String
-            let image: String
-            let projectId: UUID?
-            let cpus: Int?
-            let memory: Int64?
-        }
-
         try await withApp { app, project, _, token in
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -211,11 +315,73 @@ final class WorkloadSizeValidationTests {
                         name: "too-much-memory", image: "ghcr.io/acme/worker:v1",
                         projectId: project.id, cpus: 1, memory: memory))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                self.expectSizeRejection(res)
             }
             let count = try await Sandbox.query(on: app.db).count()
             #expect(count == 0)
         }
+    }
+
+    @Test(
+        "POST /api/sandboxes rejects an oversized 'cpus' with 400",
+        arguments: [Int.max, WorkloadSizeLimits.maxVCPUs + 1]
+    )
+    func sandboxCreateRejectsOversizedCPUs(cpus: Int) async throws {
+        // A sandbox has no `maxCpu` to bound `cpus` transitively the way a VM's
+        // create does, so this is the only gate before the shared vCPU pool's
+        // reservation add.
+        try await withApp { app, project, _, token in
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSandboxBody(
+                        name: "too-many-cpus", image: "ghcr.io/acme/worker:v1",
+                        projectId: project.id, cpus: cpus, memory: self.gb(1)))
+            } afterResponse: { res in
+                self.expectSizeRejection(res)
+            }
+            let count = try await Sandbox.query(on: app.db).count()
+            #expect(count == 0)
+        }
+    }
+
+    @Test("POST /api/sandboxes accepts a sandbox sized exactly at both limits")
+    func sandboxCreateAcceptsSizesAtTheLimit() async throws {
+        try await withApp { app, project, _, token in
+            var createdSandboxID: UUID?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSandboxBody(
+                        name: "exactly-at-the-limit", image: "ghcr.io/acme/worker:v1",
+                        projectId: project.id, cpus: WorkloadSizeLimits.maxVCPUs,
+                        memory: WorkloadSizeLimits.maxMemoryBytes))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                createdSandboxID = try res.content.decode(OperationResponse.self).resourceId
+            }
+
+            let sandboxID = try #require(createdSandboxID)
+            let created = try #require(await Sandbox.find(sandboxID, on: app.db))
+            #expect(created.cpus == WorkloadSizeLimits.maxVCPUs)
+            #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
+
+            try await waitForNoPendingOperations(resourceID: sandboxID, on: app.db)
+        }
+    }
+
+    /// Waits for the background create dispatch to fail (no agents run in
+    /// tests), so an in-flight task can't outlive the test app.
+    private func waitForNoPendingOperations(resourceID: UUID, on db: any Database) async throws {
+        for _ in 0..<100 {
+            let pending = try await ResourceOperation.query(on: db)
+                .filter(\.$resourceID == resourceID)
+                .filter(\.$status == .pending)
+                .count()
+            if pending == 0 { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("operations for \(resourceID) never reached a terminal state")
     }
 
     // MARK: - Fixture

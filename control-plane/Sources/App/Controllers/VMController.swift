@@ -800,8 +800,9 @@ struct VMController: RouteCollection {
 
     /// Upper bound on a VM's vCPU count, and so on the hotplug slots QEMU is
     /// spawned with. Well above any host Strato schedules onto, low enough
-    /// that a mistyped ceiling can't produce an unbootable machine.
-    static let maxHotpluggableCPUs = 512
+    /// that a mistyped ceiling can't produce an unbootable machine. Shared
+    /// with the sandbox path, which bounds its `cpus` against the same figure.
+    static let maxHotpluggableCPUs = WorkloadSizeLimits.maxVCPUs
 
     /// Floor on an operator's balloon target (issue #567 phase 2). A guest
     /// squeezed below this has no realistic chance of staying up — the point
