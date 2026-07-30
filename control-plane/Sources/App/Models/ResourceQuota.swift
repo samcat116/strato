@@ -315,6 +315,24 @@ extension ResourceQuota {
         return (true, nil)
     }
 
+    /// Applies one reservation to a counter without ever trapping (issue
+    /// #826). A passing admission check rules out overflow on an *enabled*
+    /// quota, but a disabled one never blocks and still tracks the reservation,
+    /// so an unbounded operand reaches these adds with no check in front of it.
+    ///
+    /// Overflow saturates and the result floors at zero — the same floor
+    /// ``applyVMResize`` uses, and for the same reason: these counters are only
+    /// a cache of measured usage, resynced to real usage before every admission
+    /// check, so a clamped figure is meaningless-but-harmless where a trap
+    /// kills the replica.
+    private static func reserving<T: FixedWidthInteger>(_ counter: T, _ addend: T) -> T {
+        let (sum, overflowed) = counter.addingReportingOverflow(addend)
+        if overflowed {
+            return addend > 0 ? .max : 0
+        }
+        return max(sum, 0)
+    }
+
     /// Reserve resources for a VM
     func reserveResources(vcpus: Int, memory: Int64, storage: Int64) throws {
         let check = canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
@@ -322,9 +340,9 @@ extension ResourceQuota {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
 
-        reservedVCPUs += vcpus
-        reservedMemory += memory
-        reservedStorage += storage
+        reservedVCPUs = Self.reserving(reservedVCPUs, vcpus)
+        reservedMemory = Self.reserving(reservedMemory, memory)
+        reservedStorage = Self.reserving(reservedStorage, storage)
         vmCount += 1
     }
 
@@ -336,18 +354,24 @@ extension ResourceQuota {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
 
-        reservedVCPUs += vcpus
-        reservedMemory += memory
+        reservedVCPUs = Self.reserving(reservedVCPUs, vcpus)
+        reservedMemory = Self.reserving(reservedMemory, memory)
         sandboxCount += 1
     }
 
     /// Check whether `bytes` of sandbox-snapshot storage fits (issue #426).
     /// Snapshots draw from the same storage pool as VM disks.
+    ///
+    /// Like the sibling checks above, overflow is treated as "does not fit"
+    /// rather than trapping the process: `bytes` is caller-influenced (it is
+    /// seeded from the sandbox's guest memory), so a plain `+` here was a
+    /// remotely reachable crash (issue #826).
     func canAccommodateSnapshotStorage(_ bytes: Int64) -> (allowed: Bool, reason: String?) {
         if !isEnabled {
             return (true, nil)
         }
-        if reservedStorage + bytes > maxStorage {
+        let (newStorage, storageOverflowed) = reservedStorage.addingReportingOverflow(bytes)
+        if storageOverflowed || newStorage > maxStorage {
             let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
             let requestedGB = Double(bytes) / 1024 / 1024 / 1024
             return (
@@ -358,13 +382,16 @@ extension ResourceQuota {
         return (true, nil)
     }
 
-    /// Reserve sandbox-snapshot storage (issue #426).
+    /// Reserve sandbox-snapshot storage (issue #426). The add cannot trap; see
+    /// ``reserving(_:_:)``. `bytes` is not certain to be positive here — the
+    /// export path passes an agent-reported size — which is the other reason
+    /// the result floors at zero.
     func reserveSnapshotStorage(_ bytes: Int64) throws {
         let check = canAccommodateSnapshotStorage(bytes)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        reservedStorage += bytes
+        reservedStorage = Self.reserving(reservedStorage, bytes)
     }
 }
 

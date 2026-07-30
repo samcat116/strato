@@ -314,11 +314,36 @@ struct SandboxController: RouteCollection {
             ?? (createRequest.image ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let cpus = restoreSource?.cpus ?? createRequest.cpus ?? 1
         let memory = restoreSource?.memory ?? createRequest.memory ?? Int64(1024 * 1024 * 1024)
+        // Both figures are bounded above as well as below (issue #826). A
+        // sandbox has no `maxCpu`/`maxMemory` ceiling to bound it transitively
+        // the way a VM's create does, so these are the only gate between a
+        // caller-supplied size and the quota arithmetic it is summed into — and
+        // a sandbox's memory is additionally the estimate its snapshots reserve
+        // storage against. A size no host could ever satisfy is a mistake the
+        // API can catch, not a workload it should commit unplaceably.
+        //
+        // A restore or fork sizes itself from the source snapshot, so the
+        // reason names that instead of a field the caller never sent.
+        let sizedFromSnapshot = restoreSource != nil
         guard cpus > 0 else {
             throw Abort(.badRequest, reason: "'cpus' must be positive")
         }
+        guard cpus <= WorkloadSizeLimits.maxVCPUs else {
+            throw Abort(
+                .badRequest,
+                reason: sizedFromSnapshot
+                    ? "The source sandbox's vCPU count must not exceed \(WorkloadSizeLimits.maxVCPUs)"
+                    : "'cpus' must not exceed \(WorkloadSizeLimits.maxVCPUs)")
+        }
         guard memory > 0 else {
             throw Abort(.badRequest, reason: "'memory' must be positive")
+        }
+        guard memory <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: sizedFromSnapshot
+                    ? "The source sandbox's memory must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes"
+                    : "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
         }
         if let ttl = createRequest.ttlSeconds, ttl <= 0 {
             throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")

@@ -7880,24 +7880,29 @@ components:
           type: string
         cpu:
           type: integer
+          maximum: 512
         memory:
           type: integer
           format: int64
           description: Memory in bytes.
+          maximum: 70368744177664
         disk:
           type: integer
           format: int64
           description: Disk in bytes.
+          maximum: 281474976710656
         maxCpu:
           type: integer
           description: >-
             Ceiling for online vCPU growth (issue #568). Defaults to `cpu` (no
             headroom); fixed for the life of a running hypervisor process.
+          maximum: 512
         maxMemory:
           type: integer
           format: int64
           description: >-
             Ceiling for online memory growth in bytes. Defaults to `memory`.
+          maximum: 70368744177664
         cmdline:
           type: string
         networkId:
@@ -7952,11 +7957,13 @@ components:
           type: integer
           description: >-
             Target boot vCPU count. On a running VM it must not exceed `maxCpu`.
+          maximum: 512
         memory:
           type: integer
           format: int64
           description: >-
             Target memory in bytes. On a running VM it must not exceed `maxMemory`.
+          maximum: 70368744177664
     VMDetail:
       type: object
       required:
@@ -8102,10 +8109,12 @@ components:
           type: string
         cpus:
           type: integer
+          maximum: 512
         memory:
           type: integer
           format: int64
           description: Guest memory in bytes.
+          maximum: 70368744177664
         entrypoint:
           type: array
           items:
