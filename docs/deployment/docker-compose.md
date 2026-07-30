@@ -125,6 +125,20 @@ docker compose down                # stop (data persists)
 docker compose down -v             # stop and WIPE all data
 ```
 
+::: tip Upgrading past Envoy v1.39.0
+The agent mTLS listener prefers `X25519MLKEM768`, a hybrid post-quantum key
+exchange that keeps recorded handshakes confidential against a future
+quantum attacker. It requires **Envoy v1.39.0 or newer**, which
+`docker-compose.yml` pins — a `docker compose pull` picks it up.
+
+If you pinned an older Envoy in a `docker-compose.override.yml`, the proxy
+will fail to start with `Failed to initialize ECDH curves`. Either drop the
+override or remove `X25519MLKEM768` from `ecdh_curves` in
+`spiffe/envoy.yaml`. Agents need no change: swift-nio-ssl offers the group
+by default from 2.37.1 and older agents fall back to X25519, so the control
+plane and agents can be upgraded in either order.
+:::
+
 `docker compose ps` reports the control plane healthy only once
 `/health/ready` passes — that is, once Postgres and migrations are both
 good, not merely once the process started. On `down` and on `up -d` upgrades the

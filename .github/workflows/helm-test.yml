@@ -183,6 +183,35 @@ jobs:
           print("✅ SPIRE database password auto-generated and strong")
           EOF
 
+      - name: Assert the Envoy sidecar keeps hybrid post-quantum key exchange
+        run: |
+          # The Envoy config lives inside a ConfigMap string, so `helm lint` and
+          # `helm template` cannot see into it, and the kind-install job runs with
+          # SPIRE disabled — Envoy never actually starts in CI. A typo in that
+          # block therefore ships silently and the sidecar then refuses to boot
+          # with "Failed to initialize ECDH curves", taking the agent mTLS
+          # listener down for every Kubernetes deployment. Parse the embedded
+          # config as YAML and assert the group is present and preferred.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 - <<'EOF'
+          import sys, yaml
+          docs = list(yaml.safe_load_all(open('/tmp/spire-template.yaml')))
+          cms = [d for d in docs if d and d.get('kind') == 'ConfigMap' and 'envoy.yaml' in (d.get('data') or {})]
+          assert len(cms) == 1, f"expected exactly one Envoy ConfigMap, found {len(cms)}"
+          cfg = yaml.safe_load(cms[0]['data']['envoy.yaml'])
+          listeners = cfg['static_resources']['listeners']
+          tls = [
+              fc['transport_socket']['typed_config']['common_tls_context']
+              for l in listeners for fc in l['filter_chains']
+              if 'transport_socket' in fc
+          ]
+          assert len(tls) == 1, f"expected exactly one TLS-terminating filter chain, found {len(tls)}"
+          curves = tls[0]['tls_params']['ecdh_curves']
+          assert curves[0] == 'X25519MLKEM768', f"hybrid PQ group is not preferred: {curves}"
+          assert 'X25519' in curves, f"classical X25519 fallback missing: {curves}"
+          print(f"✅ Envoy sidecar prefers hybrid post-quantum key exchange: {curves}")
+          EOF
+
       - name: Template with Gateway API enabled
         run: |
           # Chart-owned Gateway + GatewayClass + all three routes (HTTPRoute and

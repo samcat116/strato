@@ -137,8 +137,13 @@ listener authenticated by their SPIFFE SVID (issue #493).
   serve programmatic access; optional **OIDC** providers federate sign-in,
   with **SCIM** provisioning for users and groups and a Shared Signals
   (SSF) receiver for revocation events.
-- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated
-  by Envoy in front of the control plane.
+- Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in
+  front of the control plane. The listener prefers **X25519MLKEM768**, a
+  hybrid post-quantum key exchange, so a recorded handshake cannot be
+  decrypted retroactively once quantum computers arrive; the classical
+  X25519 half keeps the connection safe if ML-KEM is ever broken. Agents
+  negotiate it automatically from swift-nio-ssl 2.37.1 onward, and it needs
+  Envoy >= v1.39.0.
 
 ### Authorization (built-in Cedar IAM)
 
