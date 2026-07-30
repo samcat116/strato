@@ -15,7 +15,6 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        .package(url: "https://github.com/apple/swift-nio-extras.git", from: "1.20.0"),
     ],
     targets: [
         .target(
@@ -25,7 +24,6 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "NIOExtras", package: "swift-nio-extras"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

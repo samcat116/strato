@@ -219,10 +219,12 @@ public actor FirecrackerClient {
         }
 
         let stdoutDrain = OutputDrain(
-            handle: outputPipe.fileHandleForReading, label: "stdout", logger: logger)
+            fileDescriptor: outputPipe.fileHandleForReading.fileDescriptor,
+            label: "stdout", logger: logger)
         let stderrDrain = OutputDrain(
-            handle: errorPipe.fileHandleForReading, label: "stderr", logger: logger)
-        let drains = [stdoutDrain, stderrDrain]
+            fileDescriptor: errorPipe.fileHandleForReading.fileDescriptor,
+            label: "stderr", logger: logger)
+        let drains = [stdoutDrain, stderrDrain].compactMap { $0 }
 
         // With `--new-pid-ns` the jailer forks the VMM into the new namespace
         // and the parent exits 0 straight away, so a dead child handle is the
@@ -249,7 +251,13 @@ public actor FirecrackerClient {
         do {
             try await Self.connectWithRetry(manager: manager, socketPath: socketPath, timeout: .seconds(5))
         } catch {
-            drains.forEach { $0.stop() }
+            // Draining must outlive everything below: the 50ms settle only
+            // collects output if the source is still live, and a still-running
+            // VMM signalled below would otherwise be writing into an undrained
+            // pipe — the wedge `OutputDrain` exists to prevent. Stopped once at
+            // the end, on every path out.
+            defer { drains.forEach { $0.stop() } }
+
             // The jailer exits immediately on a setup failure (bad cgroup
             // value, missing netns, unwritable chroot base); surface its
             // stderr instead of an opaque socket timeout. A `--new-pid-ns`
@@ -258,7 +266,7 @@ public actor FirecrackerClient {
                 // The drain is event-driven, so give it a moment to pick up
                 // what the dying child wrote before reporting.
                 try? await Task.sleep(for: .milliseconds(50))
-                let stderr = stderrDrain.recentText()
+                let stderr = stderrDrain?.recentText() ?? ""
                 throw FirecrackerError.processSpawnFailed(
                     "process exited before its API socket appeared"
                         + (stderr.isEmpty ? "" : ": \(stderr)"))
@@ -267,8 +275,13 @@ public actor FirecrackerClient {
             // agent's lifetime, so tear it back down.
             if let trackedProcess, trackedProcess.isRunning {
                 trackedProcess.terminate()
+                await exitLatch.wait(upTo: .seconds(5))
             } else if parentExitsOnSuccess, let pid = await Self.offActor({ Self.discoverPID(vmId: vmId) }) {
-                Self.terminate(pid: pid)
+                let identity = PIDIdentity.vmId(vmId)
+                if identity.matches(pid: pid) {
+                    Self.terminate(pid: pid)
+                    await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+                }
             }
             throw error
         }
@@ -444,13 +457,13 @@ public actor FirecrackerClient {
                 // actor — and a cooperative thread — for the whole teardown,
                 // queueing every other VM's operations behind it.
                 if let latch = vm.exitLatch {
-                    _ = await latch.wait(upTo: .seconds(5))
+                    await latch.wait(upTo: .seconds(5))
                     if process.isRunning {
                         logger.warning(
                             "VMM ignored SIGTERM; escalating to SIGKILL",
                             metadata: ["vm_id": "\(vmId)"])
                         Self.forceKill(pid: process.processIdentifier)
-                        _ = await latch.wait(upTo: .seconds(5))
+                        await latch.wait(upTo: .seconds(5))
                     }
                 }
             }
@@ -688,8 +701,11 @@ public actor FirecrackerClient {
         logger.info("Cleaning up all VMs", metadata: ["count": "\(vmIds.count)"])
         await withTaskGroup(of: Void.self) { group in
             for vmId in vmIds {
-                group.addTask { [weak self] in
-                    try? await self?.destroyVM(vmId: vmId)
+                // Strong `self`: the group is awaited inside this actor, so
+                // there is no retain cycle to break — and a `weak` capture that
+                // lost the race would silently skip teardown entirely.
+                group.addTask {
+                    try? await self.destroyVM(vmId: vmId)
                 }
             }
         }

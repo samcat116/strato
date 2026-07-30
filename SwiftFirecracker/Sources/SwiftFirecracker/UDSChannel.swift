@@ -23,6 +23,33 @@ import Darwin
 /// it. NIO is then handed an already-connected descriptor and owns it from that
 /// point on — which is what removes raw file descriptors from the async paths
 /// entirely.
+extension TimeAmount {
+    /// Saturating conversion from `Duration`.
+    ///
+    /// Saturates instead of trapping: an already-elapsed deadline yields a
+    /// negative `Duration`, and a caller-supplied budget can exceed what
+    /// `Int64` nanoseconds can hold. Neither should crash an agent supervising
+    /// live VMs, which a plain `Int64(...)` conversion would do.
+    static func clamping(_ duration: Duration) -> TimeAmount {
+        let parts = duration.components
+        guard parts.seconds > 0 || (parts.seconds == 0 && parts.attoseconds > 0) else {
+            return .nanoseconds(0)
+        }
+        let maxWholeSeconds = Int64.max / 1_000_000_000
+        guard parts.seconds < maxWholeSeconds else { return .nanoseconds(.max) }
+        return .nanoseconds(parts.seconds * 1_000_000_000 + parts.attoseconds / 1_000_000_000)
+    }
+
+    /// Saturating conversion from a `TimeInterval` in seconds. NaN and negative
+    /// values collapse to zero rather than trapping.
+    static func clamping(seconds: TimeInterval) -> TimeAmount {
+        guard seconds.isFinite, seconds > 0 else { return .nanoseconds(0) }
+        let nanoseconds = seconds * 1_000_000_000
+        guard nanoseconds < Double(Int64.max) else { return .nanoseconds(.max) }
+        return .nanoseconds(Int64(nanoseconds))
+    }
+}
+
 enum UDSChannel {
     /// The event loop group used when a caller does not supply one.
     ///
@@ -39,23 +66,37 @@ enum UDSChannel {
         pipeline: @escaping @Sendable (Channel) -> EventLoopFuture<Void>
     ) async throws -> Channel {
         let fd = try openUnixStream(to: path)
-        do {
-            // Deliberately *not* enabling `allowRemoteHalfClosure`: with it on,
-            // a peer that closes (Firecracker resetting a vsock connection the
-            // guest is not listening on, or a VMM exiting mid-request) delivers
-            // `ChannelEvent.inputClosed` as a user event instead of firing
-            // `channelInactive` — and every handler waiting on a reply would
-            // hang instead of failing. Neither protocol here needs half-closure.
-            return try await ClientBootstrap(group: group)
-                .channelInitializer(pipeline)
-                .withConnectedSocket(fd)
-                .get()
-        } catch {
-            // The bootstrap only takes ownership once the channel exists; if it
-            // never got that far the descriptor is still ours to close.
+        // NIO takes ownership of the descriptor it is handed as soon as it
+        // constructs the `Channel`, and closes it itself on any later failure
+        // (a throwing channel initializer, a failed option, a failed
+        // registration). It does *not* close it if `SocketChannel.init` throws.
+        // Those two cases are indistinguishable from out here, so closing `fd`
+        // on error risks a double `close(2)` — which in a multithreaded process
+        // can tear down a descriptor another thread has just been handed.
+        //
+        // Hand NIO its own duplicate instead: each side then closes only what
+        // it owns. The worst case is leaking one descriptor if NIO fails before
+        // taking ownership, which is both bounded and far safer than closing
+        // someone else's socket.
+        let nioFD = dup(fd)
+        guard nioFD >= 0 else {
+            let failure = errno
             _ = close(fd)
-            throw error
+            throw FirecrackerError.connectionFailed(
+                "Failed to duplicate Unix socket descriptor: \(failure)")
         }
+        defer { _ = close(fd) }
+
+        // Deliberately *not* enabling `allowRemoteHalfClosure`: with it on, a
+        // peer that closes (Firecracker resetting a vsock connection the guest
+        // is not listening on, or a VMM exiting mid-request) delivers
+        // `ChannelEvent.inputClosed` as a user event instead of firing
+        // `channelInactive` — and every handler waiting on a reply would hang
+        // instead of failing. Neither protocol here needs half-closure.
+        return try await ClientBootstrap(group: group)
+            .channelInitializer(pipeline)
+            .withConnectedSocket(nioFD)
+            .get()
     }
 
     /// Opens a blocking AF_UNIX stream socket connected to `path`, routing

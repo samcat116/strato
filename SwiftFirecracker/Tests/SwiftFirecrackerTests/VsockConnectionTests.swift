@@ -37,11 +37,13 @@ struct VsockConnectionTests {
 
         let conn = try await VsockConnection.connect(
             udsPath: udsPath, port: 5000, timeout: 5.0, logger: Logger(label: "test"))
-        defer { Task { await conn.close() } }
+        // Closed explicitly at the end rather than via a fire-and-forget
+        // `defer { Task { ... } }`, which could outlive the fake server.
 
         #expect(conn.assignedHostPort == 1024)
         // The server records the CONNECT line it received.
         #expect(server.lastConnectPort() == 5000)
+        await conn.close()
     }
 
     @Test("connect echoes data over the established stream")
@@ -56,13 +58,15 @@ struct VsockConnectionTests {
 
         let conn = try await VsockConnection.connect(
             udsPath: udsPath, port: 52, timeout: 5.0, logger: Logger(label: "test"))
-        defer { Task { await conn.close() } }
+        // Closed explicitly at the end rather than via a fire-and-forget
+        // `defer { Task { ... } }`, which could outlive the fake server.
 
         // The guest control protocol is newline-delimited JSON, and the
         // connection frames on newlines, so the echoed payload carries one.
         try await conn.write(Data("ping\n".utf8))
         let echoed = try await conn.nextLine()
         #expect(echoed == "ping")
+        await conn.close()
     }
 
     @Test("connect throws when the guest rejects the port")

@@ -20,10 +20,35 @@ import Darwin
 @Suite("API socket concurrency")
 struct HTTPConcurrencyTests {
 
+    /// Deliberately `/tmp` rather than `FileManager.default.temporaryDirectory`:
+    /// these paths are *bound* as Unix domain sockets, and macOS's per-user
+    /// temporary directory is a ~50-character `/var/folders/...` path that eats
+    /// half of `sun_path`'s 104-byte budget before the socket name is appended.
+    /// Short paths keep the fixtures clear of the very limit `UnixSocketPath`
+    /// exists to work around.
     private func makeSocketDir() throws -> String {
         let dir = "/tmp/fc-http-\(UUID().uuidString.prefix(8))"
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// Runs `body` against a connected client and always disconnects before
+    /// returning. A `defer { Task { await client.disconnect() } }` would be
+    /// fire-and-forget — the channel could outlive the test and the fake server
+    /// it is talking to.
+    private func withClient<T>(
+        socketPath: String, _ body: (UnixSocketHTTPClient) async throws -> T
+    ) async throws -> T {
+        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        try await client.connect()
+        do {
+            let result = try await body(client)
+            await client.disconnect()
+            return result
+        } catch {
+            await client.disconnect()
+            throw error
+        }
     }
 
     @Test("concurrent requests each receive their own response")
@@ -38,24 +63,22 @@ struct HTTPConcurrencyTests {
         server.start()
         defer { server.stop() }
 
-        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
-        try await client.connect()
-        defer { Task { await client.disconnect() } }
-
         let requestCount = 25
-        let results = try await withThrowingTaskGroup(of: (Int, String).self) { group in
-            for i in 0..<requestCount {
-                group.addTask {
-                    let response = try await client.request(method: .GET, path: "/probe/\(i)")
-                    let body = response.body.map { String(decoding: $0, as: UTF8.self) } ?? ""
-                    return (i, body)
+        let results = try await withClient(socketPath: socketPath) { client in
+            try await withThrowingTaskGroup(of: (Int, String).self) { group in
+                for i in 0..<requestCount {
+                    group.addTask {
+                        let response = try await client.request(method: .GET, path: "/probe/\(i)")
+                        let body = response.body.map { String(decoding: $0, as: UTF8.self) } ?? ""
+                        return (i, body)
+                    }
                 }
+                var collected: [(Int, String)] = []
+                for try await result in group {
+                    collected.append(result)
+                }
+                return collected
             }
-            var collected: [(Int, String)] = []
-            for try await result in group {
-                collected.append(result)
-            }
-            return collected
         }
 
         #expect(results.count == requestCount)
@@ -78,11 +101,9 @@ struct HTTPConcurrencyTests {
         server.start()
         defer { server.stop() }
 
-        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
-        try await client.connect()
-        defer { Task { await client.disconnect() } }
-
-        let response = try await client.request(method: .GET, path: "/big")
+        let response = try await withClient(socketPath: socketPath) { client in
+            try await client.request(method: .GET, path: "/big")
+        }
         #expect(response.statusCode == 200)
         #expect(response.body?.count == payloadSize)
     }
@@ -96,19 +117,40 @@ struct HTTPConcurrencyTests {
         let server = try EchoingAPIServer(socketPath: socketPath)
         server.start()
 
-        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        try await withClient(socketPath: socketPath) { client in
+            // One good round trip proves the channel is live, then the VMM
+            // vanishes.
+            _ = try await client.request(method: .GET, path: "/alive")
+            server.stop()
+
+            // Give the close a moment to propagate to the channel.
+            try await Task.sleep(for: .milliseconds(200))
+
+            await #expect(throws: FirecrackerError.self) {
+                _ = try await client.request(method: .GET, path: "/after-close")
+            }
+        }
+    }
+
+    @Test("a request that is never answered fails on its deadline")
+    func unansweredRequestTimesOut() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        // Accepts the connection and then says nothing at all — the VMM-wedged
+        // case that used to park the caller forever and grow the waiter queue.
+        let server = try EchoingAPIServer(socketPath: socketPath, silent: true)
+        server.start()
+        defer { server.stop() }
+
+        let client = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: 0.5)
         try await client.connect()
         defer { Task { await client.disconnect() } }
 
-        // One good round trip proves the channel is live, then the VMM vanishes.
-        _ = try await client.request(method: .GET, path: "/alive")
-        server.stop()
-
-        // Give the close a moment to propagate to the channel.
-        try await Task.sleep(for: .milliseconds(200))
-
         await #expect(throws: FirecrackerError.self) {
-            _ = try await client.request(method: .GET, path: "/after-close")
+            _ = try await client.request(method: .GET, path: "/never-answered")
         }
     }
 }
@@ -119,15 +161,17 @@ struct HTTPConcurrencyTests {
 private final class EchoingAPIServer: @unchecked Sendable {
     private let socketPath: String
     private let padBodyTo: Int?
+    private let silent: Bool
     private let listenFD: Int32
     private let queue = DispatchQueue(label: "echoing-api-server")
     private let lock = NSLock()
     private var stopped = false
     private var connections: [Int32] = []
 
-    init(socketPath: String, padBodyTo: Int? = nil) throws {
+    init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false) throws {
         self.socketPath = socketPath
         self.padBodyTo = padBodyTo
+        self.silent = silent
 
         if FileManager.default.fileExists(atPath: socketPath) {
             try FileManager.default.removeItem(atPath: socketPath)
@@ -197,7 +241,9 @@ private final class EchoingAPIServer: @unchecked Sendable {
         connections = []
         lock.unlock()
         close(listenFD)
-        open.forEach { shutdown($0, SHUT_RDWR) }
+        // `Int32(...)` is load-bearing: Glibc imports SHUT_RDWR as `Int`,
+        // Darwin as `Int32`, so the bare constant compiles only on Darwin.
+        open.forEach { _ = shutdown($0, Int32(SHUT_RDWR)) }
         try? FileManager.default.removeItem(atPath: socketPath)
     }
 
@@ -228,7 +274,9 @@ private final class EchoingAPIServer: @unchecked Sendable {
                 // A small stagger makes the requests genuinely overlap on the
                 // wire rather than completing one at a time.
                 usleep(useconds_t.random(in: 200...2000))
-                writeResponse(fd, path: path)
+                // `silent` models a VMM that accepts the connection and then
+                // wedges without ever answering.
+                if !silent { writeResponse(fd, path: path) }
             }
         }
     }

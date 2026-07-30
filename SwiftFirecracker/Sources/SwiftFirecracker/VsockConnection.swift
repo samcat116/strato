@@ -1,7 +1,6 @@
 import Foundation
 import Logging
 import NIOCore
-import NIOExtras
 import NIOPosix
 
 /// A host-initiated connection to a guest vsock port, established through a
@@ -74,8 +73,13 @@ public actor VsockConnection {
 
         while ContinuousClock.now < deadline {
             do {
+                // Bound each attempt by whatever budget remains, not just the
+                // gap between attempts: a peer that accepts the UDS and then
+                // never replies would otherwise park the handshake forever
+                // inside one attempt, which the overall deadline never sees.
+                let remaining = deadline - ContinuousClock.now
                 let (channel, bridge, hostPort) = try await attempt(
-                    udsPath: udsPath, port: port, group: group)
+                    udsPath: udsPath, port: port, group: group, attemptBudget: remaining)
                 logger.debug(
                     "Connected to guest vsock port",
                     metadata: ["uds": "\(udsPath)", "port": "\(port)", "host_port": "\(hostPort)"])
@@ -117,7 +121,7 @@ public actor VsockConnection {
     public func nextLine(timeout: TimeInterval? = nil) async throws -> String? {
         try await inbound.next(
             on: channel.eventLoop,
-            timeout: timeout.map { .nanoseconds(Int64($0 * 1_000_000_000)) }
+            timeout: timeout.map { .clamping(seconds: $0) }
         ).get()
     }
 
@@ -139,7 +143,7 @@ public actor VsockConnection {
     /// host port. Any failure closes the channel before throwing so a retry
     /// starts clean.
     private static func attempt(
-        udsPath: String, port: UInt32, group: EventLoopGroup
+        udsPath: String, port: UInt32, group: EventLoopGroup, attemptBudget: Duration
     ) async throws -> (Channel, VsockInboundBridge, UInt32) {
         // Pin the channel and its handshake promise to one loop (an EventLoop
         // is itself an EventLoopGroup), so completing the promise from the
@@ -147,6 +151,15 @@ public actor VsockConnection {
         let loop = group.next()
         let handshakePromise = loop.makePromise(of: UInt32.self)
         let bridge = VsockInboundBridge()
+
+        // Deadline for this attempt's handshake, cancelled the moment it
+        // settles. Without it a peer that accepts and stays silent parks here
+        // forever, regardless of the caller's overall budget.
+        let handshakeTimeout = loop.scheduleTask(in: .clamping(attemptBudget)) {
+            handshakePromise.fail(
+                FirecrackerError.timeout("vsock handshake did not complete before the deadline"))
+        }
+        handshakePromise.futureResult.whenComplete { _ in handshakeTimeout.cancel() }
 
         let channel: Channel
         do {
@@ -157,7 +170,7 @@ public actor VsockConnection {
                     try channel.syncOptions?.setOption(.autoRead, value: false)
                     try channel.pipeline.syncOperations.addHandlers([
                         VsockHandshakeHandler(port: port, promise: handshakePromise),
-                        ByteToMessageHandler(LineBasedFrameDecoder()),
+                        ByteToMessageHandler(LineFrameDecoder()),
                         bridge,
                     ])
                     return channel.eventLoop.makeSucceededVoidFuture()

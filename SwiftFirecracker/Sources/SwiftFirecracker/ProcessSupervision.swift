@@ -14,20 +14,29 @@ import Darwin
 /// means the actor is held for the whole teardown and every other VM's
 /// operations queue behind it. This latch lets the wait suspend instead.
 ///
-/// Safe against every ordering: the handler may fire before, during, or after
-/// `wait()` suspends.
+/// Waiters genuinely suspend until signalled; there is no polling. A timed wait
+/// registers a `DispatchQueue.asyncAfter` that resumes the same waiter with
+/// `false`, so an expired budget costs one timer rather than a wakeup every
+/// 20 ms. Safe against every ordering: the handler may fire before, during, or
+/// after a `wait` suspends, and multiple waiters are supported.
 final class ExitLatch: @unchecked Sendable {
     private let lock = NSLock()
     private var signaled = false
-    private var continuation: CheckedContinuation<Void, Never>?
+    private var waiters: [UInt64: CheckedContinuation<Bool, Never>] = [:]
+    private var nextWaiterID: UInt64 = 0
 
+    /// Marks the process as exited and wakes every waiter. Idempotent.
     func signal() {
         lock.lock()
+        if signaled {
+            lock.unlock()
+            return
+        }
         signaled = true
-        let waiter = continuation
-        continuation = nil
+        let waiting = waiters
+        waiters = [:]
         lock.unlock()
-        waiter?.resume()
+        waiting.values.forEach { $0.resume(returning: true) }
     }
 
     var isSignaled: Bool {
@@ -36,33 +45,48 @@ final class ExitLatch: @unchecked Sendable {
         return signaled
     }
 
-    /// Suspends until the child exits. Deliberately not cancellation-aware:
-    /// `terminationStatus` is only valid once the handler has fired, so
-    /// returning early would let a cancelled caller read a bogus status.
+    /// Suspends until the child exits.
+    ///
+    /// Deliberately not cancellation-aware: `terminationStatus` is only valid
+    /// once the handler has fired, so resuming a cancelled caller early would
+    /// let it read a bogus status.
     func wait() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        _ = await wait(upTo: nil)
+    }
+
+    /// Suspends until the child exits or `budget` elapses, returning whether it
+    /// exited. A `nil` budget waits indefinitely.
+    ///
+    /// A bounded wait matters on teardown paths: on Linux a grandchild that
+    /// inherited the exit descriptor can hold the termination handler hostage
+    /// long after the child itself is gone.
+    @discardableResult
+    func wait(upTo budget: Duration?) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             lock.lock()
             if signaled {
                 lock.unlock()
-                continuation.resume()
+                continuation.resume(returning: true)
                 return
             }
-            self.continuation = continuation
-            lock.unlock()
-        }
-    }
 
-    /// Bounded wait, for teardown paths that must not hang if the handler never
-    /// fires (on Linux a grandchild that inherited the exit descriptor can hold
-    /// it hostage). Polls rather than registering a second continuation, since
-    /// the latch holds exactly one waiter.
-    func wait(upTo budget: Duration) async -> Bool {
-        let deadline = ContinuousClock.now + budget
-        while ContinuousClock.now < deadline {
-            if isSignaled { return true }
-            try? await Task.sleep(for: .milliseconds(20))
+            let id = nextWaiterID
+            nextWaiterID += 1
+            waiters[id] = continuation
+            lock.unlock()
+
+            guard let budget else { return }
+            let deadline = DispatchTime.now() + .milliseconds(Int(budget / .milliseconds(1)))
+            DispatchQueue.global().asyncAfter(deadline: deadline) { [weak self] in
+                guard let self else { return }
+                // Resume only if this waiter is still registered; `signal()`
+                // may have taken it first.
+                self.lock.lock()
+                let waiter = self.waiters.removeValue(forKey: id)
+                self.lock.unlock()
+                waiter?.resume(returning: false)
+            }
         }
-        return isSignaled
     }
 }
 
@@ -78,6 +102,13 @@ final class ExitLatch: @unchecked Sendable {
 /// The drain is event-driven via `DispatchSource`, so it holds no thread while
 /// idle — important because a host runs many VMs at once and a parked reader
 /// thread per stream would exhaust the pool.
+///
+/// The drain **owns its descriptor**: it dups the pipe's read end at init and
+/// closes that copy from the source's cancel handler. GCD requires a monitored
+/// descriptor stay open until cancellation completes, and `cancel()` is
+/// asynchronous — so letting a `FileHandle` deinit close the original out from
+/// under an in-flight cancellation would be a use-after-close of exactly the
+/// kind this package moved to NIO to eliminate.
 final class OutputDrain: @unchecked Sendable {
     private let lock = NSLock()
     private var recent = Data()
@@ -85,37 +116,41 @@ final class OutputDrain: @unchecked Sendable {
     private let limit: Int
     private let label: String
     private let logger: Logger
-    private let handle: FileHandle
+    private let fd: Int32
     private var source: DispatchSourceRead?
 
     /// - Parameters:
-    ///   - handle: The pipe's read end. Retained for the drain's lifetime so
-    ///     the child never writes into a closed pipe.
-    ///   - label: Stream name used in log metadata (`stdout`/`stderr`).
+    ///   - fileDescriptor: The pipe's read end. Duplicated; the caller keeps
+    ///     ownership of the descriptor it passed in.
+    ///   - label: Stream name recorded in log metadata (`stdout`/`stderr`).
     ///   - limit: How many trailing bytes to retain for diagnostics.
-    init(handle: FileHandle, label: String, logger: Logger, limit: Int = 8192) {
-        self.handle = handle
+    init?(fileDescriptor: Int32, label: String, logger: Logger, limit: Int = 8192) {
+        let owned = dup(fileDescriptor)
+        guard owned >= 0 else { return nil }
+        self.fd = owned
         self.label = label
         self.logger = logger
         self.limit = limit
 
-        let fd = handle.fileDescriptor
         // Non-blocking: the source only guarantees *some* data is ready, and a
         // blocking read after a spurious wakeup would park the queue's thread.
-        let flags = fcntl(fd, F_GETFL)
-        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
+        let flags = fcntl(owned, F_GETFL)
+        if flags >= 0 { _ = fcntl(owned, F_SETFL, flags | O_NONBLOCK) }
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
-        source.setEventHandler { [weak self] in self?.readAvailable(fd: fd) }
+        let source = DispatchSource.makeReadSource(fileDescriptor: owned, queue: .global())
+        source.setEventHandler { [weak self] in self?.readAvailable() }
+        // The descriptor is closed here and nowhere else, once GCD guarantees
+        // the source will not fire again.
+        source.setCancelHandler { _ = close(owned) }
         self.source = source
         source.resume()
     }
 
     deinit {
-        source?.cancel()
+        stop()
     }
 
-    /// Stops draining. Idempotent.
+    /// Stops draining and releases the descriptor. Idempotent.
     func stop() {
         lock.lock()
         let source = self.source
@@ -133,7 +168,7 @@ final class OutputDrain: @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func readAvailable(fd: Int32) {
+    private func readAvailable() {
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
             let count = buffer.withUnsafeMutableBytes { ptr in
@@ -146,8 +181,7 @@ final class OutputDrain: @unchecked Sendable {
                 return
             }
             if count == 0 {
-                // EOF — the child closed its end.
-                stop()
+                stop()  // EOF — the child closed its end.
                 return
             }
             append(Array(buffer.prefix(count)))
@@ -178,7 +212,9 @@ final class OutputDrain: @unchecked Sendable {
         lock.unlock()
 
         for line in lines {
-            logger.debug("firecracker \(label)", metadata: ["line": "\(line)"])
+            // `stream` stays in metadata rather than being interpolated into
+            // the message, so log backends can still group by message.
+            logger.debug("Firecracker process output", metadata: ["stream": "\(label)", "line": "\(line)"])
         }
     }
 }

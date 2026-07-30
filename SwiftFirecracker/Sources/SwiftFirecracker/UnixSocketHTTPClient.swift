@@ -22,28 +22,47 @@ public actor UnixSocketHTTPClient {
     /// client buffer without bound.
     private static let maxResponseBytes = 8 * 1024 * 1024
 
+    /// Default ceiling on how long one request may wait for its response.
+    ///
+    /// A VMM that accepts the connection but never answers would otherwise park
+    /// the caller forever and grow the handler's waiter queue without bound.
+    /// Firecracker's API calls are local and fast; this only has to be far
+    /// enough above normal to never fire in practice.
+    public static let defaultRequestTimeout: TimeInterval = 30
+
     private let socketPath: String
     private let logger: Logger
     private let group: EventLoopGroup
+    private let requestTimeout: TimeInterval
     private var channel: Channel?
     private var roundTrip: HTTPRoundTripHandler?
 
     public init(
         socketPath: String,
         logger: Logger = Logger(label: "SwiftFirecracker.HTTPClient"),
-        group: EventLoopGroup? = nil
+        group: EventLoopGroup? = nil,
+        requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout
     ) {
         self.socketPath = socketPath
         self.logger = logger
         self.group = group ?? UDSChannel.defaultGroup
+        self.requestTimeout = requestTimeout
     }
 
-    /// Connects to the Unix socket
+    /// Connects to the Unix socket.
+    ///
+    /// Calling this on an already-connected client closes the previous channel
+    /// first, so a reconnect cannot silently orphan a live socket (and its
+    /// pending round trips) by overwriting the reference.
     public func connect() async throws {
         logger.debug("Connecting to socket", metadata: ["path": "\(socketPath)"])
 
         guard FileManager.default.fileExists(atPath: socketPath) else {
             throw FirecrackerError.invalidSocketPath(socketPath)
+        }
+
+        if channel != nil {
+            await disconnect()
         }
 
         let handler = HTTPRoundTripHandler()
@@ -116,7 +135,8 @@ public actor UnixSocketHTTPClient {
             ])
 
         let response = try await roundTrip.send(
-            head: head, body: buffer, on: channel.eventLoop
+            head: head, body: buffer, on: channel.eventLoop,
+            timeout: .clamping(seconds: requestTimeout)
         ).get()
 
         logger.debug(
@@ -141,7 +161,12 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
     typealias InboundIn = NIOHTTPClientResponseFull
     typealias OutboundOut = HTTPClientRequestPart
 
-    private var waiters: [EventLoopPromise<HTTPResponse>] = []
+    private struct Waiter {
+        let promise: EventLoopPromise<HTTPResponse>
+        let timeoutTask: Scheduled<Void>?
+    }
+
+    private var waiters: [Waiter] = []
     private var context: ChannelHandlerContext?
     private var failure: Error?
 
@@ -154,7 +179,7 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
     }
 
     func send(
-        head: HTTPRequestHead, body: ByteBuffer?, on eventLoop: EventLoop
+        head: HTTPRequestHead, body: ByteBuffer?, on eventLoop: EventLoop, timeout: TimeAmount
     ) -> EventLoopFuture<HTTPResponse> {
         eventLoop.flatSubmit {
             if let failure = self.failure {
@@ -165,7 +190,20 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
             }
 
             let promise = eventLoop.makePromise(of: HTTPResponse.self)
-            self.waiters.append(promise)
+
+            // Responses are consumed strictly in order, so a timed-out request
+            // cannot simply be dropped from the middle of the queue without
+            // mis-pairing every response behind it. Fail the whole channel
+            // instead: an unanswered request means the VMM is not talking to us
+            // any more, and reconnecting is the only sound recovery.
+            let timeoutTask = eventLoop.scheduleTask(in: timeout) { [weak self] in
+                guard let self, let context = self.context else { return }
+                let error = FirecrackerError.timeout(
+                    "Firecracker did not answer \(head.method.rawValue) \(head.uri) in time")
+                self.failAll(error, context: context)
+                context.close(promise: nil)
+            }
+            self.waiters.append(Waiter(promise: promise, timeoutTask: timeoutTask))
 
             context.write(self.wrapOutboundOut(.head(head)), promise: nil)
             if let body {
@@ -174,6 +212,18 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
             context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
 
             return promise.futureResult
+        }
+    }
+
+    /// Fails every outstanding round trip and records the error so later
+    /// requests fail fast rather than queueing onto a dead channel.
+    private func failAll(_ error: Error, context: ChannelHandlerContext) {
+        failure = error
+        let waiting = waiters
+        waiters = []
+        waiting.forEach {
+            $0.timeoutTask?.cancel()
+            $0.promise.fail(error)
         }
     }
 
@@ -197,7 +247,9 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
         }
 
         let body = full.body.map { Data($0.readableBytesView) }
-        waiters.removeFirst().succeed(
+        let waiter = waiters.removeFirst()
+        waiter.timeoutTask?.cancel()
+        waiter.promise.succeed(
             HTTPResponse(
                 statusCode: Int(full.head.status.code),
                 headers: headers,
@@ -205,19 +257,14 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let error = failure ?? FirecrackerError.connectionFailed("Firecracker closed the API socket")
-        failure = error
-        let waiting = waiters
-        waiters = []
-        waiting.forEach { $0.fail(error) }
+        failAll(
+            failure ?? FirecrackerError.connectionFailed("Firecracker closed the API socket"),
+            context: context)
         context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        failure = error
-        let waiting = waiters
-        waiters = []
-        waiting.forEach { $0.fail(error) }
+        failAll(error, context: context)
         context.close(promise: nil)
     }
 }
