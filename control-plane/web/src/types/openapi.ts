@@ -305,6 +305,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /** List a virtual machine's checkpoints */
+        get: operations["listVMSnapshots"];
+        put?: never;
+        /**
+         * Checkpoint a virtual machine
+         * @description Captures guest memory, device state, and disks at one instant. The VM must be running or paused, and keeps running. The request body is optional. Asynchronous — poll the returned operation.
+         */
+        post: operations["createVMSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/snapshots/{snapshotID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM checkpoint's id. */
+                snapshotID: components["parameters"]["VMSnapshotID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a virtual machine checkpoint */
+        delete: operations["deleteVMSnapshot"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/snapshots/{snapshotID}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM checkpoint's id. */
+                snapshotID: components["parameters"]["VMSnapshotID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a virtual machine from a checkpoint
+         * @description Loads the captured memory and device state back into the VM and resumes it. The checkpoint lives inside the VM's disks, so this only works on the agent that took it. Asynchronous — poll the returned operation.
+         */
+        post: operations["restoreVMSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations/{operationID}": {
         parameters: {
             query?: never;
@@ -5000,6 +5071,37 @@ export interface components {
          * @enum {string}
          */
         SandboxSnapshotArtifactKind: "memory" | "vmstate" | "rootfs" | "config";
+        CreateVMSnapshotRequest: {
+            name?: string;
+            description?: string;
+        };
+        VMSnapshot: {
+            /** Format: uuid */
+            id?: string;
+            name: string;
+            description: string;
+            /** Format: uuid */
+            vmId?: string;
+            /** Format: uuid */
+            projectId?: string;
+            status: components["schemas"]["VMSnapshotStatus"];
+            /**
+             * Format: int64
+             * @description Bytes of guest memory and device state the checkpoint holds. The disks it lives inside are charged separately, under the VM.
+             */
+            size?: number;
+            /** @description The agent holding the checkpoint; restore is pinned here. */
+            agentId?: string;
+            qemuVersion?: string;
+            architecture?: string;
+            errorMessage?: string;
+            /** Format: uuid */
+            createdById?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        /** @enum {string} */
+        VMSnapshotStatus: "creating" | "ready" | "deleting" | "error";
         CreateImageRequest: {
             name: string;
             description?: string;
@@ -7446,6 +7548,13 @@ export interface components {
             limit: number;
             offset: number;
         };
+        VMSnapshotListPage: {
+            items: components["schemas"]["VMSnapshot"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
         ImageListPage: {
             items: components["schemas"]["Image"][];
             /** @description Total visible items, ignoring `limit`/`offset`. */
@@ -8154,6 +8263,8 @@ export interface components {
         SandboxID: string;
         /** @description The sandbox snapshot's id. */
         SandboxSnapshotID: string;
+        /** @description The VM checkpoint's id. */
+        VMSnapshotID: string;
         /** @description The operation's id. */
         OperationID: string;
         /** @description The project's id. */
@@ -8725,6 +8836,106 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listVMSnapshots: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the VM's checkpoints. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMSnapshotListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createVMSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateVMSnapshotRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["AcceptedOperation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteVMSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM checkpoint's id. */
+                snapshotID: components["parameters"]["VMSnapshotID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedOperation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    restoreVMSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM checkpoint's id. */
+                snapshotID: components["parameters"]["VMSnapshotID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedOperation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     getOperation: {

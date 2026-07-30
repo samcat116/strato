@@ -279,7 +279,18 @@ public enum WireProtocol {
     /// topology convergence programs DHCP for *every* network the authority
     /// realizes — so the gate lives at network create, not at placement (see
     /// `supportsProjectNetworkIsolation(_:)`).
-    public static let currentVersion = 21
+    ///
+    /// Version 22: full-VM checkpoint / restore (issue #564). Adds the
+    /// `vmCheckpoint` / `vmRestore` / `vmSnapshotDelete` request/response
+    /// trio — new `MessageType` cases, so this has v6/v9/v14's shape rather
+    /// than v15's: a pre-v22 agent cannot decode the envelope at all, drops
+    /// the frame before any error response can be sent, and the request would
+    /// burn its full timeout against silence. The send-side gate is therefore
+    /// load-bearing, and (like the sandbox trio) is enforced by the
+    /// registration capability rather than the version alone — a v22 agent on
+    /// a host with no QEMU backend understands the messages but can never
+    /// realize them.
+    public static let currentVersion = 22
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -496,6 +507,23 @@ public enum WireProtocol {
     /// site any of whose agents is pre-v21.
     public static func supportsProjectNetworkIsolation(_ version: Int) -> Bool {
         version >= projectNetworkIsolationMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks the full-VM checkpoint message
+    /// trio (see `currentVersion` version 22 notes).
+    public static let vmCheckpointMinimumVersion = 22
+
+    /// Whether an agent registered with `version` can decode a checkpoint,
+    /// restore, or snapshot-delete request. Below this the envelope's
+    /// `MessageType` does not decode, so the frame is dropped silently and the
+    /// control plane would wait out the operation budget for a response that
+    /// can never come — the control plane refuses the request up front
+    /// instead. Necessary but not sufficient: eligibility additionally
+    /// requires the agent to advertise the `vm_checkpoint` capability, since a
+    /// v22 build on a QEMU-less host understands the trio but cannot realize
+    /// it.
+    public static func supportsVMCheckpoint(_ version: Int) -> Bool {
+        version >= vmCheckpointMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

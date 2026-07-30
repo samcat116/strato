@@ -9,6 +9,8 @@ import type {
   Page,
   VMLogEntry,
   VMLogsQueryParams,
+  VMSnapshot,
+  CreateVMSnapshotRequest,
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
@@ -69,6 +71,34 @@ export const vmsApi = {
 
   getStatus(id: string): Promise<{ status: string }> {
     return api.get(`/api/vms/${id}/status`);
+  },
+
+  // Full-VM checkpoints (issue #564): memory + device state + disks captured
+  // at one instant, distinct from the disk-only volume snapshots. All three
+  // mutations are 202 + operation, like the rest of the VM lifecycle.
+  listSnapshots(id: string): Promise<VMSnapshot[]> {
+    return api
+      .get<Page<VMSnapshot>>(`/api/vms/${id}/snapshots`, {
+        limit: LIST_PAGE_LIMIT,
+      })
+      .then((page) => page.items);
+  },
+
+  createSnapshot(
+    id: string,
+    data?: CreateVMSnapshotRequest
+  ): Promise<Operation> {
+    return api.post<Operation>(`/api/vms/${id}/snapshots`, data ?? {});
+  },
+
+  deleteSnapshot(id: string, snapshotId: string): Promise<Operation> {
+    return api.delete<Operation>(`/api/vms/${id}/snapshots/${snapshotId}`);
+  },
+
+  restoreSnapshot(id: string, snapshotId: string): Promise<Operation> {
+    return api.post<Operation>(
+      `/api/vms/${id}/snapshots/${snapshotId}/restore`
+    );
   },
 
   getLogs(id: string, params?: VMLogsQueryParams): Promise<VMLogEntry[]> {

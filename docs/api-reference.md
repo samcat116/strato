@@ -37,7 +37,7 @@ receives `403`.
 ### Asynchronous mutations
 
 VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
-pause/resume, sandbox snapshot/restore) are **asynchronous**. They persist a
+pause/resume, VM and sandbox snapshot/restore) are **asynchronous**. They persist a
 desired-state change plus a `ResourceOperation` in one transaction and return
 `202 Accepted` with that operation. Poll `GET /api/operations/{operationID}`
 until `status` is terminal (`succeeded` or `failed`). A second mutation on a

@@ -69,7 +69,7 @@ enum CedarSchemaBuilder {
         if action == "project:create" { return [.folder, .organization] }
         let service = action.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
         switch service {
-        case "vm": return [.vm] + projectContainers
+        case "vm": return [.vm, .vmSnapshot] + projectContainers
         case "sandbox": return [.sandbox, .sandboxSnapshot] + projectContainers
         case "volume": return [.volume, .volumeSnapshot] + projectContainers
         case "image": return [.image] + projectContainers
@@ -236,8 +236,8 @@ enum CedarSchemaBuilder {
         case .organization: return []
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
-        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .floatingIP, .securityGroup,
-            .serviceAccount, .network:
+        case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .vmSnapshot, .floatingIP,
+            .securityGroup, .serviceAccount, .network:
             return [.project]
         case .site, .agent: return [.organization, .folder]
         case .user, .group, .workload: return []

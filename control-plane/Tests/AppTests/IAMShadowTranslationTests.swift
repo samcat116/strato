@@ -40,6 +40,12 @@ struct IAMShadowTranslationTests {
             ("exec", "sandbox", "sandbox:exec"),
             ("snapshot", "sandbox", "sandbox:snapshot"),
             ("snapshot", "volume", "volume:snapshot"),
+            // Full-VM checkpoints (issue #564) join the same shape.
+            ("snapshot", "virtual_machine", "vm:snapshot"),
+            ("restore", "virtual_machine", "vm:restore"),
+            ("delete", "vm_snapshot", "vm:snapshot"),
+            ("restore", "vm_snapshot", "vm:restore"),
+            ("read", "vm_snapshot", "vm:read"),
             // Snapshot subresources: delete/restore are the parent's snapshot
             // vocabulary, not resource deletes.
             ("read", "sandbox_snapshot", "sandbox:read"),
@@ -103,7 +109,10 @@ struct IAMShadowTranslationTests {
                 path: "/api/vms") == nil)
         // A verb that exists but not for this service
         #expect(action("exec", on: "virtual_machine") == nil)
-        #expect(action("snapshot", on: "virtual_machine") == nil)
+        // `export` is snapshot mobility, which only sandboxes have: a full-VM
+        // checkpoint lives inside the VM's own disks and cannot leave its host.
+        #expect(action("export", on: "virtual_machine") == nil)
+        #expect(action("export", on: "volume") == nil)
     }
 
     @Test("Every translation is a registry action applicable to its node type")

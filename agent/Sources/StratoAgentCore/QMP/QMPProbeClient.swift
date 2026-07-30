@@ -202,6 +202,209 @@ public actor QMPProbeClient {
         }
     }
 
+    // MARK: - Full-VM checkpoints (issue #564)
+
+    /// The guest-visible block devices and the top node of each, as
+    /// `query-block` reports them.
+    ///
+    /// The node names are QEMU's own. VMs are spawned with `-drive`, which
+    /// leaves the format node's name auto-generated (`#blockNNN`); those are
+    /// perfectly addressable in commands — `bdrv_find_node` matches whatever
+    /// is in `node_name` — but they are *not* stable across a respawn, which
+    /// is why every checkpoint operation rediscovers them instead of the agent
+    /// remembering the list from creation time.
+    public func blockNodes() async throws -> [QMPBlockNode] {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            return try await self.readBlockNodes(channel, framer)
+        }
+    }
+
+    /// Captures guest RAM + device state into an internal snapshot named `tag`
+    /// on `vmstateNode`, alongside a snapshot of every node in `devices`, and
+    /// waits for the background job to conclude.
+    ///
+    /// Returns the vmstate size QEMU records for the tag, or nil when the
+    /// build does not report one — the checkpoint is valid either way, so the
+    /// caller must read a nil as "unknown", not "empty".
+    ///
+    /// QEMU runs `snapshot-save` as a manual-dismiss background job, so the
+    /// verdict outlives the request: a replayed checkpoint whose first attempt
+    /// is still running rejoins that job instead of racing a second one
+    /// against the same disks.
+    @discardableResult
+    public func saveSnapshot(
+        tag: String,
+        vmstateNode: String,
+        devices: [String],
+        jobId: String,
+        pollInterval: Duration = .milliseconds(500)
+    ) async throws -> Int64? {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            try await self.runSnapshotJob(
+                channel, framer, execute: "snapshot-save",
+                arguments: QMPProbe.SnapshotSaveArguments(
+                    jobId: jobId, tag: tag, vmstate: vmstateNode, devices: devices),
+                jobId: jobId, pollInterval: pollInterval)
+
+            // The size is read back on the same channel: a second connect
+            // would race the next stats poll for the single-client monitor.
+            let nodes = try await self.readBlockNodes(channel, framer)
+            return nodes.compactMap { $0.snapshotVMStateSize(named: tag) }.first
+        }
+    }
+
+    /// Loads the internal snapshot `tag` back into the running QEMU process.
+    ///
+    /// QEMU stops the VM for the load and leaves it stopped afterwards, so the
+    /// caller resumes it explicitly — which is what makes the restore path the
+    /// same whether the VM was running, paused, or freshly spawned with `-S`.
+    public func loadSnapshot(
+        tag: String,
+        vmstateNode: String,
+        devices: [String],
+        jobId: String,
+        pollInterval: Duration = .milliseconds(500)
+    ) async throws {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            try await self.runSnapshotJob(
+                channel, framer, execute: "snapshot-load",
+                arguments: QMPProbe.SnapshotSaveArguments(
+                    jobId: jobId, tag: tag, vmstate: vmstateNode, devices: devices),
+                jobId: jobId, pollInterval: pollInterval)
+        }
+    }
+
+    /// Removes the internal snapshot `tag` from every node in `devices`.
+    ///
+    /// Idempotent by QEMU's own semantics for the tags this agent writes: a
+    /// delete naming a tag no node carries concludes without error, so a
+    /// retried delete (or one for a checkpoint whose create response was lost)
+    /// converges rather than failing.
+    public func deleteSnapshot(
+        tag: String,
+        devices: [String],
+        jobId: String,
+        pollInterval: Duration = .milliseconds(500)
+    ) async throws {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            try await self.runSnapshotJob(
+                channel, framer, execute: "snapshot-delete",
+                arguments: QMPProbe.SnapshotDeleteArguments(
+                    jobId: jobId, tag: tag, devices: devices),
+                jobId: jobId, pollInterval: pollInterval)
+        }
+    }
+
+    /// The QEMU build behind this monitor (`query-version`), as
+    /// `major.minor.micro`. Recorded with a checkpoint because a QEMU internal
+    /// snapshot only restores on a compatible build.
+    public func qemuVersion() async throws -> String? {
+        try await withChannel { channel, framer in
+            try await self.negotiate(channel, framer)
+            let reply = try await self.command(
+                channel, framer, execute: "query-version",
+                arguments: QMPProbe.NoArguments?.none, as: QMPProbe.VersionInfo.self)
+            return reply.qemu.map { "\($0.major).\($0.minor).\($0.micro)" }
+        }
+    }
+
+    // MARK: - Snapshot job plumbing
+
+    private func readBlockNodes(
+        _ channel: any QGAByteChannel, _ framer: QGAObjectFramer
+    ) async throws -> [QMPBlockNode] {
+        let reply = try await command(
+            channel, framer, execute: "query-block",
+            arguments: QMPProbe.NoArguments?.none, as: [QMPProbe.BlockDevice].self)
+        return reply.compactMap { device in
+            guard let inserted = device.inserted, let nodeName = inserted.nodeName else { return nil }
+            return QMPBlockNode(
+                device: device.device,
+                nodeName: nodeName,
+                format: inserted.drv,
+                filename: inserted.file,
+                readonly: inserted.ro ?? false,
+                snapshots: inserted.image?.snapshots ?? [])
+        }
+    }
+
+    /// Starts one snapshot job and waits for it to conclude, then dismisses it.
+    ///
+    /// A job id that is already live is *joined*, not duplicated: `snapshot-*`
+    /// jobs are manual-dismiss, so a replayed request (agent reconnect, control
+    /// plane retry) would otherwise either collide on the id or start a second
+    /// save against the same disks. Joining makes the whole operation
+    /// idempotent for as long as the QEMU process lives.
+    private func runSnapshotJob<Arguments: Encodable>(
+        _ channel: any QGAByteChannel, _ framer: QGAObjectFramer,
+        execute: String, arguments: Arguments, jobId: String, pollInterval: Duration
+    ) async throws {
+        switch try await jobState(channel, framer, id: jobId) {
+        case .none:
+            _ = try await command(
+                channel, framer, execute: execute, arguments: arguments, as: QMPProbe.Empty.self)
+        case .concluded(let error):
+            // A previous attempt's verdict was never collected. Take it now
+            // rather than colliding on the id, then let the caller retry.
+            try await dismissJob(channel, framer, id: jobId)
+            if let error { throw QMPProbeError.commandError(error) }
+            return
+        case .running:
+            break
+        }
+
+        while true {
+            try await Task.sleep(for: pollInterval)
+            switch try await jobState(channel, framer, id: jobId) {
+            case .running:
+                continue
+            case .concluded(let error):
+                try await dismissJob(channel, framer, id: jobId)
+                if let error { throw QMPProbeError.commandError(error) }
+                return
+            case .none:
+                // Manual-dismiss jobs stay queryable until dismissed, so a job
+                // that vanished under us was reaped by something else and its
+                // verdict is unrecoverable. Reporting success here would mark
+                // a checkpoint ready that may not exist.
+                throw QMPProbeError.commandError(
+                    "QMP job '\(jobId)' disappeared before reporting a result")
+            }
+        }
+    }
+
+    private enum SnapshotJobState {
+        case none
+        case running
+        case concluded(error: String?)
+    }
+
+    private func jobState(
+        _ channel: any QGAByteChannel, _ framer: QGAObjectFramer, id: String
+    ) async throws -> SnapshotJobState {
+        let jobs = try await command(
+            channel, framer, execute: "query-jobs",
+            arguments: QMPProbe.NoArguments?.none, as: [QMPProbe.JobInfo].self)
+        guard let job = jobs.first(where: { $0.id == id }) else { return .none }
+        guard job.status == "concluded" else { return .running }
+        return .concluded(error: job.error)
+    }
+
+    private func dismissJob(
+        _ channel: any QGAByteChannel, _ framer: QGAObjectFramer, id: String
+    ) async throws {
+        // Best-effort: the verdict is already in hand, and a job that another
+        // client dismissed first must not turn a completed checkpoint into a
+        // failure.
+        _ = try? await command(
+            channel, framer, execute: "job-dismiss",
+            arguments: QMPProbe.JobArguments(id: id), as: QMPProbe.Empty.self)
+    }
+
     // MARK: - Channel lifecycle
 
     /// Opens a channel, runs `body`, and closes the channel whether or not
@@ -271,6 +474,77 @@ public actor QMPProbeClient {
             framer.append(chunk)
             if framer.isOverBudget { throw QMPProbeError.malformedResponse }
         }
+    }
+}
+
+// MARK: - Block topology (issue #564)
+
+/// One guest-visible block device and the top node behind it.
+///
+/// `format` is QEMU's block driver for that node (`qcow2`, `raw`, …) — the
+/// distinction a checkpoint turns on, since only qcow2 can hold an internal
+/// snapshot.
+public struct QMPBlockNode: Sendable, Equatable {
+    /// The BlockBackend name (`drive0`), which may be empty for a node with no
+    /// named backend.
+    public let device: String?
+    /// The node name to pass to `snapshot-save`/`-load`/`-delete`.
+    public let nodeName: String
+    public let format: String?
+    public let filename: String?
+    public let readonly: Bool
+    /// Internal snapshots already present on this node.
+    public let snapshots: [QMPSnapshotInfo]
+
+    public init(
+        device: String?,
+        nodeName: String,
+        format: String?,
+        filename: String?,
+        readonly: Bool,
+        snapshots: [QMPSnapshotInfo] = []
+    ) {
+        self.device = device
+        self.nodeName = nodeName
+        self.format = format
+        self.filename = filename
+        self.readonly = readonly
+        self.snapshots = snapshots
+    }
+
+    /// Whether this node can hold an internal snapshot. A writable node in any
+    /// other format makes the *whole* VM ineligible: QEMU would checkpoint the
+    /// qcow2 disks and leave that one to drift, which restores to a machine
+    /// whose memory and disk disagree.
+    public var supportsInternalSnapshots: Bool { format == "qcow2" }
+
+    public func snapshotVMStateSize(named tag: String) -> Int64? {
+        snapshots.first { $0.name == tag }?.vmStateSize
+    }
+
+    public func hasSnapshot(named tag: String) -> Bool {
+        snapshots.contains { $0.name == tag }
+    }
+}
+
+/// One internal snapshot recorded on a qcow2 node.
+public struct QMPSnapshotInfo: Codable, Sendable, Equatable {
+    public let id: String?
+    public let name: String
+    /// Bytes of machine state stored with the tag; zero on the nodes that only
+    /// carry the disk half of the checkpoint.
+    public let vmStateSize: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case vmStateSize = "vm-state-size"
+    }
+
+    public init(id: String?, name: String, vmStateSize: Int64?) {
+        self.id = id
+        self.name = name
+        self.vmStateSize = vmStateSize
     }
 }
 
@@ -420,6 +694,94 @@ enum QMPProbe {
     /// `balloon` arguments: the memory, in bytes, the guest is left with.
     struct BalloonArguments: Encodable {
         let value: Int64
+    }
+
+    // MARK: - Snapshot jobs (issue #564)
+
+    /// `snapshot-save` / `snapshot-load` arguments. Every field is mandatory
+    /// in QEMU's schema, `devices` included — there is no "all disks" default.
+    struct SnapshotSaveArguments: Encodable {
+        let jobId: String
+        let tag: String
+        let vmstate: String
+        let devices: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case jobId = "job-id"
+            case tag
+            case vmstate
+            case devices
+        }
+    }
+
+    /// `snapshot-delete` arguments — no vmstate node: the tag is removed from
+    /// every listed device, machine state included.
+    struct SnapshotDeleteArguments: Encodable {
+        let jobId: String
+        let tag: String
+        let devices: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case jobId = "job-id"
+            case tag
+            case devices
+        }
+    }
+
+    struct JobArguments: Encodable {
+        let id: String
+    }
+
+    /// One entry of `query-jobs`. `error` is present only on a job that
+    /// concluded unsuccessfully, which is how a failed checkpoint is
+    /// distinguished from a completed one.
+    struct JobInfo: Decodable {
+        let id: String
+        let status: String
+        let error: String?
+    }
+
+    /// `query-version` → `{"qemu": {"major": M, "minor": m, "micro": u}, ...}`.
+    struct VersionInfo: Decodable {
+        struct QEMUVersion: Decodable {
+            let major: Int
+            let minor: Int
+            let micro: Int
+        }
+        let qemu: QEMUVersion?
+    }
+
+    /// One entry of `query-block`: a block backend and, when a medium is
+    /// present, the top node behind it.
+    struct BlockDevice: Decodable {
+        let device: String?
+        let inserted: InsertedMedium?
+    }
+
+    /// `query-block`'s `inserted` object. Only the fields a checkpoint turns
+    /// on are decoded; everything else QEMU reports is ignored, so a newer
+    /// build's extra keys can never fail the decode.
+    struct InsertedMedium: Decodable {
+        let nodeName: String?
+        let drv: String?
+        let file: String?
+        let ro: Bool?
+        let image: ImageInfo?
+
+        enum CodingKeys: String, CodingKey {
+            case nodeName = "node-name"
+            case drv
+            case file
+            case ro
+            case image
+        }
+    }
+
+    /// `inserted.image`, for its internal snapshot list. QEMU builds that omit
+    /// `snapshots` here leave the checkpoint's size unknown rather than
+    /// failing it.
+    struct ImageInfo: Decodable {
+        let snapshots: [QMPSnapshotInfo]?
     }
 
     /// `query-balloon` → `{"actual": N}`, the balloon's current view of how
