@@ -42,9 +42,15 @@ let package = Package(
         // Package.resolved — is identical on every host. Linking is gated per-target
         // below with `.when(platforms:)`. Revision-pinned (not branch) so `swift package
         // update` on macOS can't silently move the pin. Bump by editing this revision.
+        //
+        // Keep SwiftOVN's default traits: its `TLS` trait is what makes
+        // `OVSDBEndpoint.ssl` available, and NetworkServiceLinux matches on that
+        // case to attach the northbound mTLS material. Passing `traits: []` here
+        // (or building with `--disable-default-traits`) turns that case
+        // unavailable and breaks the build.
         .package(
             url: "https://github.com/samcat116/swift-ovn.git",
-            revision: "5b31b8da93c10fbd371216e77937be27e4db8ac2"),
+            revision: "591681fad2eb3b09f7f1e30d742662ceecd462c9"),
     ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
