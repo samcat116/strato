@@ -384,13 +384,37 @@ struct AgentConfigTests {
     }
 
     @Test("Jailer defaults: binary beside firecracker, chroot under VM storage")
-    func sandboxJailerDefaults() {
-        // The sibling path only wins when it exists on the test host, so pin
-        // the fallback shape instead: an absent sibling falls back to the
-        // sibling path itself (the well-known locations are also absent here).
-        let binary = AgentConfig.defaultSandboxJailerBinaryPath(
-            firecrackerBinaryPath: "/nonexistent/bin/firecracker")
-        #expect(binary == "/nonexistent/bin/jailer")
+    func sandboxJailerDefaults() throws {
+        // Probe a fixture rather than the host's installs so the result does
+        // not depend on whether a real jailer is present on the test machine.
+        try withTempDirectory { tempDirectory in
+            let sibling = tempDirectory.appendingPathComponent("bin")
+            let wellKnown = tempDirectory.appendingPathComponent("well-known")
+            try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: wellKnown, withIntermediateDirectories: true)
+            let wellKnownJailer = wellKnown.appendingPathComponent("jailer").path
+            try "".write(toFile: wellKnownJailer, atomically: true, encoding: .utf8)
+
+            // Nothing beside firecracker: fall through to the well-known list.
+            #expect(
+                AgentConfig.defaultSandboxJailerBinaryPath(
+                    firecrackerBinaryPath: sibling.appendingPathComponent("firecracker").path,
+                    wellKnownPaths: [wellKnownJailer]) == wellKnownJailer)
+
+            // A jailer beside firecracker wins over the well-known locations.
+            let siblingJailer = sibling.appendingPathComponent("jailer").path
+            try "".write(toFile: siblingJailer, atomically: true, encoding: .utf8)
+            #expect(
+                AgentConfig.defaultSandboxJailerBinaryPath(
+                    firecrackerBinaryPath: sibling.appendingPathComponent("firecracker").path,
+                    wellKnownPaths: [wellKnownJailer]) == siblingJailer)
+        }
+
+        // No candidate exists: fall back to the sibling path itself.
+        #expect(
+            AgentConfig.defaultSandboxJailerBinaryPath(
+                firecrackerBinaryPath: "/nonexistent/bin/firecracker",
+                wellKnownPaths: []) == "/nonexistent/bin/jailer")
 
         #expect(
             AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: "/var/lib/strato/vms")
@@ -787,7 +811,9 @@ struct AgentConfigTests {
 
     @Test("Load default configuration")
     func loadDefaultConfig() {
-        let config = AgentConfig.loadDefaultConfig()
+        // Empty search paths: exercise the built-in defaults rather than
+        // whatever config file the host operator happens to have installed.
+        let config = AgentConfig.loadDefaultConfig(searchPaths: [])
 
         #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
 
@@ -800,6 +826,28 @@ struct AgentConfigTests {
         #expect(config.enableHVF == true)
         #expect(config.enableKVM == false)
         #endif
+    }
+
+    @Test("Default config search tries paths in order and skips unreadable ones")
+    func loadDefaultConfigSearchOrder() throws {
+        try withTempDirectory { tempDirectory in
+            let secondPath = tempDirectory.appendingPathComponent("second.toml").path
+            try """
+            control_plane_url = "ws://second:8080/agent/ws"
+            """.write(toFile: secondPath, atomically: true, encoding: .utf8)
+
+            let missingPath = tempDirectory.appendingPathComponent("missing.toml").path
+            let skipped = AgentConfig.loadDefaultConfig(searchPaths: [missingPath, secondPath])
+            #expect(skipped.controlPlaneURL == "ws://second:8080/agent/ws")
+
+            let firstPath = tempDirectory.appendingPathComponent("first.toml").path
+            try """
+            control_plane_url = "ws://first:8080/agent/ws"
+            """.write(toFile: firstPath, atomically: true, encoding: .utf8)
+
+            let first = AgentConfig.loadDefaultConfig(searchPaths: [firstPath, secondPath])
+            #expect(first.controlPlaneURL == "ws://first:8080/agent/ws")
+        }
     }
 
     // MARK: - Codable Tests
@@ -885,5 +933,9 @@ struct AgentConfigTests {
         #expect(AgentConfig.defaultConfigPath == "/etc/strato/config.toml")
         #endif
         #expect(AgentConfig.fallbackConfigPath == "./config.toml")
+        #expect(
+            AgentConfig.defaultConfigSearchPaths == [
+                AgentConfig.defaultConfigPath, AgentConfig.fallbackConfigPath,
+            ])
     }
 }

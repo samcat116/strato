@@ -848,24 +848,35 @@ public struct AgentConfig: Codable {
 
     public static let fallbackConfigPath = "./config.toml"
 
-    public static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
-        // Try to load from default path first
-        do {
-            return try load(from: defaultConfigPath, logger: logger)
-        } catch {
-            logger?.warning("Failed to load config from \(defaultConfigPath): \(error)")
-        }
+    /// Paths `loadDefaultConfig` probes, in order: the platform config location
+    /// first, then a working-directory file for development.
+    public static var defaultConfigSearchPaths: [String] {
+        [defaultConfigPath, fallbackConfigPath]
+    }
 
-        // Try fallback path for development
-        do {
-            return try load(from: fallbackConfigPath, logger: logger)
-        } catch {
-            logger?.warning("Failed to load config from \(fallbackConfigPath): \(error)")
+    /// Loads the first config file that parses out of `searchPaths`, falling
+    /// back to the built-in defaults. `searchPaths` is injectable so tests can
+    /// pin the search (or skip it entirely) instead of reading whatever the
+    /// host operator installed.
+    public static func loadDefaultConfig(
+        searchPaths: [String]? = nil,
+        logger: Logger? = nil
+    ) -> AgentConfig {
+        for path in searchPaths ?? defaultConfigSearchPaths {
+            do {
+                return try load(from: path, logger: logger)
+            } catch {
+                logger?.warning("Failed to load config from \(path): \(error)")
+            }
         }
 
         // Return default configuration if no config file found
         logger?.info("Using default configuration")
+        return builtinDefaults
+    }
 
+    /// The compiled-in configuration used when no config file is found.
+    public static var builtinDefaults: AgentConfig {
         #if os(Linux)
         #if arch(arm64)
         let defaultQemuPath = "/usr/bin/qemu-system-aarch64"
@@ -1029,13 +1040,20 @@ public struct AgentConfig: Codable {
         return "/var/lib/strato/sandbox/guest"
     }
 
+    /// Well-known jailer install locations probed after the Firecracker sibling.
+    public static let wellKnownSandboxJailerPaths = ["/usr/local/bin/jailer", "/usr/bin/jailer"]
+
     /// Default jailer binary path (Linux only). The jailer ships in the same
     /// release tarball as Firecracker, so look beside the resolved Firecracker
-    /// binary first, then the same well-known locations.
-    public static func defaultSandboxJailerBinaryPath(firecrackerBinaryPath: String) -> String {
+    /// binary first, then the same well-known locations. `wellKnownPaths` is
+    /// injectable so tests can probe a fixture instead of the host's installs.
+    public static func defaultSandboxJailerBinaryPath(
+        firecrackerBinaryPath: String,
+        wellKnownPaths: [String] = wellKnownSandboxJailerPaths
+    ) -> String {
         let sibling = URL(fileURLWithPath: firecrackerBinaryPath)
             .deletingLastPathComponent().appendingPathComponent("jailer").path
-        let candidates = [sibling, "/usr/local/bin/jailer", "/usr/bin/jailer"]
+        let candidates = [sibling] + wellKnownPaths
         return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? sibling
     }
 
