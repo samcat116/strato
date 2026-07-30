@@ -22,6 +22,15 @@ export function useVM(id: string) {
   });
 }
 
+export function useVMSnapshots(id: string) {
+  return useQuery({
+    queryKey: ["vms", id, "snapshots"],
+    queryFn: () => vmsApi.listSnapshots(id),
+    enabled: !!id,
+    refetchInterval: 5000,
+  });
+}
+
 export function useInvalidateVMs() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["vms"] });

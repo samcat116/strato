@@ -52,7 +52,7 @@ enum IAMActionTranslator {
         case .organization: return "org"
         case .organizationalUnit: return "folder"
         case .project: return "project"
-        case .virtualMachine: return "vm"
+        case .virtualMachine, .vmSnapshot: return "vm"
         case .sandbox, .sandboxSnapshot: return "sandbox"
         case .image: return "image"
         case .network: return "network"
@@ -93,6 +93,7 @@ enum IAMActionTranslator {
             switch nodeType {
             case .sandboxSnapshot: return "sandbox:snapshot"
             case .volumeSnapshot: return "volume:snapshot"
+            case .vmSnapshot: return "vm:snapshot"
             case .floatingIP: return "floatingip:release"
             default: return "\(service):delete"
             }
@@ -104,12 +105,14 @@ enum IAMActionTranslator {
             switch service {
             case "sandbox": return "sandbox:snapshot"
             case "volume": return "volume:snapshot"
+            case "vm": return "vm:snapshot"
             default: return nil
             }
         case "restore":
             switch service {
             case "sandbox": return "sandbox:restore"
             case "volume": return "volume:restore"
+            case "vm": return "vm:restore"
             default: return nil
             }
         case "export":

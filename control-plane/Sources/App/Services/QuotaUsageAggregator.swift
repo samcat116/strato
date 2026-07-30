@@ -148,11 +148,12 @@ struct QuotaUsageAggregator {
         ).first(decoding: SandboxTotals.self)
 
         let snapshotStorage = try await snapshotStorageBytes(in: scope, on: db)
+        let checkpointStorage = try await vmCheckpointStorageBytes(in: scope, on: db)
 
         return QuotaMeasuredUsage(
             vcpus: Int(vms?.vcpus ?? 0) + Int(sandboxes?.vcpus ?? 0),
             memoryBytes: (vms?.memory_bytes ?? 0) + (sandboxes?.memory_bytes ?? 0),
-            storageBytes: (vms?.disk_bytes ?? 0) + snapshotStorage,
+            storageBytes: (vms?.disk_bytes ?? 0) + snapshotStorage + checkpointStorage,
             vmCount: Int(vms?.vm_count ?? 0),
             sandboxCount: Int(sandboxes?.sandbox_count ?? 0)
         )
@@ -188,6 +189,35 @@ struct QuotaUsageAggregator {
             FROM sandbox_snapshots
             WHERE \(scope.predicate)
               AND status::text <> \(bind: SandboxSnapshotStatus.error.rawValue)
+            """
+        ).first(decoding: StorageTotal.self)
+        return total?.storage_bytes ?? 0
+    }
+
+    /// Total full-VM checkpoint storage in scope (issue #564): the sum of
+    /// `size` over non-error checkpoints, where `size` is the machine state
+    /// (RAM + devices) each one added.
+    ///
+    /// Only the machine state is counted, deliberately. A checkpoint is an
+    /// *internal* qcow2 snapshot living inside disks whose provisioned size
+    /// this quota already charges under the VM — adding the disks again would
+    /// double-count them. `creating` rows carry the admission estimate (the
+    /// VM's memory grant, which bounds the machine state) until the agent
+    /// reports the real figure; `error` rows are excluded, since a failed
+    /// checkpoint's partial state is deleted.
+    static func vmCheckpointStorageBytes(in scope: QuotaScope, on db: Database) async throws -> Int64 {
+        if case .none = scope.projects { return 0 }
+        let sql = try requireSQL(db)
+
+        struct StorageTotal: Decodable {
+            let storage_bytes: Int64
+        }
+        let total = try await sql.raw(
+            """
+            SELECT COALESCE(SUM(size), 0)::bigint AS storage_bytes
+            FROM vm_snapshots
+            WHERE \(scope.predicate)
+              AND status::text <> \(bind: VMSnapshotStatus.error.rawValue)
             """
         ).first(decoding: StorageTotal.self)
         return total?.storage_bytes ?? 0

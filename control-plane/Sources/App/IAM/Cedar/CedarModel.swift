@@ -33,6 +33,7 @@ enum CedarEntityType: String, CaseIterable, Sendable {
     case volume = "Volume"
     case volumeSnapshot = "VolumeSnapshot"
     case sandboxSnapshot = "SandboxSnapshot"
+    case vmSnapshot = "VMSnapshot"
     case site = "Site"
     case agent = "Agent"
     /// Both a node type (a project-scoped resource with `serviceaccount:*`
@@ -70,6 +71,7 @@ extension IAMNodeType {
         case .volume: return .volume
         case .volumeSnapshot: return .volumeSnapshot
         case .sandboxSnapshot: return .sandboxSnapshot
+        case .vmSnapshot: return .vmSnapshot
         case .site: return .site
         case .agent: return .agent
         case .serviceAccount: return .serviceAccount

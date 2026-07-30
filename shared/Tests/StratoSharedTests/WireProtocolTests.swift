@@ -68,6 +68,17 @@ struct WireProtocolTests {
         #expect(WireProtocol.supportsProjectNetworkIsolation(WireProtocol.currentVersion))
     }
 
+    @Test("VM checkpoint gate starts at wire protocol v22")
+    func vmCheckpointGate() {
+        // The trio adds new MessageType cases, so a pre-v22 agent fails the
+        // envelope decode and drops the frame — the request would burn its
+        // whole budget against silence (issue #564).
+        #expect(WireProtocol.vmCheckpointMinimumVersion == 22)
+        #expect(!WireProtocol.supportsVMCheckpoint(21))
+        #expect(WireProtocol.supportsVMCheckpoint(22))
+        #expect(WireProtocol.supportsVMCheckpoint(WireProtocol.currentVersion))
+    }
+
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {
         #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))

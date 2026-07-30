@@ -352,6 +352,13 @@ enum IAMResourceTree {
                 try await SandboxSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
                 id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
 
+        case .vmSnapshot:
+            // Like the other snapshot types, a checkpoint references its VM by
+            // attribute, not as a parent — its container is the project.
+            return projectParents(
+                try await VMSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
+
         case .floatingIP:
             return projectParents(
                 try await FloatingIP.query(on: db).filter(\.$id ~~ idList).all(),

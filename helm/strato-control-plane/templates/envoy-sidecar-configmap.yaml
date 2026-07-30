@@ -45,9 +45,19 @@ data:
                             grpc_services:
                               - envoy_grpc:
                                   cluster_name: spire_agent
-                    # Trust bundle for validating client (agent) certificates
+                    # Trust bundle for validating client (agent) certificates.
+                    # "ALL" rather than a single "spiffe://<td>" name: it asks
+                    # the SPIRE agent's SDS for a SPIFFECertValidator carrying
+                    # every trust domain's bundle keyed by domain, so a client
+                    # is checked against the roots of its *own* domain instead
+                    # of one fixed bundle. With per-org trust domains (issue
+                    # #600) agents attest in `org-<id>.{{ .Values.spire.trustDomain }}`
+                    # while the control plane stays in the platform domain, and
+                    # a single-bundle validation context would reject all of
+                    # them. It keeps per-domain separation: this is not a union
+                    # of roots that any CA could satisfy.
                     validation_context_sds_secret_config:
-                      name: "spiffe://{{ .Values.spire.trustDomain }}"
+                      name: "ALL"
                       sds_config:
                         resource_api_version: V3
                         api_config_source:
@@ -108,7 +118,20 @@ data:
                                           principals:
                                             - authenticated:
                                                 principal_name:
-                                                  prefix: "spiffe://{{ .Values.spire.trustDomain }}/agent/"
+                                                  safe_regex:
+                                                    # Single-quoted: YAML does no escape processing
+                                                    # there, so the backslashes regexQuoteMeta emits
+                                                    # reach RE2 intact.
+                                                    #
+                                                    # Lowercased to match what is actually in an SVID:
+                                                    # SPIFFE trust domain names are lowercase, and
+                                                    # OrgTrustDomain.trustDomain(forOrganization:) lowercases
+                                                    # the whole derived domain for exactly that reason. A
+                                                    # mixed-case spire.trustDomain would otherwise render an
+                                                    # org alternative that matches no SVID at all — and only
+                                                    # the /ingest/* routes would break, since the platform
+                                                    # alternative keeps working.
+                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
                             # Sandbox snapshot artifact transfer (issue #428):
                             # agents PUT exported checkpoint artifacts during an
                             # export and GET them back for cross-agent
@@ -134,7 +157,20 @@ data:
                                           principals:
                                             - authenticated:
                                                 principal_name:
-                                                  prefix: "spiffe://{{ .Values.spire.trustDomain }}/agent/"
+                                                  safe_regex:
+                                                    # Single-quoted: YAML does no escape processing
+                                                    # there, so the backslashes regexQuoteMeta emits
+                                                    # reach RE2 intact.
+                                                    #
+                                                    # Lowercased to match what is actually in an SVID:
+                                                    # SPIFFE trust domain names are lowercase, and
+                                                    # OrgTrustDomain.trustDomain(forOrganization:) lowercases
+                                                    # the whole derived domain for exactly that reason. A
+                                                    # mixed-case spire.trustDomain would otherwise render an
+                                                    # org alternative that matches no SVID at all — and only
+                                                    # the /ingest/* routes would break, since the platform
+                                                    # alternative keeps working.
+                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
                             - match:
                                 prefix: "/agent/"
                               route:
@@ -150,6 +186,19 @@ data:
                       # download route above). Control-plane routes keep their
                       # existing model — the control plane re-verifies the
                       # forwarded client cert (XFCC) itself.
+                      #
+                      # Those overrides match the principal name by regex
+                      # rather than by a single-trust-domain prefix, because
+                      # with per-org trust domains (issue #600) an agent's SVID
+                      # reads spiffe://org-<16 hex>.<td>/agent/<name> — while
+                      # platform-domain agents enrolled before the cutover keep
+                      # spiffe://<td>/agent/<name>, so both alternatives have
+                      # to be admitted. Envoy string matchers are full matches,
+                      # hence the trailing `/agent/.+` rather than a bare
+                      # prefix: a domain merely *ending* in the trust domain,
+                      # or a path that only starts with /agent/, does not
+                      # match. The trust domain is regex-escaped so its dots
+                      # cannot act as wildcards.
                       #
                       # Note the shape: because the catch-all "/" route carries
                       # no RBAC, a path that misses a guarded route's matcher is

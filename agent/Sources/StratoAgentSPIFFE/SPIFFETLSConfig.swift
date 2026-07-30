@@ -9,10 +9,20 @@ public enum SPIFFETLSConfig {
     /// Create a client TLS configuration for mTLS using an SVID
     /// - Parameters:
     ///   - svid: The X.509 SVID to use for client authentication
+    ///   - peerTrustDomain: The trust domain of the peer this configuration
+    ///     will dial, selecting which of the SVID's root sets verifies it.
+    ///     Nil means the SVID's own domain — the single-trust-domain case.
+    ///     Once the agent lives in its organization's trust domain (issue
+    ///     #600) the control plane is a federated peer, and naming its domain
+    ///     here is what picks up the federated roots. Unlike the WebSocket
+    ///     path, this is load-bearing rather than defense in depth: the
+    ///     artifact downloader has no pinning callback, so these roots are the
+    ///     only thing standing between it and an unverified peer.
     ///   - verifyPeer: Whether to verify the server certificate (default: true)
     /// - Returns: TLSConfiguration for client connections
     public static func makeClientConfiguration(
         svid: X509SVID,
+        peerTrustDomain: String? = nil,
         verifyPeer: Bool = true
     ) throws -> TLSConfiguration {
         // Parse certificate chain
@@ -26,7 +36,15 @@ public enum SPIFFETLSConfig {
         // Parse trust bundle for server verification
         let trustRoots: NIOSSLTrustRoots
         if verifyPeer {
-            let trustedCerts = try svid.trustBundle.map { pemString in
+            let peerDomain = peerTrustDomain ?? svid.spiffeID.trustDomain
+            guard let rootsPEM = svid.roots(forTrustDomain: peerDomain) else {
+                throw SPIFFEError.noRootsForTrustDomain(
+                    peerTrustDomain: peerDomain,
+                    ownTrustDomain: svid.spiffeID.trustDomain,
+                    federated: Array(svid.federatedBundles.keys)
+                )
+            }
+            let trustedCerts = try rootsPEM.map { pemString in
                 try NIOSSLCertificate(bytes: [UInt8](pemString.utf8), format: .pem)
             }
             trustRoots = .certificates(trustedCerts)
@@ -106,6 +124,12 @@ public actor SVIDManager {
     private let client: any SPIFFEClientProtocol
     private let logger: Logger
 
+    /// Trust domain of the peer the managed TLS configuration dials — the
+    /// control plane, the agent's only mTLS peer. Nil keeps the SVID's own
+    /// domain, which is correct until the agent and control plane live in
+    /// different trust domains (issue #600).
+    private let peerTrustDomain: String?
+
     private var currentSVID: X509SVID?
     private var currentTLSConfig: TLSConfiguration?
     private var watchTask: Task<Void, Never>?
@@ -114,9 +138,10 @@ public actor SVIDManager {
     /// Time before expiration to trigger rotation (default: 5 minutes)
     public var rotationMargin: TimeInterval = 300
 
-    public init(client: any SPIFFEClientProtocol, logger: Logger) {
+    public init(client: any SPIFFEClientProtocol, logger: Logger, peerTrustDomain: String? = nil) {
         self.client = client
         self.logger = logger
+        self.peerTrustDomain = peerTrustDomain
     }
 
     /// Start the SVID manager and fetch initial SVID
@@ -127,7 +152,8 @@ public actor SVIDManager {
         currentSVID = try await client.fetchX509SVID()
 
         // Generate TLS config
-        currentTLSConfig = try SPIFFETLSConfig.makeClientConfiguration(svid: currentSVID!)
+        currentTLSConfig = try SPIFFETLSConfig.makeClientConfiguration(
+            svid: currentSVID!, peerTrustDomain: peerTrustDomain)
 
         logger.info(
             "Initial SVID loaded",
@@ -211,7 +237,8 @@ public actor SVIDManager {
 
         // Update TLS config
         do {
-            currentTLSConfig = try SPIFFETLSConfig.makeClientConfiguration(svid: svid)
+            currentTLSConfig = try SPIFFETLSConfig.makeClientConfiguration(
+                svid: svid, peerTrustDomain: peerTrustDomain)
         } catch {
             logger.error("Failed to update TLS config after rotation: \(error)")
         }

@@ -521,6 +521,10 @@ public func configure(_ app: Application) async throws {
     // compatibility constraints, and the sandbox's create-time CPU template.
     app.migrations.add(AddSandboxSnapshotMobility())
 
+    // Full-VM checkpoints (issue #564): RAM + device state as a qcow2 internal
+    // snapshot of the VM's own disks.
+    app.migrations.add(CreateVMSnapshot())
+
     // Give the seeded "default" network resolvers so guests can resolve names
     // out of the box (issue #518). Runs late: it must follow the migration that
     // adds `dns_servers`, and it only fills a network that still has none.

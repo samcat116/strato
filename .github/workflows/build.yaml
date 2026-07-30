@@ -361,6 +361,23 @@ jobs:
         working-directory: clients/swift
         run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
+      # The vendored Firecracker wrapper. The `firecracker` filter already
+      # gated the agent build above, but that only compiles this package as a
+      # *library* — its own test target was never built, so the suite had no
+      # Linux coverage at all on the one platform Firecracker runs on. A test
+      # that compiled on Darwin and not on Glibc (SHUT_RDWR imports as Int
+      # there, Int32 here) reached main green because of exactly that gap.
+      - name: Build SwiftFirecracker
+        id: build-firecracker
+        if: ${{ !cancelled() && (needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
+        working-directory: SwiftFirecracker
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/firecracker" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+
+      - name: Test SwiftFirecracker
+        if: ${{ !cancelled() && steps.build-firecracker.outcome == 'success' }}
+        working-directory: SwiftFirecracker
+        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/firecracker" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+
       # The flock holder is a detached process, so the lock would also be
       # released when the ephemeral pod exits. Release it explicitly anyway:
       # that invariant belongs to how the runners are deployed, not to this

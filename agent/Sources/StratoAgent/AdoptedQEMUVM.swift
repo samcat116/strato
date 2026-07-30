@@ -8,7 +8,8 @@ import SwiftQEMU
 // Orphan re-adoption (reconciliation phase 2, issue #260).
 //
 // `QEMUManager` can only drive a QEMU process it spawned itself: its QMP
-// socket lives at a random /tmp path and there is no connect-to-existing API.
+// socket lives in a private per-instance directory under the process's runtime
+// directory, and there is no connect-to-existing API.
 // So `QEMUService` gives every VM a *second*, deterministic QMP monitor at
 // `<vmStoragePath>/<vmId>/qmp.sock` (QEMU supports multiple `-qmp` sockets),
 // and after an agent restart an orphan is re-adopted by attaching a fresh
@@ -22,26 +23,31 @@ protocol QEMUVMHandle: Sendable {
     func start() async throws
     func pause() async throws
     func reset() async throws
-    func shutdown() async throws
-    func destroy() async throws
+    /// - Parameter timeout: how long the guest gets to power itself off before
+    ///   termination is forced.
+    func shutdown(timeout: Duration) async throws
+    /// - Parameter terminationTimeout: how long QEMU gets to honour SIGTERM
+    ///   before it is killed outright, and again after SIGKILL.
+    func destroy(terminationTimeout: Duration) async throws
     func getStatus() async throws -> QEMUVMStatus
-    func attachDisk(path: String, deviceName: String, readOnly: Bool) async throws
-    func detachDisk(deviceName: String) async throws
+    /// - Parameter bus: the bus to hot-plug onto, or `nil` to let the handle
+    ///   pick — which on a machine type whose default bus refuses hot-plug
+    ///   (q35, arm `virt`) means one of the `pcie-root-port` devices the VM was
+    ///   launched with.
+    func attachDisk(path: String, deviceName: String, readOnly: Bool, bus: String?) async throws
+    /// - Parameter timeout: how long to wait for QEMU's `DEVICE_DELETED` before
+    ///   giving up. Hot-unplug needs the guest to release the device, so a guest
+    ///   that ignores the request never answers.
+    func detachDisk(deviceName: String, timeout: Duration) async throws
 }
 
-// Four of these methods grew extra defaulted parameters in
-// samcat116/swift-qemu#31/#37 (`Duration` timeouts, and a PCIe `bus` to attach
-// to), and a parameter the requirement does not name cannot witness the
-// requirement even when it has a default. These forwarders re-state the
-// library's own defaults, so the handle keeps the behaviour it had when the
-// signatures were argument-free: 30s to wait out an ACPI powerdown (which the
-// `qmp-shutdown` call site already budgets 60s for),
-// `QEMUProcess.defaultTerminationTimeout` before SIGKILL, and QEMU's own choice
-// of hot-plug bus.
-extension QEMUManager: QEMUVMHandle {
-    func shutdown() async throws {
-        try await shutdown(timeout: .seconds(30))
-    }
+/// The defaults SwiftQEMU spells as default arguments, which a protocol
+/// requirement cannot carry. They are kept deliberately shorter than the
+/// `StageBudget` each call site wraps these in, so the handle's own escalation
+/// (force-quit on a guest that won't shut down, SIGKILL on one that won't die)
+/// gets to run before the outer budget abandons the call.
+extension QEMUVMHandle {
+    func shutdown() async throws { try await shutdown(timeout: .seconds(30)) }
 
     func destroy() async throws {
         try await destroy(terminationTimeout: QEMUProcess.defaultTerminationTimeout)
@@ -55,6 +61,8 @@ extension QEMUManager: QEMUVMHandle {
         try await detachDisk(deviceName: deviceName, timeout: .seconds(5))
     }
 }
+
+extension QEMUManager: QEMUVMHandle {}
 
 /// A QEMU VM inherited from a previous agent incarnation, driven purely over
 /// its deterministic QMP socket. Unlike `QEMUManager` there is no `Process`
@@ -107,13 +115,14 @@ actor AdoptedQEMUVM: QEMUVMHandle {
 
     /// Graceful shutdown. With no child-process handle to wait on, completion
     /// is detected by polling status until the process exits (the QMP
-    /// connection drops) or reports shutdown; after 30s the VM is destroyed,
-    /// matching `QEMUManager.shutdown`'s force-quit fallback.
-    func shutdown() async throws {
+    /// connection drops) or reports shutdown; once `timeout` is spent the VM is
+    /// destroyed, matching `QEMUManager.shutdown`'s force-quit fallback.
+    func shutdown(timeout: Duration) async throws {
         guard isConnected else { throw QMPError.notConnected }
         try await qmp.systemPowerdown()
 
-        for _ in 0..<30 {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
             try await Task.sleep(for: .seconds(1))
             do {
                 let response = try await qmp.queryStatus()
@@ -128,10 +137,13 @@ actor AdoptedQEMUVM: QEMUVMHandle {
         }
 
         logger.warning("Adopted VM did not shut down gracefully, forcing termination")
-        try await destroy()
+        try await destroy(terminationTimeout: QEMUProcess.defaultTerminationTimeout)
     }
 
-    func destroy() async throws {
+    /// Force quit. There is no child-process handle here, so `quit` over QMP is
+    /// the only lever — nothing to escalate to, which is why the termination
+    /// timeout is accepted for protocol conformance and then unused.
+    func destroy(terminationTimeout: Duration) async throws {
         if isConnected {
             do {
                 try await qmp.quit()
@@ -150,24 +162,69 @@ actor AdoptedQEMUVM: QEMUVMHandle {
         return try await queryStatus()
     }
 
-    func attachDisk(path: String, deviceName: String, readOnly: Bool) async throws {
+    /// Hot-plug, without the port bookkeeping `QEMUManager` keeps.
+    ///
+    /// q35 and arm `virt` refuse hot-plug on their default bus, so the disk has
+    /// to name one of the `pcie-root-port` devices the VM was launched with. A
+    /// spawning `QEMUManager` remembers which of those it has handed out; an
+    /// adopted VM cannot — that state died with the previous agent process, and
+    /// SwiftQEMU's command vocabulary has no `query-pci` to rebuild it from. So
+    /// the ports are tried in order and QEMU arbitrates: a port already holding
+    /// a device rejects the second with `slot 0 function 0 already occupied`.
+    /// `nil` comes last, for a machine type whose default bus does accept
+    /// hot-plug and where none of these ports exist at all.
+    func attachDisk(path: String, deviceName: String, readOnly: Bool, bus: String?) async throws {
         guard isConnected else { throw QMPError.notConnected }
         let nodeName = "drive-\(deviceName)"
+
+        let candidates: [String?] = if let bus { [bus] } else { Self.hotplugPortCandidates }
+
         try await qmp.blockdevAdd(nodeName: nodeName, filename: path, readOnly: readOnly)
-        do {
-            try await qmp.deviceAdd(deviceId: deviceName, driveId: nodeName)
-        } catch {
-            try? await qmp.blockdevDel(nodeName: nodeName)
-            throw error
+
+        // The *first* failure is the one worth reporting. Walking the list is
+        // normal — an occupied port is how a busy pool answers — so the last
+        // error is whatever the machine-default attempt said, which is the
+        // least informative of the candidates. A real fault (a bad path, a
+        // dropped connection, a duplicate device id) shows up on the first
+        // attempt and would otherwise be buried by four follow-on rejections.
+        var firstError: (any Error)?
+        for candidate in candidates {
+            do {
+                try await qmp.deviceAdd(deviceId: deviceName, driveId: nodeName, bus: candidate)
+                return
+            } catch {
+                if firstError == nil { firstError = error }
+                logger.debug(
+                    "Hot-plug port rejected the disk; trying the next one",
+                    metadata: [
+                        "deviceName": .string(deviceName),
+                        "bus": .string(candidate ?? "<machine default>"),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
         }
+
+        try? await qmp.blockdevDel(nodeName: nodeName)
+        throw firstError ?? QMPError.invalidConfiguration
     }
 
-    func detachDisk(deviceName: String) async throws {
+    func detachDisk(deviceName: String, timeout: Duration) async throws {
         guard isConnected else { throw QMPError.notConnected }
         let nodeName = "drive-\(deviceName)"
-        try await qmp.deviceDel(deviceId: deviceName)
+        try await qmp.deviceDel(deviceId: deviceName, timeout: timeout)
         try await qmp.blockdevDel(nodeName: nodeName)
     }
+
+    /// The buses `attachDisk` tries, in order, when the caller names none.
+    ///
+    /// The port ids are derived from a default `QEMUConfiguration` rather than
+    /// hard-coded, so they track SwiftQEMU's own naming. Deriving them from the
+    /// *default* configuration is sound because the list does not vary across
+    /// the machine types this agent spawns: q35 on x86 and `virt` on arm64 both
+    /// need root ports, and both therefore get the same
+    /// `automaticHotplugPortCount` ids.
+    private static let hotplugPortCandidates: [String?] =
+        QEMUConfiguration().hotplugPortIDs.map { $0 } + [nil]
 
     /// Same QMP status mapping as `QEMUManager.updateStatus`, minus the
     /// stateful bookkeeping.

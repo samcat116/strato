@@ -126,6 +126,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(command.contains("fake-join-token"))
                 #expect(command.contains("spire.example.com:8085"))
                 #expect(command.contains("--trust-domain 'strato.local'"))
+                // Always explicit, even in the single-trust-domain case (issue
+                // #615): the agent's own default derives the pin from *its*
+                // trust domain, which stops being the control plane's the
+                // moment per-org domains are switched on.
+                #expect(
+                    command.contains("--control-plane-spiffe-id 'spiffe://strato.local/control-plane'"))
             }
 
             // The join token lifetime matches the enrollment's expirationHours
@@ -325,6 +331,104 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 0)
+        }
+    }
+
+    // MARK: - Revoking a grant whose trust domain no longer exists
+
+    /// An enrollment naming an org trust domain with no `org_trust_domains`
+    /// row: what is left after that org's teardown completes, or after a row is
+    /// lost, while the enrollment still records the domain.
+    private func makeOrphanedDomainEnrollment(agentName: String = "node-orphan") -> AgentEnrollment {
+        AgentEnrollment(
+            agentName: agentName,
+            spiffeID: "spiffe://org-deadbeefdeadbeef.strato.local/agent/\(agentName)",
+            trustDomain: "org-deadbeefdeadbeef.strato.local",
+            expirationHours: 1)
+    }
+
+    @Test("Revoking a grant whose trust domain is unknown fails closed by default")
+    func revokeUnknownTrustDomainFailsClosed() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let enrollment = makeOrphanedDomainEnrollment()
+            try await enrollment.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+            }
+
+            // Nothing was deleted anywhere — in particular not against the
+            // *platform* server, which would have reported success while the
+            // org's entries stood.
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
+
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            #expect(remaining == 1)
+        }
+    }
+
+    @Test("skipSpireDeprovision lets an unknown trust domain be revoked anyway")
+    func revokeUnknownTrustDomainWithOverride() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let enrollment = makeOrphanedDomainEnrollment()
+            try await enrollment.save(on: app.db)
+
+            // Without this escape hatch the row is permanently undeletable:
+            // no `org_trust_domains` row will ever come back, so there is
+            // nothing to retry.
+            try await app.test(
+                .DELETE, "/api/agent-enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // The override skips deprovisioning; it must not silently retarget
+            // the platform server.
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
+
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("Deregistering an agent whose trust domain is unknown fails closed, and overrides")
+    func deregisterUnknownTrustDomain() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let agent = makeAgent(named: "node-orphan")
+            agent.trustDomain = "org-deadbeefdeadbeef.strato.local"
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+            }
+            #expect(try await Agent.query(on: app.db).count() == 1)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)?skipSpireDeprovision=true") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            #expect(try await Agent.query(on: app.db).count() == 0)
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
         }
     }
 
@@ -701,6 +805,7 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
 
     private var failJoinToken = false
     private var failCreateEntry = false
+    private var failEntryUpdates = false
     private var failDelete = false
     private var deleteInvalidArgument = false
     private var evictInvalidArgument = false
@@ -730,6 +835,10 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     /// attested agent (a node that never redeemed its join token).
     func setEvictInvalidArgument(_ fail: Bool) { evictInvalidArgument = fail }
     func setEntryResult(_ result: SPIREEntryCreationResult) { entryResult = result }
+    /// updateEntries throws, as SPIRE does when the server is unreachable —
+    /// used to check that a failed federation reconcile fails the provisioning
+    /// rather than yielding an entry with the wrong federation set.
+    func setFailEntryUpdates(_ fail: Bool) { failEntryUpdates = fail }
 
     func createJoinToken(ttlSeconds: Int32, agentID: String?) async throws -> SPIREJoinToken {
         if failJoinToken {
@@ -766,6 +875,9 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     }
 
     func updateEntries(_ updates: [SPIREEntryUpdate]) async throws -> [SPIREEntry] {
+        if failEntryUpdates {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
         entryUpdates.append(contentsOf: updates)
         return []
     }

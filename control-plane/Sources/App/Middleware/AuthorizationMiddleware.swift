@@ -276,12 +276,13 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         let method = request.method
         let pathComponents = request.url.path.split(separator: "/")
 
-        // Snapshot subresource (issue #426): creating, deleting, or restoring
-        // a sandbox snapshot is guarded by the parent resource's `snapshot`
-        // permission (finer per-snapshot checks live in the handlers);
-        // listing follows plain `read`. Without this carve-out the generic
-        // mapping below would demand `delete` on the *sandbox* to delete one
-        // of its snapshots.
+        // Snapshot subresource (issue #426, and full-VM checkpoints in #564):
+        // creating, deleting, or restoring a snapshot is guarded by the parent
+        // resource's `snapshot` permission (finer per-snapshot checks live in
+        // the handlers); listing follows plain `read`. Without this carve-out
+        // the generic mapping below would demand `delete` on the *VM or
+        // sandbox* to delete one of its snapshots. Both guarded prefixes nest
+        // snapshots at the same depth, so one rule covers them.
         let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
 
         // Determine required permission based on HTTP method and path

@@ -48,16 +48,21 @@ actor QEMUService: HypervisorService {
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
-    // VMs this service spawned and has not yet started. Every VM is spawned
-    // with `-S` (`startPaused`), so QEMU sits in the `prelaunch` run state
-    // until `bootVM` issues `cont` — and swift-qemu reports `prelaunch` as
-    // `.paused` (samcat116/swift-qemu#29; it used to be `.creating`). Without
-    // this set a freshly created VM observes `.paused`, which
-    // `DesiredVMStatus.shutdown.isSatisfied(by:)` does not accept, so the
-    // create operation never reaches a terminal state and hangs until the
-    // stuck-operation sweep fails it. Re-adopted VMs are deliberately absent:
-    // `AdoptedQEMUVM` reads the run state itself and still maps `prelaunch` to
-    // `.creating`.
+    // VMs this process spawned (with `-S`, per the create contract) and has not
+    // started yet.
+    //
+    // SwiftQEMU reports QEMU's `prelaunch` run state as `.paused`, the same
+    // value it reports for a VM the operator paused after it was running. The
+    // two are different desired states here — a freshly created VM must satisfy
+    // `.shutdown`, a paused one must satisfy `.paused` — so the distinction
+    // QEMU does draw (`prelaunch` vs `paused`) has to be recovered from what
+    // this service knows: whether it has ever issued `start()`. Without it every
+    // create hangs, because `.paused` never satisfies a new VM's `.shutdown`
+    // desired state and the operation waits out its budget.
+    //
+    // Only ever holds VMs spawned here. Re-adopted VMs are absent by
+    // construction, which is correct: `AdoptedQEMUVM` reads the run state
+    // itself and still maps `prelaunch` to `.creating`.
     private var awaitingFirstStart: Set<String> = []
 
     init(
@@ -322,35 +327,19 @@ actor QEMUService: HypervisorService {
             if case HypervisorServiceError.timeout = error { throw error }
             // A guest that powered off took its QEMU process with it, so the
             // control channel is dead and `cont` cannot revive it. Respawn the
-            // process from the configuration the VM was created with (its disks
-            // persist on this host) and resume that. Without a stored config
-            // (re-adopted VM from a previous agent incarnation) the original
-            // error stands. A false positive is safe: QEMU's image locking
-            // refuses a second process on the same disk.
-            guard let config = vmConfigs[vmId] else { throw error }
-            logger.info(
-                "VM control channel is dead; respawning QEMU process",
-                metadata: ["vmId": .string(vmId), "startError": .string(error.localizedDescription)])
-            try? await vm.destroy()
-            // The stored configuration points at this VM's swtpm socket, and a
-            // guest that powered off may have outlived its swtpm. Restarting it
-            // here is safe and idempotent: the TPM's state directory persists,
-            // so the respawned guest sees the same TPM it had (issue #565).
-            if vmSpecs[vmId]?.effectiveMachine.tpm == true, let swtpm {
-                let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
-                try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
+            // process from the configuration the VM was created with and resume
+            // that. Without a stored config (re-adopted VM from a previous agent
+            // incarnation) the original error stands.
+            guard let manager = try await respawn(vmId: vmId, handle: vm, after: error) else {
+                throw error
             }
-            let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
-            try await manager.createVM(
-                config: config, timeout: .seconds(StageBudget.hypervisorSpawnSeconds))
-            activeVMs[vmId] = manager
             try await controlled("qmp-start-respawned", vmId: vmId) {
                 try await manager.start()
             }
         }
 
-        // Started — `prelaunch` is behind us, so a later `.paused` reading is a
-        // real pause and must be reported as one.
+        // Past this point `.paused` from the handle means a real pause, not the
+        // `-S` the process was spawned under.
         awaitingFirstStart.remove(vmId)
 
         // A fresh QEMU process starts with a fully deflated balloon, so a VM
@@ -362,6 +351,38 @@ actor QEMUService: HypervisorService {
         }
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
+    }
+
+    /// Replaces a VM's dead QEMU process with a fresh one spawned from the
+    /// configuration the VM was created with, leaving it paused (`-S`) for the
+    /// caller to start or load into. Returns nil when there is no stored
+    /// configuration — a VM re-adopted from a previous agent incarnation — in
+    /// which case the caller's original error stands.
+    ///
+    /// A false positive is safe: QEMU's image locking refuses a second process
+    /// on the same disks, so a "dead" channel that was merely confused cannot
+    /// produce two writers.
+    private func respawn(
+        vmId: String, handle: any QEMUVMHandle, after error: any Error
+    ) async throws -> QEMUManager? {
+        guard let config = vmConfigs[vmId] else { return nil }
+        logger.info(
+            "VM control channel is dead; respawning QEMU process",
+            metadata: ["vmId": .string(vmId), "cause": .string(error.localizedDescription)])
+        try? await handle.destroy()
+        // The stored configuration points at this VM's swtpm socket, and a
+        // guest that powered off may have outlived its swtpm. Restarting it
+        // here is safe and idempotent: the TPM's state directory persists, so
+        // the respawned guest sees the same TPM it had (issue #565).
+        if vmSpecs[vmId]?.effectiveMachine.tpm == true, let swtpm {
+            let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+            try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
+        }
+        let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
+        try await manager.createVM(
+            config: config, timeout: .seconds(StageBudget.hypervisorSpawnSeconds))
+        activeVMs[vmId] = manager
+        return manager
     }
 
     func shutdownVM(vmId: String) async throws {
@@ -417,6 +438,14 @@ actor QEMUService: HypervisorService {
         try await controlled("qmp-pause", vmId: vmId) {
             try await vm.pause()
         }
+
+        // An explicit pause is past first start by definition, and it is the one
+        // route to `paused` that need not pass a status query first — so the
+        // observed-`.running` clear above cannot be relied on to have run.
+        // Without this the pause reports `.created`, and the reconciler answers
+        // that with `[.boot, .pause]`: the guest is un-paused and re-paused
+        // before the operator's intent sticks.
+        awaitingFirstStart.remove(vmId)
 
         logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
     }
@@ -580,6 +609,15 @@ actor QEMUService: HypervisorService {
             ) {
                 try await qemuManager.getStatus()
             }
+            // Seeing the guest execute settles it, whatever happened to the call
+            // that got it there: `bootVM` rethrows an ambiguous `qmp-start`
+            // timeout without reaching its own clear, and the guest behind that
+            // wedged channel may be running perfectly well. Clearing here makes
+            // the flag self-correcting rather than dependent on `bootVM`
+            // returning.
+            if qemuStatus == .running {
+                awaitingFirstStart.remove(vmId)
+            }
             return Self.vmStatus(from: qemuStatus, awaitingFirstStart: awaitingFirstStart.contains(vmId))
         } catch is StageBudgetError {
             logger.warning("VM status query timed out; reporting unknown", metadata: ["vmId": .string(vmId)])
@@ -593,11 +631,13 @@ actor QEMUService: HypervisorService {
     /// The single SwiftQEMU `QEMUVMStatus` → `VMStatus` mapping, shared by
     /// status queries and re-adoption so the two can never drift apart.
     ///
-    /// - Parameter awaitingFirstStart: whether this service spawned the VM and
-    ///   has not started it yet. Such a VM is sitting in QEMU's `prelaunch`
-    ///   state, which swift-qemu reports as `.paused` — indistinguishable from
-    ///   a deliberately paused VM at this layer, so the caller supplies the
-    ///   bookkeeping that tells them apart. See `awaitingFirstStart`.
+    /// - Parameter awaitingFirstStart: whether this VM was spawned by this
+    ///   service and has not been started yet. SwiftQEMU folds QEMU's
+    ///   `prelaunch` into `.paused`, so without this a just-created VM is
+    ///   indistinguishable from an operator-paused one — and reports a status
+    ///   its `.shutdown` desired state can never be satisfied by. Defaults to
+    ///   false, which is right for re-adopted VMs: `AdoptedQEMUVM` reads the run
+    ///   state itself and maps `prelaunch` to `.creating`.
     static func vmStatus(from qemuStatus: QEMUVMStatus, awaitingFirstStart: Bool = false) -> VMStatus {
         switch qemuStatus {
         case .running:
@@ -1039,6 +1079,244 @@ actor QEMUService: HypervisorService {
         return (vcpus, memoryBytes)
     }
 
+    // MARK: - Full-VM checkpoints (issue #564)
+
+    /// Checkpoints a running VM: guest RAM, device state, and the disks at the
+    /// same instant, written as an internal snapshot of the VM's qcow2 disks
+    /// under a tag derived from `snapshotId`.
+    ///
+    /// The guest is paused by QEMU only for the duration of the save job and
+    /// resumes on its own afterwards — the VM's desired state is unaffected,
+    /// which is why this is an imperative operation and not a state the
+    /// reconciler converges.
+    ///
+    /// The budget scales with guest RAM (the machine state is written at disk
+    /// speed), so it uses the image-materialization envelope rather than the
+    /// control-call one, and `.cancelAndWait`: a save job abandoned mid-write
+    /// would leave a half-written tag that a retry could mistake for a
+    /// checkpoint.
+    func checkpointVM(vmId: String, snapshotId: String) async throws -> VMCheckpointReport {
+        guard activeVMs[vmId] != nil else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+        let client = try requireProbeClient(vmId: vmId)
+        let tag = VMSnapshotTag.tag(for: snapshotId)
+
+        logger.info(
+            "Checkpointing QEMU VM",
+            metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId), "tag": .string(tag)])
+
+        let targets = try await captureTargets(vmId: vmId, client: client)
+        let vmStateSize = try await StageBudget.run(
+            seconds: StageBudget.checkpointSeconds, stage: "qmp-snapshot-save", onTimeout: .cancelAndWait
+        ) {
+            try await client.saveSnapshot(
+                tag: tag, vmstateNode: targets.vmstate, devices: targets.devices,
+                jobId: Self.jobId("save", snapshotId))
+        }
+
+        logger.info(
+            "QEMU VM checkpoint captured",
+            metadata: [
+                "vmId": .string(vmId), "snapshotId": .string(snapshotId),
+                "vmStateSizeBytes": .string(vmStateSize.map(String.init) ?? "unknown"),
+            ])
+
+        return VMCheckpointReport(
+            vmStateSizeBytes: vmStateSize,
+            deviceNodes: targets.devices,
+            // Best-effort: a checkpoint that exists must not be reported as
+            // failed because the version probe did not answer.
+            hypervisorVersion: try? await client.qemuVersion())
+    }
+
+    /// Restores a VM in place from one of its checkpoints: loads the captured
+    /// RAM and device state back into the VM's QEMU process, then resumes it.
+    ///
+    /// The VM must be known to this agent, but need not be *running*. A VM
+    /// whose guest powered off took its QEMU process with it, so there is
+    /// nothing to load into; the process is respawned from the stored
+    /// configuration first — paused, exactly as `bootVM` does for a dead
+    /// control channel — and the checkpoint loads into that. Together with the
+    /// desired-state sync re-creating a stopped VM after an agent restart,
+    /// this is what makes checkpoint → stop → restart-agent → restore work
+    /// without the agent having remembered anything.
+    func restoreVM(vmId: String, snapshotId: String) async throws {
+        guard var vm = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+        let tag = VMSnapshotTag.tag(for: snapshotId)
+
+        logger.info(
+            "Restoring QEMU VM from checkpoint",
+            metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId), "tag": .string(tag)])
+
+        // The checkpoint's disks are read through the *live* process's block
+        // layer, so opening the monitor and querying it doubles as the liveness
+        // check: a VM whose QEMU is gone fails here, before anything has been
+        // mutated. Both steps are inside the `do` — a process that exited took
+        // its stats socket with it, so `requireProbeClient` failing is itself
+        // one of the dead-process signals and must not escape the respawn.
+        var client: QMPProbeClient
+        var targets: VMCheckpointTargets.Selection
+        do {
+            client = try requireProbeClient(vmId: vmId)
+            targets = try await tagTargets(vmId: vmId, client: client, tag: tag)
+        } catch let error where Self.indicatesDeadHypervisor(error) {
+            guard let manager = try await respawn(vmId: vmId, handle: vm, after: error) else {
+                throw error
+            }
+            vm = manager
+            client = try requireProbeClient(vmId: vmId)
+            targets = try await tagTargets(vmId: vmId, client: client, tag: tag)
+        }
+
+        let loadClient = client
+        try await StageBudget.run(
+            seconds: StageBudget.checkpointSeconds, stage: "qmp-snapshot-load", onTimeout: .cancelAndWait
+        ) { [targets] in
+            try await loadClient.loadSnapshot(
+                tag: tag, vmstateNode: targets.vmstate, devices: targets.devices,
+                jobId: Self.jobId("load", snapshotId))
+        }
+
+        // QEMU leaves the machine stopped after a load, whatever it was doing
+        // before, so the resume is unconditional. It also means the VM is past
+        // first start by definition — without clearing the flag a restored VM
+        // reports `.created` and the reconciler answers that by booting it
+        // again.
+        awaitingFirstStart.remove(vmId)
+        let restored = vm
+        try await controlled("qmp-start-restored", vmId: vmId) {
+            try await restored.start()
+        }
+
+        logger.info(
+            "QEMU VM restored from checkpoint",
+            metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+    }
+
+    /// Removes a checkpoint from the VM's disks. Idempotent: a tag no node
+    /// carries — because the delete already ran, or because the create's
+    /// response was lost after a partial write — is a success, since the
+    /// post-condition ("this checkpoint is gone") holds either way.
+    ///
+    /// Unlike restore, this does *not* respawn a dead QEMU process: deleting a
+    /// checkpoint is not worth booting a machine the operator stopped. On a VM
+    /// with no live process the request fails and the control plane leaves the
+    /// row `deleting`, which is retryable once the VM runs again — or moot,
+    /// since deleting the VM takes its disks and the checkpoint with them.
+    func deleteVMCheckpoint(vmId: String, snapshotId: String) async throws {
+        guard activeVMs[vmId] != nil else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+        let client = try requireProbeClient(vmId: vmId)
+        let tag = VMSnapshotTag.tag(for: snapshotId)
+
+        let nodes = try await controlled("qmp-query-block", vmId: vmId) {
+            try await client.blockNodes()
+        }
+        let carrying = nodes.filter { $0.hasSnapshot(named: tag) }.map(\.nodeName)
+        guard !carrying.isEmpty else {
+            logger.info(
+                "Checkpoint already absent from VM disks; delete is a no-op",
+                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+            return
+        }
+
+        try await StageBudget.run(
+            seconds: StageBudget.checkpointSeconds, stage: "qmp-snapshot-delete", onTimeout: .cancelAndWait
+        ) {
+            try await client.deleteSnapshot(
+                tag: tag, devices: carrying, jobId: Self.jobId("del", snapshotId))
+        }
+
+        logger.info(
+            "QEMU VM checkpoint deleted",
+            metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+    }
+
+    /// A QEMU job id for one checkpoint operation. QEMU identifiers must start
+    /// with a letter, so the id is prefixed rather than being a bare UUID; it
+    /// is deterministic per (operation, snapshot) so a replayed request rejoins
+    /// the job its first attempt started instead of racing a second one.
+    private static func jobId(_ operation: String, _ snapshotId: String) -> String {
+        "strato-\(operation)-\(snapshotId.lowercased())"
+    }
+
+    /// Whether an error means the VM's QEMU process is gone, and a restore
+    /// should respawn it rather than give up.
+    ///
+    /// Framed as "what proves the monitor is alive", because the cost of the
+    /// two mistakes is asymmetric: failing to respawn a dead process wastes a
+    /// restore, while respawning a live one destroys a running guest. So the
+    /// errors that positively describe a *reachable* monitor — or that are too
+    /// ambiguous to act on — keep the process, and everything else (a stats
+    /// socket that is gone, a channel at EOF, a connect refused on a stale
+    /// socket file) is taken as evidence the process exited.
+    private static func indicatesDeadHypervisor(_ error: any Error) -> Bool {
+        switch error {
+        case HypervisorServiceError.timeout:
+            // A budget overrun is not evidence of death. The stats monitor is
+            // single-client and shared with the balloon poller, so contention
+            // produces exactly this — and killing a healthy guest over a slow
+            // reply is the worse failure. Same reasoning as `bootVM`'s respawn.
+            return false
+        case is VMCheckpointTargets.SelectionError:
+            // A verdict about the checkpoint, reached by reading a monitor that
+            // answered. Respawning changes nothing.
+            return false
+        case QMPProbeClient.QMPProbeError.commandError,
+            QMPProbeClient.QMPProbeError.malformedResponse:
+            // QEMU replied, so it is alive; the reply was a rejection or was
+            // unparseable.
+            return false
+        default:
+            return true
+        }
+    }
+
+    /// The nodes a *new* checkpoint writes to. The rules live in
+    /// `VMCheckpointTargets.forCapture`; this supplies the two facts only the
+    /// service knows — where this VM's UEFI variable store is, and which disk is
+    /// its boot disk — and maps the pure verdict onto the hypervisor error
+    /// vocabulary.
+    private func captureTargets(
+        vmId: String, client: QMPProbeClient
+    ) async throws -> VMCheckpointTargets.Selection {
+        let nodes = try await controlled("qmp-query-block", vmId: vmId) {
+            try await client.blockNodes()
+        }
+        do {
+            return try VMCheckpointTargets.forCapture(
+                nodes: nodes,
+                nvramPath: Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId),
+                // The first disk on the spawn command line is the boot disk;
+                // hot-plugged volumes are never in the stored configuration.
+                // Absent for a VM re-adopted from a previous agent incarnation,
+                // which falls back to deterministic placement.
+                bootDiskPath: vmConfigs[vmId]?.disks.first?.path)
+        } catch let error as VMCheckpointTargets.SelectionError {
+            throw HypervisorServiceError.notSupported(
+                "VM \(vmId) cannot be checkpointed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The nodes an *existing* checkpoint lives on, found by its tag. See
+    /// `VMCheckpointTargets.forTag`.
+    private func tagTargets(
+        vmId: String, client: QMPProbeClient, tag: String
+    ) async throws -> VMCheckpointTargets.Selection {
+        let nodes = try await controlled("qmp-query-block", vmId: vmId) {
+            try await client.blockNodes()
+        }
+        do {
+            return try VMCheckpointTargets.forTag(nodes: nodes, tag: tag)
+        } catch let error as VMCheckpointTargets.SelectionError {
+            throw HypervisorServiceError.invalidConfiguration("VM \(vmId): \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Disk Hot-Plug Operations (Volume Support)
 
     /// Attaches a disk to a running VM using QMP hot-plug
@@ -1387,13 +1665,6 @@ actor QEMUService: HypervisorService {
         // Enable hardware acceleration based on platform and the operator's
         // `enable_kvm`/`enable_hvf` preference. When disabled, QEMU falls back
         // to TCG emulation (slow, but useful for dev/test on unaccelerated hosts).
-        //
-        // `accelerator` replaced the deprecated `enableKVM` in
-        // samcat116/swift-qemu#37. It must carry the macOS choice too: the
-        // property always emits an `-accel` argument (it defaults to `.tcg`),
-        // so the old trick of leaving `enableKVM` false and appending
-        // `-accel hvf` to `additionalArgs` would now put two `-accel` flags on
-        // the command line.
         #if os(Linux)
         // KVM on Linux
         qemuConfig.accelerator = hardwareAccelerationEnabled ? .kvm : .tcg
@@ -1403,7 +1674,9 @@ actor QEMUService: HypervisorService {
             logger.info("KVM acceleration disabled by configuration (enable_kvm=false); using TCG emulation")
         }
         #elseif os(macOS)
-        // KVM is never available on macOS; Hypervisor.framework (HVF) is the accelerator.
+        // KVM is never available on macOS; Hypervisor.framework (HVF) is the
+        // accelerator. SwiftQEMU emits `-accel <name>` from this, so it no
+        // longer has to be appended by hand.
         qemuConfig.accelerator = hardwareAccelerationEnabled ? .hvf : .tcg
         if hardwareAccelerationEnabled {
             logger.debug("Enabling Hypervisor.framework (HVF) acceleration")

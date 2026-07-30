@@ -46,8 +46,17 @@ static_resources:
                         grpc_services:
                           - envoy_grpc:
                               cluster_name: spire_agent
+                # "ALL" rather than a single "spiffe://<td>" name: it asks the
+                # SPIRE agent's SDS for a SPIFFECertValidator carrying every
+                # trust domain's bundle keyed by domain, so a client is checked
+                # against the roots of its *own* domain instead of one fixed
+                # bundle. With per-org trust domains (issue #600) agents attest
+                # in `org-<id>.strato.local` while the control plane stays in
+                # the platform domain, and a single-bundle validation context
+                # would reject all of them. It keeps per-domain separation:
+                # this is not a union of roots that any CA could satisfy.
                 validation_context_sds_secret_config:
-                  name: "spiffe://strato.local"
+                  name: "ALL"
                   sds_config:
                     resource_api_version: V3
                     api_config_source:
@@ -104,7 +113,10 @@ static_resources:
                                       principals:
                                         - authenticated:
                                             principal_name:
-                                              prefix: "spiffe://strato.local/agent/"
+                                              safe_regex:
+                                                # Single-quoted: YAML does no escape processing
+                                                # there, so the backslashes reach RE2 intact.
+                                                regex: 'spiffe://(strato\.local|org-[0-9a-f]{16}\.strato\.local)/agent/.+'
                         - match:
                             path: "/ingest/logs"
                           route:
@@ -124,7 +136,10 @@ static_resources:
                                       principals:
                                         - authenticated:
                                             principal_name:
-                                              prefix: "spiffe://strato.local/agent/"
+                                              safe_regex:
+                                                # Single-quoted: YAML does no escape processing
+                                                # there, so the backslashes reach RE2 intact.
+                                                regex: 'spiffe://(strato\.local|org-[0-9a-f]{16}\.strato\.local)/agent/.+'
                         # Image/artifact downloads (issue #493): agents fetch
                         # base-image bytes here with their SVID as the client
                         # cert; the control plane re-verifies the forwarded
@@ -152,7 +167,10 @@ static_resources:
                                       principals:
                                         - authenticated:
                                             principal_name:
-                                              prefix: "spiffe://strato.local/agent/"
+                                              safe_regex:
+                                                # Single-quoted: YAML does no escape processing
+                                                # there, so the backslashes reach RE2 intact.
+                                                regex: 'spiffe://(strato\.local|org-[0-9a-f]{16}\.strato\.local)/agent/.+'
                         # Sandbox snapshot artifact transfer (issue #428):
                         # agents PUT exported checkpoint artifacts up during
                         # an export and GET them back for cross-agent
@@ -179,7 +197,10 @@ static_resources:
                                       principals:
                                         - authenticated:
                                             principal_name:
-                                              prefix: "spiffe://strato.local/agent/"
+                                              safe_regex:
+                                                # Single-quoted: YAML does no escape processing
+                                                # there, so the backslashes reach RE2 intact.
+                                                regex: 'spiffe://(strato\.local|org-[0-9a-f]{16}\.strato\.local)/agent/.+'
                         - match:
                             prefix: "/agent/"
                           route:
@@ -195,6 +216,17 @@ static_resources:
                   # and image-download routes above). Control-plane routes keep
                   # their existing model — the control plane re-verifies the
                   # forwarded client cert (XFCC) itself.
+                  #
+                  # Those overrides match the principal name by regex rather
+                  # than by a single-trust-domain prefix, because with per-org
+                  # trust domains (issue #600) an agent's SVID reads
+                  # spiffe://org-<16 hex>.strato.local/agent/<name> — while
+                  # platform-domain agents enrolled before the cutover keep
+                  # spiffe://strato.local/agent/<name>, so both alternatives
+                  # have to be admitted. Envoy string matchers are full
+                  # matches, hence the trailing `/agent/.+` rather than a bare
+                  # prefix: a domain merely *ending* in strato.local, or a path
+                  # that only starts with /agent/, does not match.
                   #
                   # Note the shape: because the catch-all "/" route below
                   # carries no RBAC, a path that misses a guarded route's

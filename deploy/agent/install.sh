@@ -25,6 +25,12 @@
 # spiffe-helper, which push node metrics and journal logs to the control
 # plane's telemetry ingest using the same SVID.
 #
+# Re-running this with a *fresh* bootstrap command re-enrolls the node: a
+# changed --trust-domain or a join token this host has not already redeemed
+# clears the spire-agent data dir so the node attests again under its new
+# identity. Re-running the *same* command (to upgrade binaries, say) leaves the
+# attested identity alone.
+#
 # Linux only: spire-agent, systemd, and KVM all are.
 #
 # Flags (all five below are required):
@@ -544,6 +550,50 @@ install_unit
 # SPIRE server with the one-time join token, then serve the Workload API that
 # the strato-agent (and spiffe-helper) draw SVIDs from.
 
+# A spire-agent that has already attested keeps its SVID and private key in
+# data_dir and ignores the join token from then on. That is right for an
+# ordinary re-run (upgrading binaries must not force re-attestation), and wrong
+# for a re-enrollment: the operator has revoked the old grant and been handed a
+# fresh bootstrap command, so the stored identity is dead. Worse, with per-org
+# trust domains (issue #600) re-enrollment can move the node into a *different*
+# trust domain, where the old SVID is not merely revoked but meaningless.
+#
+# Distinguish the two by what the new bootstrap command carries: a changed trust
+# domain, or a join token this node has not already redeemed. A plain re-run
+# replays the same command, so both compare equal and the data dir survives.
+reset_spire_data_dir_if_reenrolling() {
+  local conf="$SPIRE_CONF_DIR/agent.conf"
+  [ -f "$conf" ] || return 0
+  [ -d "$SPIRE_DATA_DIR" ] || return 0
+
+  local prev_td prev_token reason=""
+  prev_td="$(sed -n 's/^[[:space:]]*trust_domain[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$conf" | head -1)"
+  prev_token="$(sed -n 's/^[[:space:]]*join_token[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$conf" | head -1)"
+
+  if [ -n "$prev_td" ] && [ "$prev_td" != "$TRUST_DOMAIN" ]; then
+    reason="trust domain changed ($prev_td -> $TRUST_DOMAIN)"
+  elif [ -n "$prev_token" ] && [ "$prev_token" != "$JOIN_TOKEN" ]; then
+    reason="a new join token was issued (re-enrollment)"
+  fi
+
+  [ -n "$reason" ] || return 0
+
+  log "Resetting $SPIRE_DATA_DIR: $reason"
+  # Stop first: a running spire-agent would keep serving the old SVID from
+  # memory and rewrite its key material on shutdown.
+  if [ "$USE_SYSTEMD" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl stop spire-agent.service 2>/dev/null || true
+  else
+    pkill -f "spire-agent run" 2>/dev/null || true
+  fi
+  # Contents, not the directory: it may be a mount point, and the KeyManager
+  # "disk" plugin is configured to write into this exact path. `find -delete`
+  # rather than a glob so dotfiles go too and an empty directory is not an
+  # error.
+  find "${SPIRE_DATA_DIR:?}" -mindepth 1 -delete \
+    || die "could not clear $SPIRE_DATA_DIR; remove it by hand and re-run"
+}
+
 setup_spire() {
   # Fail fast on a stale agent config. write_config below only writes
   # config.toml when it is absent, so a leftover file without a [spiffe]
@@ -557,6 +607,8 @@ setup_spire() {
 
   local host="${SPIRE_SERVER_ADDRESS%:*}" port="${SPIRE_SERVER_ADDRESS##*:}"
   [ "$host" != "$port" ] || die "--spire-server-address must be host:port"
+
+  reset_spire_data_dir_if_reenrolling
 
   mkdir -p "$SPIRE_CONF_DIR" "$SPIRE_DATA_DIR" "$SPIRE_SOCKET_DIR"
 
@@ -685,6 +737,13 @@ cert_dir = "$ALLOY_CERT_DIR"
 svid_file_name = "svid.pem"
 svid_key_file_name = "svid_key.pem"
 svid_bundle_file_name = "bundle.pem"
+# Write the federated domains' roots into bundle.pem alongside our own.
+# Alloy pushes to the control plane's Envoy listener, which presents a
+# platform-trust-domain SVID — and with per-org trust domains (issue #600)
+# this node is issued in its organization's domain, so our own roots cannot
+# verify that peer. Without this, telemetry mTLS fails with an unknown-CA
+# error while the agent's own WebSocket keeps working.
+include_federated_domains = true
 daemon_mode = true
 EOF
   chmod 600 "$HELPER_CONF_DIR/helper.conf"
@@ -807,6 +866,52 @@ write_telemetry_config
 # a fresh host the file must exist first. This is also the only place the
 # selected network mode is persisted — without it the agent defaults to OVN
 # even when installed with --network-mode user.
+# Replace `key = "..."` inside config.toml, or insert it directly under the
+# [spiffe] header when absent. Used for the handful of values a re-enrollment
+# must refresh — everything else in an existing config is left to the operator.
+#
+# awk rather than sed throughout: this only ever runs against a config the
+# operator may have hand-edited, and awk lets the value be passed as data
+# instead of interpolated into a sed replacement, where a `|` or `&` in the
+# value would corrupt the result. Both branches also stop after the first
+# match, so a key that appears twice is not rewritten twice.
+#
+# The value arrives through ENVIRON rather than `awk -v`, which expands
+# backslash escapes in its assignment (`a\db` would lose the `\d`). Neither a
+# trust domain nor a SPIFFE ID can contain a backslash, so this is belt and
+# braces — but it costs nothing and keeps the function honest about being a
+# verbatim writer.
+set_spiffe_key() {
+  local key="$1" value="$2"
+  if grep -q "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE"; then
+    local current
+    current="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\".*/\1/p" "$CONFIG_FILE" | head -1)"
+    [ "$current" != "$value" ] || return 0
+    log "Updating ${key} in $CONFIG_FILE ($current -> $value)"
+    # Write through a temp file: in-place editing spelling differs GNU vs BSD.
+    SPIFFE_KEY="$key" SPIFFE_VALUE="$value" awk '
+      BEGIN { key = ENVIRON["SPIFFE_KEY"]; value = ENVIRON["SPIFFE_VALUE"] }
+      !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = \"" value "\""; done = 1; next }
+      { print }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  else
+    log "Adding ${key} to $CONFIG_FILE"
+    # Directly under the [spiffe] header rather than at EOF: this branch only
+    # runs for a config that already existed, so a table the operator added
+    # after [spiffe] would otherwise silently capture the key.
+    SPIFFE_KEY="$key" SPIFFE_VALUE="$value" awk '
+      BEGIN { key = ENVIRON["SPIFFE_KEY"]; value = ENVIRON["SPIFFE_VALUE"] }
+      { print }
+      !done && $0 ~ /^[[:space:]]*\[spiffe\][[:space:]]*$/ { print key " = \"" value "\""; done = 1 }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    # setup_spire already refuses a config with no [spiffe] section, so the
+    # insert above finds its anchor. Fall back to appending rather than
+    # silently dropping the key if that ever stops being true.
+    grep -q "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE" \
+      || printf '%s = "%s"\n' "$key" "$value" >> "$CONFIG_FILE"
+  fi
+}
+
 write_config() {
   install -d "$STRATO_CONF_DIR"
   local cp_url="${CONTROL_PLANE_URL%%\?*}"
@@ -831,6 +936,16 @@ write_config() {
       printf 'control_plane_url = "%s"\n' "$cp_url" | cat - "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
         && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     fi
+    # The trust domain and the pinned control-plane identity must track the
+    # bootstrap command for the same reason control_plane_url does — and more
+    # urgently, because re-enrolling into a different organization's trust
+    # domain (issue #600) changes both. A stale trust_domain leaves the agent
+    # pinning spiffe://<old-domain>/control-plane and refusing every handshake.
+    set_spiffe_key trust_domain "$TRUST_DOMAIN"
+    if [ -n "$CONTROL_PLANE_SPIFFE_ID" ]; then
+      set_spiffe_key control_plane_spiffe_id "$CONTROL_PLANE_SPIFFE_ID"
+    fi
+
     log "$CONFIG_FILE already existed; other settings left as-is (ensure the [spiffe] block is correct)"
     return 0
   fi

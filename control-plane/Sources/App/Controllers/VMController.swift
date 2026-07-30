@@ -83,6 +83,14 @@ struct VMController: RouteCollection {
             vm.post("resume", use: resume)
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
+            // Full-VM checkpoints (issue #564); handlers live in
+            // VMSnapshotController.swift.
+            vm.post("snapshots", use: createSnapshot)
+            vm.get("snapshots", use: listSnapshots)
+            vm.group("snapshots", ":snapshotID") { snapshot in
+                snapshot.delete(use: deleteSnapshot)
+                snapshot.post("restore", use: restoreSnapshot)
+            }
         }
     }
 

@@ -193,8 +193,12 @@ fi
 # A full agent handshake needs a SPIRE-issued client SVID, so settle for
 # proving the TLS side is alive: Envoy must present a server certificate.
 if command -v openssl >/dev/null 2>&1; then
-  if openssl s_client -connect "$AGENT_ENDPOINT" </dev/null 2>/dev/null \
-      | grep -q 'BEGIN CERTIFICATE'; then
+  # Collected first, then matched. Piping straight into `grep -q` reported a
+  # healthy listener as a failure: grep exits at the first match and closes the
+  # pipe, openssl dies of SIGPIPE, and `set -o pipefail` promotes that to a
+  # failed pipeline.
+  cert_out=$(openssl s_client -connect "$AGENT_ENDPOINT" </dev/null 2>/dev/null)
+  if [[ "$cert_out" == *"BEGIN CERTIFICATE"* ]]; then
     pass "Envoy mTLS listener presents a server certificate on ${AGENT_ENDPOINT}"
   else
     fail "Envoy mTLS listener on ${AGENT_ENDPOINT} (no server certificate presented)"
