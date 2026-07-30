@@ -1,4 +1,9 @@
-export { useVMs, useVM, useInvalidateVMs } from "./use-vms";
+export {
+  useVMs,
+  useVM,
+  useVMSnapshots,
+  useInvalidateVMs,
+} from "./use-vms";
 export { useSites, useInvalidateSites } from "./use-sites";
 export {
   useSandboxes,

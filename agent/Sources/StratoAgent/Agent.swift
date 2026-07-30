@@ -1288,6 +1288,17 @@ actor Agent {
         // Sandbox snapshot/checkpoint message set (issue #426). One marker
         // for the trio (create/delete/restore) — they ship together.
         capabilities.append(MessageType.sandboxSnapshotCreate.rawValue)
+        // Full-VM checkpoint message set (issue #564). One marker for the trio
+        // (checkpoint/restore/delete), and only when a backend that can
+        // realize it is actually usable on this host. QEMU is that backend:
+        // the mechanism is a qcow2 internal snapshot, and Firecracker's
+        // checkpoints are a sandbox primitive with their own message set. A
+        // QEMU-less agent understands the frames but would answer every one
+        // with `notSupported`, so the control plane should route around it
+        // rather than turn that into a failed operation.
+        if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
+            capabilities.append(MessageType.vmCheckpoint.rawValue)
+        }
 
         for hypervisor in hypervisors {
             if hypervisor.available {
@@ -1935,6 +1946,16 @@ extension Agent {
             case .vmReboot:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMReboot(message)
+            // Full-VM checkpoint / restore (issue #564)
+            case .vmCheckpoint:
+                let message = try envelope.decode(as: VMCheckpointMessage.self)
+                await handleVMCheckpoint(message)
+            case .vmRestore:
+                let message = try envelope.decode(as: VMRestoreMessage.self)
+                await handleVMRestore(message)
+            case .vmSnapshotDelete:
+                let message = try envelope.decode(as: VMSnapshotDeleteMessage.self)
+                await handleVMSnapshotDelete(message)
             case .agentUpdate:
                 let message = try envelope.decode(as: AgentUpdateMessage.self)
                 await handleAgentUpdate(message)
@@ -2137,6 +2158,90 @@ extension Agent {
             logger.error(
                 "Failed to reboot VM",
                 metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    // MARK: - Full-VM checkpoints (issue #564)
+
+    private func handleVMCheckpoint(_ message: VMCheckpointMessage) async {
+        logger.info(
+            "VM checkpoint request received",
+            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
+        do {
+            let report = try await service.checkpointVM(
+                vmId: message.vmId, snapshotId: message.snapshotId)
+            let response = VMCheckpointStatusResponse(
+                snapshotId: message.snapshotId,
+                vmStateSizeBytes: report.vmStateSizeBytes,
+                deviceNodes: report.deviceNodes,
+                qemuVersion: report.hypervisorVersion,
+                architecture: CPUArchitecture.current)
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "VM checkpoint created", data: data)
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to checkpoint VM: \(error.localizedDescription)")
+            logger.error(
+                "Failed to checkpoint VM",
+                metadata: [
+                    "vmId": .string(message.vmId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleVMRestore(_ message: VMRestoreMessage) async {
+        logger.info(
+            "VM restore request received",
+            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
+        do {
+            try await service.restoreVM(vmId: message.vmId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "VM restored from checkpoint")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to restore VM: \(error.localizedDescription)")
+            logger.error(
+                "Failed to restore VM from checkpoint",
+                metadata: [
+                    "vmId": .string(message.vmId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleVMSnapshotDelete(_ message: VMSnapshotDeleteMessage) async {
+        logger.info(
+            "VM checkpoint delete request received",
+            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
+        do {
+            try await service.deleteVMCheckpoint(vmId: message.vmId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "VM checkpoint deleted")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to delete VM checkpoint: \(error.localizedDescription)")
         }
     }
 

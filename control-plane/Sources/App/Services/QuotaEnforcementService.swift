@@ -174,6 +174,25 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Admission for a full-VM checkpoint (issue #564). The machine state a
+    /// checkpoint writes draws from the shared storage pool, so admission
+    /// checks `size` — the VM's memory grant as an estimate, later replaced by
+    /// what the agent actually wrote — against every applicable quota's
+    /// storage limit. Call inside the same transaction as the snapshot insert.
+    static func reserveVMSnapshot(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateSnapshotStorage(size)
+            guard check.allowed else { return check }
+            try quota.reserveSnapshotStorage(size)
+            return check
+        }
+    }
+
     /// Post-completion validation for sandbox snapshots (issue #426):
     /// admission reserved an *estimate*, so once the agent reports actual
     /// sizes the caller re-checks the pool. Resyncs every applicable quota to
@@ -325,7 +344,8 @@ struct QuotaEnforcementService {
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
         quota.reservedVCPUs = usage.vcpus
         quota.reservedMemory = usage.memoryBytes
-        // Storage: VM disks plus sandbox snapshot artifacts (issue #426).
+        // Storage: VM disks, sandbox snapshot artifacts (issue #426), and
+        // full-VM checkpoint machine state (issue #564).
         quota.reservedStorage = usage.storageBytes
         quota.vmCount = usage.vmCount
         quota.sandboxCount = usage.sandboxCount

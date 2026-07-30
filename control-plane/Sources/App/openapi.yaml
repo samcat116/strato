@@ -108,6 +108,10 @@ tags:
     description: OCI-image Firecracker microVMs. Mutations are asynchronous.
   - name: Sandbox Snapshots
     description: Sandbox checkpoint/restore.
+  - name: VM Snapshots
+    description: >-
+      Full-VM checkpoints: guest memory, device state, and disks captured at one
+      instant. Distinct from volume snapshots, which are disk-only.
   - name: Images
     description: VM/sandbox base images and their per-hypervisor artifacts.
   - name: Volumes
@@ -462,6 +466,82 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: listVMSnapshots
+      summary: List a virtual machine's checkpoints
+      tags: [VM Snapshots]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the VM's checkpoints.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMSnapshotListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createVMSnapshot
+      summary: Checkpoint a virtual machine
+      description: >-
+        Captures guest memory, device state, and disks at one instant. The VM
+        must be running or paused, and keeps running. The request body is
+        optional. Asynchronous — poll the returned operation.
+      tags: [VM Snapshots]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVMSnapshotRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/snapshots/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - $ref: "#/components/parameters/VMSnapshotID"
+    delete:
+      operationId: deleteVMSnapshot
+      summary: Delete a virtual machine checkpoint
+      tags: [VM Snapshots]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/snapshots/{snapshotID}/restore:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - $ref: "#/components/parameters/VMSnapshotID"
+    post:
+      operationId: restoreVMSnapshot
+      summary: Restore a virtual machine from a checkpoint
+      description: >-
+        Loads the captured memory and device state back into the VM and resumes
+        it. The checkpoint lives inside the VM's disks, so this only works on
+        the agent that took it. Asynchronous — poll the returned operation.
+      tags: [VM Snapshots]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/operations/{operationID}:
     parameters:
@@ -7033,6 +7113,14 @@ components:
       schema:
         type: string
         format: uuid
+    VMSnapshotID:
+      name: snapshotID
+      in: path
+      required: true
+      description: The VM checkpoint's id.
+      schema:
+        type: string
+        format: uuid
     OperationID:
       name: operationID
       in: path
@@ -8273,6 +8361,57 @@ components:
       type: string
       description: A component of an exported sandbox snapshot.
       enum: [memory, vmstate, rootfs, config]
+
+    CreateVMSnapshotRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    VMSnapshot:
+      type: object
+      required: [name, description, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        vmId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/VMSnapshotStatus"
+        size:
+          type: integer
+          format: int64
+          description: >-
+            Bytes of guest memory and device state the checkpoint holds. The
+            disks it lives inside are charged separately, under the VM.
+        agentId:
+          type: string
+          description: The agent holding the checkpoint; restore is pinned here.
+        qemuVersion:
+          type: string
+        architecture:
+          type: string
+        errorMessage:
+          type: string
+        createdById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    VMSnapshotStatus:
+      type: string
+      enum: [creating, ready, deleting, error]
 
     CreateImageRequest:
       type: object
@@ -13066,6 +13205,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SandboxSnapshot"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    VMSnapshotListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/VMSnapshot"
         total:
           type: integer
           description: Total visible items, ignoring `limit`/`offset`.

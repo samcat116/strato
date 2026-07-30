@@ -97,3 +97,19 @@ use in code, tests, docs, and review. Architecture-level maps live in
   held socket, and turning a nudge into a local desired-state sync. Production
   adapter: `AgentService`. Test adapter: an in-memory fake, so the bridge is
   testable through its own interface without a real agent socket.
+
+## Snapshots
+
+- **Volume snapshot** — a **disk-only** point-in-time copy of one volume, an
+  external qcow2 overlay backed by the volume. Owned by the storage layer, taken
+  only on a *detached* volume, and unrelated to guest memory.
+
+- **Checkpoint** (a.k.a. **VM snapshot**) — guest **RAM + device state + disks**
+  captured together, so a restore brings the machine back mid-process. Stored as
+  a qcow2 *internal* snapshot inside the VM's own disks, tagged
+  `strato-<snapshotId>`, and therefore pinned to the agent that took it.
+  Recorded as a `vm_snapshots` row; `size` counts only the machine state, since
+  the disks it lives inside are already charged under the VM.
+
+  "Snapshot" alone is ambiguous between the two — say which, or say
+  "checkpoint" when you mean memory is included.

@@ -69,7 +69,8 @@ Org
            ├── Network
            ├── Volume
            ├── Image
-           └── Snapshot  (references its Volume by attribute, not as a parent)
+           └── Snapshot  (volume, sandbox, or full-VM checkpoint; references
+                          its subject by attribute, not as a parent)
 ```
 
 - **INVARIANT: one parent per resource.** No DAG, no multi-parent inheritance.

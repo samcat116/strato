@@ -58,6 +58,14 @@ public enum StageBudget {
     // only made a non-point-in-time snapshot look trustworthy). Kept alongside
     // `QGAClient`'s freeze/thaw verbs for the real live-snapshot path.
     public static let guestFreezeSeconds = 30
+    // A full-VM checkpoint or restore (issue #564): QEMU writes (or reads) the
+    // guest's entire RAM plus device state through a background job. The cost
+    // scales with guest memory at disk speed, exactly like image
+    // materialization, so it gets that envelope rather than the control-call
+    // one — a 64 GiB guest legitimately takes minutes. Kept under the control
+    // plane's own operation budget so the agent's verdict, not the sweep,
+    // decides the operation.
+    public static let checkpointSeconds = 1200
 
     /// What a budget does with an operation that is still running when the
     /// deadline passes. The right answer depends on whether the operation has

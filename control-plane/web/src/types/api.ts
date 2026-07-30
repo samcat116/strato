@@ -1079,6 +1079,36 @@ export interface CreateSandboxRequest {
   cpuTemplate?: string;
 }
 
+// Full-VM checkpoints (issue #564): guest memory + device state + disks at one
+// instant, stored inside the VM's own qcow2 disks. Not to be confused with
+// `Snapshot` above, which is a disk-only volume snapshot.
+export type VMSnapshotStatus = "creating" | "ready" | "deleting" | "error";
+
+export interface VMSnapshot {
+  id: string;
+  name: string;
+  description: string;
+  vmId: string;
+  projectId: string;
+  status: VMSnapshotStatus;
+  // Bytes of guest memory and device state; the disks the checkpoint lives
+  // inside are charged separately, under the VM.
+  size?: number | null;
+  // The agent holding the checkpoint. Restore is pinned to it: the machine
+  // state never leaves that host.
+  agentId?: string | null;
+  qemuVersion?: string | null;
+  architecture?: string | null;
+  errorMessage?: string | null;
+  createdById?: string | null;
+  createdAt?: string | null;
+}
+
+export interface CreateVMSnapshotRequest {
+  name?: string;
+  description?: string;
+}
+
 export type SandboxSnapshotStatus =
   | "creating"
   | "ready"

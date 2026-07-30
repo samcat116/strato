@@ -219,6 +219,68 @@ snapshot — QMP `blockdev-snapshot-sync` (or `blockdev-backup`), which makes th
 overlay the guest's active layer and needs the volume's `storagePath`, the VM
 manifest, and snapshot deletion to follow the resulting backing chain.
 
+### Full-VM checkpoints
+
+Volume snapshots above are disk-only. A **checkpoint** (issue #564) captures
+guest RAM, device state, and disks at one consistent point — the primitive
+behind "save this VM and bring it back exactly as it was" — and lives at
+`POST/GET/DELETE /api/vms/:id/snapshots` plus `.../restore`, in the
+`vm_snapshots` table.
+
+The mechanism is QEMU's `snapshot-save` / `snapshot-load` / `snapshot-delete`
+background jobs, driven over each VM's dedicated QMP stats monitor by
+`QMPProbeClient` and polled through `query-jobs` to `concluded`. The state goes
+into an *internal* snapshot of the VM's own qcow2 disks, tagged
+`strato-<snapshotId>`, so there is no separate state file to track: the agent
+re-derives the tag from the ids on every call, which makes delete idempotent
+and lets a retried checkpoint rejoin a job its first attempt started.
+
+Consequences of "internal to the disks":
+
+- **Every writable disk must be qcow2.** A writable raw volume would run on
+  while the qcow2 disks were frozen, restoring to a machine whose memory and
+  disks disagree, so the agent refuses the whole checkpoint rather than
+  capturing part of it.
+- **The UEFI variable store is excluded on purpose.** It is a raw pflash image
+  and could not hold an internal snapshot anyway, but the exclusion is a
+  decision: boot order and enrolled Secure Boot keys are firmware
+  configuration, not guest run state, and refusing every UEFI VM over them
+  would rule out nearly all of them.
+- **Checkpoints do not move between hosts.** Restore is pinned to the agent
+  that took it (`VMSnapshot.agentId`). Off-node export — either shared storage
+  (#352/#353) or an object-storage copy like sandboxes got in #428 — is the
+  follow-up.
+
+Restore loads the state back into the VM's live QEMU process and resumes it.
+The VM only has to *exist* on the agent, not be running: after an agent restart
+the desired-state sync re-creates a stopped VM's process (its disks, and the
+checkpoint inside them, never left the host) and the restore loads into that,
+which is what makes checkpoint → stop → restart-agent → restore work with no
+extra machinery.
+
+Machine state is written to the VM's **boot disk**, not to whichever qcow2 disk
+sorts first. A hot-plugged volume's QMP backend is anonymous, so a positional
+rule picks it over the VM's own root disk — and then detaching that volume
+silently makes a `ready` checkpoint unrestorable, while a volume clone quietly
+carries a copy of the guest's RAM. Restore does not re-derive the choice: it
+finds the vmstate node by the tag, so a checkpoint stays restorable across disk
+hot-plug.
+
+Quota counts only the machine state (`VMSnapshot.size`), not the disks — those
+are already charged under the VM, and an internal snapshot does not copy them.
+
+Two operational consequences worth knowing before running this at scale:
+
+- **A checkpoint holds the VM's QMP stats monitor for the whole job** (up to
+  the 1200s agent budget). That monitor is single-client and is also where
+  balloon/guest-memory stats come from, so `memoryStats` returns nil for the
+  duration — and it swallows the failure, so the metrics gap looks like a guest
+  that stopped reporting rather than a self-inflicted hole.
+- **A checkpoint occupies the VM's one pending operation slot.** With an 1800s
+  operation budget, a large checkpoint can block start/stop/delete on that VM
+  for up to half an hour, and the only feedback is `ResourceOperation.begin`'s
+  bare `409`.
+
 ### Volume placement across agents
 
 Volumes are host-local. The control-plane `VolumeService` places volumes on

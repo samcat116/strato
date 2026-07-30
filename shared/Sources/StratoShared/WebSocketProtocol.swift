@@ -17,6 +17,13 @@ public enum MessageType: String, Codable, Sendable {
     // desired-state sync.
     case vmReboot = "vm_reboot"
 
+    // Full-VM checkpoint / restore (protocol version >= 22, issue #564).
+    // RAM + device state captured as a qcow2 internal snapshot; like the
+    // sandbox trio these are imperative request/response pairs, not states.
+    case vmCheckpoint = "vm_checkpoint"
+    case vmRestore = "vm_restore"
+    case vmSnapshotDelete = "vm_snapshot_delete"
+
     // Network topology has no imperative messages: it is level-triggered from
     // `DesiredStateMessage.networks` alone. The removed `network_*` frames
     // named their OVN objects after user-chosen network names — which two

@@ -133,6 +133,7 @@ dual-mode rollout.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
+| `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
 | `vm_create`, `vm_boot`, `vm_shutdown`, `vm_pause`, `vm_resume`, `vm_delete`, `vm_info`, `vm_status` | **Deprecated** imperative VM lifecycle (issue #261), superseded by desired-state sync; kept for older control planes |
 | `network_*` (create/delete/list/info/attach/detach) | Network operations |
 | `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |

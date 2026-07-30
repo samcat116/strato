@@ -24,6 +24,27 @@ public struct ConsoleEndpoint: Sendable {
     }
 }
 
+/// What a completed full-VM checkpoint captured (issue #564), for the control
+/// plane's snapshot record.
+public struct VMCheckpointReport: Sendable {
+    /// Bytes of guest RAM + device state the backend wrote, or nil when it
+    /// reported no size for the checkpoint it just took. Nil is "unknown",
+    /// never "empty".
+    public let vmStateSizeBytes: Int64?
+    /// Backend-native names of the storage the checkpoint spans, for
+    /// diagnostics.
+    public let deviceNodes: [String]
+    /// The hypervisor build that captured the checkpoint. A restore needs a
+    /// compatible one.
+    public let hypervisorVersion: String?
+
+    public init(vmStateSizeBytes: Int64?, deviceNodes: [String], hypervisorVersion: String?) {
+        self.vmStateSizeBytes = vmStateSizeBytes
+        self.deviceNodes = deviceNodes
+        self.hypervisorVersion = hypervisorVersion
+    }
+}
+
 /// Protocol defining the interface for hypervisor services
 /// Both QEMUService and FirecrackerService conform to this protocol
 public protocol HypervisorService: Actor, Sendable {
@@ -115,6 +136,25 @@ public protocol HypervisorService: Actor, Sendable {
     /// session throw `HypervisorServiceError.notSupported`, in which case the
     /// VM stays orphaned.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus
+
+    /// Checkpoints a VM (issue #564): guest RAM, device state, and disk
+    /// contents captured at one consistent point under `snapshotId`, with the
+    /// VM left running.
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend has no
+    ///   full-VM checkpoint mechanism, or if the VM's storage cannot hold one
+    func checkpointVM(vmId: String, snapshotId: String) async throws -> VMCheckpointReport
+
+    /// Restores a VM in place from one of its checkpoints and resumes it. Same
+    /// VM, same identity — it keeps its ID, disks, NICs, and addresses.
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   restore checkpoints
+    func restoreVM(vmId: String, snapshotId: String) async throws
+
+    /// Removes a checkpoint's stored state. Idempotent: a checkpoint that is
+    /// already gone is a success, so a retried delete converges.
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   take checkpoints in the first place
+    func deleteVMCheckpoint(vmId: String, snapshotId: String) async throws
 }
 
 // MARK: - Default Implementations
@@ -133,6 +173,25 @@ public extension HypervisorService {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support re-adopting orphaned VMs")
     }
+    /// Backends must opt in to full-VM checkpoints (issue #564). Without an
+    /// explicit implementation the control plane's capability gate keeps the
+    /// request away in the first place; this default is the belt-and-braces
+    /// answer for one that arrives anyway.
+    func checkpointVM(vmId: String, snapshotId: String) async throws -> VMCheckpointReport {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support full-VM checkpoints")
+    }
+
+    func restoreVM(vmId: String, snapshotId: String) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support restoring full-VM checkpoints")
+    }
+
+    func deleteVMCheckpoint(vmId: String, snapshotId: String) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support full-VM checkpoints")
+    }
+
     /// Stops and deletes a VM
     func stopAndDeleteVM(vmId: String) async throws {
         do {
