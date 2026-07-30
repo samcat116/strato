@@ -352,7 +352,7 @@ enum IAMAuthorizer {
     /// closed — denied, logged, recorded — because an unmapped pair is a check
     /// site nobody mapped, not an allowance.
     static func checkLegacyVocabulary(
-        userID: UUID,
+        principal: IAMPrincipal,
         permission: String,
         resourceType: String,
         resourceID: String,
@@ -380,11 +380,11 @@ enum IAMAuthorizer {
                 ])
             state?.decisionEvaluated.withLockedValue { $0 = true }
             await app.iamDecisionRecorder.recordUntranslatedDenial(
-                subject: userID.uuidString, equivalent: equivalent, context: context)
+                subject: principal.subject, equivalent: equivalent, context: context)
             return false
         }
         let decision = try await authorize(
-            userID: userID,
+            principal: principal,
             action: translation.action,
             node: translation.node,
             legacyEquivalent: equivalent,
@@ -403,6 +403,11 @@ extension Request {
     /// everything else (the legacy-vocabulary `can`, the middleware, the
     /// controllers' policy-admin gates) resolves to.
     ///
+    /// Asks about the request's *acting principal*: the authenticated user, or
+    /// the service account / workload a JWT-SVID resolved to (issue #495). The
+    /// evaluator has taken a typed principal since #491, so machine principals
+    /// are evaluated by the same policy set against the same bindings.
+    ///
     /// - Throws: `.unauthorized` if unauthenticated; `.serviceUnavailable` /
     ///   `.internalServerError` when the evaluator cannot answer (fail
     ///   closed).
@@ -411,11 +416,9 @@ extension Request {
         on node: IAMNode,
         legacyEquivalent: LegacyCheckEquivalent? = nil
     ) async throws -> Bool {
-        guard let user = auth.get(User.self), let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
+        let principal = try requireActingPrincipal()
         let decision = try await IAMAuthorizer.authorize(
-            userID: userID,
+            principal: principal,
             action: action,
             node: node,
             legacyEquivalent: legacyEquivalent,
@@ -442,11 +445,9 @@ extension Request {
     ///   closed) — a list that cannot be scoped is an error, never a
     ///   silently-empty page.
     func canFilter(_ action: String, on nodes: [IAMNode]) async throws -> Set<IAMNode> {
-        guard let user = auth.get(User.self), let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
+        let principal = try requireActingPrincipal()
         let decisions = try await IAMAuthorizer.authorize(
-            principal: .user(userID),
+            principal: principal,
             action: action,
             nodes: nodes,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id),
@@ -487,11 +488,9 @@ extension Request {
     ///
     /// - Throws: `.unauthorized` if the request is unauthenticated.
     func can(_ permission: String, on resourceType: String, id: String) async throws -> Bool {
-        guard let user = auth.get(User.self), let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
+        let principal = try requireActingPrincipal()
         return try await IAMAuthorizer.checkLegacyVocabulary(
-            userID: userID,
+            principal: principal,
             permission: permission,
             resourceType: resourceType,
             resourceID: id,
@@ -526,10 +525,20 @@ extension Request {
     /// default-deny middleware's handler assertion so admin-only mutations
     /// count as having made an authorization decision.
     ///
+    /// System administrator is a property of a *user* record, so a machine
+    /// principal can never satisfy this gate. It is denied explicitly (403 with
+    /// a reason) rather than falling through to the bare 401 a missing user
+    /// would produce: the credential authenticated, it simply cannot hold this
+    /// privilege (issue #495).
+    ///
     /// - Throws: `.unauthorized` if unauthenticated, `.forbidden` for
-    ///   non-admins.
+    ///   non-admins and for workload principals.
     func requireSystemAdmin(_ deniedReason: String = "System administrator access required") throws -> User {
         guard let user = auth.get(User.self) else {
+            iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
+            if isWorkloadAuthenticated {
+                throw Abort(.forbidden, reason: deniedReason)
+            }
             throw Abort(.unauthorized)
         }
         iamAuthState.decisionEvaluated.withLockedValue { $0 = true }

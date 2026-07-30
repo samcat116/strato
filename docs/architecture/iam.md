@@ -499,8 +499,8 @@ of the current system are unchanged by the migration:
 - SCIM- and OIDC-claim-driven group/role sync is **blessed as provisioning**:
   claims mutate persistent membership/bindings at login time and are evaluated
   from the store per-request — the token itself is never a standing grant.
-- API keys are unchanged for now (deferred; revisit toward short-lived
-  credentials later).
+- API keys are unchanged. The short-lived-credential successor path is
+  JWT-SVIDs (below), which sits alongside them rather than replacing them.
 
 ### The workload registry (issue #491)
 
@@ -530,8 +530,80 @@ type. The membership-shaped platform policies (`platform-system-admin`,
 `org-membership`) are `principal is User`-scoped — machine principals hold
 only what bindings give them.
 
-Still future: request-path authentication of service accounts and workloads
-on the HTTP API (SVID mTLS beyond the agent surfaces), and the impersonation
+### JWT-SVIDs as programmatic credentials (issue #495)
+
+Registered workloads present a **JWT-SVID** as a bearer token to authenticate
+on the HTTP API — the request-path authentication of machine principals the
+registry could describe but nothing could exercise. Unlike an X.509 SVID it
+survives hops that cannot carry a client certificate (load balancers,
+TLS-terminating ingress), which is what makes it usable from CI and
+automation; that same bearer property is why its reach is narrow by
+construction:
+
+- **Verification** (`JWTSVIDVerification`, `JWTSVIDAuthorityStore`): the
+  signature must chain to the trust domain's *current* JWT authorities, read
+  from the SPIRE server's bundle API and cached for
+  `SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL`. There is no background refresh task:
+  the cached set expires and the next request re-fetches it, and a token
+  naming a `kid` we do not hold forces an immediate re-fetch (rate-limited),
+  which is how key rotation is picked up without a restart. Concurrent
+  fetches collapse onto one in-flight request, so a cold cache under load
+  dials SPIRE once rather than once per request. Only asymmetric algorithms
+  are accepted; an HMAC "signature" would be forgeable by anyone holding the
+  public JWKS.
+- **Audience**: the token must name this control plane (`SPIFFE_JWT_AUDIENCE`,
+  default `spiffe://<trust-domain>/control-plane`). A token minted for another
+  relying party is rejected even though its signature is good.
+- **Identity, not authorization**: the verified `sub` is a lookup key into
+  `workload_registrations` and nothing else. A valid SVID for an unregistered
+  identity authenticates as **nobody** (401); a registered one becomes an
+  ordinary Cedar principal whose access is whatever its role bindings say.
+  No claim in the token grants anything.
+- **Agents are refused**: an identity resolving to `kind = agent` cannot be
+  used as an API credential (403). Agents authenticate the transport with
+  mTLS and are not Cedar request principals; accepting a bearer token for one
+  would create an API principal out of an identity minted on every hypervisor
+  node.
+
+The request path generalized with it: `Request.actingPrincipal` is the seam,
+and `req.can` / `req.authorize` / `req.canFilter` and the default-deny
+middleware all ask for it rather than for a `User`. The evaluator itself
+needed no change — it has taken a typed `IAMPrincipal` since #491.
+
+Two surfaces stay user-only, and say so with a 403 rather than a confusing
+401: the **self-scoped identity plane** (`/api/api-keys`, `/api/users/me`,
+`/api/oauth` — "my keys" has no referent for a service account) and
+**`requireSystemAdmin()`**, since system administrator is a property of a user
+record. A machine principal's organization scope, for the collection-level
+"are you anyone in this org" checks, comes from where it was registered — a
+service account's project's organization, or a workload registration's
+organization — never from membership, which machine principals do not have.
+
+**Reads today, mutations still user-only.** Listing and reading VMs and
+sandboxes (and every handler that authorizes purely through the evaluator)
+works for a machine principal. The async-mutation endpoints do not:
+`resource_operations.user_id` is a non-null *user* id that names the
+initiator, and operation visibility falls back to "the initiator may read it"
+once the resource row is gone. A machine principal has no user id to put
+there, so those handlers refuse with a 403 naming the reason rather than
+recording a misleading initiator. Widening them needs a principal-typed
+initiator column (`principal_type` alongside `user_id`) plus the matching
+change to the initiator-fallback check — a schema change deliberately kept
+out of this one.
+
+Off by default (`SPIFFE_JWT_SVID_AUTH_ENABLED`): it widens the credential
+surface from mTLS-only to bearer tokens accepted, which is an operator's
+decision. Requires `SPIRE_ENABLED` and `SPIRE_SERVER_API_ADDRESS`. Identities
+in **per-org trust domains** are not accepted yet — the control plane only
+holds the platform domain's JWT authorities — so those workloads continue on
+X.509 mTLS.
+
+On the agent side, `WorkloadAPISPIFFEClient` implements the full JWT-SVID
+profile (`FetchJWTSVID` / `FetchJWTBundles` / `ValidateJWTSVID`); the
+file-based SVID source refuses all three rather than pretending an empty
+answer is a valid one.
+
+Still future: per-org trust domains for JWT-SVID auth, and the impersonation
 *flow* (minting short-lived credentials) behind the already-modeled
 `serviceaccount:impersonate` permission.
 

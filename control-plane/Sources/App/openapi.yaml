@@ -18,9 +18,26 @@ info:
 
     - `bearerAuth` — an API key (`Authorization: Bearer <key>`) minted via
       `POST /api/api-keys`. Keys carry scopes (`read`, `write`) enforced per
-      request.
+      request. The same header also accepts a **SPIFFE JWT-SVID**, when the
+      deployment enables it, authenticating a registered service account or
+      workload rather than a user (see below).
     - `cookieAuth` — the `vapor-session` cookie set after a WebAuthn/passkey
       login.
+
+    ### Workload credentials (JWT-SVID)
+
+    Where enabled (`SPIFFE_JWT_SVID_AUTH_ENABLED`), a registered workload may
+    present a short-lived SPIFFE JWT-SVID on the same `Authorization: Bearer`
+    header. The token must be signed by the trust domain's current JWT
+    authorities and name this control plane in its `aud` claim; its `sub`
+    SPIFFE ID is looked up in the workload registry, and access is decided by
+    the resulting principal's role bindings. No claim in the token grants
+    anything.
+
+    Two classes of endpoint remain user-only and answer `403` for a workload
+    credential: the self-scoped identity plane (`/api/api-keys`,
+    `/api/users/me`, `/api/oauth`) and the asynchronous mutation endpoints,
+    whose operation records name a user as the initiator.
 
     Per-object access is additionally enforced by the control plane's Cedar
     policy evaluator; a caller who is authenticated but not authorized
@@ -6964,7 +6981,9 @@ components:
       scheme: bearer
       description: >-
         An API key minted via `POST /api/api-keys`, sent as
-        `Authorization: Bearer <key>`.
+        `Authorization: Bearer <key>`. Deployments with
+        `SPIFFE_JWT_SVID_AUTH_ENABLED` also accept a SPIFFE JWT-SVID on this
+        header, authenticating a registered service account or workload.
     cookieAuth:
       type: apiKey
       in: cookie

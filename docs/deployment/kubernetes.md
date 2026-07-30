@@ -96,6 +96,29 @@ DaemonSet, and an Envoy mTLS sidecar next to the control plane — agents
 authenticate exclusively with SPIRE-issued SVIDs, so the chart refuses to
 render with `spire.enabled=false`.
 
+::: warning Envoy >= v1.39.0 required
+The mTLS listener prefers `X25519MLKEM768` (hybrid post-quantum key
+exchange) so recorded handshakes stay confidential against a future quantum
+attacker. That group needs **Envoy v1.39.0 or newer**, which the chart pins
+by default.
+
+If you override `spire.envoy.image.tag` with something older — an
+air-gapped mirror, a conservative pin — the sidecar refuses to start with
+`Failed to initialize ECDH curves` and every agent loses the control
+channel. Drop the group in that case:
+
+```yaml
+spire:
+  envoy:
+    tlsParams:
+      ecdhCurves: [X25519, P-256]
+```
+
+Agents need no configuration either way: swift-nio-ssl offers the group by
+default from 2.37.1, and older agents fall back to X25519 automatically, so
+control plane and agents can be upgraded in either order.
+:::
+
 Two pieces make the control plane a first-class member of its own trust
 domain:
 

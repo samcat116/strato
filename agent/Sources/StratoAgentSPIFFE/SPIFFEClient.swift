@@ -16,6 +16,32 @@ public protocol SPIFFEClientProtocol: Sendable {
     /// Note: Returns a nonisolated stream that can be consumed by any actor
     nonisolated func watchX509SVID() -> AsyncStream<X509SVID>
 
+    /// Mint a JWT-SVID for the given audiences (issue #495).
+    ///
+    /// JWT-SVIDs are audience-scoped by construction: the token is only valid
+    /// for the relying parties named here, so a token captured by one service
+    /// cannot be replayed against another. Sources that cannot mint tokens
+    /// throw `SPIFFEError.unsupportedOperation`.
+    ///
+    /// - Parameters:
+    ///   - audience: the relying parties the token is for. Must be non-empty.
+    ///   - spiffeID: the identity to mint for, when the workload is entitled
+    ///     to several; nil takes the default identity.
+    func fetchJWTSVID(audience: [String], spiffeID: SPIFFEIdentity?) async throws -> JWTSVID
+
+    /// Fetch the JWT signing keys (JWKS) for every trust domain the workload
+    /// knows, keyed by the trust domain's SPIFFE ID. Relying parties verify
+    /// JWT-SVIDs against these.
+    func fetchJWTBundles() async throws -> [String: JWTBundle]
+
+    /// Ask the Workload API to validate a JWT-SVID against an audience,
+    /// returning the identity it names.
+    ///
+    /// This delegates verification to the local SPIRE agent, which holds the
+    /// trust domain's current JWT authorities. The returned claims name the
+    /// principal; they never carry authorization.
+    func validateJWTSVID(token: String, audience: String) async throws -> ValidatedJWTSVID
+
     /// Close the client connection
     func close() async
 }
@@ -136,6 +162,27 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
                 await self.startWatching()
             }
         }
+    }
+
+    // JWT-SVIDs cannot come from files: minting one needs the private signing
+    // key held by the SPIRE server, and validating one needs the trust
+    // domain's current JWT authorities. A spiffe-helper deployment writes
+    // neither, so these fail loudly rather than pretending an empty answer is
+    // a valid one.
+
+    public func fetchJWTSVID(audience: [String], spiffeID: SPIFFEIdentity?) async throws -> JWTSVID {
+        throw SPIFFEError.unsupportedOperation(
+            "File-based SVIDs cannot mint JWT-SVIDs; configure the SPIRE Workload API socket instead")
+    }
+
+    public func fetchJWTBundles() async throws -> [String: JWTBundle] {
+        throw SPIFFEError.unsupportedOperation(
+            "File-based SVIDs carry no JWT authorities; configure the SPIRE Workload API socket instead")
+    }
+
+    public func validateJWTSVID(token: String, audience: String) async throws -> ValidatedJWTSVID {
+        throw SPIFFEError.unsupportedOperation(
+            "File-based SVIDs cannot validate JWT-SVIDs; configure the SPIRE Workload API socket instead")
     }
 
     public func close() async {

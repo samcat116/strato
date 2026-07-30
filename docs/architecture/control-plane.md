@@ -205,6 +205,14 @@ future work.
 - 16 MiB max frame size (desired-state syncs carry every placement on the
   agent); frames arriving before auth completes are buffered (capped at
   4 MiB) and replayed once the agent is identified.
+- **Hybrid post-quantum key exchange.** The Envoy listener terminating this
+  socket prefers `X25519MLKEM768` (ML-KEM-768 + X25519). The control channel
+  is the one surface with real "harvest now, decrypt later" exposure — an
+  attacker who records handshakes today could decrypt them retroactively —
+  so the key exchange is hardened even though the SVIDs authenticating it
+  live only an hour. Agents offer the group by default from swift-nio-ssl
+  2.37.1; it requires Envoy >= v1.39.0, and the curve list is configurable
+  via `spire.envoy.tlsParams.ecdhCurves` in the Helm chart.
 - **One auth path**: SPIFFE mTLS. The XFCC header is trusted only from the
   pod-local Envoy sidecar and the certificate is re-verified against the
   SPIRE trust bundle; the SVID's SPIFFE ID names the agent, and the `?name=`

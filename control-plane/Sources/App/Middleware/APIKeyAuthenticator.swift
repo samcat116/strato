@@ -65,11 +65,12 @@ extension Request {
 struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         // Check for Authorization header with Bearer token. Each authenticator
-        // guards on its own token prefix (`sk_` API keys, `st_` CLI access
-        // tokens), so both can run unconditionally.
+        // guards on its own token shape (`sk_` API keys, `st_` CLI access
+        // tokens, compact-JWS JWT-SVIDs), so all three can run unconditionally.
         if let authorization = request.headers.bearerAuthorization {
             try await APIKeyAuthenticator().authenticate(bearer: authorization, for: request)
             try await OAuthTokenAuthenticator().authenticate(bearer: authorization, for: request)
+            try await JWTSVIDAuthenticator().authenticate(bearer: authorization, for: request)
         }
 
         return try await next.respond(to: request)

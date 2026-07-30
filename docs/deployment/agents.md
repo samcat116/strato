@@ -411,6 +411,9 @@ Control-plane environment reference:
 | `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` (compose); the Helm chart sets `spire.<host>:443` when `gateway.enabled` |
 | `SPIRE_AGENT_SELECTORS` | Comma-separated workload selectors | `unix:uid:0` |
 | `SPIRE_SVID_TTL` | X.509 SVID TTL for agent entries (seconds) | `3600` |
+| `SPIFFE_JWT_SVID_AUTH_ENABLED` | Accept **JWT-SVIDs** as bearer credentials on the HTTP API, for registered service accounts and workloads (issue #495). Needs `SPIRE_ENABLED` and `SPIRE_SERVER_API_ADDRESS` — the trust domain's JWT authorities come from the SPIRE server's bundle API. See [IAM](../architecture/iam.md). | `false` |
+| `SPIFFE_JWT_AUDIENCE` | Audience a JWT-SVID must name to be accepted here. A token minted for any other relying party is rejected. | `spiffe://<trust-domain>/control-plane` |
+| `SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL` | How long the JWT authorities are cached (seconds) before the next request re-fetches them — there is no background refresh. Rotation is also picked up on demand when a token names an unknown key. | `300` |
 
 ### Connectivity (remote nodes)
 

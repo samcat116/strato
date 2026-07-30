@@ -204,7 +204,9 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        guard let user = request.auth.get(User.self) else {
+        // The acting principal: a session/API-key user, or the machine
+        // principal a JWT-SVID resolved to (issue #495).
+        guard let principal = request.actingPrincipal else {
             throw Abort(.unauthorized, reason: "User not authenticated")
         }
 
@@ -212,9 +214,20 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         case .isPublic:
             fatalError("unreachable: handled above")
         case .loginOnly:
+            // These are the self-scoped identity-plane routes: "my API keys",
+            // "my passkeys", "my OAuth sessions". Their authorization *is* the
+            // row scoping to the caller's own user record, which a machine
+            // principal has none of — so there is nothing here to scope to, and
+            // letting one through would fall into handlers that assume a user.
+            if request.auth.get(User.self) == nil {
+                throw Abort(
+                    .forbidden,
+                    reason: "This endpoint is only available to user principals, not workload credentials")
+            }
             return try await next.respond(to: request)
         case .resource(let resource):
-            try await checkResourcePermissions(request: request, user: user, resource: resource)
+            try await checkResourcePermissions(
+                request: request, principal: principal, resource: resource)
             return try await next.respond(to: request)
         case .handlerChecked:
             let response = try await next.respond(to: request)
@@ -258,7 +271,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     }
 
     private func checkResourcePermissions(
-        request: Request, user: User, resource: GuardedResource
+        request: Request, principal: IAMPrincipal, resource: GuardedResource
     ) async throws {
         let method = request.method
         let pathComponents = request.url.path.split(separator: "/")
@@ -307,19 +320,18 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             }
         }
 
-        guard let userID = user.id else {
-            throw Abort(.forbidden, reason: "Invalid user session")
-        }
-
         // Collection-level operations (list, create) gate on the caller's
-        // current organization — bare membership grants `org:read`, so this is
-        // "are you anyone here at all"; the handler does the real
-        // project-scoped check for creates.
+        // organization — bare membership grants `org:read`, so this is "are you
+        // anyone here at all"; the handler does the real project-scoped check
+        // for creates. A user's comes from their current organization; a
+        // machine principal's from where it was registered (issue #495) — it
+        // holds nothing by membership, so this only narrows which org's
+        // collection it is talking about.
         let check: (permission: String, resourceType: String, resourceID: String)
         if (permission == "read" && resourceId == "*")
             || (permission == "create" && resourceId == "*")
         {
-            guard let currentOrgId = user.currentOrganizationId else {
+            guard let currentOrgId = try await request.actingOrganizationID() else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
             check = ("view_organization", "organization", currentOrgId.uuidString)
@@ -330,7 +342,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         }
 
         let allowed = try await IAMAuthorizer.checkLegacyVocabulary(
-            userID: userID,
+            principal: principal,
             permission: check.permission,
             resourceType: check.resourceType,
             resourceID: check.resourceID,

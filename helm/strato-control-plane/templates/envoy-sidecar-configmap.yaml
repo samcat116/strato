@@ -27,6 +27,13 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
                   require_client_certificate: true
                   common_tls_context:
+                    # Offer hybrid post-quantum key exchange first — see
+                    # spire.envoy.tlsParams in values.yaml for why, and for the
+                    # Envoy >= v1.39.0 floor X25519MLKEM768 depends on.
+                    tls_params:
+                      tls_minimum_protocol_version: {{ .Values.spire.envoy.tlsParams.minimumProtocolVersion }}
+                      ecdh_curves:
+                        {{- toYaml .Values.spire.envoy.tlsParams.ecdhCurves | nindent 24 }}
                     # Server certificate from SPIRE via SDS
                     tls_certificate_sds_secret_configs:
                       - name: "spiffe://{{ .Values.spire.trustDomain }}/control-plane"
