@@ -859,10 +859,10 @@ public struct AgentConfig: Codable {
     /// pin the search (or skip it entirely) instead of reading whatever the
     /// host operator installed.
     public static func loadDefaultConfig(
-        searchPaths: [String]? = nil,
+        searchPaths: [String] = defaultConfigSearchPaths,
         logger: Logger? = nil
     ) -> AgentConfig {
-        for path in searchPaths ?? defaultConfigSearchPaths {
+        for path in searchPaths {
             do {
                 return try load(from: path, logger: logger)
             } catch {
@@ -875,42 +875,30 @@ public struct AgentConfig: Codable {
         return builtinDefaults
     }
 
-    /// The compiled-in configuration used when no config file is found.
+    /// The compiled-in configuration used when no config file is found. Paths
+    /// delegate to the dedicated `default*` properties rather than repeating
+    /// them, so this can't drift from the fallbacks the CLI applies when a
+    /// config file leaves a key unset.
     public static var builtinDefaults: AgentConfig {
         #if os(Linux)
-        #if arch(arm64)
-        let defaultQemuPath = "/usr/bin/qemu-system-aarch64"
+        let networkMode = NetworkMode.ovn
+        let enableHVF = false
+        let enableKVM = true
         #else
-        let defaultQemuPath = "/usr/bin/qemu-system-x86_64"
+        let networkMode = NetworkMode.user
+        let enableHVF = true
+        let enableKVM = false
         #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "/var/run/qemu",
+            qemuSocketDir: defaultQemuSocketDir,
             logLevel: "info",
-            networkMode: .ovn,
-            enableHVF: false,
-            enableKVM: true,
-            vmStoragePath: "/var/lib/strato/vms",
-            qemuBinaryPath: defaultQemuPath
+            networkMode: networkMode,
+            enableHVF: enableHVF,
+            enableKVM: enableKVM,
+            vmStoragePath: defaultVMStoragePath,
+            qemuBinaryPath: defaultQemuBinaryPath
         )
-        #else
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        #if arch(arm64)
-        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-aarch64"
-        #else
-        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-x86_64"
-        #endif
-        return AgentConfig(
-            controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "\(home)/Library/Application Support/strato/qemu-sockets",
-            logLevel: "info",
-            networkMode: .user,
-            enableHVF: true,
-            enableKVM: false,
-            vmStoragePath: "\(home)/Library/Application Support/strato/vms",
-            qemuBinaryPath: defaultQemuPath
-        )
-        #endif
     }
 
     /// Default VM storage path (platform-specific)
