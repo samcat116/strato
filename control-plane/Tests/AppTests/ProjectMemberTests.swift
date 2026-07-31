@@ -6,7 +6,7 @@ import VaporTesting
 
 /// Tests project-level role grants (users and groups): the relational mirror rows are
 /// written, the `role_bindings` rows follow (including revoke-old-then-grant-new on a
-/// role change), and listing/mutations are gated by view_project / manage_project.
+/// role change), and listing/mutations are gated by view_project / iam:setPolicy.
 @Suite("Project Member Tests", .serialized)
 final class ProjectMemberTests {
 
@@ -347,25 +347,31 @@ final class ProjectMemberTests {
         }
     }
 
-    @Test("Granting requires manage_project")
-    func grantRequiresManageProject() async throws {
-        try await withApp { app, project, _, target, _, _ in
-            // A viewer can list members but holds no project:update, so the
-            // grant is denied.
-            let viewer = try await TestDataBuilder(db: app.db).createUser(
-                username: "pm-viewer", email: "pm-viewer@example.com")
+    @Test("An editor cannot promote themselves to project admin")
+    func editorCannotSelfPromote() async throws {
+        try await withApp { app, project, _, _, _, _ in
+            let editor = try await TestDataBuilder(db: app.db).createUser(
+                username: "pm-editor", email: "pm-editor@example.com")
             try await RoleBindingService.grant(
-                principalType: .user, principalID: viewer.id!, role: .viewer,
+                principalType: .user, principalID: editor.id!, role: .editor,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let viewerToken = try await viewer.generateAPIKey(on: app.db)
-            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
-                try req.content.encode(
-                    ProjectMemberController.GrantMemberRequest(
-                        userEmail: target.email, userID: nil, role: "member"))
+            try await ProjectMember(
+                projectID: project.id!, userID: editor.id!, role: IAMRole.editor.seededID.uuidString
+            ).save(on: app.db)
+            let editorToken = try await editor.generateAPIKey(on: app.db)
+
+            try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(editor.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
+                try req.content.encode(ProjectMemberController.UpdateMemberRoleRequest(role: "admin"))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
+
+            let membership = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == editor.id!)
+                .first()
+            #expect(membership?.role == IAMRole.editor.seededID.uuidString)
         }
     }
 }

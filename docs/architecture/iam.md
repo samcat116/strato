@@ -296,6 +296,14 @@ free-form Cedar text.
 - Nodes: any tree node — Org, Folder, Project, or an **individual resource**.
   Resource-level bindings exist from day one.
 - Many-to-many. The one-parent rule constrains *resources*, never principals.
+- **Which nodes have a write surface.** Org grants go through the org members
+  API, project grants through the project members/groups APIs, and folder
+  grants through `/api/organizations/{orgID}/ous/{ouID}/members` and
+  `…/groups` (STR-109) — the endpoint that makes "this team administers
+  everything under `engineering`" expressible as one grant instead of an
+  org-wide role or a copy per project. Resource-level bindings are still
+  written only by the creator-binding path; there is no customer-facing
+  endpoint to author or revoke one individually.
 - **Every binding has a nullable `expires_at`.** TTL is a property of the
   grant primitive.
 - Bindings are written in the same database transaction as the resources they

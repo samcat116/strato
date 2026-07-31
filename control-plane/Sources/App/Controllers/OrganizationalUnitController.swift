@@ -267,7 +267,13 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.conflict, reason: "Cannot delete folder with projects. Move or delete projects first.")
         }
 
-        try await ou.delete(on: req.db)
+        // Bindings have no FK to the node they protect, so the folder's own
+        // grants have to go with it. This became load-bearing once folder
+        // grants were authorable (STR-109): before that nothing wrote one.
+        try await req.db.transaction { db in
+            try await RoleBindingService.revokeAll(nodeType: .organizationalUnit, nodeID: ouID, on: db)
+            try await ou.delete(on: db)
+        }
         return .noContent
     }
 

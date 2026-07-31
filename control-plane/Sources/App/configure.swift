@@ -671,6 +671,14 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateDNSZone())
     app.migrations.add(EnforceDNSRecordEnums())
 
+    // Floating IP pool names belong to their owner, not to the deployment
+    // (STR-105), following networks (#765) and agent identities (#613).
+    // `sites.name` carries the same owner columns and is still globally
+    // unique, so it has the same squatting shape and is the remaining one to
+    // scope; `agents.name` and `storage_pools.name` are legitimately global
+    // (a routing identity and an ownerless row).
+    app.migrations.add(ScopeFloatingIPPoolNamesToOwners())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

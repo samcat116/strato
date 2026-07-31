@@ -2365,6 +2365,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organizations/{organizationID}/ous/{ouID}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a folder's user and group role grants
+         * @description Requires `iam:readPolicy` on the folder. Folder grants are stored as role bindings and nothing else — there is no membership mirror table — so `role` is always a role id.
+         */
+        get: operations["listFolderMembers"];
+        put?: never;
+        /**
+         * Grant a user a role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Identify the user by `userID` or `userEmail`. Returns an empty body. The grant inherits down every folder, project, and resource beneath the folder, and keeps applying to projects added later. A principal may hold at most one role per folder; use `PATCH` to change it. A user outside the folder's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        post: operations["grantFolderMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/members/{userID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a user's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Revoking an organization-external user's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
+         */
+        delete: operations["revokeFolderMember"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a user's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Replaces the user's grant on this folder; returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the folder and is recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        patch: operations["updateFolderMemberRole"];
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant a group a role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Returns an empty body. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        post: operations["grantFolderGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The group's id. */
+                groupID: components["parameters"]["GroupID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a group's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Revoking an organization-external group's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
+         */
+        delete: operations["revokeFolderGroup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/organizations/{organizationID}/groups": {
         parameters: {
             query?: never;
@@ -6213,6 +6325,69 @@ export interface components {
             depth: number;
             projectCount: number;
             children: components["schemas"]["FolderTreeNode"][];
+        };
+        /** @description A folder's user role grants and group role grants. Backed by `role_bindings` directly — there is no membership mirror table for folders — so only users and groups appear; machine principals are managed from their own surfaces. */
+        FolderMembers: {
+            users: components["schemas"]["FolderMember"][];
+            groups: components["schemas"]["FolderGroupGrant"][];
+        };
+        FolderMember: {
+            /** Format: uuid */
+            userId?: string;
+            username: string;
+            displayName: string;
+            email: string;
+            /**
+             * Format: uuid
+             * @description The granted role's id.
+             */
+            role: string;
+            /** @description The role's name, or `(deleted role)` if the role no longer exists. */
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+            /**
+             * Format: date-time
+             * @description When the grant expires; absent if it never does.
+             */
+            expiresAt?: string | null;
+            /** @description The user is not a member of the folder's organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
+        };
+        FolderGroupGrant: {
+            /** Format: uuid */
+            groupId?: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description The granted role's id.
+             */
+            role: string;
+            /** @description The role's name, or `(deleted role)` if the role no longer exists. */
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
+        };
+        /** @description The role to grant on the folder: a role id, or a seeded role name (`viewer`/`operator`/`editor`/`admin`). A role id must name a role owned at or above the folder. The legacy project vocabulary (`member`) is not accepted here. */
+        FolderRole: string;
+        /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
+        GrantFolderMemberRequest: {
+            userEmail?: string;
+            /** Format: uuid */
+            userID?: string;
+            role: components["schemas"]["FolderRole"];
+        };
+        UpdateFolderMemberRoleRequest: {
+            role: components["schemas"]["FolderRole"];
+        };
+        GrantFolderGroupRequest: {
+            /** Format: uuid */
+            groupID: string;
+            role: components["schemas"]["FolderRole"];
         };
         GroupDetail: {
             /** Format: uuid */
@@ -12820,6 +12995,181 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listFolderMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The folder's role grants. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderMembers"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    grantFolderMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantFolderMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    revokeFolderMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateFolderMemberRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFolderMemberRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    grantFolderGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantFolderGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    revokeFolderGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The group's id. */
+                groupID: components["parameters"]["GroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listGroups: {

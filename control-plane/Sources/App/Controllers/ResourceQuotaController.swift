@@ -449,7 +449,7 @@ struct ResourceQuotaController: RouteCollection {
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
 
         // Validate environment if specified
         if let environment = createRequest.environment {
@@ -537,7 +537,7 @@ struct ResourceQuotaController: RouteCollection {
             try await OrganizationAccessService.requireAdmin(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {
             let project = try await req.requireProject(id: projectID)
-            try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+            try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
         } else {
             try requireSystemAdminForScopelessQuota(on: req)
         }

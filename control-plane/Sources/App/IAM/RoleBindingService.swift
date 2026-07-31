@@ -204,6 +204,26 @@ enum RoleBindingService {
             .all()
     }
 
+    /// The unexpired bindings a principal holds on one node — the question the
+    /// member surfaces ask ("does this user already have a role here?"),
+    /// answered by the database rather than by loading a node's or a
+    /// principal's whole binding set and filtering in Swift.
+    static func activeBindings(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        nodeType: IAMNodeType,
+        nodeID: UUID,
+        on db: Database
+    ) async throws -> [RoleBinding] {
+        try await RoleBinding.query(on: db)
+            .filter(\.$principalType == principalType.rawValue)
+            .filter(\.$principalID == principalID)
+            .filter(\.$nodeType == nodeType.rawValue)
+            .filter(\.$nodeID == nodeID)
+            .active()
+            .all()
+    }
+
     /// The unexpired bindings held by a principal.
     static func activeBindings(
         principalType: IAMPrincipalType, principalID: UUID, on db: Database

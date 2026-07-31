@@ -180,7 +180,12 @@ struct FloatingIPController: RouteCollection {
         do {
             try await pool.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(.conflict, reason: "A floating IP pool named '\(name)' already exists")
+            // Names are unique per owner (STR-105), so this only ever reports a
+            // collision inside the caller's own scope — it can't be used to
+            // probe another tenant's pool names.
+            throw Abort(
+                .conflict,
+                reason: "A floating IP pool named '\(name)' already exists in this organization scope")
         }
 
         return try FloatingIPPoolResponse(from: pool, allocatedCount: 0)

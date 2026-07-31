@@ -43,7 +43,8 @@ struct NetworkOrchestrator: Sendable {
                     // No OVN here (user-mode SLIRP), so its DHCP responder can't
                     // run; fall back to static guest config.
                     dhcpEnabled: false,
-                    dnsServers: spec.dnsServers
+                    dnsServers: spec.dnsServers,
+                    domainName: spec.domainName
                 )
             }
         }
@@ -90,7 +91,8 @@ struct NetworkOrchestrator: Sendable {
                         gateway6: spec.gateway6,
                         mtu: spec.mtu,
                         dhcpEnabled: dhcpRealized,
-                        dnsServers: spec.dnsServers
+                        dnsServers: spec.dnsServers,
+                        domainName: spec.domainName
                     ))
             } catch {
                 logger.error(
