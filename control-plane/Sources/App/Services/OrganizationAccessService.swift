@@ -47,7 +47,7 @@ struct OrganizationAccessService {
     /// This intentionally does not use the legacy `manage_project` permission. That
     /// permission translates to `project:update`, which editors hold, and therefore
     /// must only gate project metadata updates.
-    static func requireProjectAdmin(project: Project, on req: Request) async throws {
+    static func requireProjectPolicyAdmin(project: Project, on req: Request) async throws {
         try await requireProjectAction("iam:setPolicy", project: project, on: req)
     }
 

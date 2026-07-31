@@ -150,7 +150,7 @@ struct ProjectMemberController: RouteCollection {
     /// POST /api/projects/:projectID/members — grant a user a role on the project.
     func grant(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         let body = try req.content.decode(GrantMemberRequest.self)
@@ -212,7 +212,7 @@ struct ProjectMemberController: RouteCollection {
     /// PATCH /api/projects/:projectID/members/:userID — change a user's role.
     func updateRole(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
@@ -288,7 +288,7 @@ struct ProjectMemberController: RouteCollection {
     /// DELETE /api/projects/:projectID/members/:userID — revoke a user's role.
     func revoke(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
@@ -333,7 +333,7 @@ struct ProjectMemberController: RouteCollection {
     /// POST /api/projects/:projectID/groups — grant a group a role on the project.
     func grantGroup(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         let body = try req.content.decode(GrantGroupRequest.self)
@@ -395,7 +395,7 @@ struct ProjectMemberController: RouteCollection {
     /// DELETE /api/projects/:projectID/groups/:groupID — revoke a group's role.
     func revokeGroup(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         guard let groupID = req.parameters.get("groupID", as: UUID.self) else {

@@ -230,19 +230,18 @@ final class RegistryPullSecretTests {
         }
     }
 
-    @Test("Mutations require iam:setPolicy; denial is a 403")
-    func mutationsRequirePermission() async throws {
+    @Test("Editors cannot mutate registry credentials")
+    func editorsCannotMutateCredentials() async throws {
         try await withPullSecretTestApp { app, _, project, _, _ in
-            // A project viewer can read but holds no project:update, so the
-            // requireProjectAdmin gate denies the mutation.
-            let viewer = try await TestDataBuilder(db: app.db).createUser(
-                username: "secret-viewer", email: "secret-viewer@example.com")
+            let editor = try await TestDataBuilder(db: app.db).createUser(
+                username: "secret-editor", email: "secret-editor@example.com")
             try await RoleBindingService.grant(
-                principalType: .user, principalID: viewer.id!, role: .viewer,
+                principalType: .user, principalID: editor.id!, role: .editor,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let viewerToken = try await viewer.generateAPIKey(on: app.db)
+            let editorToken = try await editor.generateAPIKey(on: app.db)
+
             try await app.test(.POST, credentialsPath(project)) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
+                req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
                 try req.content.encode([
                     "registry": "ghcr.io", "username": "bot", "secret": "s",
                 ])

@@ -51,7 +51,7 @@ struct RegistryPullSecretController: RouteCollection {
     /// POST — add a credential for a registry the project has none for yet.
     func create(req: Request) async throws -> Response {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
         let createRequest = try req.content.decode(CreateRegistryPullSecretRequest.self)
@@ -99,7 +99,7 @@ struct RegistryPullSecretController: RouteCollection {
     /// delete-and-create, not an edit.
     func update(req: Request) async throws -> RegistryPullSecretResponse {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
         let updateRequest = try req.content.decode(UpdateRegistryPullSecretRequest.self)
@@ -125,7 +125,7 @@ struct RegistryPullSecretController: RouteCollection {
     /// keep converging on it; their next pull simply becomes anonymous.
     func delete(req: Request) async throws -> HTTPStatus {
         let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
         try await pullSecret.delete(on: req.db)
