@@ -292,6 +292,30 @@ final class VMOperationTests {
         }
     }
 
+    @Test("A transitional VM past the timeout is left alone while an operation is still pending")
+    func sweepLeavesTransitionalVMWithPendingOperationAlone() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // Old enough for the transitional backstop (120s) but with a fresh
+            // operation still inside its own budget: the pending operation owns
+            // this VM's resolution, so the backstop must skip it. Without the
+            // backdating, `sweepIgnoresFreshOperations` never reaches the guard
+            // — the VM is filtered out in SQL by the age predicate first.
+            vm.setStatus(.starting, at: Date().addingTimeInterval(-400))
+            try await vm.save(on: app.db)
+
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let fresh = try await ResourceOperation.find(operation.id, on: app.db)
+            #expect(fresh?.status == .pending)
+
+            let freshVM = try await VM.find(vm.id, on: app.db)
+            #expect(freshVM?.status == .starting)
+        }
+    }
+
     @Test("A transitional VM with no status timestamp is aged off updatedAt")
     func sweepAgesTransitionalVMOffUpdatedAtWhenStatusTimestampIsMissing() async throws {
         try await withVMTestApp { app, _, vm, _ in
