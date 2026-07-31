@@ -202,6 +202,25 @@ enum IAMRoleRegistry {
     /// plumbing.
     static let identityActions: Set<String> = ["user:read", "user:update", "user:delete"]
 
+    /// In-guest command execution on a VM (the guest-agent stack, issue #804):
+    /// `vm:exec` is an interactive session, `vm:runCommand` a non-interactive
+    /// run with its output captured.
+    ///
+    /// **No seeded role carries either**, deliberately — not `editor`, not
+    /// `admin`. Both are root-on-VM, and a seeded role is inherited down the
+    /// whole subtree it is bound on, so a default role carrying them would
+    /// confer a shell on every VM beneath every binding written for any other
+    /// reason. They are reachable through a custom role somebody authored on
+    /// purpose (the binding row being the audit trail), or through the tier-1
+    /// `platform-system-admin` policy, which reaches everything.
+    ///
+    /// The two are equal in privilege — a one-shot `sh -c` is a shell — and
+    /// differ only in what the platform can attest to afterwards, which is why
+    /// they are separable at all. docs/architecture/iam.md ("In-guest execution
+    /// is never in a default role") carries the full argument for both halves
+    /// of the decision; keep it there rather than growing a second copy here.
+    static let guestExecutionActions: Set<String> = ["vm:exec", "vm:runCommand"]
+
     /// Actions no seeded role carries and only the tier-1
     /// `platform-system-admin` policy reaches. `agent:updateArtifact` overrides
     /// the agent's update artifact with an arbitrary URL — that binary is
@@ -224,6 +243,7 @@ enum IAMRoleRegistry {
     static let allActions: Set<String> =
         IAMRole.allCases.reduce(
             into: membershipDerivedActions.union(identityActions).union(systemAdminOnlyActions)
+                .union(guestExecutionActions)
         ) {
             $0.formUnion(actions(for: $1))
         }

@@ -613,4 +613,72 @@ final class IAMAuthorizerBackstopTests {
         #expect(M.classify(path: "/vms/\(id)") == nil)
         #expect(M.classify(path: "/this-route-does-not-exist") == nil)
     }
+
+    @Test("In-guest execution routes derive their own verb, not the update fallback")
+    func guestExecutionRoutesDeriveTheirVerb() {
+        let id = UUID().uuidString
+        typealias M = AuthorizationMiddleware
+        guard case .resource(let vms)? = M.classify(path: "/api/vms/\(id)/exec"),
+            case .resource(let sandboxes)? = M.classify(path: "/api/sandboxes/\(id)/exec")
+        else {
+            Issue.record("expected /api/vms and /api/sandboxes to be resource-mapped")
+            return
+        }
+
+        func permission(_ path: String, _ method: HTTPMethod = .POST) -> String? {
+            M.permission(method: method, pathComponents: path.split(separator: "/"), resource: vms)
+        }
+        func sandboxPermission(_ path: String, _ method: HTTPMethod = .POST) -> String? {
+            M.permission(
+                method: method, pathComponents: path.split(separator: "/"), resource: sandboxes)
+        }
+
+        // The two shapes the guest-agent exec endpoints will serve. The
+        // failure this guards is silent: an unlisted POST subpath falls back
+        // to `update`, which translates to `vm:update` — an *editor*
+        // permission gating a root shell.
+        #expect(permission("/api/vms/\(id)/exec") == "exec")
+        #expect(permission("/api/vms/\(id)/actions/run") == "run")
+        let execAction = IAMActionTranslator.translate(
+            permission: "exec", resourceType: "virtual_machine", resourceID: id,
+            path: "/api/vms/\(id)/exec")
+        #expect(execAction?.action == "vm:exec")
+        let runAction = IAMActionTranslator.translate(
+            permission: "run", resourceType: "virtual_machine", resourceID: id,
+            path: "/api/vms/\(id)/actions/run")
+        #expect(runAction?.action == "vm:runCommand")
+
+        // An interactive session is a WebSocket upgrade — a GET — so the verb
+        // has to win over the `read` default there too, or the shell is gated
+        // on a *viewer* permission. This is the live shape of the sandbox exec
+        // attach route, generalized to VMs by the guest-agent work.
+        #expect(permission("/api/vms/\(id)/exec", .GET) == "exec")
+        #expect(permission("/api/vms/\(id)/exec/\(id)/attach", .GET) == "exec")
+        #expect(sandboxPermission("/api/sandboxes/\(id)/exec/\(id)/attach", .GET) == "exec")
+
+        // The `/actions/` hop and the GET rule read the verb list and nothing
+        // else: an unrecognized verb still falls back, and every existing
+        // shape keeps the permission it had.
+        #expect(permission("/api/vms/\(id)/actions/frobnicate") == "update")
+        #expect(permission("/api/vms/\(id)/actions") == "update")
+        #expect(permission("/api/vms/\(id)/start") == "start")
+        #expect(permission("/api/vms/\(id)/snapshots") == "snapshot")
+        #expect(permission("/api/vms/\(id)", .DELETE) == "delete")
+        #expect(permission("/api/vms", .GET) == "read")
+        // GETs whose subpath is not a verb still read — including the VM
+        // console, whose own `view_console` check is what gates it.
+        #expect(permission("/api/vms/\(id)/console", .GET) == "read")
+        #expect(permission("/api/vms/\(id)/snapshots", .GET) == "read")
+        #expect(sandboxPermission("/api/sandboxes/\(id)/status", .GET) == "read")
+        #expect(sandboxPermission("/api/sandboxes/\(id)/operations", .GET) == "read")
+
+        // The hop is generic across guarded resources, not a VM special case:
+        // pinned so a future `/actions/`-shaped sandbox route can't move its
+        // gate without this failing first.
+        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/exec") == "exec")
+        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/frobnicate") == "update")
+        // Sandboxes have no `run` verb — one resource gaining a verb must not
+        // hand it to the other.
+        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/run") == "update")
+    }
 }

@@ -58,13 +58,39 @@ struct CedarSchemaTests {
         #expect(editor != admin)
         // `admin` carries the whole vocabulary except the actions no role
         // carries by design: `project:create` (bare org membership grants it),
-        // the identity-plane `user:*` set, and the system-admin-only actions —
-        // the last two reach principals through the tier-1 policies, never
-        // through a binding.
+        // the identity-plane `user:*` set, the system-admin-only actions, and
+        // the in-guest execution pair. The identity and system-admin sets reach
+        // principals through the tier-1 policies, never through a binding;
+        // in-guest execution reaches them only through a custom role somebody
+        // wrote on purpose.
         let roleless = IAMRoleRegistry.identityActions
             .union(IAMRoleRegistry.systemAdminOnlyActions)
+            .union(IAMRoleRegistry.guestExecutionActions)
             .union(["project:create"])
         #expect(admin == IAMRoleRegistry.allActions.subtracting(roleless))
+    }
+
+    @Test("In-guest execution is carried by no seeded role, but is a real, ceilable action")
+    func guestExecutionIsRolelessButReal() {
+        // The security decision behind issue #804, pinned where a future
+        // registry edit has to look at it. `vm:exec` and `vm:runCommand` are
+        // root-on-VM; a seeded role would carry them down every subtree it is
+        // bound on, so they are reachable only through a deliberately authored
+        // custom role (or the tier-1 system-admin policy).
+        for action in IAMRoleRegistry.guestExecutionActions {
+            #expect(
+                IAMRoleRegistry.roles(granting: action).isEmpty,
+                "\(action) must not be carried by a seeded role")
+            // Roleless is not the same as absent: the action has to be in the
+            // vocabulary for a custom role to name it, for a guardrail to
+            // ceiling it, and for the decision log to record it.
+            #expect(IAMRoleRegistry.allActions.contains(action))
+            let types = CedarSchemaBuilder.resourceTypes(for: action)
+            #expect(types.contains(.vm), "\(action) must be requestable against a VM")
+            // It rides the `vm` service group, so a `vm:*` ceiling covers it
+            // without anyone having to remember it exists.
+            #expect(IAMRoleRegistry.actionServices.contains("vm"))
+        }
     }
 
     @Test("Canonical permit text enumerates exactly the role's expanded actions")
