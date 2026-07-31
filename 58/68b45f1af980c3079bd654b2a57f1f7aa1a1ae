@@ -1,0 +1,32 @@
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_fc11bc84994473::t_8d58e7a6667831 157-202
+  s_fc11bc84994473::t_a131699b2ff5d6 203-236
+docs/architecture/networking.md
+  s_fc11bc84994473::t_b4f3087dedbf4f 459-460
+control-plane/Sources/App/configure.swift
+  s_fc11bc84994473::t_6fd865cb51598f 674-678
+control-plane/Sources/App/Migrations/ScopeFloatingIPPoolNamesToOwners.swift
+  s_fc11bc84994473::t_d63864c65d6416 2
+  s_fc11bc84994473::t_f06b0f5fa4b6f6 1,3-28,30,33-85
+  s_fc11bc84994473::t_fb110a218268cd 29,31-32
+control-plane/Sources/App/Models/FloatingIPPool.swift
+  s_fc11bc84994473::t_a7922c20086a31 21-22
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_fc11bc84994473::t_ee809b4fa9c3d4 183-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "5868b45f1af980c3079bd654b2a57f1f7aa1a1ae",
+  "prompts": {},
+  "sessions": {
+    "s_fc11bc84994473": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15c4f3c7-8724-42fd-a73b-75a484729c52",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
