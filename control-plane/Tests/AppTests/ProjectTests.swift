@@ -364,7 +364,7 @@ final class ProjectTests {
 
     @Test("Project list returns only projects the caller may read, not the org inventory")
     func testListProjectsFiltersPerRow() async throws {
-        try await withProjectTestApp { app, _, testOrganization, _, _ in
+        try await withProjectTestApp { app, _, testOrganization, testOU, _ in
             // Two projects directly in the org.
             let visibleProject = Project(
                 name: "Visible Project", description: "member has a binding here",
@@ -374,6 +374,13 @@ final class ProjectTests {
                 name: "Hidden Project", description: "member has no binding here",
                 organizationID: testOrganization.id, path: "")
             try await hiddenProject.save(on: app.db)
+
+            // A folder project the member also has no binding on — covers the
+            // folder-scoped list endpoint (`listFolderProjects`).
+            let hiddenFolderProject = Project(
+                name: "Hidden Folder Project", description: "member has no binding here",
+                organizationalUnitID: testOU.id, path: "")
+            try await hiddenFolderProject.save(on: app.db)
 
             // A bare org member: a membership mirror row and nothing else —
             // under the redesign that grants `org:read` + `project:create`, no
@@ -410,6 +417,19 @@ final class ProjectTests {
                 let projects = try res.content.decode([ProjectResponse].self)
                 #expect(projects.contains { $0.name == "Visible Project" })
                 #expect(!projects.contains { $0.name == "Hidden Project" })
+            }
+
+            // ...and on the folder-scoped list: the member has no binding in
+            // the folder, so it comes back empty rather than leaking the
+            // folder's projects.
+            try await app.test(
+                .GET, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let projects = try res.content.decode([ProjectResponse].self)
+                #expect(!projects.contains { $0.name == "Hidden Folder Project" })
             }
         }
     }

@@ -503,9 +503,13 @@ struct APIKeyAuthenticatorTests {
         // A scope refusal never reaches the evaluator, so without an explicit
         // row it would be an authorization denial the decision log cannot
         // explain (STR-116). The row names the principal, the credential, and
-        // the scope the request needed.
+        // the scope the request needed. Filter to the scope_denied rows rather
+        // than assert on the whole table, so a future middleware that records
+        // something else on this request doesn't turn this into a flake.
         await app.iamDecisionRecorder.flush()
-        let entries = try await IAMDecisionLog.query(on: app.db).all()
+        let entries = try await IAMDecisionLog.query(on: app.db)
+            .filter(\.$cedarDecision == "scope_denied")
+            .all()
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         let userID = try user.requireID()

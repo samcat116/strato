@@ -102,7 +102,6 @@ struct APIKeyScopeMiddleware: AsyncMiddleware {
         if let apiKey = request.apiKey, !apiKey.grants(required) {
             await recordDenial(
                 request: request,
-                subject: apiKey.$user.id.uuidString,
                 denial: CredentialScopeDenial(
                     credentialType: "api_key",
                     credentialID: apiKey.id,
@@ -119,7 +118,6 @@ struct APIKeyScopeMiddleware: AsyncMiddleware {
         if let cliSession = request.cliSession, !cliSession.grants(required) {
             await recordDenial(
                 request: request,
-                subject: cliSession.$user.id.uuidString,
                 denial: CredentialScopeDenial(
                     credentialType: "cli_session",
                     credentialID: cliSession.id,
@@ -134,9 +132,11 @@ struct APIKeyScopeMiddleware: AsyncMiddleware {
         return try await next.respond(to: request)
     }
 
-    private func recordDenial(
-        request: Request, subject: String, denial: CredentialScopeDenial
-    ) async {
+    private func recordDenial(request: Request, denial: CredentialScopeDenial) async {
+        // The acting principal's own subject spelling, so the row matches every
+        // other decision-log subject rather than reconstructing the user UUID
+        // here and drifting if that convention ever changes.
+        let subject = request.actingPrincipal?.subject ?? ""
         await request.application.iamDecisionRecorder.recordScopeDenial(
             subject: subject,
             denial: denial,

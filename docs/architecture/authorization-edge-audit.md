@@ -129,7 +129,8 @@ owner — correctly use a container gate whose action matches the rows.
 These are real leaks of the same class, deferred because a correct fix is a
 product/design decision (admin-gate the aggregate vs filter the whole tree
 per-row) that runs through shared aggregation services and deserves its own
-tracked change rather than a rushed edit inside the audit PR.
+tracked change rather than a rushed edit inside the audit PR. Tracked as
+[#882](https://github.com/samcat116/strato/issues/882).
 
 | Endpoint | Leaks | Notes |
 | -- | -- | -- |

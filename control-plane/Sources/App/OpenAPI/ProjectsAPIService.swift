@@ -564,13 +564,32 @@ struct ProjectsAPIService: APIProtocol {
     /// entire project inventory. `project:read` is what `view_project`
     /// translates to, so a listed project and the object read that follows it
     /// are the same decision, answered once from the request memo (#686).
+    ///
+    /// `ProjectVisibility` is used the way every other list endpoint uses it:
+    /// its SQL narrowing bounds the set *before* the evaluator decides, so a
+    /// caller whose bindings reach only a handful of projects sends a
+    /// handful-sized Cedar batch — not one node per project in the org — and
+    /// writes only that many decision rows. `nil` candidates means "no bound"
+    /// (a system admin, an unbounded authored permit), and every candidate is
+    /// still decided below.
     private func readableSummaries(for projects: [Project], on req: Request) async throws
         -> [Components.Schemas.ProjectSummary]
     {
         let visibility = try await ProjectVisibility.resolve(on: req)
+        if visibility.reachesNoProject { return [] }
+
+        // Bound the candidates to the SQL-narrowed set before deciding, when
+        // one exists (nil = no bound, e.g. a system admin).
+        let narrowed: [Project]
+        if let candidateIDs = visibility.candidateProjectIDs.map(Set.init) {
+            narrowed = projects.filter { $0.id.map(candidateIDs.contains) ?? false }
+        } else {
+            narrowed = projects
+        }
+
         let readable = try await visibility.readableProjects(
-            among: projects.compactMap(\.id), on: req)
-        let filtered = projects.filter { project in
+            among: narrowed.compactMap(\.id), on: req)
+        let filtered = narrowed.filter { project in
             project.id.map(readable.contains) ?? false
         }
         return try await summaries(for: filtered, on: req.db)
