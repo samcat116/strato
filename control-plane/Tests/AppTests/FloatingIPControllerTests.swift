@@ -357,7 +357,8 @@ final class FloatingIPControllerTests {
                 #expect(res.status == .conflict)
             }
 
-            // Cross-project VM → 409.
+            // Cross-project VM → 400, the one status every cross-project
+            // refusal answers with (issue #777); was 409.
             let builder = TestDataBuilder(db: app.db)
             let otherProject = try await builder.createProject(
                 name: "Other FIP Project", description: "", organization: org)
@@ -367,7 +368,7 @@ final class FloatingIPControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": foreignVM.id!.uuidString])
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .badRequest)
             }
 
             // Happy path.

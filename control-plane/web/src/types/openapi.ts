@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create a virtual machine
-         * @description Records the VM and a pending `create` operation, returning the operation to poll.
+         * @description Records the VM and a pending `create` operation, returning the operation to poll. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
          */
         post: operations["createVM"];
         delete?: never;
@@ -896,7 +896,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a volume to a VM */
+        /**
+         * Attach a volume to a VM
+         * @description Requires `attach` on the volume and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachVolume"];
         delete?: never;
         options?: never;
@@ -1157,7 +1160,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a floating IP to a VM NIC */
+        /**
+         * Attach a floating IP to a VM NIC
+         * @description Requires `update` on the floating IP and on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachFloatingIP"];
         delete?: never;
         options?: never;
@@ -1242,7 +1248,7 @@ export interface paths {
         put?: never;
         /**
          * Add a rule to a security group
-         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer. `remoteGroupId` is resolved within this group's own project — one naming a group outside it is reported as not found rather than as a distinct cross-project refusal, since nothing authorizes the caller against the group it names.
          */
         post: operations["createSecurityGroupRule"];
         delete?: never;
@@ -1285,7 +1291,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a security group to a VM NIC */
+        /**
+         * Attach a security group to a VM NIC
+         * @description Requires `attach` on the group and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachSecurityGroup"];
         delete?: never;
         options?: never;
@@ -1450,7 +1459,7 @@ export interface paths {
         put?: never;
         /**
          * Attach a zone to a logical network
-         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it.
+         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it. Requires `attach` on the zone and `update` on the network, and is refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
          */
         post: operations["attachDNSZoneToNetwork"];
         delete?: never;
@@ -1476,7 +1485,7 @@ export interface paths {
         post?: never;
         /**
          * Detach a zone from a logical network
-         * @description Refused while this zone is the network's primary — clear the network's primary zone first, so its VMs' derived records are never stranded.
+         * @description Refused while this zone is the network's primary — clear the network's primary zone first, so its VMs' derived records are never stranded. Resolves the network the same way attach does: requires `update` on it, and is refused with `400` when the zone and the network belong to different projects — the status every cross-project refusal answers with.
          */
         delete: operations["detachDNSZoneFromNetwork"];
         options?: never;
@@ -9085,6 +9094,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };

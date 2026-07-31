@@ -396,7 +396,8 @@ final class SecurityGroupControllerTests {
                 .count()
             #expect(memberships == 2)
 
-            // Cross-project attach → 409.
+            // Cross-project attach → 400, the one status every cross-project
+            // refusal answers with (issue #777); was 409.
             let builder = TestDataBuilder(db: app.db)
             let otherProject = try await builder.createProject(
                 name: "Elsewhere", description: "p", organization: org)
@@ -406,7 +407,7 @@ final class SecurityGroupControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .badRequest)
             }
 
             // Detach down to one group; detaching the last is refused.
@@ -520,7 +521,10 @@ final class SecurityGroupControllerTests {
                 .all()
             #expect(groups2.map { $0.$securityGroup.id } == [web.id])
 
-            // A group from another project → 400, and no VM row is left.
+            // A group from another project is resolved out of existence rather
+            // than refused as cross-project (issue #777): nothing authorizes
+            // the caller against it, so it answers 404 like an unknown id, and
+            // no VM row is left.
             let otherProject = try await builder.createProject(
                 name: "Wrong Project", description: "p", organization: org)
             let foreign = try await SecurityGroupService.ensureDefaultGroup(
@@ -532,7 +536,7 @@ final class SecurityGroupControllerTests {
                         name: "sg-foreign-vm", imageId: image.id, projectId: project.id,
                         cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID, securityGroupIds: [foreign.id!]))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                #expect(res.status == .notFound)
             }
             let vm3 = try await VM.query(on: app.db).filter(\.$name == "sg-foreign-vm").first()
             #expect(vm3 == nil)

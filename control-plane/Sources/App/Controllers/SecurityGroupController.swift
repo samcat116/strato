@@ -456,13 +456,16 @@ struct SecurityGroupController: RouteCollection {
         guard let vm = try await VM.find(request.vmId, on: req.db) else {
             throw Abort(.badRequest, reason: "VM \(request.vmId) does not exist")
         }
-        guard vm.$project.id == group.$project.id else {
-            throw Abort(.conflict, reason: "VM belongs to a different project than the security group")
-        }
         let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
         guard hasVMPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
+        // After the VM check, never before: a containment refusal handed to a
+        // caller who can't touch the VM would tell them it exists in another
+        // project (issue #777).
+        try ProjectContainment.require(
+            "VM", in: vm.$project.id,
+            sameProjectAs: "the security group", in: group.$project.id)
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
             .filter(\.$vm.$id == request.vmId)

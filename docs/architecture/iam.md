@@ -564,6 +564,34 @@ of the current system are unchanged by the migration:
 - API keys are unchanged. The short-lived-credential successor path is
   JWT-SVIDs (below), which sits alongside them rather than replacing them.
 
+### Credential scopes are a parallel gate, to be folded in (STR-115)
+
+API keys and CLI sessions carry a `scopes` array (`read`/`write`/`admin`)
+enforced by `APIKeyScopeMiddleware` entirely outside the evaluator, with the
+required scope derived from the HTTP method alone. That is this section's
+invariant violated in-tree: a scoped credential is identity carrying
+authorization. The consequences are concrete: `admin` is never *required* by
+anything (safe methods need `read`, everything else `write`), so `read`+`write`
+is full account power; a default CLI login asks for and receives `read write`;
+guardrails cannot ceiling what a credential may do; and none of the canonical
+narrowing use cases (a CI token for one project, a monitoring key that reads
+VMs but not images) is expressible.
+
+**Decided direction** (STR-115 is the implementation): a credential is issued
+*on behalf of* a principal and optionally carries a **restriction** in the
+existing action/role vocabulary — a role id, an action list, or a node scope —
+and enforcement moves into the evaluator so the effective permission is
+`bindings ∩ restriction`, recorded in `iam_decision_logs` with tier
+attribution like every other decision. Guardrails then cover credentials for
+free. The current scopes become a compatibility shim (`read` → the viewer
+action set; `write`/`admin` → unrestricted) so existing keys keep working;
+the bespoke three-value enum takes on no new consumers.
+
+Until then, the one repair already made (STR-116): a scope refusal writes a
+`scope_denied` row to `iam_decision_logs` naming the principal, the credential
+(`api_key`/`cli_session` + id), and the missing scope — previously it was the
+only authorization denial that left no decision row at all.
+
 ### The workload registry (issue #491)
 
 SPIFFE identities become principals by **registration**, never by parsing.
@@ -920,10 +948,21 @@ organization, which is exactly the `inherited_member` behaviour the invariant
 above deliberately reverses: bare membership let you enumerate every project
 name, description, folder and VM count in the org while every individual
 `GET /api/projects/:id` answered 403 (issue #870). They route through the
-evaluator now, on `project:read` / `folder:read` / `vm:read` / the quota's own
-scope. **Reaching a container is not reaching its contents**: an
-organization-level gate says the caller may see the container, and each row
-inside it is still a decision of its own.
+evaluator now — projects and quota rows in STR-116, folders, the hierarchy
+tree, its resource dumps and both search routes in STR-113 — on
+`project:read` / `folder:read` / `vm:read` / the quota's own scope.
+**Reaching a container is not reaching its contents**: an organization-level
+gate says the caller may see the container, and each row inside it is still a
+decision of its own. `docs/architecture/authorization-edge-audit.md` carries
+the per-endpoint table and what remains open.
+
+Two things the fix has to keep apart, because collapsing them is how the leak
+happened: the query **bound** and the **gate**. A bound derived from
+membership rows decides too — silently, by never putting a row in front of the
+evaluator — which is the same defect pointing the other way, and it costs a
+caller rows they hold a real grant on. So a bound has to come from the
+caller's grants (`ProjectVisibility`) wherever the gate can see further than
+membership does.
 
 What legitimately remains admin-conditional in controllers, in exactly two
 shapes:
@@ -944,7 +983,7 @@ shapes:
 - **The list-scoping narrowing** in `ProjectVisibility` (issue #688). The
   project-scoped list endpoints (`/api/volumes`, `/api/networks`,
   `/api/security-groups`, `/api/floating-ips`, `/api/dns-zones`, and since
-  issue #870 the project lists and `/api/quotas` themselves) used to load every
+  issue #870 the project-scoped rows of `/api/quotas`) used to load every
   project in the installation and evaluate each one; they now derive a *superset* of the
   caller's reachable projects from their own grants and narrow the row query to
   it, then decide each project the surviving rows land in through `req.can` as

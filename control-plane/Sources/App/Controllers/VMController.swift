@@ -291,11 +291,20 @@ struct VMController: RouteCollection {
                 reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
         }
         for groupId in requestedSecurityGroupIds {
-            guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Security group \(groupId) does not exist")
-            }
-            guard group.$project.id == projectId else {
-                throw Abort(.badRequest, reason: "Security group \(groupId) belongs to a different project")
+            // Scoped to the project, exactly like the NIC's network a few lines
+            // below (`LogicalNetworkService.resolveForWorkloadCreate`), and
+            // reported the same way: *not found here*. Nothing authorizes the
+            // caller against the named group, so a distinct "belongs to another
+            // project" answer would confirm that an opaque id names a group
+            // somewhere in the fleet — the disclosure the containment guard is
+            // placed behind an authorization check to avoid everywhere it does
+            // fire (issue #777).
+            let group = try await SecurityGroup.query(on: req.db)
+                .filter(\.$id == groupId)
+                .filter(\.$project.$id == projectId)
+                .first()
+            guard group != nil else {
+                throw Abort(.notFound, reason: "Security group \(groupId) not found in this project")
             }
         }
 
