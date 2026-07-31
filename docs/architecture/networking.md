@@ -456,7 +456,8 @@ in `deploy/ovn-central/README.md`).
 **As built (issue #344):**
 
 - **Control plane:** `FloatingIPPool` rows (external IPv4 CIDR, optional
-  gateway exclusion, optional site pin, org/folder-scoped like sites) and
+  gateway exclusion, optional site pin, org/folder-scoped like sites; the name
+  is unique within that owner, not deployment-wide — STR-105) and
   `FloatingIP` rows (pool + address + project, optional FK to a
   `VMNetworkInterface`; `SET NULL` on NIC delete, so removing a VM *detaches*
   rather than releases). `IPAMService.allocateFloatingIP` reuses the
