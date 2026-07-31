@@ -1,0 +1,30 @@
+docs/architecture/dns.md
+  s_ddbe2df7a5e93e::t_7eb4f4507ef5f4 16-22
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_ddbe2df7a5e93e::t_859e31e247fd74 509-522
+  s_ddbe2df7a5e93e::t_d40128781162f0 441-443
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_ddbe2df7a5e93e::t_0febcb8b278d28 46-47
+  s_ddbe2df7a5e93e::t_f3994ba98e3651 94-95
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_ddbe2df7a5e93e::t_429e5dfcc586de 93
+  s_ddbe2df7a5e93e::t_90fae7c543a7d3 61-64,78-79
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_ddbe2df7a5e93e::t_de9756194a7105 122-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "8041b129068647b79b92e92cd2966355c69772aa",
+  "prompts": {},
+  "sessions": {
+    "s_ddbe2df7a5e93e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9e81db06-6702-47f9-8d49-5c0e2cfb1078",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
