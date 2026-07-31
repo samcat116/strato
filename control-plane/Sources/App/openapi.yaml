@@ -12695,10 +12695,9 @@ components:
             database; null when none is designated.
         networkControllerStatus:
           description: >-
-            Heartbeat-derived status of the designated network controller; null
-            when the site designates none. Reported as soon as the heartbeat
-            lapses, before the API begins refusing work.
-          nullable: true
+            Heartbeat-derived status of the designated network controller;
+            omitted when the site designates none. Reported as soon as the
+            heartbeat lapses, before the API begins refusing work.
           allOf:
             - $ref: '#/components/schemas/AgentStatus'
         networkControllerIssue:
