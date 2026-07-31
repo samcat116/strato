@@ -38,6 +38,14 @@ final class ConsoleSessionManager: @unchecked Sendable {
         /// graphics session is never confused with a serial one.
         let stream: ConsoleStream
         let createdAt: Date
+        /// Whether the browser has been told the console is live.
+        ///
+        /// This is what decides whether a teardown may still explain itself: a
+        /// failure *before* ready arrives on a socket nobody has claimed, so
+        /// the reason can be written to it. After ready the socket belongs to
+        /// the console's own protocol — noVNC in the graphics case — and a text
+        /// frame injected there would be read as part of the byte stream.
+        var readyNotified: Bool = false
     }
 
     /// A minted-but-not-yet-attached graphics session.
@@ -235,20 +243,36 @@ final class ConsoleSessionManager: @unchecked Sendable {
     /// disconnect notification is a stream event keyed by `sessionId`, which
     /// does route — so it is what carries the bad news to the browser.
     ///
-    /// The reason rides the WebSocket close frame rather than a data frame:
-    /// after `ready` the graphics console's socket belongs to noVNC, and a text
-    /// frame injected there would be read as part of the RFB stream. noVNC
-    /// surfaces a close reason on its `disconnect` event, and the serial
-    /// console's hook already reports one from `onclose`.
+    /// The reason must travel as a **data** frame, not on the close frame:
+    /// WebSocketKit's `close(code:)` writes a two-byte status code and nothing
+    /// else, so a browser's `event.reason` is always empty and noVNC's
+    /// `disconnect` event carries nothing either. Sending it as data is the
+    /// only way the text reaches anyone.
+    ///
+    /// It is sent only *before* `ready`, which is exactly when these failures
+    /// happen. After ready the socket belongs to the console's own protocol —
+    /// injecting a text frame into a live RFB stream would be worse than
+    /// staying quiet — and a post-ready teardown is an ordinary disconnect the
+    /// UI already reports.
     func closeSession(sessionId: String, fromAgentKey agentKey: String, reason: String?) {
-        let websocket = lock.withLock { () -> WebSocket? in
-            guard let session = sessions[sessionId], session.agentKey == agentKey else { return nil }
-            return frontendConnections[sessionId]
+        let target = lock.withLock { () -> (websocket: WebSocket, session: ConsoleSessionInfo)? in
+            guard let session = sessions[sessionId], session.agentKey == agentKey,
+                let websocket = frontendConnections[sessionId]
+            else { return nil }
+            return (websocket, session)
         }
+
         // A browser-initiated teardown gets here too, with the socket already
         // closing; closing it again is a no-op.
-        if let websocket {
-            _ = websocket.close(code: .normalClosure)
+        if let target {
+            if !target.session.readyNotified, let reason {
+                // Same shapes the two frontends already parse: JSON control
+                // frames for the graphics console, an `error: ` prefix for the
+                // serial one.
+                target.websocket.send(
+                    target.session.stream == .vnc ? Self.errorControlFrame(reason) : "error: \(reason)")
+            }
+            _ = target.websocket.close(code: .normalClosure)
         }
         removeSession(sessionId: sessionId, fromAgentKey: agentKey)
         if let reason {
@@ -399,23 +423,38 @@ final class ConsoleSessionManager: @unchecked Sendable {
         // graphics console uses the JSON control frames the exec path
         // established, because once noVNC owns the socket it treats every text
         // frame as its own and an unstructured one is unparseable.
-        let stream = lock.withLock { sessions[sessionId]?.stream } ?? .serial
+        let stream = lock.withLock { () -> ConsoleStream in
+            sessions[sessionId]?.readyNotified = true
+            return sessions[sessionId]?.stream ?? .serial
+        }
         ws.send(stream == .vnc ? Self.readyControlFrame : "ready")
     }
 
-    /// The one control frame the graphics console sends. Everything after it is
-    /// RFB: noVNC is attached to the socket by then and would read a later text
-    /// frame as part of its own stream, so post-ready failures close the socket
-    /// with a reason instead of writing to it.
+    /// The last control frame the graphics console sends. Everything after it
+    /// is RFB: noVNC is attached to the socket by then and would read a later
+    /// text frame as part of its own stream, so a post-ready failure closes the
+    /// socket without explanation rather than corrupting it.
     static let readyControlFrame = #"{"type":"ready"}"#
 
+    private struct ErrorControlFrame: Encodable {
+        let type = "error"
+        let message: String
+    }
+
     /// A pre-ready failure, in the same JSON shape.
+    ///
+    /// Encoded rather than interpolated: these messages now carry text the
+    /// *agent* wrote, and hand-rolled escaping that covers `\` and `"` still
+    /// emits invalid JSON for a reason containing a newline — which the
+    /// frontend would silently drop in its parse `catch`, turning an
+    /// explanatory failure back into a blank one.
     static func errorControlFrame(_ message: String) -> String {
-        let escaped =
-            message
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return #"{"type":"error","message":"\#(escaped)"}"#
+        guard let data = try? JSONEncoder().encode(ErrorControlFrame(message: message)),
+            let json = String(data: data, encoding: .utf8)
+        else {
+            return #"{"type":"error","message":"Console unavailable"}"#
+        }
+        return json
     }
 
     /// Route user input from frontend to agent

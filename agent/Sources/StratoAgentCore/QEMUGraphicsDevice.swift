@@ -56,6 +56,14 @@ public enum QEMUGraphicsDevice {
     ///   controller to sit on: `q35` starts with USB off and `virt` has none at
     ///   all, hence the explicit `qemu-xhci` and the `bus=` that pins the
     ///   tablet to it.
+    /// - `usb-kbd` on **every** architecture, and this is not redundant on the
+    ///   one where it looks it. `q35` still carries the default i8042 PS/2
+    ///   controller, so x86 guests would type without it (it simply becomes a
+    ///   second keyboard there, which is harmless). The arm64 `virt` machine
+    ///   has no PS/2 controller and creates no input devices at all, so without
+    ///   this an aarch64 guest would render and accept clicks while dropping
+    ///   every keystroke — the failure mode that breaks exactly the installer
+    ///   this console exists to drive.
     public static func arguments(vncSocketPath: String, architecture: CPUArchitecture) -> [String] {
         var args = [
             "-display", "none",
@@ -70,6 +78,7 @@ public enum QEMUGraphicsDevice {
         args += [
             "-device", "\(usbControllerModel),id=\(usbControllerID)",
             "-device", "usb-tablet,bus=\(usbControllerID).0",
+            "-device", "usb-kbd,bus=\(usbControllerID).0",
         ]
         return args
     }

@@ -18,11 +18,13 @@ import Vapor
 /// Browser frame contract:
 /// - browser → CP: binary frames are RFB client messages. Text frames are
 ///   ignored; there is no control channel, because noVNC owns the socket.
-/// - CP → browser: `{"type":"ready"}` once the agent has attached to the VM's
-///   VNC socket, after which **every** frame is binary RFB. A failure past
-///   that point closes the socket with a reason rather than writing text into
-///   the middle of an RFB stream — noVNC surfaces the close reason on its
-///   `disconnect` event.
+/// - CP → browser: `{"type":"error","message":"…"}` for anything that goes
+///   wrong before the console is live, then `{"type":"ready"}` once the agent
+///   has attached to the VM's VNC socket — after which **every** frame is
+///   binary RFB. A failure past that point just closes the socket: writing text
+///   into the middle of an RFB stream would corrupt it, and the close frame
+///   cannot carry an explanation anyway (WebSocketKit's `close(code:)` sends a
+///   two-byte status code and nothing else).
 struct VNCWebSocketController: RouteCollection {
     /// Bound on the attach socket. The browser's side of RFB is small — key and
     /// pointer events, update requests — but a clipboard paste arrives as one

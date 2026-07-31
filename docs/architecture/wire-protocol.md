@@ -133,6 +133,15 @@ downgraded after its VMs were placed). Unlike v18 it needs no registration
 capability beside the version: placement already restricts to QEMU-capable
 agents, and a QEMU built `--disable-vnc` fails the create loudly.
 
+The byte-identity above is a property of the *production* path, not just the
+type: `VMSpecBuilder` sends `nil` rather than an explicit `"None"` for a
+headless VM, so the key is genuinely absent from every spec a headless VM
+produces. `GraphicsMode` itself decodes strictly, following `DesiredVMStatus` —
+but note the blast radius, since a `DesiredStateMessage` is decoded in one
+shot: a future unknown mode fails the *whole* sync for that agent and stops it
+converging on everything, not just the VM that carried it. The version gate is
+what keeps that unreachable.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a

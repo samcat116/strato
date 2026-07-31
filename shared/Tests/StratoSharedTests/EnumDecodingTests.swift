@@ -64,7 +64,9 @@ struct EnumDecodingTests {
     }
 
     @Test func graphicsModeRoundTripsAndRejectsUnknown() throws {
-        #expect(GraphicsMode.none.rawValue == "None")
+        // `headless` in source, `"None"` on the wire — the case was renamed to
+        // keep `== .none` from colliding with `Optional.none` at use sites.
+        #expect(GraphicsMode.headless.rawValue == "None")
         #expect(GraphicsMode.vnc.rawValue == "Vnc")
         for mode in GraphicsMode.allCases {
             #expect(try roundTrip([mode]) == [mode])

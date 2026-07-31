@@ -304,7 +304,7 @@ struct VMSpecTests {
     @Test func consoleSpecWithoutGraphicsDecodesToHeadless() throws {
         let decoded = try decodeJSON(ConsoleSpec.self, from: #"{"console":"Pty","serial":"Pty"}"#)
         #expect(decoded.graphics == nil)
-        #expect(decoded.effectiveGraphics == .none)
+        #expect(decoded.effectiveGraphics == .headless)
     }
 
     /// The other direction, and the reason `graphics` is Optional rather than a

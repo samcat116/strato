@@ -59,7 +59,13 @@ public enum ConsoleMode: String, Codable, CaseIterable, Sendable {
 /// own wire-version bump and gate, not by being tolerated here.
 public enum GraphicsMode: String, Codable, CaseIterable, Sendable {
     /// Headless — no display device, no framebuffer server. Today's behavior.
-    case none = "None"
+    ///
+    /// Spelled `headless` rather than `none` deliberately. `graphics` is an
+    /// Optional, and `spec.console?.graphics == .none` would compile against
+    /// `Optional.none` — reading as "has a graphics mode of headless" while
+    /// actually testing "the field is absent". The raw value stays `"None"`,
+    /// so this is a source-level rename with no wire change.
+    case headless = "None"
     /// A VNC server on a Unix socket in the VM's directory, relayed to the
     /// browser by the agent. There is no RFB password: the socket's file mode
     /// and the control plane's `view_console` authorization are the security

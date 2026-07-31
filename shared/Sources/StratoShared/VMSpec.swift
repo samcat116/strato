@@ -366,5 +366,5 @@ public struct ConsoleSpec: Codable, Sendable {
 
     /// The graphics mode to realize, defaulting to headless when the sending
     /// control plane predates the field.
-    public var effectiveGraphics: GraphicsMode { graphics ?? .none }
+    public var effectiveGraphics: GraphicsMode { graphics ?? .headless }
 }

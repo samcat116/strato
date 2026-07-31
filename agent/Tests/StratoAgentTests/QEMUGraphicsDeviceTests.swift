@@ -86,6 +86,23 @@ struct QEMUGraphicsDeviceTests {
         #expect(controllerIndex < tabletIndex)
     }
 
+    /// Every architecture needs an explicit keyboard, and arm64 is why: `virt`
+    /// has no PS/2 controller and creates no input devices, so a guest there
+    /// would render and accept clicks while silently dropping every keystroke —
+    /// which breaks the installer this console exists to drive. x86 would type
+    /// without it (q35 keeps the default i8042), so testing only that
+    /// architecture would hide the bug entirely.
+    @Test("a USB keyboard is present on every architecture", arguments: CPUArchitecture.allCases)
+    func keyboardIsPresentOnEveryArchitecture(architecture: CPUArchitecture) throws {
+        let args = arguments(architecture)
+        let controllerIndex = try #require(
+            args.firstIndex(of: "\(QEMUGraphicsDevice.usbControllerModel),id=\(QEMUGraphicsDevice.usbControllerID)"))
+        let keyboardIndex = try #require(
+            args.firstIndex(of: "usb-kbd,bus=\(QEMUGraphicsDevice.usbControllerID).0"))
+        #expect(args[keyboardIndex - 1] == "-device")
+        #expect(controllerIndex < keyboardIndex)
+    }
+
     /// The path the agent hands to QEMU and the path it later reconnects to for
     /// a re-adopted VM are the same derivation, so they cannot drift.
     @Test("the socket path is derived from the VM directory")

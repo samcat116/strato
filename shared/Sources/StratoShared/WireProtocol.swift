@@ -316,6 +316,14 @@ public enum WireProtocol {
     /// otherwise-capable host; here placement already restricts to
     /// QEMU-capable agents, and a QEMU built `--disable-vnc` fails the create
     /// loudly at spawn rather than degrading.
+    ///
+    /// `GraphicsMode` decodes strictly, following `DesiredVMStatus` — a mode
+    /// this build cannot realize must not quietly become "no display" on a VM
+    /// the API says has one. Size that choice knowingly: a `DesiredStateMessage`
+    /// is decoded in one shot, so a future unknown mode would fail the *whole*
+    /// sync for that agent and stop it converging on everything, not just the
+    /// VM that carried it. The version gate is what keeps that unreachable, and
+    /// any future mode must ship with its own bump for exactly this reason.
     public static let currentVersion = 23
 
     /// The lowest protocol version that speaks reconciliation state sync

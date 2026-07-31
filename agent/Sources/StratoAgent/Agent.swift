@@ -662,6 +662,10 @@ actor Agent {
             await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
         }
 
+        await consoleSocketManager?.setOnConsoleClosed { [weak self] vmId, sessionId, reason in
+            await self?.sendConsoleDisconnected(vmId: vmId, sessionId: sessionId, reason: reason)
+        }
+
         // Initialize SPIFFE/mTLS. A SPIRE-issued X.509 SVID is the agent's only
         // means of authenticating to the control plane, so it is mandatory:
         // missing config or a failed issuance is fatal, never a fallback.
@@ -2488,14 +2492,15 @@ extension Agent {
     /// console that is never going to open.
     private func failConsoleConnect(_ message: ConsoleConnectMessage, reason: String) async {
         await sendError(for: message.requestId, error: reason)
+        await sendConsoleDisconnected(vmId: message.vmId, sessionId: message.sessionId, reason: reason)
+    }
+
+    /// Tell the control plane a console session is over, and why, so it can
+    /// close the browser's socket instead of leaving it attached to nothing.
+    private func sendConsoleDisconnected(vmId: String, sessionId: String, reason: String) async {
         do {
             try await websocketClient?.sendMessage(
-                ConsoleDisconnectedMessage(
-                    requestId: message.requestId,
-                    vmId: message.vmId,
-                    sessionId: message.sessionId,
-                    reason: reason
-                ))
+                ConsoleDisconnectedMessage(vmId: vmId, sessionId: sessionId, reason: reason))
         } catch {
             logger.error("Failed to send console disconnected message: \(error)")
         }

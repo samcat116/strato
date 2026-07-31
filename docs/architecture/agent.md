@@ -224,6 +224,12 @@ tests, and a device line QEMU rejects surfaces only as a QMP connect timeout.
   which makes a graphical installer unclickable. `q35` starts with USB off and
   `virt` has no controller at all, so both the controller and the tablet's
   `bus=` are explicit.
+- `usb-kbd`, on every architecture. It looks redundant on x86 — `q35` keeps the
+  default i8042 PS/2 controller, so a guest there types without it and this just
+  becomes a second keyboard — but arm64's `virt` has no PS/2 and creates no
+  input devices at all. Without it an aarch64 guest renders and accepts clicks
+  while dropping every keystroke, which breaks precisely the installer this
+  console exists to drive.
 
 **There is no RFB password.** The socket's file mode inside the VM directory,
 plus the control plane's `view_console` authorization in front of the relay, are

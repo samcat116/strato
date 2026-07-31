@@ -22,6 +22,11 @@ actor ConsoleSocketManager {
     /// Callback for sending console data to control plane
     private var onConsoleData: ((String, String, Data) async -> Void)?
 
+    /// Callback for reporting a console socket that closed on its own — the
+    /// guest powered off, or QEMU exited underneath a live session. Without it
+    /// the browser holds an open WebSocket onto a console that is gone.
+    private var onConsoleClosed: ((String, String, String) async -> Void)?
+
     /// Track first data receipt per session to avoid noisy logs
     private var firstDataLogged: Set<String> = []
 
@@ -47,6 +52,12 @@ actor ConsoleSocketManager {
     /// Sets the callback for console data output
     func setOnConsoleData(_ callback: @escaping (String, String, Data) async -> Void) {
         self.onConsoleData = callback
+    }
+
+    /// Sets the callback for a console socket closing by itself, as
+    /// `(vmId, sessionId, reason)`.
+    func setOnConsoleClosed(_ callback: @escaping (String, String, String) async -> Void) {
+        self.onConsoleClosed = callback
     }
 
     /// Connect to one of a VM's console sockets
@@ -273,14 +284,24 @@ actor ConsoleSocketManager {
         // Clean up the connection. `finish` rather than `cancel`: the socket
         // went away but the browser is still attached, so whatever the guest
         // wrote before the close still has somewhere to go.
-        if let connection = connections.removeValue(forKey: sessionId) {
-            connection.relay.finish()
-            vmSessions[connection.vmId]?.remove(sessionId)
-            if vmSessions[connection.vmId]?.isEmpty == true {
-                vmSessions.removeValue(forKey: connection.vmId)
-            }
+        //
+        // An entry still being here means the socket closed on its own rather
+        // than being torn down by `disconnect`, which removes it first — so
+        // this is the guest going away underneath a live session, and the
+        // browser has to be told. Otherwise its WebSocket stays open onto a
+        // console that no longer exists.
+        guard let connection = connections.removeValue(forKey: sessionId) else {
+            firstDataLogged.remove(sessionId)
+            return
+        }
+        connection.relay.finish()
+        vmSessions[connection.vmId]?.remove(sessionId)
+        if vmSessions[connection.vmId]?.isEmpty == true {
+            vmSessions.removeValue(forKey: connection.vmId)
         }
         firstDataLogged.remove(sessionId)
+
+        await onConsoleClosed?(connection.vmId, sessionId, "The VM's console closed")
     }
 }
 

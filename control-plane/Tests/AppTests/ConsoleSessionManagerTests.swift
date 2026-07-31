@@ -159,6 +159,27 @@ final class ConsoleSessionManagerTests: BaseTestCase {
         }
     }
 
+    /// The reason has to survive as JSON the frontend can parse. It carries
+    /// agent-written text, and the close frame cannot hold it — WebSocketKit's
+    /// `close(code:)` writes a two-byte status code and nothing else — so a
+    /// hand-escaped string that broke on a newline would put the failure right
+    /// back where it started: a blank "Disconnected".
+    @Test("An error control frame stays valid JSON for reasons with awkward characters")
+    func errorControlFrameSurvivesAwkwardReasons() async throws {
+        try await withApp { _ in
+            let reason = "VM \"x\" has no display:\n\tuse a \\qemu\\ image"
+            let frame = ConsoleSessionManager.errorControlFrame(reason)
+
+            struct Decoded: Decodable {
+                let type: String
+                let message: String
+            }
+            let decoded = try JSONDecoder().decode(Decoded.self, from: Data(frame.utf8))
+            #expect(decoded.type == "error")
+            #expect(decoded.message == reason)
+        }
+    }
+
     /// A mint whose agent socket dropped can only ever fail on attach — and it
     /// would fail after the upgrade, where explaining why is hardest.
     @Test("Agent disconnect drops that agent's unattached graphics sessions")

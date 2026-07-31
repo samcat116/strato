@@ -590,17 +590,26 @@ struct VMSpecBuilderTests {
         #expect(specWithVolumes.console?.graphics == .vnc)
     }
 
-    /// The default is headless, and must reach the agent as an explicit
-    /// `None` rather than as an absent field that a newer agent could read as
-    /// "no opinion".
-    @Test("A VM with no display asks for none")
-    func testHeadlessIsExplicit() throws {
+    /// The default is headless, and it reaches the agent as an *absent* field
+    /// rather than an explicit `None`. That is what makes a headless VM's spec
+    /// byte-identical to what a pre-v23 agent already receives — the invariant
+    /// the whole v23 gating story rests on — so asserting it here is what stops
+    /// the production path from quietly drifting away from the claim.
+    @Test("A headless VM's spec omits the graphics key entirely")
+    func testHeadlessOmitsGraphics() throws {
         let image = createTestImage()
         let vm = createTestVM()
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-        #expect(spec.console?.graphics == GraphicsMode.none)
-        #expect(spec.console?.effectiveGraphics == GraphicsMode.none)
+        for spec in [
+            VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: []),
+            VMSpecBuilder.buildVMSpecWithVolumes(from: vm, image: image, volumes: [], networkInterfaces: []),
+        ] {
+            #expect(spec.console?.graphics == nil)
+            #expect(spec.console?.effectiveGraphics == .headless)
+
+            let json = String(decoding: try WireProtocol.makeEncoder().encode(spec), as: UTF8.self)
+            #expect(!json.contains("graphics"))
+        }
     }
 }
 

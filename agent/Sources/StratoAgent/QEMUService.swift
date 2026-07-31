@@ -586,14 +586,20 @@ actor QEMUService: HypervisorService {
         return nil
     }
 
-    /// Returns the VNC socket path for a VM, or nil when it has no graphics
-    /// console (the default) or its QEMU process is not running.
+    /// Returns the VNC socket path for a VM, or nil when no socket file exists
+    /// — which is the case for the headless VMs that are the default, and for
+    /// a VM whose QEMU exited cleanly.
     ///
     /// Existence of the socket file is the authority, not the cache: QEMU owns
     /// the listener, so a VM re-adopted after an agent restart still has one
     /// even though this process never spawned it. Conversely a VM created
     /// headless never has one, and cannot gain one without being recreated —
     /// the display device is fixed in the QEMU process's arguments.
+    ///
+    /// Note this proves the *file* is there, not that anything is listening: a
+    /// SIGKILLed QEMU can leave the socket behind where a clean stop unlinks
+    /// it. The connect attempt is what settles that, and its failure is
+    /// reported to the browser as a console that could not be opened.
     func getVNCSocketPath(vmId: String) -> String? {
         let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
         let vncSocketPath = QEMUGraphicsDevice.socketPath(vmDirectory: vmDir)
