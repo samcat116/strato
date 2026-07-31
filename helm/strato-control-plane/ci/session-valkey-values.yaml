@@ -2,10 +2,17 @@
 #
 # The two Valkey-backed stores have opposite failure contracts (coordination
 # fails open, sessions cannot), so they are separately configurable. This file
-# exercises the split render: SESSION_VALKEY_* on both the Deployment and the
-# migration Job, the session password Secret, and the extra NetworkPolicy egress
-# rule. Every other ci/ values file leaves `sessionValkey.host` empty and so
-# covers the default — sessions sharing the coordination instance.
+# drives the "Template with a split session store" step in
+# .github/workflows/helm-test.yml, whose assertions cover all four template
+# branches the split adds: SESSION_VALKEY_* on the Deployment *and* on the
+# migration Job (which boots the full application, and whose env block is a
+# verbatim copy that has no other guard against drift), the session password
+# Secret, and the extra NetworkPolicy egress rule.
+#
+# The same step asserts the negative on the default render: with
+# `sessionValkey.host` unset — every other ci/ values file, and every existing
+# deployment — no SESSION_VALKEY_* is emitted at all, so sessions keep sharing
+# the coordination endpoint and a single client.
 
 image:
   repository: nginx  # Using nginx for CI tests

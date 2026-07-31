@@ -155,6 +155,59 @@ jobs:
           print("✅ Scrape endpoints decoupled from the bundled Prometheus")
           EOF
 
+      - name: Template with a split session store
+        run: |
+          helm template strato-session helm/strato-control-plane/ \
+            -f helm/strato-control-plane/ci/session-valkey-values.yaml > /tmp/session-valkey-template.yaml
+          echo "Split session-store template generated successfully"
+
+      - name: Assert the session store renders on every workload that needs it
+        run: |
+          python3 - <<'EOF'
+          import re
+
+          split = open('/tmp/session-valkey-template.yaml').read()
+          default = open('/tmp/default-template.yaml').read()
+
+          # Sessions and coordination are separate Valkey-backed stores with
+          # opposite failure contracts (issue #855). Four template branches carry
+          # the split; each is asserted below.
+          def env_of(kind):
+              """Env var names on the first container spec of `kind`."""
+              for doc in split.split('\n---\n'):
+                  if re.search(r'^kind: %s$' % kind, doc, re.M):
+                      return set(re.findall(r'^\s*- name: (SESSION_VALKEY_\w+)', doc, re.M))
+              raise AssertionError("no %s rendered" % kind)
+
+          expected = {'SESSION_VALKEY_HOST', 'SESSION_VALKEY_PORT',
+                      'SESSION_VALKEY_DATABASE', 'SESSION_VALKEY_PASSWORD'}
+
+          # 1/2. Both workloads. The migration Job boots the full application, so
+          # it needs the session endpoint too — and its env block is a verbatim
+          # copy of the Deployment's, which is exactly how the two drift.
+          for kind in ('Deployment', 'Job'):
+              missing = expected - env_of(kind)
+              assert not missing, "%s is missing %s" % (kind, sorted(missing))
+
+          # 3. The password Secret the env block's secretKeyRef points at.
+          assert 'session-valkey-password:' in split, "session password secret key missing"
+
+          # 4. Egress to the session endpoint's own port. This rule lives outside
+          # the NetworkPolicy's egress with/else — inside it, the chart's default
+          # egress list would make it dead for every deployment that keeps the
+          # default.
+          netpol = [d for d in split.split('\n---\n') if re.search(r'^kind: NetworkPolicy$', d, re.M)]
+          assert any('port: 6380' in d for d in netpol), "no egress rule for the session Valkey port"
+
+          # The upgrade guarantee: a deployment that never sets sessionValkey.host
+          # emits no SESSION_VALKEY_* at all, so sessions keep sharing the
+          # coordination endpoint and one client.
+          assert 'SESSION_VALKEY' not in default, \
+              "default render leaks SESSION_VALKEY_*; sessions must default to the coordination endpoint"
+
+          print("✅ Split session store renders on both workloads; default render unchanged")
+          EOF
+
       - name: Template with SPIRE enabled
         run: |
           helm template strato-spire helm/strato-control-plane/ \
