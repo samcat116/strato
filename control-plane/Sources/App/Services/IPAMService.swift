@@ -84,6 +84,13 @@ enum IPAMService {
         "ipam:\(networkID.uuidString)"
     }
 
+    /// Lock key for a floating IP pool's address range. Keyed on the id for
+    /// the same reason as networks: pool names are unique only within their
+    /// owning org or folder (STR-105).
+    private static func allocationLockKey(floatingIPPoolID: UUID) -> String {
+        "fip:\(floatingIPPoolID.uuidString)"
+    }
+
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
         // The used set is the union of VM and sandbox addresses on the network
@@ -238,9 +245,10 @@ enum IPAMService {
     /// backstops same-table races. Callers run inside the transaction that
     /// saves the new row.
     static func allocateFloatingIP(for pool: FloatingIPPool, on db: Database) async throws -> String {
-        try await lockAllocations(key: "fip:\(pool.name)", on: db)
+        let poolID = try pool.requireID()
+        try await lockAllocations(key: allocationLockKey(floatingIPPoolID: poolID), on: db)
         let used = try await FloatingIP.query(on: db)
-            .filter(\.$pool.$id == pool.requireID())
+            .filter(\.$pool.$id == poolID)
             .all()
             .compactMap { parseIPv4($0.address) }
         return try allocateIP(
