@@ -49,7 +49,12 @@ final class HierarchyPathVisibilityTests {
         let nestedVM = try await builder.createVM(name: "nested-vm", project: nestedProject)
         let directVM = try await builder.createVM(name: "direct-vm", project: directProject)
 
+        // One quota at each scope: the folder-scoped row is the branch where the
+        // node the read is decided on diverges most from the row's own naming,
+        // and where `readable(on:)` applies a different action (`folder:read`)
+        // to the same row.
         _ = try await builder.createResourceQuota(name: "org-quota", organization: organization)
+        _ = try await builder.createResourceQuota(name: "folder-quota", ou: folder)
         _ = try await builder.createResourceQuota(name: "project-quota", project: directProject)
 
         return Fixture(
@@ -218,10 +223,119 @@ final class HierarchyPathVisibilityTests {
 
             let response = try await summary(app, organization: fixture.organization, token: token)
 
-            #expect(Set(response.quotaCompliance.map(\.quotaName)) == ["org-quota", "project-quota"])
+            #expect(
+                Set(response.quotaCompliance.map(\.quotaName)) == ["org-quota", "folder-quota", "project-quota"])
             let orgQuota = try #require(response.quotaCompliance.first { $0.quotaName == "org-quota" })
             #expect(orgQuota.cpuCompliance.used == 4)
             #expect(orgQuota.vmCompliance.used == 2)
+        }
+    }
+
+    /// The folder branch of `QuotaVisibility.measuredNode`: a folder-scoped
+    /// quota measures the folder's whole subtree, so a folder grant is what
+    /// reaches it — and an unrelated project grant is not.
+    @Test("A folder-scoped quota follows the folder grant, not a sibling project's")
+    func folderScopedQuotaFollowsTheFolderGrant() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await makeFixture(builder)
+
+            let folderViewer = try await builder.createUser(
+                username: "quota-folder", email: "quota-folder@example.com")
+            try await builder.addUserToOrganization(
+                user: folderViewer, organization: fixture.organization, role: "member")
+            try await grantViewer(
+                app, to: folderViewer, on: IAMNode(type: .organizationalUnit, id: fixture.folder.id!))
+            let folderToken = try await folderViewer.generateAPIKey(on: app.db)
+
+            // A folder grant reaches the folder's own quota and the quota of the
+            // project nested under it, and stops there.
+            let folderView = try await summary(app, organization: fixture.organization, token: folderToken)
+            #expect(folderView.quotaCompliance.map(\.quotaName) == ["folder-quota"])
+            let folderQuota = try #require(folderView.quotaCompliance.first)
+            #expect(folderQuota.vmCompliance.used == 1)
+
+            // The caller granted only the org-parented project sees neither the
+            // folder's quota nor the folder subtree's usage.
+            let (projectViewer, projectToken) = try await bareMember(
+                app, builder: builder, organization: fixture.organization, username: "quota-sibling")
+            try await grantViewer(
+                app, to: projectViewer, on: IAMNode(type: .project, id: fixture.directProject.id!))
+            let projectView = try await summary(app, organization: fixture.organization, token: projectToken)
+            #expect(projectView.quotaCompliance.map(\.quotaName) == ["project-quota"])
+        }
+    }
+
+    // MARK: - The other doors onto the same number
+
+    /// `ResourceQuotaResponse` ships `usage`/`utilization` off the stored
+    /// counters, which `QuotaEnforcementService.resyncReservations` writes
+    /// straight from `QuotaUsageAggregator.measure` — the same quantity
+    /// `quotaCompliance` reports. Gating one field would only move the number,
+    /// so every route carrying the row asks the same question.
+    @Test("A bare member reaches the organization's measured usage on no route")
+    func measuredUsageIsUnreachableForABareMember() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await makeFixture(builder)
+            let (_, token) = try await bareMember(
+                app, builder: builder, organization: fixture.organization, username: "usage-bare")
+
+            let orgQuota = try #require(
+                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+            let quotaID = try orgQuota.requireID()
+
+            // The direct door: measured live, with a per-VM breakdown.
+            try await app.test(.GET, "/api/quotas/\(quotaID)/usage") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden, "\(res.status): \(res.body.string)")
+            }
+
+            try await app.test(.GET, "/api/quotas/\(quotaID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden, "\(res.status): \(res.body.string)")
+            }
+
+            // And the rows that carry the counters.
+            try await app.test(.GET, "/api/quotas") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+                let quotas = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self)
+                #expect(quotas.items.isEmpty)
+            }
+
+            for path in ["hierarchy", "resources"] {
+                try await app.test(.GET, "/api/organizations/\(fixture.organization.id!)/\(path)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+                    #expect(!res.body.string.contains("org-quota"), "\(path) still carries the org quota row")
+                }
+            }
+        }
+    }
+
+    @Test("An org admin still reaches a quota's measured usage")
+    func measuredUsageStaysAvailableToAnAdmin() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await makeFixture(builder)
+            let admin = try await builder.createUser(username: "usage-admin", email: "usage-admin@example.com")
+            try await builder.addUserToOrganization(
+                user: admin, organization: fixture.organization, role: "admin")
+            let token = try await admin.generateAPIKey(on: app.db)
+
+            let orgQuota = try #require(
+                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+
+            try await app.test(.GET, "/api/quotas/\(try orgQuota.requireID())/usage") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+            }
         }
     }
 }

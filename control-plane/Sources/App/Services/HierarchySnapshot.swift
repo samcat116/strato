@@ -83,20 +83,24 @@ struct HierarchySnapshot {
     /// reaching its contents; each row is put to the evaluator on its own node,
     /// three batched decisions for the whole tree.
     ///
-    /// Two rows are kept without a decision of their own, both because the
-    /// caller has already been allowed something that implies them:
+    /// One row is kept without a decision of its own: folders on the path down
+    /// to a project the caller *can* read. Dropping them would strand the
+    /// project outside the nesting, and the project's own materialized `path`
+    /// (which `GET /api/projects/{id}/path` already hands to any project member)
+    /// names them anyway. Their quotas are not kept — only folders that survive
+    /// `folder:read` contribute those.
     ///
-    /// - Organization-scoped quotas — the handler's own `view_organization`
-    ///   gate passed, and they describe that organization.
-    /// - Folders on the path down to a project the caller *can* read. Dropping
-    ///   them would strand the project outside the nesting, and the project's
-    ///   own materialized `path` (which `GET /api/projects/{id}/path` already
-    ///   hands to any project member) names them anyway. Their quotas are not
-    ///   kept — only folders that survive `folder:read` contribute those.
+    /// That argument is about *nesting*, so it only holds for the tree: a
+    /// consumer with nothing to connect reads `decidedFolders` instead, and
+    /// never sees a folder it did not earn.
     ///
-    ///   That argument is about *nesting*, so it only holds for the tree: a
-    ///   consumer with nothing to connect reads `decidedFolders` instead, and
-    ///   never sees a folder it did not earn.
+    /// Quotas are the exception to "the container gate implies it": an
+    /// organization-scoped quota used to ride the handler's `view_organization`
+    /// on the grounds that it describes that organization, but its `usage` and
+    /// `utilization` are the organization's measured consumption, not a
+    /// description — the inventory above in scalar form. They go through
+    /// ``QuotaVisibility``, which is the one gate every route onto that number
+    /// shares.
     func readable(on req: Request) async throws -> HierarchySnapshot {
         let readableFolderIDs = Set(
             try await req.canFilter(
@@ -140,11 +144,7 @@ struct HierarchySnapshot {
             vms: vms.filter { vm in
                 readableProjectIDs.contains(vm.$project.id) && (vm.id.map(readableVMIDs.contains) ?? false)
             },
-            quotas: quotas.filter { quota in
-                if let projectID = quota.$project.id { return readableProjectIDs.contains(projectID) }
-                if let folderID = quota.$organizationalUnit.id { return readableFolderIDs.contains(folderID) }
-                return true
-            },
+            quotas: try await QuotaVisibility.readable(quotas, on: req),
             decidedFolderIDs: readableFolderIDs
         )
     }

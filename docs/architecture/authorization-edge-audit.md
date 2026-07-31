@@ -147,17 +147,36 @@ tree, and the project's own materialized `path` names them anyway. It only
 applies to the nested tree; flat consumers read `decidedFolders` and never see
 them.
 
-Organization-scoped quota **rows** likewise ride the handler's
-`view_organization` gate, since they describe that organization. Their
-*measured usage* does not. `QuotaComplianceService` calls
-`calculateActualUsage`, which sums every row beneath the quota's node, so an
-organization-scoped quota reports the organization's whole vCPU, memory and VM
-consumption — handing back through `quotaCompliance` the same totals
-`resourceUsage` had just been narrowed to remove. The summary endpoint
-therefore decides each quota on `quota:read` at the node it hangs on before
-measuring: unlike the `org:read` that admits the row, `quota:read` is
-role-derived, so a bare member does not hold it, while anyone with a viewer
-role at organization level already sees the rows the total is drawn from.
+Organization-scoped quotas no longer ride the handler's `view_organization`
+gate. A quota is not only a limit: `ResourceQuotaResponse` ships `usage` and
+`utilization` off the stored counters, `/api/quotas/:id/usage` measures them
+fresh with a per-VM breakdown, and `/resources/summary` derives per-quota
+compliance. Those are one quantity — `QuotaEnforcementService` writes the
+counters straight from `QuotaUsageAggregator.measure` — and for an
+organization-scoped quota it is the organization's whole vCPU, memory and VM
+consumption. That makes the quota the scalar form of the inventory these
+endpoints filter per row, so every door onto it now asks `quota:read` on the
+node the quota hangs on (`QuotaVisibility`):
+
+| Route | Was | Now |
+| -- | -- | -- |
+| `/resources`, `/hierarchy`, `/resources/summary` | org-scoped rows kept on the handler's `view_organization` | `quota:read` in `HierarchySnapshot.readable(on:)` |
+| `GET /api/quotas` | `org:read` for org/folder rows, `project:read` for project rows | `quota:read` for every scope |
+| `GET /api/quotas/:id`, `GET /api/quotas/:id/usage` | `verifyQuotaAccess` → `requireMember` / `requireProjectMember` | `quota:read` |
+
+Unlike the `org:read` that admits a *container*, `quota:read` is role-derived,
+so bare membership does not reach it, while anyone with a viewer role at
+organization level already sees the rows the total is drawn from. Gating one
+field or one route would only have moved the number: an earlier revision of
+this work decided `quotaCompliance` alone, leaving the same figures on the row
+DTO across three endpoints and, fresher still, on `/api/quotas/:id/usage`.
+
+The check node must follow `QuotaUsageAggregator.projects(of:)` — project,
+then folder, then organization — since that is what decides the rows the
+measurement sums. `QuotaComplianceService.quotaScope` and
+`ResourceQuotaResponse.init` walk the opposite order for their own descriptive
+purposes; copying either would gate a wide measurement on a narrow node and
+nothing would fail.
 
 `GET /api/organizations/:id/search` was additionally **500ing for every
 caller**: it declared its folder join inside an `.or` group, which Fluent drops

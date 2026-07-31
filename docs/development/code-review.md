@@ -325,6 +325,13 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   form. Check both directions of a response: `/resources/summary` filtered
   `resourceUsage` per row while handing the same totals straight back through
   `quotaCompliance`.
+- **Gate the quantity, not the field.** Once you find a number that needs a
+  gate, find every route that ships it before claiming it closed — a stored
+  counter on a DTO, a live-measured endpoint, and a derived summary are one
+  quantity if the same aggregator produces them, and the weakest gate is the
+  real one. `QuotaVisibility` exists because gating `quotaCompliance` alone
+  left the identical figures on the quota row across three endpoints and on
+  `/api/quotas/:id/usage`.
 
 **Networking and IPAM**
 - The **control plane** allocates IPs; the agent never invents them.

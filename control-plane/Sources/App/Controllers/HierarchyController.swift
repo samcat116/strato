@@ -143,19 +143,11 @@ struct HierarchyController: RouteCollection {
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
             .readable(on: req)
 
-        // Compliance is measured, not stored: `calculateActualUsage` sums every
-        // row beneath the quota's node, so an organization-scoped quota reports
-        // the *whole organization's* vCPU, memory and VM consumption. Reporting
-        // it for a caller whose `resourceUsage` above was just narrowed to their
-        // own rows would hand back the same totals through the other field —
-        // the org-wide inventory in scalar form.
-        //
-        // `quota:read` on the node the quota hangs on is the check: unlike the
-        // `org:read` that admits the quota *row* to a list, it is role-derived,
-        // so a bare member does not hold it, while anyone with a viewer role at
-        // organization level already sees the rows the total is drawn from.
+        // The snapshot's quotas are already the ones this caller may read
+        // (`QuotaVisibility`), and compliance measures exactly what that gate
+        // covers — so there is no second decision to make here.
         let quotaCompliance = try await QuotaComplianceService.complianceInfos(
-            for: try await readableUsageQuotas(snapshot.quotas, on: req), on: req.db)
+            for: snapshot.quotas, on: req.db)
 
         return ResourceSummaryResponse(
             organizationId: organizationID,
@@ -164,29 +156,6 @@ struct HierarchyController: RouteCollection {
             quotaCompliance: quotaCompliance,
             hierarchyStats: HierarchyTreeBuilder.stats(for: snapshot)
         )
-    }
-
-    /// The quotas whose measured usage the caller may be told, decided in one
-    /// batch (#687) on the node each hangs on.
-    ///
-    /// A quota has no node of its own, so the check lands on its
-    /// org/folder/project — the container types `quota:read` is declared
-    /// against (`CedarSchemaBuilder.resourceTypes`).
-    private func readableUsageQuotas(_ quotas: [ResourceQuota], on req: Request) async throws -> [ResourceQuota] {
-        func node(of quota: ResourceQuota) -> IAMNode? {
-            if let projectID = quota.$project.id { return IAMNode(type: .project, id: projectID) }
-            if let folderID = quota.$organizationalUnit.id {
-                return IAMNode(type: .organizationalUnit, id: folderID)
-            }
-            if let organizationID = quota.$organization.id {
-                return IAMNode(type: .organization, id: organizationID)
-            }
-            // A scopeless row measures nothing anyone here owns.
-            return nil
-        }
-
-        let readable = try await req.canFilter("quota:read", on: quotas.compactMap(node))
-        return quotas.filter { node(of: $0).map(readable.contains) ?? false }
     }
 
     // MARK: - Search and Navigation

@@ -2649,7 +2649,7 @@ export interface paths {
         };
         /**
          * Get an organization's resource usage and quota compliance
-         * @description Usage totals and hierarchy statistics cover the rows the caller may read. `quotaCompliance` reports a quota only when the caller may read quotas at the org, folder, or project it hangs on: compliance is measured over everything beneath that node, so an organization-scoped quota's figures describe the whole organization.
+         * @description Usage totals and hierarchy statistics cover the rows the caller may read. A quota appears only when the caller holds `quota:read` at the org, folder, or project it hangs on: its figures are measured over everything beneath that node, so an organization-scoped quota describes the whole organization.
          */
         get: operations["getOrganizationResourceSummary"];
         put?: never;
@@ -3258,7 +3258,7 @@ export interface paths {
         };
         /**
          * Get a quota's reserved and actual usage
-         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status.
+         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status. Requires `quota:read` on the org, folder, or project the quota hangs on — the figures cover everything beneath that node, so an organization-scoped quota reports the whole organization's consumption.
          */
         get: operations["getResourceQuotaUsage"];
         put?: never;
