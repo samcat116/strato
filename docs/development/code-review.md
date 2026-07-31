@@ -309,7 +309,11 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   `ProjectContainment.require` — one status (`400`) and one wording for every
   site. Place it **after** the authorization checks on both resources: a
   containment refusal reaching a caller who can't see the other resource tells
-  them it exists in a project they aren't in.
+  them it exists in a project they aren't in. Where there is no check to sit
+  behind (nothing authorizes the caller against the resource the body names),
+  don't disclose containment at all — scope the lookup to the caller's project
+  and answer plain not-found, as VM create does for `networkId` and
+  `securityGroupIds`.
 
 **Networking and IPAM**
 - The **control plane** allocates IPs; the agent never invents them.

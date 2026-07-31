@@ -15,6 +15,12 @@ import VaporTesting
 /// status and the shared wording at each site so the next one cannot quietly
 /// pick a different answer.
 ///
+/// Two sites deliberately answer something else, and are pinned here as such:
+/// where nothing authorizes the caller against the resource the request body
+/// names, the lookup is scoped to the caller's own project and a resource
+/// elsewhere is reported as plain not-found — a containment message there would
+/// itself be the disclosure the ordering rule exists to prevent.
+///
 /// Volume attach — the site that prompted the audit — is pinned in
 /// `VolumeAttachProjectContainmentTests`.
 @Suite("Cross-Project Containment Tests", .serialized)
@@ -89,6 +95,23 @@ final class CrossProjectContainmentTests {
     }
 
     // MARK: - Fixtures
+
+    /// A refusal reduced to what a client can act on. Vapor's error body is
+    /// JSON with no guaranteed key order, so the two answers a non-disclosure
+    /// test compares have to be compared field by field, not as raw strings.
+    private struct Refusal {
+        let status: HTTPStatus
+        let reason: String
+    }
+
+    private struct ErrorBody: Content {
+        let reason: String
+    }
+
+    private static func refusal(from res: TestingHTTPResponse) -> Refusal {
+        let reason = (try? res.content.decode(ErrorBody.self).reason) ?? res.body.string
+        return Refusal(status: res.status, reason: reason)
+    }
 
     /// Body mirroring `VMController`'s private `CreateVMRequest`.
     private struct CreateVMBody: Content {
@@ -194,35 +217,59 @@ final class CrossProjectContainmentTests {
 
     // MARK: - The status at each site
 
-    @Test("VM create naming a security group from another project is refused with 400")
-    func vmCreateCrossProjectSecurityGroup() async throws {
+    /// The two sites where nothing authorizes the caller against the resource
+    /// the body names. They don't get the shared containment refusal at all —
+    /// the lookup is scoped to the caller's project, so a group elsewhere is
+    /// indistinguishable from one that doesn't exist. A containment message
+    /// here would confirm that an opaque id names a real group in the fleet,
+    /// which is the disclosure the ordering rule prevents at the sites that do
+    /// authorize.
+
+    @Test("VM create naming a security group from another project cannot tell it from a missing one")
+    func vmCreateForeignSecurityGroupIsIndistinguishableFromMissing() async throws {
         try await withApp { fixture in
             let group = try await self.createGroup(
                 app: fixture.app, token: fixture.adminToken, project: fixture.other,
                 name: "other-project-group")
 
-            // Already 400 here. The other half of this same handler — the
-            // NIC's network — answered 403 for the same condition until #765
-            // moved network resolution into `LogicalNetworkService`, where a
-            // network outside the project is deliberately a plain 404: names
-            // are per-project, so confirming one exists elsewhere would
-            // disclose another tenant's networks.
-            try await fixture.app.test(.POST, "/api/vms") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.adminToken)
-                try req.content.encode(
-                    CreateVMBody(
-                        name: "containment-create-vm", imageId: fixture.image.id,
-                        projectId: fixture.home.id, environment: "development",
-                        cpu: 1, memory: 1 << 30, disk: 10 << 30, networkName: "default",
-                        securityGroupIds: [group.id]))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("Security group \(group.id) \(Self.sharedReason) the VM"))
+            func create(name: String, securityGroupIds: [UUID]) async throws -> Refusal {
+                var refusal = Refusal(status: .ok, reason: "")
+                try await fixture.app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.adminToken)
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: name, imageId: fixture.image.id,
+                            projectId: fixture.home.id, environment: "development",
+                            cpu: 1, memory: 1 << 30, disk: 10 << 30, networkName: "default",
+                            securityGroupIds: securityGroupIds))
+                } afterResponse: { res in
+                    refusal = Self.refusal(from: res)
+                }
+                return refusal
             }
 
+            // Matches how the same handler resolves the NIC's network (#765):
+            // scoped to the project, reported as not found.
+            let foreign = try await create(
+                name: "containment-create-vm", securityGroupIds: [group.id])
+            #expect(foreign.status == .notFound)
+            #expect(foreign.reason == "Security group \(group.id) not found in this project")
+            #expect(!foreign.reason.contains(Self.sharedReason))
+
+            // A wholly unknown id is answered identically but for the id, so
+            // the response distinguishes nothing.
+            let unknownId = UUID()
+            let unknown = try await create(
+                name: "containment-create-vm-2", securityGroupIds: [unknownId])
+            #expect(unknown.status == foreign.status)
+            #expect(
+                unknown.reason.replacingOccurrences(of: unknownId.uuidString, with: "")
+                    == foreign.reason.replacingOccurrences(of: group.id.uuidString, with: ""))
+
             let created = try await VM.query(on: fixture.app.db)
-                .filter(\.$name == "containment-create-vm").first()
-            #expect(created == nil)
+                .filter(\.$name ~~ ["containment-create-vm", "containment-create-vm-2"])
+                .count()
+            #expect(created == 0)
         }
     }
 
@@ -301,8 +348,30 @@ final class CrossProjectContainmentTests {
         }
     }
 
-    @Test("A rule referencing a security group in another project is refused with 400")
-    func securityGroupRuleCrossProjectReference() async throws {
+    @Test("Detaching a DNS zone from a network in another project is refused with 400")
+    func dnsZoneDetachCrossProject() async throws {
+        try await withApp { fixture in
+            // `authorizedNetwork` serves both halves of the attachment API, so
+            // detach moved off 409 with attach and is pinned here too.
+            let zoneId = try await self.createZone(
+                app: fixture.app, token: fixture.adminToken, project: fixture.home,
+                name: "detach.internal")
+            let network = try await self.createNetwork(
+                app: fixture.app, project: fixture.other, name: "dns-detach-net",
+                subnet: "10.82.0.0/24", gateway: "10.82.0.1")
+
+            let networkID = try network.requireID()
+            try await fixture.app.test(.DELETE, "/api/dns-zones/\(zoneId)/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("Network \(Self.sharedReason) the DNS zone"))
+            }
+        }
+    }
+
+    @Test("A rule's remote group in another project cannot be told from a missing one")
+    func securityGroupRuleForeignRemoteIsIndistinguishableFromMissing() async throws {
         try await withApp { fixture in
             let group = try await self.createGroup(
                 app: fixture.app, token: fixture.adminToken, project: fixture.home,
@@ -311,18 +380,34 @@ final class CrossProjectContainmentTests {
                 app: fixture.app, token: fixture.adminToken, project: fixture.other,
                 name: "rule-remote-group")
 
-            try await fixture.app.test(.POST, "/api/security-groups/\(group.id)/rules") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.adminToken)
-                try req.content.encode(
-                    CreateSecurityGroupRuleRequest(
-                        direction: .ingress, ethertype: .ipv4, protocolName: "tcp",
-                        portRangeMin: 443, portRangeMax: 443, remoteGroupId: remote.id))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(
-                    res.body.string.contains(
-                        "Referenced security group \(remote.id) \(Self.sharedReason) this rule's group"))
+            func addRule(remoteGroupId: UUID) async throws -> Refusal {
+                var refusal = Refusal(status: .ok, reason: "")
+                try await fixture.app.test(.POST, "/api/security-groups/\(group.id)/rules") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.adminToken)
+                    try req.content.encode(
+                        CreateSecurityGroupRuleRequest(
+                            direction: .ingress, ethertype: .ipv4, protocolName: "tcp",
+                            portRangeMin: 443, portRangeMax: 443, remoteGroupId: remoteGroupId))
+                } afterResponse: { res in
+                    refusal = Self.refusal(from: res)
+                }
+                return refusal
             }
+
+            // The caller holds rights on this rule's group, not on the one the
+            // body names — so the two answers must be identical.
+            let foreign = try await addRule(remoteGroupId: remote.id)
+            let unknown = try await addRule(remoteGroupId: UUID())
+            #expect(foreign.status == .badRequest)
+            #expect(foreign.reason == "Referenced security group not found")
+            #expect(!foreign.reason.contains(Self.sharedReason))
+            #expect(unknown.status == foreign.status)
+            #expect(unknown.reason == foreign.reason)
+
+            let rules = try await SecurityGroupRule.query(on: fixture.app.db)
+                .filter(\.$securityGroup.$id == group.id)
+                .count()
+            #expect(rules == 0)
         }
     }
 
