@@ -7386,6 +7386,10 @@ export interface components {
              * @description The member agent that authors this site's shared OVN northbound database; null when none is designated.
              */
             networkControllerAgentId?: string | null;
+            /** @description Heartbeat-derived status of the designated network controller; null when the site designates none. Reported as soon as the heartbeat lapses, before the API begins refusing work. */
+            networkControllerStatus?: components["schemas"]["AgentStatus"] | null;
+            /** @description Why the designated network controller cannot author this site's topology right now — offline past the grace window, or re-registered without the capabilities it was designated under. Null while it can. When non-null, creating networked workloads, pinning networks to this site, attaching floating IPs and attaching security groups here are refused with 409. */
+            networkControllerIssue?: string | null;
             /** Format: uuid */
             organizationId?: string | null;
             /** Format: uuid */

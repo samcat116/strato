@@ -518,7 +518,15 @@ actor AgentService {
         // never appears, with no API-visible symptom. An existing designation
         // is never displaced. The sync pushed right after this registration
         // carries the new controller its authoritative topology.
+        //
+        // Re-validation runs first: every condition the designation was made
+        // under is a property of *this* registration, and an agent that came
+        // back in user-mode or on a rolled-back binary would otherwise keep the
+        // job while authoring nothing (issue #833). When it hands the job back,
+        // an eligible peer claims it on its own next registration.
         if let siteID = agent.$site.id {
+            await SiteNetworkAuthority.revalidateDesignation(
+                agent: agent, siteID: siteID, on: db, logger: app.logger)
             await SiteNetworkAuthority.designateIfUnset(
                 agent: agent, siteID: siteID, on: db, logger: app.logger)
         }
@@ -985,9 +993,42 @@ actor AgentService {
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
                     metadata: ["agentName": .string(agent.name)])
+                await warnIfSiteNetworkController(agent)
             }
         } catch {
             app.logger.error("Stale-agent sweep failed: \(error)")
+        }
+    }
+
+    /// Raises the alarm when the node that just went quiet is some site's
+    /// designated network controller.
+    ///
+    /// This is the highest-value signal in the site-authority area: nothing
+    /// else in the site can author topology while it is gone, so *every* new
+    /// networked workload there is about to be refused, and already-running
+    /// ones keep running — which is exactly what makes the outage easy to miss
+    /// (issue #833). Best effort: a failure here must not abort the sweep.
+    private func warnIfSiteNetworkController(_ agent: Agent) async {
+        guard let agentID = agent.id else { return }
+        do {
+            let controlled = try await Site.query(on: app.db)
+                .filter(\.$networkControllerAgent.$id == agentID)
+                .all()
+            for site in controlled {
+                Telemetry.recordSiteNetworkControllerUp(site: site.name, up: false)
+                app.logger.warning(
+                    "Site network controller went offline; nothing authors the site's network topology until it returns",
+                    metadata: [
+                        "agentName": .string(agent.name),
+                        "site": .string(site.name),
+                        "graceSeconds": .stringConvertible(
+                            Int(SiteNetworkAuthority.controllerOfflineGrace)),
+                    ])
+            }
+        } catch {
+            app.logger.warning(
+                "Failed to check whether the stale agent is a site's network controller",
+                metadata: ["agentName": .string(agent.name), "error": .string("\(error)")])
         }
     }
 
@@ -2207,6 +2248,10 @@ actor AgentService {
     /// releasing the reservation, as a dispatch failure does, since the
     /// placement never becomes desired state.
     ///
+    /// The same refusal covers a site whose designated controller is offline
+    /// past the grace window or came back unable to author topology (issue
+    /// #833) — the workload would park on a switch nobody writes either way.
+    ///
     /// Site-less agents (legacy self-authored NB) and non-overlay
     /// (user-mode/SLIRP) agents realize their networking without a site
     /// controller and are unaffected.
@@ -2217,13 +2262,13 @@ actor AgentService {
             let agent = try await Agent.find(agentUUID, on: db),
             agent.supportsInterVMNetworking
         else { return }
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
         guard
-            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
-                forAgent: agent, on: db)
+            let reason = SiteNetworkAuthority.refusalReason(
+                authority, host: agent, consequence: consequence)
         else { return }
         await app.coordination.releaseReservation(agentId: agentId, vmId: workloadId)
-        throw AgentServiceError.schedulingFailed(
-            SiteNetworkAuthority.missingControllerReason(site: site, consequence: consequence))
+        throw AgentServiceError.schedulingFailed(reason)
     }
 
     /// The site a VM's placement is pinned to, derived from its NICs'

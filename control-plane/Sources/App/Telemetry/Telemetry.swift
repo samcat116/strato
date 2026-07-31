@@ -56,6 +56,16 @@ enum Telemetry {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
     }
 
+    /// Whether a site's designated network controller can author its topology:
+    /// `1` while it can, `0` once it goes stale or re-registers unable to
+    /// (issue #833). The highest-value alert in this area — one node going
+    /// quiet stalls *every* new networked workload in its site, and this fires
+    /// before an operator sees the first refusal. Alert on
+    /// `strato_site_network_controller_up == 0`.
+    static func recordSiteNetworkControllerUp(site: String, up: Bool) {
+        Gauge(label: "strato_site_network_controller_up", dimensions: [("site", site)]).record(up ? 1 : 0)
+    }
+
     // MARK: - Agent auto-update (issue #434)
 
     /// The rollout sweep assigned an agent its target version.

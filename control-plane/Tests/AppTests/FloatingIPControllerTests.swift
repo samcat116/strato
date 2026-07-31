@@ -526,6 +526,69 @@ final class FloatingIPControllerTests {
         }
     }
 
+    @Test("Attach is refused when the site's network controller is long offline")
+    func attachOfflineControllerGate() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "offline-ctl-net", subnet: "10.96.0.0/24", gateway: "10.96.0.1",
+                projectID: try project.requireID(), externalAccess: true)
+            try await network.save(on: app.db)
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, network: network, fixedIP: "10.96.0.5")
+
+            // A two-node site: the VM's host, plus a separate controller that
+            // has gone quiet past the grace window. The controller is the agent
+            // that would author the NAT rule, so nothing realizes it — issue
+            // #833's cross-node case, distinct from having no controller at all.
+            let site = Site(name: "offline-controller", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
+            host.$site.id = site.id
+            try await host.save(on: app.db)
+
+            let controllerUUID = try await app.agentService.registerAgent(
+                AgentRegisterMessage(
+                    agentId: "fip-offline-ctl", hostname: "fip-offline-ctl-host", version: "1.0.0",
+                    capabilities: ["qemu"],
+                    resources: AgentResources(
+                        totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
+                        totalDisk: 1 << 39, availableDisk: 1 << 39),
+                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion),
+                agentName: "fip-offline-ctl", siteID: site.id,
+                organizationScope: .organization(org.id!))
+            let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            controller.lastHeartbeat = Date().addingTimeInterval(
+                -(SiteNetworkAuthority.controllerOfflineGrace + 600))
+            try await controller.save(on: app.db)
+
+            var fipId: UUID?
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                fipId = try res.content.decode(FloatingIPResponse.self).id
+            }
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("fip-offline-ctl"))
+            }
+
+            // A heartbeat from the controller unblocks the same attach.
+            controller.lastHeartbeat = Date()
+            try await controller.save(on: app.db)
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
     @Test("System admins list floating IPs without per-project role bindings")
     func adminListBypass() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in

@@ -192,13 +192,31 @@ struct SiteController: RouteCollection {
         let visible = sites.filter { site in
             site.id.map { readable.contains(IAMNode(type: .site, id: $0)) } ?? false
         }
-        return try visible.map { try SiteResponse(from: $0) }
+        // One batched read for the page's designated controllers (issue #833
+        // adds their health to the response) rather than a lookup per site.
+        let controllerIDs = Set(visible.compactMap { $0.$networkControllerAgent.id })
+        let controllers =
+            controllerIDs.isEmpty
+            ? []
+            : try await Agent.query(on: req.db).filter(\.$id ~~ Array(controllerIDs)).all()
+        let byID = Dictionary(uniqueKeysWithValues: controllers.compactMap { agent in agent.id.map { ($0, agent) } })
+        return try visible.map { site in
+            try SiteResponse(from: site, controller: site.$networkControllerAgent.id.flatMap { byID[$0] })
+        }
     }
 
     func getSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
         try await requireSitePermission(req, site: site, permission: "view")
-        return try SiteResponse(from: site)
+        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
+    }
+
+    /// The designated controller's row, for the health fields `SiteResponse`
+    /// carries. Nil when the site designates none — or when the designation
+    /// dangles at a deleted agent, which the column allows (no FK).
+    private static func controller(of site: Site, on db: Database) async throws -> Agent? {
+        guard let controllerID = site.$networkControllerAgent.id else { return nil }
+        return try await Agent.find(controllerID, on: db)
     }
 
     func createSite(req: Request) async throws -> SiteResponse {
@@ -241,7 +259,8 @@ struct SiteController: RouteCollection {
             throw Abort(.conflict, reason: "A site named '\(name)' already exists")
         }
 
-        return try SiteResponse(from: site)
+        // A freshly created site designates nobody yet.
+        return try SiteResponse(from: site, controller: nil)
     }
 
     func updateSite(req: Request) async throws -> SiteResponse {
@@ -320,7 +339,7 @@ struct SiteController: RouteCollection {
         // handover safe in either order.
         await req.application.agentService.syncDesiredStateToAllAgents()
 
-        return try SiteResponse(from: site)
+        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
     }
 
     func deleteSite(req: Request) async throws -> HTTPStatus {

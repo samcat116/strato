@@ -455,6 +455,58 @@ final class SecurityGroupControllerTests {
         }
     }
 
+    @Test("Attach is refused when the site's network controller cannot author the ACLs")
+    func attachControllerAuthorityGate() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            // The controller authors the ACLs; while it is long offline nothing
+            // does, and this used to attach silently and realize nothing
+            // (issue #833).
+            let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+
+            let site = Site(name: "SG Offline Site", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
+            host.$site.id = site.id
+            try await host.save(on: app.db)
+
+            let controllerUUID = try await app.agentService.registerAgent(
+                AgentRegisterMessage(
+                    agentId: "sg-offline-ctl", hostname: "sg-offline-ctl-host", version: "1.0.0",
+                    capabilities: ["qemu"],
+                    resources: AgentResources(
+                        totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
+                        totalDisk: 1 << 39, availableDisk: 1 << 39),
+                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion),
+                agentName: "sg-offline-ctl", siteID: site.id,
+                organizationScope: .organization(org.id!))
+            let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            controller.lastHeartbeat = Date().addingTimeInterval(
+                -(SiteNetworkAuthority.controllerOfflineGrace + 600))
+            try await controller.save(on: app.db)
+
+            try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("sg-offline-ctl"))
+            }
+
+            // A heartbeat from the controller unblocks the same attach.
+            controller.lastHeartbeat = Date()
+            try await controller.save(on: app.db)
+            try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+        }
+    }
+
     // MARK: - VM create
 
     @Test("POST /api/vms attaches the default group when none specified, explicit groups otherwise")

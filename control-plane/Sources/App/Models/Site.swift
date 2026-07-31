@@ -83,11 +83,14 @@ final class Site: Model, Content, @unchecked Sendable {
     @Field(key: "labels")
     var labels: [String: String]
 
-    /// The agent that authors the site's shared OVN NB topology. Assigned
-    /// explicitly by the operator (it is the node running ovn-central, a
-    /// deployment-time fact the control plane cannot infer). While unset, no
-    /// agent in the site reconciles network topology — VMs still place and
-    /// their ports bind, but switches/routers won't be realized.
+    /// The agent that authors the site's shared OVN NB topology. Claimed by the
+    /// site's first OVN-capable member (`SiteNetworkAuthority.designateIfUnset`)
+    /// and changeable by the operator through `PUT /api/sites/:id`. While unset
+    /// — or while the designated agent is offline or no longer able to author —
+    /// no agent in the site reconciles network topology: VMs still place and
+    /// their ports bind, but switches/routers won't be realized, which is why
+    /// the preconditions built on `SiteNetworkAuthority.refusal` reject new
+    /// topology-dependent work rather than accept a 202 that can't complete.
     @OptionalParent(key: "network_controller_agent_id")
     var networkControllerAgent: Agent?
 
@@ -197,12 +200,27 @@ struct SiteResponse: Content {
     let regionCode: String?
     let labels: [String: String]
     let networkControllerAgentId: UUID?
+    /// The designated controller's heartbeat-derived status; nil when the site
+    /// designates none. Reported the moment the heartbeat lapses, so the site
+    /// page shows a controller going quiet before the API starts refusing work.
+    let networkControllerStatus: AgentStatus?
+    /// Why the designation cannot author topology right now, in the same words
+    /// the 409 uses; nil while it can. Non-nil means new networked workloads,
+    /// site-pinned networks and floating-IP attaches in this site are being
+    /// refused (issue #833).
+    let networkControllerIssue: String?
     let organizationId: UUID?
     let organizationalUnitId: UUID?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from site: Site) throws {
+    /// `controller` is the designated agent's row, loaded by the caller (the
+    /// list endpoint batches them). Required rather than optional-with-default
+    /// so no producer can accidentally report a sick controller as healthy.
+    init(from site: Site, controller: Agent?) throws {
+        let health = SiteNetworkAuthority.controllerHealth(controller: controller)
+        self.networkControllerStatus = health.status
+        self.networkControllerIssue = health.issue
         self.id = try site.requireID()
         self.name = site.name
         self.description = site.description

@@ -605,6 +605,14 @@ export interface Site {
   regionCode?: string;
   labels: Record<string, string>;
   networkControllerAgentId?: string;
+  /** Heartbeat-derived status of the designated controller; absent when none is designated. */
+  networkControllerStatus?: AgentStatus;
+  /**
+   * Why the designated controller cannot author this site's topology right now;
+   * absent while it can. When present, new networked workloads, site-pinned
+   * networks, floating-IP attaches and security-group attaches here are refused.
+   */
+  networkControllerIssue?: string;
   organizationId?: string;
   organizationalUnitId?: string;
   createdAt?: string;
