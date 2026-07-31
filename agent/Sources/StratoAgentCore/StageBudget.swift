@@ -58,6 +58,15 @@ public enum StageBudget {
     // only made a non-point-in-time snapshot look trustworthy). Kept alongside
     // `QGAClient`'s freeze/thaw verbs for the real live-snapshot path.
     public static let guestFreezeSeconds = 30
+    // A command run inside a guest through `guest-exec` (STR-74). Unlike every
+    // other qga budget this bounds *guest work* rather than a round trip: the
+    // command decides how long it runs, and the agent can only wait. Default
+    // ceiling for a caller that has no better number; callers with a real
+    // operation budget (the run-command API) should pass their own. Note that
+    // qga cannot signal a spawned process, so exceeding this abandons the
+    // command rather than stopping it — the bound protects the agent, not the
+    // guest.
+    public static let guestExecSeconds = 300
     // A full-VM checkpoint or restore (issue #564): QEMU writes (or reads) the
     // guest's entire RAM plus device state through a background job. The cost
     // scales with guest memory at disk speed, exactly like image

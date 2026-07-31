@@ -84,6 +84,86 @@ enum QGA {
         }
     }
 
+    /// `guest-exec` arguments (STR-74). `capture-output` is what makes the
+    /// spawned process's stdout/stderr retrievable later via
+    /// `guest-exec-status`; without it qga discards both.
+    struct ExecArguments: Encodable {
+        let path: String
+        let arg: [String]?
+        let env: [String]?
+        /// Base64 stdin. qga writes it and then closes the process's stdin, so
+        /// this is a one-shot payload, not a stream.
+        let inputData: String?
+        let captureOutput: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case path
+            case arg
+            case env
+            case inputData = "input-data"
+            case captureOutput = "capture-output"
+        }
+    }
+
+    /// `guest-exec` → `{"pid": N}`. The PID is the guest agent's handle on the
+    /// spawned process, valid until its status is reaped by `guest-exec-status`.
+    struct ExecPID: Decodable {
+        let pid: Int
+    }
+
+    /// `guest-exec-status` arguments.
+    struct ExecStatusArguments: Encodable {
+        let pid: Int
+    }
+
+    /// `guest-exec-status` reply. Everything but `exited` is absent while the
+    /// process is still running: qga buffers the captured streams in the guest
+    /// and hands over the whole of each one, base64-encoded, in the single reply
+    /// that first reports `exited: true`. `exitcode` and `signal` are mutually
+    /// exclusive — a process killed by a signal has no exit code.
+    struct ExecStatus: Decodable {
+        let exited: Bool
+        let exitcode: Int?
+        let signal: Int?
+        let outData: String?
+        let errData: String?
+        /// Set when qga's own in-guest capture cap (16 MiB per stream) cut the
+        /// output short. Reported rather than treated as an error: a truncated
+        /// exit status is still a real one.
+        let outTruncated: Bool?
+        let errTruncated: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case exited
+            case exitcode
+            case signal
+            case outData = "out-data"
+            case errData = "err-data"
+            case outTruncated = "out-truncated"
+            case errTruncated = "err-truncated"
+        }
+    }
+
+    /// `guest-info` reply: the agent's version plus every command it knows,
+    /// each flagged with whether it is actually callable. Distros filter
+    /// commands with `--allow-rpcs`/`--block-rpcs` (the RHEL family ships an
+    /// allowlist that omits `guest-exec`), and this is how that is discoverable
+    /// without attempting the call — see issue #803.
+    struct AgentInfo: Decodable {
+        let version: String
+        let supportedCommands: [SupportedCommand]
+
+        enum CodingKeys: String, CodingKey {
+            case version
+            case supportedCommands = "supported_commands"
+        }
+
+        struct SupportedCommand: Decodable {
+            let name: String
+            let enabled: Bool
+        }
+    }
+
     /// One address of a `guest-network-get-interfaces` entry.
     struct IPAddress: Decodable {
         let ipAddressType: String
