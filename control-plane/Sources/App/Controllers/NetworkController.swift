@@ -175,21 +175,22 @@ struct NetworkController: RouteCollection {
                     .badRequest,
                     reason: "Site \(siteId) does not serve the network's project")
             }
-            // A site that already has member agents but designates no network
-            // controller reconciles no topology at all: the switch would be
-            // created in the database and realized nowhere, and the first VM
-            // on it would park forever with no API-visible symptom (issue
-            // #743). An *empty* site is not refused — pre-provisioning a
-            // network for capacity that hasn't been enrolled yet is
-            // legitimate, and the first OVN-capable node to join becomes the
-            // controller automatically.
-            if site.$networkControllerAgent.id == nil {
+            // A site whose topology nobody authors — no designated network
+            // controller, or one that is offline past the grace window or came
+            // back unable to author (issue #833) — reconciles nothing: the
+            // switch would be created in the database and realized nowhere, and
+            // the first VM on it would park forever with no API-visible symptom
+            // (issue #743). An *empty* site is not refused — pre-provisioning a
+            // network for capacity that hasn't been enrolled yet is legitimate,
+            // and the first OVN-capable node to join becomes the controller
+            // automatically. (A site with an unusable controller has a member
+            // by definition, so only the unassigned case reaches that count.)
+            let authority = try await SiteNetworkAuthority.resolve(forSite: site, on: req.db)
+            if let refusal = SiteNetworkAuthority.refusal(
+                authority, consequence: "a network pinned to it would be realized nowhere")
+            {
                 let members = try await Agent.query(on: req.db).filter(\.$site.$id == siteId).count()
-                guard members == 0 else {
-                    throw SiteNetworkAuthority.missingControllerAbort(
-                        site: site,
-                        consequence: "a network pinned to it would be realized nowhere")
-                }
+                guard members == 0 else { throw refusal }
             }
         }
 

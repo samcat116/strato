@@ -439,10 +439,42 @@ The per-agent-local-NB (Unix socket) model cannot express this.
   leaving or deregistering — with the site emptied there is no topology left
   to author.
 
-Remaining in this phase: controller-failover UX (re-designation after the
-first is a manual `PUT /api/sites/:id`; syncs handle the handover
-level-triggered) and geneve verification on real multi-node hardware (recipe
-in `deploy/ovn-central/README.md`).
+- **Liveness and capability regression (issue #833):** a designation that
+  *exists* reaches the same dead end far more often than a missing one — the
+  controller is an ordinary hypervisor node that can crash, be drained, or
+  re-register in user-mode or on a rolled-back pre-v4 binary, and nothing
+  re-checked the bar it was designated under. `SiteNetworkAuthority.resolve`
+  therefore also reports `.controllerUnavailable`, and every precondition goes
+  through one `refusal` helper so the two "nothing would realize this" states
+  are worded and handled alike: placement, `POST /vms/:id/start`, pinning a
+  network to the site, attaching a floating IP, and attaching a security group
+  (previously a silent no-op there). Two deliberate softenings:
+  - **A grace window.** Liveness is judged on heartbeat age against
+    `SITE_CONTROLLER_OFFLINE_GRACE_SECONDS` (default 300s), not the 60s
+    `Agent.isOnline` threshold, so a node reboot keeps degrading to the
+    existing 202-and-converge behavior instead of a wall of `409`s. A
+    capability regression gets no grace — it never converges on its own.
+  - **The host exemption.** When the unavailable controller *is* the
+    workload's own host (the single-node site), the refusal is skipped: the
+    workload and its topology author share a fate, the node is already visible
+    as offline, and desired state may legitimately be set while it reboots.
+    The cross-node stall this exists for is unaffected.
+
+  Reporting, so the outage is visible before the first refusal: `SiteDetail`
+  carries `networkControllerStatus` (heartbeat-derived, no grace) and
+  `networkControllerIssue` (non-null exactly when work is being refused), the
+  sites page renders both, the stale-agent sweep logs a warning naming the site
+  and sets the `strato_site_network_controller_up` gauge to 0, and registration
+  re-validates a standing designation — handing the job back (so an eligible
+  peer can claim it on its next registration) only when the site has another
+  eligible member.
+
+Remaining in this phase: automatic controller failover — re-designation away
+from a *live* controller needs a fencing story (two agents authoring one shared
+NB is worse than the stall), so today a replacement is a manual
+`PUT /api/sites/:id`; syncs handle the handover level-triggered. Also geneve
+verification on real multi-node hardware (recipe in
+`deploy/ovn-central/README.md`).
 
 ### Phase 3 — Floating IPs + north-south advertisement — **implemented (first cut)**
 
