@@ -404,9 +404,12 @@ struct AgentWebSocketController: RouteCollection {
                         "sessionId": .string(message.sessionId),
                         "reason": .string(message.reason ?? "unknown"),
                     ])
-                // Clean up the session
-                req.consoleSessionManager.removeSession(
-                    sessionId: message.sessionId, fromAgentKey: agentKey)
+                // Close the browser socket as well as cleaning up: this is the
+                // only routable signal the agent has for "I could not open
+                // that console", so dropping it here would leave the tab
+                // waiting on a connection that will never come.
+                req.consoleSessionManager.closeSession(
+                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
             case .sandboxExecStarted:
                 let message = try envelope.decode(as: SandboxExecStartedMessage.self)

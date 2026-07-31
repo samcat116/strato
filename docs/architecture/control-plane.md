@@ -110,6 +110,17 @@ The important ones to know when navigating `Services/`:
   **`RegistryClientService`** (OCI tag resolution + pull tokens for sandboxes).
 - **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
   WebSockets to the agent socket for consoles and sandbox exec.
+  `ConsoleSessionManager` carries both of a VM's consoles: the serial console
+  upgrades in one step (`GET /api/vms/:id/console`), while the graphics console
+  (issue #566) is minted and attached in two — `POST /api/vms/:id/console/vnc`
+  returns a single-use session, and `GET …/console/vnc/:sessionID/attach`
+  upgrades it. The split exists for error reporting: a display can be
+  unavailable because the VM was created headless (409), because its agent is
+  too old to realize one, or because its socket is held by another replica
+  (503), and each deserves a status code rather than an unexplained disconnect
+  after the upgrade. Both directions of both consoles run through a serial
+  pump, since a task-per-frame relay can transpose frames — merely ugly on a
+  terminal, unrecoverable for RFB.
 - Identity/compliance: `WebAuthnService`, `OIDCIdentityService`,
   `AuditService`, `SSFService`, the `SCIM/` handlers, and the `SPIFFE/`
   services (SPIRE identity validation and registration).

@@ -348,9 +348,23 @@ public struct NetworkSpec: Codable, Sendable {
 public struct ConsoleSpec: Codable, Sendable {
     public let console: ConsoleMode
     public let serial: ConsoleMode
+    /// Whether the guest also gets a framebuffer, and over which protocol
+    /// (issue #566). Nil from control planes that predate the field, and from
+    /// callers that want today's headless behavior; consumers read nil through
+    /// `effectiveGraphics`.
+    ///
+    /// Optional rather than defaulted-non-optional so the synthesized
+    /// `encode(to:)` omits the key entirely when unset — a pre-#566 agent must
+    /// keep receiving byte-identical spec JSON.
+    public let graphics: GraphicsMode?
 
-    public init(console: ConsoleMode, serial: ConsoleMode) {
+    public init(console: ConsoleMode, serial: ConsoleMode, graphics: GraphicsMode? = nil) {
         self.console = console
         self.serial = serial
+        self.graphics = graphics
     }
+
+    /// The graphics mode to realize, defaulting to headless when the sending
+    /// control plane predates the field.
+    public var effectiveGraphics: GraphicsMode { graphics ?? .none }
 }

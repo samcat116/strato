@@ -66,6 +66,7 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
 | `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
 | `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
+| `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -117,6 +118,21 @@ generation converged without touching the balloon. Hence
 v17 there is no "restart to apply" remedy to offer, because a balloon target
 only exists on a running guest in the first place.
 
+Version 23 adds the graphics console (issue #566): `ConsoleSpec.graphics`
+outbound, which makes the QEMU driver give the guest a display device and a
+`vnc.sock` in its VM directory, and `ConsoleConnectMessage.stream`, which picks
+that socket over the serial one for a console session. Both are optional and
+encode to nothing when unset, so a pre-v23 agent receives byte-identical JSON —
+which is exactly the hazard, in v18's *silent* form rather than v22's
+undecodable-envelope form. Ignoring `graphics`, the agent boots the guest
+headless while the API reports a display; ignoring `stream`, it answers a
+graphics connect with the serial socket, and noVNC hangs reading kernel log
+text where it expects `RFB 003.008`. Hence `supportsGraphicsConsole`, enforced
+both at placement and again when a console session is minted (an agent can be
+downgraded after its VMs were placed). Unlike v18 it needs no registration
+capability beside the version: placement already restricts to QEMU-capable
+agents, and a QEMU built `--disable-vnc` fails the create loudly.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -137,7 +153,7 @@ dual-mode rollout.
 | `vm_create`, `vm_boot`, `vm_shutdown`, `vm_pause`, `vm_resume`, `vm_delete`, `vm_info`, `vm_status` | **Deprecated** imperative VM lifecycle (issue #261), superseded by desired-state sync; kept for older control planes |
 | `network_*` (create/delete/list/info/attach/detach) | Network operations |
 | `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |
-| `console_connect`, `console_disconnect`, `console_data` | Console session control and input |
+| `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
 | `agent_update` | Imperative agent self-update (v6+) |
 

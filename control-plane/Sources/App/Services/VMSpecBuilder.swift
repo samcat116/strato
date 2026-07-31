@@ -155,7 +155,9 @@ struct VMSpecBuilder {
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: legacyVolumeSpecs(from: vm),
             networks: networkSpecs(from: networkInterfaces, networks: networks),
-            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
+            console: ConsoleSpec(
+                console: vm.consoleMode, serial: vm.serialMode,
+                graphics: vm.graphicsConsole ? .vnc : GraphicsMode.none),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )
@@ -201,7 +203,9 @@ struct VMSpecBuilder {
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
                 securityGroupsByInterface: securityGroupsByInterface, logger: logger),
-            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
+            console: ConsoleSpec(
+                console: vm.consoleMode, serial: vm.serialMode,
+                graphics: vm.graphicsConsole ? .vnc : GraphicsMode.none),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )

@@ -11,6 +11,7 @@ import type {
   VMLogsQueryParams,
   VMSnapshot,
   CreateVMSnapshotRequest,
+  VNCSession,
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
@@ -37,6 +38,14 @@ export const vmsApi = {
 
   update(id: string, data: UpdateVMRequest): Promise<VM> {
     return api.put<VM>(`/api/vms/${id}`, data);
+  },
+
+  // Mint a single-use graphics console session. Throws ApiError with the
+  // server's reason when the VM has no display (409), or when its agent cannot
+  // serve one right now (503) — surface that text rather than a generic
+  // failure, since each case has a different remedy.
+  startVNCSession(id: string): Promise<VNCSession> {
+    return api.post<VNCSession>(`/api/vms/${id}/console/vnc`, {});
   },
 
   delete(id: string): Promise<Operation> {

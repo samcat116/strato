@@ -88,4 +88,100 @@ final class ConsoleSessionManagerTests: BaseTestCase {
             #expect(otherIndex.count == 1)
         }
     }
+
+    // MARK: - Graphics console sessions (issue #566)
+
+    @Test("A minted graphics session attaches once and records its stream")
+    func vncSessionMintAndAttach() async throws {
+        try await withApp { app in
+            let manager = app.consoleSessionManager
+            let vmId = UUID().uuidString
+            let userId = UUID().uuidString
+
+            let pending = manager.createPendingVNCSession(
+                vmId: vmId, agentKey: agentKey("console-agent"), userId: userId)
+
+            // Minting alone must not create an attached session — nothing is
+            // routable until the browser actually connects.
+            #expect(!manager.hasSession(sessionId: pending.sessionId))
+
+            try manager.attachVNCSession(
+                sessionId: pending.sessionId, vmId: vmId, userId: userId, websocket: nil)
+
+            let info = manager.getSession(sessionId: pending.sessionId)
+            #expect(info?.vmId == vmId)
+            #expect(info?.stream == .vnc)
+            #expect(manager.getSessionsForVM(vmId: vmId).count == 1)
+
+            // Single-use: a replayed attach cannot open a second relay against
+            // the same session id.
+            #expect(throws: ConsoleSessionError.self) {
+                try manager.attachVNCSession(
+                    sessionId: pending.sessionId, vmId: vmId, userId: userId, websocket: nil)
+            }
+        }
+    }
+
+    /// The session id is the only credential on the attach URL, so a leaked one
+    /// must not let a different user — or a different VM's tab — attach.
+    @Test("A graphics session rejects the wrong VM, the wrong user, and expiry")
+    func vncSessionRejectsMismatchAndExpiry() async throws {
+        try await withApp { app in
+            let manager = app.consoleSessionManager
+            let vmId = UUID().uuidString
+            let userId = UUID().uuidString
+
+            let pending = manager.createPendingVNCSession(
+                vmId: vmId, agentKey: agentKey("console-agent"), userId: userId)
+
+            #expect(throws: ConsoleSessionError.self) {
+                try manager.attachVNCSession(
+                    sessionId: pending.sessionId, vmId: UUID().uuidString, userId: userId, websocket: nil)
+            }
+            #expect(throws: ConsoleSessionError.self) {
+                try manager.attachVNCSession(
+                    sessionId: pending.sessionId, vmId: vmId, userId: UUID().uuidString, websocket: nil)
+            }
+
+            // Still attachable, since neither rejection consumed it.
+            try manager.attachVNCSession(
+                sessionId: pending.sessionId, vmId: vmId, userId: userId, websocket: nil)
+            manager.removeSession(sessionId: pending.sessionId)
+
+            // Past its TTL an abandoned mint cannot be replayed.
+            let stale = manager.createPendingVNCSession(
+                vmId: vmId, agentKey: agentKey("console-agent"), userId: userId)
+            #expect(throws: ConsoleSessionError.self) {
+                try manager.attachVNCSession(
+                    sessionId: stale.sessionId, vmId: vmId, userId: userId, websocket: nil,
+                    now: stale.expiresAt.addingTimeInterval(1))
+            }
+        }
+    }
+
+    /// A mint whose agent socket dropped can only ever fail on attach — and it
+    /// would fail after the upgrade, where explaining why is hardest.
+    @Test("Agent disconnect drops that agent's unattached graphics sessions")
+    func agentDisconnectDropsPendingVNCSessions() async throws {
+        try await withApp { app in
+            let manager = app.consoleSessionManager
+            let vmId = UUID().uuidString
+            let userId = UUID().uuidString
+
+            let doomed = manager.createPendingVNCSession(
+                vmId: vmId, agentKey: agentKey("console-agent"), userId: userId)
+            let survivor = manager.createPendingVNCSession(
+                vmId: UUID().uuidString, agentKey: agentKey("other-agent"), userId: userId)
+
+            manager.closeAllSessions(forAgent: agentKey("console-agent"), reason: "agent disconnected")
+
+            #expect(throws: ConsoleSessionError.self) {
+                try manager.attachVNCSession(
+                    sessionId: doomed.sessionId, vmId: vmId, userId: userId, websocket: nil)
+            }
+            // The other agent's mint is untouched.
+            try manager.attachVNCSession(
+                sessionId: survivor.sessionId, vmId: survivor.vmId, userId: userId, websocket: nil)
+        }
+    }
 }

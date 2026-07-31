@@ -159,6 +159,14 @@ export interface VM {
   secureBoot?: boolean;
   tpmEnabled?: boolean;
   /**
+   * Graphics console (backend issue #566): whether the guest has a display
+   * device whose framebuffer the Display tab can attach to. Fixed at creation
+   * — the display lives in the hypervisor process's arguments, so an existing
+   * VM cannot gain or lose one. Optional here only because older control
+   * planes omit it.
+   */
+  graphicsConsole?: boolean;
+  /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
    * `observedHostname` is the guest OS's own hostname when it reported one.
@@ -947,6 +955,14 @@ export interface CreateVMRequest {
    */
   tpm?: boolean;
   /**
+   * Graphics console: gives the guest a display device and a VNC server, so a
+   * graphical OS installer can be driven from the Display tab. Defaults to
+   * false (headless). Rejected with 400 for Firecracker, which emulates no
+   * display device, and only schedulable onto an agent new enough to realize
+   * one. Cannot be changed after creation.
+   */
+  graphicsConsole?: boolean;
+  /**
    * Security groups for the VM's NIC (max 5, same project as the VM).
    * Omitted → the project's default group.
    */
@@ -1139,6 +1155,21 @@ export interface SandboxSnapshot {
 export interface UpdateSandboxRequest {
   name?: string;
   ttlSeconds?: number;
+}
+
+// VM graphics console (backend issue #566): POST /api/vms/:id/console/vnc
+// mints a short-lived single-use session, then the browser attaches over a
+// WebSocket at `websocketPath` and hands that socket to noVNC. The two-step
+// shape exists so the reasons a display can be unavailable — the VM was
+// created headless (409), its agent is too old or its socket is on another
+// replica (503) — arrive as status codes rather than as an unexplained
+// disconnect after the upgrade.
+export interface VNCSession {
+  sessionId: string;
+  /** Same-origin WebSocket path, e.g. `/api/vms/<id>/console/vnc/<sessionId>/attach`. */
+  websocketPath: string;
+  /** When the pending (unattached) session expires. */
+  expiresAt: string;
 }
 
 // Sandbox exec (backend issue #423): POST /api/sandboxes/:id/exec creates a

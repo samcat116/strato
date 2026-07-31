@@ -2370,7 +2370,12 @@ actor AgentService {
                 // machine profile reaches the agent at all.
                 supportsVTPM: agent.tpmCapable
                     && WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
-                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0)
+                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
+                // One signal only for the graphics console (issue #566): every
+                // candidate is already QEMU-capable, and a QEMU built without
+                // VNC fails the create loudly instead of degrading — so there
+                // is no host capability to advertise beyond the protocol.
+                supportsGraphicsConsole: WireProtocol.supportsGraphicsConsole(agent.wireProtocolVersion ?? 0)
             )
         }
     }

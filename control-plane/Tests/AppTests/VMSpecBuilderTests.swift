@@ -572,6 +572,36 @@ struct VMSpecBuilderTests {
         #expect(spec.machine?.secureBoot == false)
         #expect(spec.machine?.tpm == false)
     }
+
+    // MARK: - Graphics console (issue #566)
+
+    @Test("VMSpecBuilder carries the VM's graphics console intent")
+    func testGraphicsConsolePassthrough() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+        vm.graphicsConsole = true
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.console?.graphics == .vnc)
+        #expect(spec.console?.effectiveGraphics == .vnc)
+
+        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.console?.graphics == .vnc)
+    }
+
+    /// The default is headless, and must reach the agent as an explicit
+    /// `None` rather than as an absent field that a newer agent could read as
+    /// "no opinion".
+    @Test("A VM with no display asks for none")
+    func testHeadlessIsExplicit() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.console?.graphics == GraphicsMode.none)
+        #expect(spec.console?.effectiveGraphics == GraphicsMode.none)
+    }
 }
 
 @Suite("VM create user-data validation")

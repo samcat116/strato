@@ -109,6 +109,7 @@ host cleanly rejects placements it can't serve.
 - **`QEMUService`** (`.qemu`): Linux KVM / macOS HVF via SwiftQEMU.
   Materializes boot disks through the storage backend, wires serial/console
   sockets, and re-adopts orphaned VMs over a deterministic QMP socket path.
+  Optionally gives the guest a **graphics console** (see below).
 - **`FirecrackerService`** (`.firecracker`, Linux only): translates the
   neutral spec into Firecracker API calls; requires direct-kernel boot and
   `.tap` network attachments. Shares one `FirecrackerClient` with the
@@ -187,6 +188,64 @@ Whether the host has a usable `swtpm` is what the agent advertises as
 `tpmCapable` at registration (plus a `vtpm` capability string), and the host
 preflight reports its absence as an advisory — a host without swtpm is
 perfectly useful, it just never receives a TPM placement.
+
+## Graphics console (VNC)
+
+A VM whose spec carries `ConsoleSpec.graphics == .vnc` (issue #566) is spawned
+with a display device and a VNC server on a Unix socket, so its framebuffer can
+be relayed to noVNC in the web UI. Headless is the default and its command line
+is unchanged.
+
+`StratoAgentCore/QEMUGraphicsDevice.swift` builds the arguments — in the core
+library, not beside the rest of the command line in `QEMUService`, for the same
+reason as `QEMUBalloonDevice`: that file links SwiftQEMU and so has no unit
+tests, and a device line QEMU rejects surfaces only as a QMP connect timeout.
+
+- `-display none` plus `-vnc unix:<vmDir>/vnc.sock`. In current QEMU `-vnc` *is*
+  a display backend, so the VNC server is what exports the framebuffer and no
+  local window is ever opened. `-nographic` is correspondingly **not** passed
+  for these VMs — its whole job is to force `-display none` and redirect the
+  *default* serial and monitor to stdio. The VM's serial console is unaffected,
+  because it is an explicit `-serial unix:…`, which is what `-nographic` defers
+  to anyway. (A side effect worth knowing: dropping `-nographic` also moves
+  QEMU's HMP monitor off the agent process's stdio.)
+- **Standard VGA on x86** (`-vga std`), not virtio. The point of this console is
+  pre-driver output — UEFI, GRUB, Windows Setup, a panic screen — and
+  `virtio-vga` needs a guest driver for anything past its VGA-compat mode.
+  virtio-gpu is also a separate QEMU module that some distribution builds omit
+  entirely, while `std` is always present. Passing `-vga std` *selects* the
+  default adapter rather than adding a second one, which is what keeps QEMU from
+  refusing to start with two VGA devices.
+- **`virtio-gpu-pci` on arm64**, where the `virt` machine creates no display
+  device at all and there is no `-vga` to select one. EDK2 drives it at firmware
+  time through `VirtioGpuDxe`.
+- `qemu-xhci` + `usb-tablet`, for **absolute** pointer positioning. Without it
+  the guest sees relative motion and its cursor drifts away from the browser's,
+  which makes a graphical installer unclickable. `q35` starts with USB off and
+  `virt` has no controller at all, so both the controller and the tablet's
+  `bus=` are explicit.
+
+**There is no RFB password.** The socket's file mode inside the VM directory,
+plus the control plane's `view_console` authorization in front of the relay, are
+the security boundary — the same trust model as the QMP and serial sockets
+beside it. It must never become a TCP listener.
+
+The socket path is deterministic, so a VM re-adopted after an agent restart
+resolves its console from `vmStoragePath + vmId` alone; the listener belongs to
+the surviving QEMU process, not to the agent. Conversely, a VM created headless
+can never gain a display without being recreated — the device is fixed in the
+QEMU process's arguments, and a stop/start respawns from those same arguments.
+
+`ConsoleSocketManager` relays whichever socket a session asked for as opaque
+bytes, so nothing agent-side understands RFB. Reads are handed to the control
+plane through an `OrderedByteRelay` (a synchronous `yield` on the channel's
+event loop, drained by one consumer task): a task-per-read forwards reads that
+can transpose, which is survivable for a text console and fatal for RFB, where
+the client reads a length-prefixed header and then exactly that many bytes.
+Sessions are keyed by stream as well as VM, so opening the Display tab does not
+tear down a serial console on the same VM. Graphics sessions are never evicted
+at all — QEMU multiplexes RFB clients on one socket, so two viewers is a
+supported case rather than a stale one.
 
 ## Guest provisioning (cloud-init)
 
