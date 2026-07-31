@@ -256,7 +256,14 @@ final class WebhookDeliveryService: @unchecked Sendable {
         let signature = Self.signature(
             payload: delivery.payload, timestamp: timestamp, secret: secret)
 
-        var request = HTTPClientRequest(url: subscription.url)
+        // Build the request from the SAME parsed URL the guard validated (its
+        // normalized `absoluteString`), not the raw stored string. The pin below
+        // is keyed on `url.host` (Foundation's parse); if the request re-parsed
+        // the raw string and the two parsers disagreed on the host (userinfo
+        // `@`, backslashes, ...), the `dnsOverride` key would miss and the
+        // connection would resolve the name fresh — silently skipping the rebind
+        // pin while validation still "passed".
+        var request = HTTPClientRequest(url: url.absoluteString)
         request.method = .POST
         request.headers.add(name: "Content-Type", value: "application/json")
         request.headers.add(name: "User-Agent", value: "Strato-Webhooks/1.0")

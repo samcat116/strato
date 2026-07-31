@@ -152,6 +152,7 @@ struct PolicyController: RouteCollection {
         let prepared = try await PolicyStore.prepare(
             id: id, cedarText: payload.cedarText, ownerType: owner.type, ownerID: owner.id,
             engine: req.application.cedarEngine, on: req.db)
+        let crossOrgGrant = try await requireAuthoredGrantPermitted(prepared, owner: owner, req: req)
 
         let policy = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             let policy = try await PolicyStore.create(
@@ -170,6 +171,9 @@ struct PolicyController: RouteCollection {
             return policy
         }
         await req.application.announcePolicySetChange()
+        if let crossOrgGrant {
+            await recordAuthoredCrossOrgGrant(policyID: id, owner: owner, grant: crossOrgGrant, req: req)
+        }
 
         let response = Response(status: .created)
         try response.content.encode(try PolicyDTO(policy))
@@ -196,6 +200,10 @@ struct PolicyController: RouteCollection {
                 id: id, cedarText: payload.cedarText!, ownerType: owner.type, ownerID: owner.id,
                 engine: req.application.cedarEngine, on: req.db)
             : nil
+        var crossOrgGrant: AuthoredCrossOrgGrant?
+        if let prepared {
+            crossOrgGrant = try await requireAuthoredGrantPermitted(prepared, owner: owner, req: req)
+        }
 
         let name = payload.name ?? existing.name
         let updated = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
@@ -221,6 +229,10 @@ struct PolicyController: RouteCollection {
             return policy
         }
         await req.application.announcePolicySetChange()
+        if let crossOrgGrant {
+            await recordAuthoredCrossOrgGrant(
+                policyID: id, owner: owner, grant: crossOrgGrant, req: req)
+        }
 
         return try PolicyDTO(updated)
     }
@@ -269,6 +281,95 @@ struct PolicyController: RouteCollection {
     }
 
     // MARK: - Helpers
+
+    /// A cross-org grant made by authoring a `permit` policy, carried from the
+    /// write-time gate to the post-commit audit. The principal is present only
+    /// when the policy named a single one; an unconstrained/bare-type permit
+    /// grants to many, so there is no single principal to record.
+    private struct AuthoredCrossOrgGrant {
+        let principalType: IAMPrincipalType?
+        let principalID: UUID?
+    }
+
+    /// The authored-policy analogue of `CrossOrgBindingGate.requireGrantPermitted`.
+    ///
+    /// A `permit` whose principal reaches outside the owner's organization
+    /// grants external access, so authoring it must pass `iam:grantExternal` on
+    /// the owner — the same distinct, separately-withholdable permission the
+    /// binding path uses — rather than riding `iam:setPolicy` alone. Without
+    /// this, a delegated policy-admin given `iam:setPolicy` but deliberately not
+    /// `iam:grantExternal` (or ceilinged by a guardrail on it) could grant
+    /// arbitrary external principals access to their subtree, bypassing the
+    /// named control and its `crossOrgGrant` audit. Returns the grant to audit
+    /// when the write commits, or nil when no cross-org grant is authored.
+    private func requireAuthoredGrantPermitted(
+        _ prepared: PolicyStore.Prepared, owner: PolicyOwner, req: Request
+    ) async throws -> AuthoredCrossOrgGrant? {
+        // A forbid grants nothing; only a permit can reach an external principal.
+        guard prepared.effect == .permit else { return nil }
+        let ownerNode = owner.node
+
+        // Resolve a single, named principal (`== E` / `in E`) to a typed one.
+        var namedPrincipal: (type: IAMPrincipalType, id: UUID)?
+        if prepared.principalConstrained, let scope = prepared.principalScope,
+            let type = scope.type.iamPrincipalType
+        {
+            namedPrincipal = (type, scope.id)
+        }
+
+        // A named principal internal to the owner's org is an ordinary in-org
+        // grant and needs no cross-org permission.
+        if let principal = namedPrincipal {
+            let external = try await CrossOrgBindingGate.isCrossOrg(
+                principalType: principal.type, principalID: principal.id, node: ownerNode, on: req.db)
+            if !external { return nil }
+        }
+
+        // Everything else a permit can reach — the unconstrained `principal`, a
+        // bare `principal is T`, an `in <group>`/reference not resolved to one
+        // entity, or a named *external* principal — grants access outside the
+        // org. Require `iam:grantExternal` on the owner, so a role that withholds
+        // it or a guardrail that ceilings it can't be sidestepped via a policy.
+        guard try await req.can("iam:grantExternal", on: ownerNode) else {
+            throw Abort(
+                .forbidden,
+                reason:
+                    "This policy grants access to principals outside its organization; authoring it requires the iam:grantExternal permission on the owner"
+            )
+        }
+        return AuthoredCrossOrgGrant(principalType: namedPrincipal?.type, principalID: namedPrincipal?.id)
+    }
+
+    /// Loud audit for a cross-org grant authored as a policy, mirroring
+    /// `CrossOrgBindingGate.recordCrossOrgEvent`. Best-effort — never fails the
+    /// request.
+    private func recordAuthoredCrossOrgGrant(
+        policyID: UUID, owner: PolicyOwner, grant: AuthoredCrossOrgGrant, req: Request
+    ) async {
+        let actor = req.auth.get(User.self)
+        var metadata: [String: String] = [
+            "via": "authored_policy",
+            "policyId": policyID.uuidString,
+        ]
+        if let type = grant.principalType { metadata["principalType"] = type.rawValue }
+        if let id = grant.principalID { metadata["principalId"] = id.uuidString }
+        await req.audit.record(
+            AuditRecord(
+                eventType: AuditEventType.crossOrgGrant.rawValue,
+                userID: actor?.id,
+                username: actor?.username,
+                apiKeyID: req.apiKey?.id,
+                organizationID: try? await CrossOrgBindingGate.rootOrganizationID(
+                    of: owner.node, on: req.db),
+                method: req.method.rawValue,
+                path: req.url.path,
+                resourceType: owner.node.type.rawValue,
+                resourceID: owner.node.id.uuidString,
+                action: "iam:grantExternal",
+                sourceIP: req.auditClientIP,
+                metadata: metadata
+            ))
+    }
 
     /// A policy's owner as both halves it is used as: the store's
     /// `(ownerType, ownerID)` pair and the tree node the gates run on.
@@ -345,6 +446,21 @@ struct PolicyController: RouteCollection {
         guard try await req.can(write ? "iam:setPolicy" : "iam:readPolicy", on: node) else {
             throw Abort(
                 .forbidden, reason: "Managing policies requires admin on the policy's owner or a container above it")
+        }
+    }
+}
+
+extension CedarEntityType {
+    /// The IAM principal type this entity type denotes, or nil for a resource
+    /// type. Used to decide whether a policy's named principal is a subject
+    /// that can be internal/external to an organization.
+    fileprivate var iamPrincipalType: IAMPrincipalType? {
+        switch self {
+        case .user: return .user
+        case .group: return .group
+        case .serviceAccount: return .serviceAccount
+        case .workload: return .workload
+        default: return nil
         }
     }
 }

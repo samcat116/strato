@@ -32,6 +32,12 @@ enum PolicyStore {
     struct Prepared: Equatable, Sendable {
         let cedarText: String
         let effect: IAMPolicyEffect
+        /// Whether the policy's principal scope is constrained at all (false =
+        /// the unconstrained `principal`, which a `permit` grants to everyone).
+        let principalConstrained: Bool
+        /// The single principal a `permit` grants to, when named by `==`/`in`;
+        /// nil for unconstrained / bare-type / non-resolvable principal scopes.
+        let principalScope: AuthoredResourceScope?
     }
 
     /// Turn authored text into the row's stored fields, proving containment and
@@ -59,7 +65,9 @@ enum PolicyStore {
         try await requireContained(shape, ownerType: ownerType, ownerID: ownerID, on: db)
         try await compileCandidate(policyID: policyID, cedarText: cedarText, engine: engine, on: db)
 
-        return Prepared(cedarText: cedarText, effect: shape.effect)
+        return Prepared(
+            cedarText: cedarText, effect: shape.effect,
+            principalConstrained: shape.principalConstrained, principalScope: shape.principalScope)
     }
 
     /// Prove the policy's resource scope names something inside the owner's

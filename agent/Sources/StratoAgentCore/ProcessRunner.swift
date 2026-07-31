@@ -238,7 +238,17 @@ public enum ProcessRunner {
         let err = await stderrData
         await waitForExit(exited)
 
-        if await limitMonitor?.value == true {
+        var exceeded = await limitMonitor?.value == true
+        // Terminal-exit race: the poller only observes a *running* process, so a
+        // producer that crosses the ceiling and then exits within one poll
+        // window is missed and its over-limit output would be accepted. Re-check
+        // the final size once the process is gone to close that gap.
+        if !exceeded, let limit = maxOutputBytes, let size = fileSize(atPath: outputPath),
+            size > Int64(limit)
+        {
+            exceeded = true
+        }
+        if exceeded {
             try? FileManager.default.removeItem(atPath: outputPath)
             throw ProcessRunnerError.outputLimitExceeded(limit: maxOutputBytes ?? 0)
         }
