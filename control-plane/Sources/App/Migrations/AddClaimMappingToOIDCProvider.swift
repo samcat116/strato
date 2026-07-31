@@ -2,7 +2,6 @@ import Fluent
 
 struct AddClaimMappingToOIDCProvider: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // SQLite doesn't support multiple ADD clauses in a single ALTER TABLE statement
         try await database.schema("oidc_providers")
             .field("groups_claim", .string)
             .update()

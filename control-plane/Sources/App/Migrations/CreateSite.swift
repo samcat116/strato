@@ -22,7 +22,6 @@ struct CreateSite: AsyncMigration {
             .unique(on: "name")
             .create()
 
-        // One field per .update() for SQLite compatibility.
         try await database.schema("agents")
             .field("site_id", .uuid, .references("sites", "id", onDelete: .setNull))
             .update()

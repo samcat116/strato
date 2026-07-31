@@ -495,8 +495,7 @@ extension SandboxController {
 
     /// Serialize every fork admission and destructive lineage transition on
     /// the snapshot IDs they touch. Postgres advisory locks span replicas and
-    /// live until the enclosing transaction commits; SQLite writes already
-    /// serialize in local tests, so it needs no separate primitive.
+    /// live until the enclosing transaction commits.
     static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: any Database) async throws {
         guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
         for snapshotID in Set(snapshotIDs).sorted(by: { $0.uuidString < $1.uuidString }) {

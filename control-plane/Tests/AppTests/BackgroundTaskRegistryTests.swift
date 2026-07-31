@@ -5,7 +5,7 @@ import Vapor
 @testable import App
 
 /// Regression coverage for the shutdown teardown race that crashed CI's "Test
-/// Control Plane" job (SQLite step) with a nil unwrap in `Fluent/FluentProvider`.
+/// Control Plane" job with a nil unwrap in `Fluent/FluentProvider`.
 ///
 /// Post-`202` completion work runs in `backgroundTasks.spawn` tasks that touch
 /// `app.db`. At shutdown `BackgroundTaskLifecycle.drain` cancels tasks that

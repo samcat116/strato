@@ -84,8 +84,7 @@ struct RekeyInterfacesToLogicalNetworkID: AsyncMigration {
 
         try await Self.purgeInterfaceRows(on: sql)
 
-        // Indexes before their columns: an index referencing a dropped column
-        // is an error on SQLite, and dropping them explicitly keeps `revert`
+        // Indexes before their columns: dropping them explicitly keeps `revert`
         // symmetric rather than relying on Postgres's implicit cleanup.
         for index in Self.legacyIndexes {
             try await sql.raw("DROP INDEX IF EXISTS \(unsafeRaw: index.name)").run()

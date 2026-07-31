@@ -26,8 +26,7 @@ final class RoleBinding: Model, @unchecked Sendable {
 
     /// The granted role, as the `iam_roles` row id in `UUID.uuidString`
     /// (uppercase) form. A string column rather than a typed uuid because
-    /// the table's five-column unique constraint predates role-row identity
-    /// and SQLite cannot drop a unique table constraint without a rebuild.
+    /// the table's five-column unique constraint predates role-row identity.
     /// Rows whose value parses to no known role are dropped by every read
     /// path (under-grant, never over-grant).
     @Field(key: "role")

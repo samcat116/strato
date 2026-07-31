@@ -20,8 +20,7 @@ struct CreateSandbox: AsyncMigration {
             .field("vcpus", .int, .required)
             .field("memory", .int64, .required)
             // Overrides over the OCI image config. Arrays bind as native SQL
-            // arrays (text[] on Postgres, JSON text on SQLite); the env map is
-            // a scalar JSON document.
+            // arrays (text[]); the env map is a scalar JSON document.
             .field("entrypoint", .array(of: .string))
             .field("cmd", .array(of: .string))
             .field("env", .json, .required)

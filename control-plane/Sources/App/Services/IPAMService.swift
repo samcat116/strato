@@ -73,9 +73,7 @@ enum IPAMService {
     ///
     /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (see
-    /// `QuotaEnforcementService.lockQuotas` for the same pattern). On SQLite
-    /// (local tests) there is no advisory-lock primitive and writes already
-    /// serialize on the database file, so this is a no-op.
+    /// `QuotaEnforcementService.lockQuotas` for the same pattern).
     private static func lockAllocations(key: String, on db: Database) async throws {
         guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()

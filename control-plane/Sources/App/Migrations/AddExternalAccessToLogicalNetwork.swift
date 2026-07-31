@@ -10,8 +10,6 @@ import SQLKit
 /// realize routers; `generation` defaults to 1 as the first realized version.
 struct AddExternalAccessToLogicalNetwork: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // One action per update() call: SQLite cannot combine multiple ALTER
-        // TABLE actions in a single statement.
         try await database.schema("logical_networks")
             .field("external_access", .bool, .required, .sql(.default(true)))
             .update()
