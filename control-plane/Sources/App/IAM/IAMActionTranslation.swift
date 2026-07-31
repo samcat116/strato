@@ -58,6 +58,9 @@ enum IAMActionTranslator {
         case .network: return "network"
         case .floatingIP: return "floatingip"
         case .securityGroup: return "securitygroup"
+        // Zones and their records share one service: they are one authoring
+        // surface (issue #770).
+        case .dnsZone, .dnsRecord: return "dns"
         case .volume, .volumeSnapshot: return "volume"
         case .site: return "site"
         case .agent: return "agent"
@@ -138,6 +141,7 @@ enum IAMActionTranslator {
             case "volume": return "volume:attach"
             case "floatingip": return "floatingip:attach"
             case "securitygroup": return "securitygroup:attach"
+            case "dns": return "dns:attach"
             default: return nil
             }
         case "detach":
@@ -145,6 +149,7 @@ enum IAMActionTranslator {
             case "volume": return "volume:detach"
             case "floatingip": return "floatingip:detach"
             case "securitygroup": return "securitygroup:detach"
+            case "dns": return "dns:detach"
             default: return nil
             }
         case "clone":
@@ -191,6 +196,8 @@ enum IAMActionTranslator {
             return "floatingip:create"
         case "create_security_group":
             return "securitygroup:create"
+        case "create_dns_zone":
+            return "dns:create"
 
         default:
             return nil

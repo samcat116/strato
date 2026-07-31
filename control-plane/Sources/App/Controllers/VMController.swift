@@ -189,6 +189,10 @@ struct VMController: RouteCollection {
 
         struct CreateVMRequest: Content {
             let name: String
+            /// The VM's DNS label (issue #770). Defaults to a slugified
+            /// `name`, disambiguated against whatever already registers into
+            /// the target network's primary zone.
+            let hostname: String?
             let description: String?
             let imageId: UUID?
             let projectId: UUID?
@@ -479,6 +483,35 @@ struct VMController: RouteCollection {
                     // Generate unique paths and configurations using the generated ID
                     let vmID = try vm.requireID()
 
+                    // Every VM starts with one NIC on the network the caller named,
+                    // resolved here — inside the transaction — so the row that IPAM
+                    // allocates from is the one the NIC's foreign key then pins
+                    // (issue #765).
+                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
+                        requestedID: createRequest.networkId,
+                        requestedName: createRequest.networkName,
+                        projectID: projectId,
+                        on: db
+                    )
+                    let logicalNetworkID = try logicalNetwork.requireID()
+
+                    // The VM's DNS label (issue #770), resolved against the
+                    // zone the network registers into. An explicit hostname is
+                    // held to strict uniqueness — the caller named it, so a
+                    // collision is worth a 409 — while the default is
+                    // disambiguated with a suffix, because two VMs called
+                    // "web server" is an ordinary thing to do and failing the
+                    // create over an implicit label would be baffling.
+                    let registrationZones = try await DNSZoneService.registrationZones(
+                        networkIDs: [logicalNetworkID], on: db)
+                    if let requestedHostname = createRequest.hostname {
+                        vm.hostname = try await DNSZoneService.validatedExplicitHostname(
+                            requestedHostname, forVM: vmID, in: registrationZones, on: db)
+                    } else {
+                        vm.hostname = try await DNSZoneService.availableHostname(
+                            basedOn: vm.name, forVM: vmID, in: registrationZones, on: db)
+                    }
+
                     // Image-based paths - disk will be created by agent from cached image
                     vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
 
@@ -494,19 +527,9 @@ struct VMController: RouteCollection {
                     // Update VM with generated paths
                     try await vm.update(on: db)
 
-                    // Every VM starts with one NIC on the network the caller named,
-                    // resolved here — inside the transaction — so the row that IPAM
-                    // allocates from is the one the NIC's foreign key then pins
-                    // (issue #765). The control plane owns IPAM (issue #212): the
-                    // address is allocated here so agents receive it in the spec
-                    // instead of inventing one.
-                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
-                        requestedID: createRequest.networkId,
-                        requestedName: createRequest.networkName,
-                        projectID: projectId,
-                        on: db
-                    )
-                    let logicalNetworkID = try logicalNetwork.requireID()
+                    // The control plane owns IPAM (issue #212): the address is
+                    // allocated here so agents receive it in the spec instead
+                    // of inventing one.
                     let allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
                     let networkGateway = logicalNetwork.gateway
                     // Dual-stack network: the NIC gets one address per family.
@@ -633,6 +656,10 @@ struct VMController: RouteCollection {
         // and Content's Encodable half has nothing to encode here.
         struct UpdateVMRequest: Decodable {
             let name: String?
+            /// The VM's DNS label (issue #770). Set explicitly: renaming the
+            /// VM deliberately does *not* move its records, so this is the
+            /// only way its name in DNS changes.
+            let hostname: String?
             let description: String?
             /// Target boot vCPU count (issue #568).
             let cpu: Int?
@@ -646,12 +673,13 @@ struct VMController: RouteCollection {
             let balloonTarget: Int64??
 
             enum CodingKeys: String, CodingKey {
-                case name, description, cpu, memory, balloonTarget
+                case name, hostname, description, cpu, memory, balloonTarget
             }
 
             init(from decoder: any Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 name = try c.decodeIfPresent(String.self, forKey: .name)
+                hostname = try c.decodeIfPresent(String.self, forKey: .hostname)
                 description = try c.decodeIfPresent(String.self, forKey: .description)
                 cpu = try c.decodeIfPresent(Int.self, forKey: .cpu)
                 memory = try c.decodeIfPresent(Int64.self, forKey: .memory)
@@ -665,6 +693,13 @@ struct VMController: RouteCollection {
 
         if let name = updateRequest.name {
             existingVM.name = name
+        }
+
+        if let hostname = updateRequest.hostname {
+            let vmID = try existingVM.requireID()
+            let zones = try await DNSZoneService.registrationZones(vmID: vmID, on: req.db)
+            existingVM.hostname = try await DNSZoneService.validatedExplicitHostname(
+                hostname, forVM: vmID, in: zones, on: req.db)
         }
 
         if let description = updateRequest.description {

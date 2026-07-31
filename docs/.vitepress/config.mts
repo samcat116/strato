@@ -47,6 +47,7 @@ export default defineConfig({
           { text: 'Scheduler', link: '/architecture/scheduler' },
           { text: 'Multi-Replica Control Plane', link: '/architecture/multi-replica' },
           { text: 'Networking', link: '/architecture/networking' },
+          { text: 'DNS', link: '/architecture/dns' },
           { text: 'Storage', link: '/architecture/storage' },
           { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
