@@ -485,13 +485,16 @@ struct DNSController: RouteCollection {
         guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
             throw Abort(.badRequest, reason: "Network \(networkID) does not exist")
         }
-        guard network.$project.id == zone.$project.id else {
-            throw Abort(.conflict, reason: "Network belongs to a different project than the DNS zone")
-        }
         let allowed = try await req.can("update", on: "network", id: networkID.uuidString)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this network")
         }
+        // After the network check, never before: a containment refusal handed
+        // to a caller who can't touch the network would tell them it exists in
+        // another project (issue #777).
+        try ProjectContainment.require(
+            "Network", in: network.$project.id,
+            sameProjectAs: "the DNS zone", in: zone.$project.id)
         return network
     }
 

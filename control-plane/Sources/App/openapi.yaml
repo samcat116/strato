@@ -284,7 +284,13 @@ paths:
     post:
       operationId: createVM
       summary: Create a virtual machine
-      description: Records the VM and a pending `create` operation, returning the operation to poll.
+      description: >-
+        Records the VM and a pending `create` operation, returning the
+        operation to poll. `networkId`/`networkName` and `securityGroupIds` are
+        resolved within the VM's own project: one naming something outside it
+        is reported as `404`, not as a distinct cross-project refusal, since
+        ids are opaque and names are per-project — confirming that one exists
+        elsewhere would disclose another tenant's resources.
       tags: [Virtual Machines]
       requestBody:
         required: true
@@ -297,6 +303,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}:
     parameters:
@@ -1206,6 +1213,10 @@ paths:
     post:
       operationId: attachVolume
       summary: Attach a volume to a VM
+      description: >-
+        Requires `attach` on the volume and `update` on the VM. Refused with
+        `400` when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1607,6 +1618,10 @@ paths:
     post:
       operationId: attachFloatingIP
       summary: Attach a floating IP to a VM NIC
+      description: >-
+        Requires `update` on the floating IP and on the VM. Refused with `400`
+        when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Floating IPs]
       requestBody:
         required: true
@@ -1748,6 +1763,10 @@ paths:
       description: >-
         Rules are immutable; edit by deleting and recreating. At most one of
         `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+        `remoteGroupId` is resolved within this group's own project — one
+        naming a group outside it is reported as not found rather than as a
+        distinct cross-project refusal, since nothing authorizes the caller
+        against the group it names.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -1786,6 +1805,10 @@ paths:
     post:
       operationId: attachSecurityGroup
       summary: Attach a security group to a VM NIC
+      description: >-
+        Requires `attach` on the group and `update` on the VM. Refused with
+        `400` when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -2056,7 +2079,10 @@ paths:
         "VMs on this network can resolve this zone." Idempotent. Pass
         `primary: true` to also make it the zone the network's VMs
         auto-register into; that is refused when the VMs already on the
-        network would collide in it.
+        network would collide in it. Requires `attach` on the zone and
+        `update` on the network, and is refused with `400` when the two belong
+        to different projects — the status every cross-project refusal answers
+        with.
       tags: [DNS]
       requestBody:
         required: true
@@ -2086,6 +2112,10 @@ paths:
       description: >-
         Refused while this zone is the network's primary — clear the network's
         primary zone first, so its VMs' derived records are never stranded.
+        Resolves the network the same way attach does: requires `update` on it,
+        and is refused with `400` when the zone and the network belong to
+        different projects — the status every cross-project refusal answers
+        with.
       tags: [DNS]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
