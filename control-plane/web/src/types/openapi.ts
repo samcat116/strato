@@ -2647,7 +2647,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get an organization's resource usage and quota compliance */
+        /**
+         * Get an organization's resource usage and quota compliance
+         * @description Usage totals and hierarchy statistics cover the rows the caller may read. `quotaCompliance` reports a quota only when the caller may read quotas at the org, folder, or project it hangs on: compliance is measured over everything beneath that node, so an organization-scoped quota's figures describe the whole organization.
+         */
         get: operations["getOrganizationResourceSummary"];
         put?: never;
         post?: never;
@@ -2744,7 +2747,7 @@ export interface paths {
         };
         /**
          * Resolve an entity's breadcrumb path
-         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity.
+         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity, reduced to the components the caller may read. A component the caller cannot read is omitted rather than refused, so a project readable inside an unreadable folder comes back directly under the organization; a caller who can read none of the chain gets the organization alone.
          */
         get: operations["getHierarchyEntityPath"];
         put?: never;

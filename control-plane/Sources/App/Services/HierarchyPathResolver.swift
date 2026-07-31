@@ -5,6 +5,12 @@ import Fluent
 /// Resolves the breadcrumb path (organization → OU chain → project → VM) for an
 /// entity in the hierarchy. Extracted from `HierarchyController` so the recursive
 /// path assembly can be tested on its own.
+///
+/// Assembly stays a pure function of the rows; ``visibleComponents(_:on:)`` is
+/// the separate step that reduces a path to the components one caller may read.
+/// Keeping them apart is what lets the assembly be tested without a request, and
+/// makes the filtering a single reviewable rule rather than a condition threaded
+/// through the recursion.
 struct HierarchyPathResolver {
     /// Builds the ordered path components from the organization root down to the
     /// given entity. Unknown entity types yield just the organization root.
@@ -77,5 +83,46 @@ struct HierarchyPathResolver {
         }
 
         return components
+    }
+
+    /// The components of an assembled path whose entity the caller may read.
+    ///
+    /// A breadcrumb names things, and a name is the disclosure `folder:read` /
+    /// `project:read` / `vm:read` gate. Without this the route is the one door
+    /// onto the hierarchy that issue #870 left open: `view_organization` — which
+    /// bare org membership grants — was the whole check, so any member could
+    /// resolve an arbitrary id into the names of the folders, project and VM
+    /// above it, the same inventory the tree and the search results next door
+    /// filter per row.
+    ///
+    /// Elides rather than refuses, matching the tree: a caller who may read a
+    /// project but not its folder gets the project directly under the
+    /// organization. Naming the folder is the part that is gated; that the
+    /// project sits somewhere beneath the org is already in its own materialized
+    /// `path`. The organization root is kept unconditionally — reaching this
+    /// route at all is `view_organization` on it.
+    static func visibleComponents(_ components: [PathComponent], on req: Request) async throws -> [PathComponent] {
+        // One batch per node type (#687), in a fixed order so the decision log
+        // records a stable sequence.
+        let readChecks: [(type: String, nodeType: IAMNodeType, action: String)] = [
+            ("organizational_unit", .organizationalUnit, "folder:read"),
+            ("project", .project, "project:read"),
+            ("vm", .virtualMachine, "vm:read"),
+        ]
+
+        var readable: Set<IAMNode> = []
+        for check in readChecks {
+            let nodes = components.filter { $0.type == check.type }.map { IAMNode(type: check.nodeType, id: $0.id) }
+            readable.formUnion(try await req.canFilter(check.action, on: nodes))
+        }
+
+        return components.filter { component in
+            guard let check = readChecks.first(where: { $0.type == component.type }) else {
+                // The organization root, and any component type with no read
+                // action of its own.
+                return true
+            }
+            return readable.contains(IAMNode(type: check.nodeType, id: component.id))
+        }
     }
 }

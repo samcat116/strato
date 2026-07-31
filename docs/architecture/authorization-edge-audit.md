@@ -139,13 +139,25 @@ summary are all assembled from it, so there is one answer rather than three.
 | `GET /api/organizations/:id/resources/summary` | org-wide usage + per-quota compliance | same snapshot, so the totals count what the tree would show |
 | `GET /api/organizations/:id/search` / `GET /api/hierarchy/search` | matching folders/projects/VMs org-wide | `HierarchySearchService.readable`, one batch per result kind |
 | `GET /api/organizations/:id/ous`, `.../ous/:ouID/ous` | the org's whole folder structure | `folder:read` per folder |
+| `GET /api/organizations/:id/path/:type/:id` | folder/project/VM names for an arbitrary entity | `HierarchyPathResolver.visibleComponents`, one batch per component type |
 
-Two rows survive without a decision of their own, both documented at the call
-site: organization-scoped quotas (the handler's `view_organization` gate has
-already passed and they describe that organization), and folders on the path
-down to a readable project — dropping those disconnects the tree, and the
-project's own materialized `path` names them anyway. The second only applies to
-the nested tree; flat consumers read `decidedFolders` and never see them.
+One row survives without a decision of its own, documented at the call site:
+folders on the path down to a readable project — dropping those disconnects the
+tree, and the project's own materialized `path` names them anyway. It only
+applies to the nested tree; flat consumers read `decidedFolders` and never see
+them.
+
+Organization-scoped quota **rows** likewise ride the handler's
+`view_organization` gate, since they describe that organization. Their
+*measured usage* does not. `QuotaComplianceService` calls
+`calculateActualUsage`, which sums every row beneath the quota's node, so an
+organization-scoped quota reports the organization's whole vCPU, memory and VM
+consumption — handing back through `quotaCompliance` the same totals
+`resourceUsage` had just been narrowed to remove. The summary endpoint
+therefore decides each quota on `quota:read` at the node it hangs on before
+measuring: unlike the `org:read` that admits the row, `quota:read` is
+role-derived, so a bare member does not hold it, while anyone with a viewer
+role at organization level already sees the rows the total is drawn from.
 
 `GET /api/organizations/:id/search` was additionally **500ing for every
 caller**: it declared its folder join inside an `.or` group, which Fluent drops
@@ -156,7 +168,6 @@ never joined. Nothing covered the route.
 
 | Endpoint | Leaks | Notes |
 | -- | -- | -- |
-| `GET /api/organizations/:id/path/:type/:id` | folder/project names for an arbitrary entity | single-entity variant of the search leak |
 | `GET /api/organizations/:id/groups` | every group in the org, and `getMembers` discloses emails | `group:read` exists, so this is fixable the same way; identity-plane inventory rather than the project one |
 | `GET /api/organizations/:id/webhooks` | every subscription in the org, **including delivery URLs** | no `webhook:*` actions in the registry, so there is nothing to decide on yet — registering them comes first |
 | `GET /api/organizations/:id/ous/:ouID` and the folder mutation routes | any folder in the org, by id | an *item*-route gap, not a list one: the controller gates on `requireMember` where `folder:read` / `folder:update` exist |
