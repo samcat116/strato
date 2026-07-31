@@ -113,6 +113,7 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 - **The control plane does IPAM** (`IPAMService`): allocates static IPs/netmask/gateway from a `LogicalNetwork`'s subnet and passes them to the agent.
 - Agent-side, `NetworkOrchestrator` routes to a platform driver behind `NetworkServiceProtocol`; hypervisor drivers receive typed `NetworkAttachment` values (TAP path + driver type) rather than assuming a format.
 - Linux: OVN/OVS (via SwiftOVN) for real SDN — TAP interfaces, VM-to-VM traffic, isolation. macOS: QEMU user-mode SLIRP only (outbound NAT, no inbound, no VM-to-VM) — dev/test only.
+- **DNS** (`docs/architecture/dns.md`) is a separate control-plane-owned model: project-scoped `DNSZone`s attach many-to-many to networks, each network optionally naming one as its **primary** (the zone its VMs register into). A zone's contents are **derived ∪ authored** — `VM.hostname` → allocated addresses plus PTR, unioned with `DNSRecord` rows — assembled on demand by `DNSZoneAssembler` and never stored, so realization stays a swappable driver. Nothing realizes it yet; guests still get DHCP option delivery only.
 
 ### Storage and images
 

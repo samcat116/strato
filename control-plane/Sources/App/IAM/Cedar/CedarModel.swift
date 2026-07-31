@@ -30,6 +30,8 @@ enum CedarEntityType: String, CaseIterable, Sendable {
     case network = "Network"
     case floatingIP = "FloatingIP"
     case securityGroup = "SecurityGroup"
+    case dnsZone = "DNSZone"
+    case dnsRecord = "DNSRecord"
     case volume = "Volume"
     case volumeSnapshot = "VolumeSnapshot"
     case sandboxSnapshot = "SandboxSnapshot"
@@ -68,6 +70,8 @@ extension IAMNodeType {
         case .network: return .network
         case .floatingIP: return .floatingIP
         case .securityGroup: return .securityGroup
+        case .dnsZone: return .dnsZone
+        case .dnsRecord: return .dnsRecord
         case .volume: return .volume
         case .volumeSnapshot: return .volumeSnapshot
         case .sandboxSnapshot: return .sandboxSnapshot

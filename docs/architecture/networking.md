@@ -531,7 +531,13 @@ in `deploy/ovn-central/README.md`).
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental) — met
   since the images moved to Ubuntu 26.04 (OVN 26.03), but still experimental
   upstream.
-- **IPv4-only IPAM** today; IPv6 is out of scope for this roadmap.
+- **Dual-stack IPAM** — networks default to a generated ULA /64 alongside their
+  IPv4 subnet, and each NIC carries one address row per family. IPv6 is
+  allocated, delivered (RA + DHCPv6), and realized; what remains open is
+  IPv6-specific L3 work such as external egress.
+- **Name resolution** is a separate track: see [dns](./dns.md). What exists on
+  this substrate today is DHCP option delivery only (`dns_servers` /
+  `domain_name` → OVN `DHCP_Options`); the OVN `DNS` table is not yet written.
 
 ## References
 

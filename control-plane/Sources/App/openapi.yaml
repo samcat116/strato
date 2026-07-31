@@ -120,6 +120,12 @@ tags:
     description: Logical (SDN) networks.
   - name: Floating IPs
     description: External address pools and VM NIC attachments.
+  - name: DNS
+    description: >-
+      Internal name resolution: project-owned zones, their attachment to
+      logical networks, and user-authored records. A zone's effective contents
+      are derived (VM hostname → allocated addresses, plus PTR) ∪ authored,
+      assembled on demand and never stored.
   - name: Logs
     description: Loki-backed VM console and sandbox workload log queries.
   - name: Users
@@ -1810,6 +1816,277 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/AttachSecurityGroupRequest"
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones:
+    get:
+      operationId: listDNSZones
+      summary: List DNS zones
+      tags: [DNS]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the visible DNS zones.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZoneListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createDNSZone
+      summary: Create a DNS zone
+      description: >-
+        Zone names are validated as fully-qualified domain names but are not
+        constrained to `.internal`, and are unique per project rather than
+        globally — two tenants may both serve `corp.example.com` internally.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDNSZoneRequest"
+      responses:
+        "200":
+          description: The created zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: getDNSZone
+      summary: Get a DNS zone
+      tags: [DNS]
+      responses:
+        "200":
+          description: The zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateDNSZone
+      summary: Update a DNS zone's name or description
+      description: >-
+        Renaming a zone moves every record in it, derived and authored alike.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDNSZoneRequest"
+      responses:
+        "200":
+          description: The updated zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteDNSZone
+      summary: Delete a DNS zone
+      description: >-
+        Refused while any network is attached; detach first, so losing
+        resolution is always an explicit act. Records cascade with the zone.
+      tags: [DNS]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/recordset:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: getDNSZoneRecordSet
+      summary: Get a zone's effective record set
+      description: >-
+        The zone's contents as **derived ∪ authored**, computed on demand and
+        never stored — exactly what a realization driver consumes. Derived
+        entries come from the hostnames and IPAM allocations of VMs on
+        networks whose primary zone is this one, plus the matching PTRs.
+      tags: [DNS]
+      responses:
+        "200":
+          description: The assembled record set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssembledDNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/dns-zones/{zoneId}/records:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: listDNSRecords
+      summary: List a zone's authored records
+      tags: [DNS]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the zone's authored records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecordListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createDNSRecord
+      summary: Author a record in a zone
+      description: >-
+        Refused with `409` when the record would collide with one derived from
+        a VM, or would break CNAME's exclusivity rule — a shadowed record is
+        rejected at write time rather than silently never answered. Also `409`
+        when `ttl` or `view` disagrees with the record set this joins: those
+        belong to the whole RRset (RFC 2181 §5.2), not to individual records.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDNSRecordRequest"
+      responses:
+        "200":
+          description: The created record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/records/{recordId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+      - $ref: "#/components/parameters/DNSRecordID"
+    get:
+      operationId: getDNSRecord
+      summary: Get an authored record
+      tags: [DNS]
+      responses:
+        "200":
+          description: The record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateDNSRecord
+      summary: Update an authored record's value, TTL, or view
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDNSRecordRequest"
+      responses:
+        "200":
+          description: The updated record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteDNSRecord
+      summary: Delete an authored record
+      tags: [DNS]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/dns-zones/{zoneId}/networks:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    post:
+      operationId: attachDNSZoneToNetwork
+      summary: Attach a zone to a logical network
+      description: >-
+        "VMs on this network can resolve this zone." Idempotent. Pass
+        `primary: true` to also make it the zone the network's VMs
+        auto-register into; that is refused when the VMs already on the
+        network would collide in it.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachDNSZoneRequest"
+      responses:
+        "200":
+          description: The zone, with its updated attachments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/networks/{networkId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+      - $ref: "#/components/parameters/DNSZoneNetworkID"
+    delete:
+      operationId: detachDNSZoneFromNetwork
+      summary: Detach a zone from a logical network
+      description: >-
+        Refused while this zone is the network's primary — clear the network's
+        primary zone first, so its VMs' derived records are never stranded.
+      tags: [DNS]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -7217,6 +7494,30 @@ components:
       schema:
         type: string
         format: uuid
+    DNSZoneID:
+      name: zoneId
+      in: path
+      required: true
+      description: The DNS zone's id.
+      schema:
+        type: string
+        format: uuid
+    DNSRecordID:
+      name: recordId
+      in: path
+      required: true
+      description: The DNS record's id.
+      schema:
+        type: string
+        format: uuid
+    DNSZoneNetworkID:
+      name: networkId
+      in: path
+      required: true
+      description: The attached logical network's id.
+      schema:
+        type: string
+        format: uuid
     OrganizationIdQuery:
       name: organization_id
       in: query
@@ -7955,6 +8256,13 @@ components:
       properties:
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label. Defaults to a slugified `name`, disambiguated
+            with a numeric suffix against whatever already registers into the
+            target network's primary zone. An explicit value is instead held to
+            strict uniqueness and answers `409` on a collision.
         description:
           type: string
         imageId:
@@ -8039,6 +8347,11 @@ components:
       properties:
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label. Renaming the VM deliberately does not move its
+            records, so this is the only way its name in DNS changes.
         description:
           type: string
         cpu:
@@ -8073,6 +8386,12 @@ components:
           format: uuid
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label — what it registers as in the primary zone of
+            each network it sits on. Distinct from `observedHostname`, which is
+            whatever the guest OS calls itself.
         description:
           type: string
         image:
@@ -8875,6 +9194,17 @@ components:
           type: integer
         externalAccess:
           type: boolean
+        primaryDnsZoneId:
+          type: string
+          format: uuid
+          description: >-
+            The DNS zone this network's VMs auto-register into. Must already be
+            attached to the network.
+        clearPrimaryDnsZone:
+          type: boolean
+          description: >-
+            Unset the primary zone. A JSON `null` is indistinguishable from an
+            omitted field, so the clear is its own flag.
     Network:
       type: object
       required:
@@ -8921,6 +9251,10 @@ components:
         siteId:
           type: string
           format: uuid
+        primaryDnsZoneId:
+          type: string
+          format: uuid
+          description: The DNS zone this network's VMs auto-register into, if any.
         createdAt:
           type: string
           format: date-time
@@ -9167,6 +9501,212 @@ components:
           type: string
           format: uuid
           description: The VM NIC; defaults to the VM's first interface.
+    DNSRecordType:
+      type: string
+      description: >-
+        Deliberately wider than any realization driver: the OVN `DNS` table
+        answers A/AAAA/PTR only, and the per-network resolver is what makes
+        the rest resolvable. Drivers reject what they cannot do with a clear
+        error rather than the model pretending those records don't exist.
+      enum: [A, AAAA, CNAME, TXT, SRV, PTR]
+    DNSRecordView:
+      type: string
+      description: >-
+        Which side of a split horizon the record belongs to. Carried so
+        split-horizon is not a retrofit; nothing consumes it yet, so every
+        record is served internally regardless of its value.
+      enum: [internal, external, both]
+      default: both
+    DNSZoneNetworkAttachment:
+      type: object
+      required: [networkId, networkName, isPrimary]
+      properties:
+        networkId:
+          type: string
+          format: uuid
+        networkName:
+          type: string
+        isPrimary:
+          type: boolean
+          description: >-
+            Whether this zone is the network's primary — i.e. whether the
+            network's VMs auto-register their derived records here.
+    DNSZone:
+      type: object
+      required: [id, name, projectId, networks, recordCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: >-
+            The zone's fully-qualified name, lowercased and without a trailing
+            dot. Not constrained to `.internal`: a tenant may serve
+            `corp.example.com` internally. Unique per project, never globally.
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        networks:
+          type: array
+          description: The logical networks that can resolve this zone.
+          items:
+            $ref: "#/components/schemas/DNSZoneNetworkAttachment"
+        recordCount:
+          type: integer
+          description: >-
+            Authored records only. Derived records are assembled on demand and
+            never stored — fetch the record set for the effective view.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDNSZoneRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Fully-qualified zone name, e.g. `acme.internal`.
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+          description: Defaults to the caller's default project when omitted.
+    UpdateDNSZoneRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    AttachDNSZoneRequest:
+      type: object
+      required: [networkId]
+      properties:
+        networkId:
+          type: string
+          format: uuid
+        primary:
+          type: boolean
+          default: false
+          description: >-
+            Also make this zone the network's primary — the zone its VMs
+            auto-register into. Attaching alone only grants resolution.
+    DNSRecord:
+      type: object
+      required: [id, zoneId, name, fqdn, type, value, ttl, view]
+      properties:
+        id:
+          type: string
+          format: uuid
+        zoneId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Owner name relative to the zone; `@` is the apex.
+        fqdn:
+          type: string
+          description: The same name fully qualified.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        value:
+          type: string
+          description: >-
+            RDATA in zone-file text form: an address for A/AAAA, a target name
+            for CNAME/PTR, the string contents for TXT, and
+            `priority weight port target` for SRV.
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDNSRecordRequest:
+      type: object
+      required: [type, value]
+      properties:
+        name:
+          type: string
+          description: >-
+            Owner name relative to the zone; omitted means the apex (`@`). A
+            leftmost `*` label is a wildcard, including a bare `*` for the
+            zone-apex wildcard.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        value:
+          type: string
+        ttl:
+          type: integer
+          default: 300
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+    UpdateDNSRecordRequest:
+      type: object
+      description: >-
+        Name and type are the record's identity; change those by deleting and
+        recreating, so the rename is conflict-checked as the create it is.
+        `ttl` and `view` belong to the whole RRset (RFC 2181 §5.2), so changing
+        either applies to every record sharing this one's name and type.
+      properties:
+        value:
+          type: string
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+    AssembledDNSRecord:
+      type: object
+      required: [name, type, values, ttl, view, origin]
+      properties:
+        name:
+          type: string
+          description: Fully-qualified owner name.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        values:
+          type: array
+          description: >-
+            The RRset's values, deduplicated and sorted. A list because an
+            RRset is one: a dual-stack VM yields an A entry and an AAAA entry,
+            and a round-robin name yields several values.
+          items:
+            type: string
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+        origin:
+          type: string
+          description: >-
+            `derived` entries are generated from VM hostnames and their IPAM
+            allocations and are never stored; `authored` entries are record
+            rows.
+          enum: [derived, authored]
+    AssembledDNSZone:
+      type: object
+      required: [zoneId, zoneName, records]
+      properties:
+        zoneId:
+          type: string
+          format: uuid
+        zoneName:
+          type: string
+        records:
+          type: array
+          description: Sorted by name then type, so two assemblies diff cleanly.
+          items:
+            $ref: "#/components/schemas/AssembledDNSRecord"
     UserPublic:
       type: object
       description: The publicly readable projection of a user account.
@@ -13325,6 +13865,36 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SecurityGroup"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    DNSZoneListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSZone"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    DNSRecordListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecord"
         total:
           type: integer
           description: Total visible items, ignoring `limit`/`offset`.

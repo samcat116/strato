@@ -233,13 +233,126 @@ public struct CreateNetworkRequest: Codable, Sendable {
     public let gateway: String?
     public let projectId: String?
     public let dhcpEnabled: Bool?
+    /// Resolvers advertised to guests over DHCP.
+    public let dnsServers: [String]?
+    /// Search domain advertised over DHCP (`domain_name` option).
+    public let domainName: String?
 
-    public init(name: String, subnet: String, gateway: String?, projectId: String?, dhcpEnabled: Bool?) {
+    public init(
+        name: String, subnet: String, gateway: String?, projectId: String?, dhcpEnabled: Bool?,
+        dnsServers: [String]? = nil, domainName: String? = nil
+    ) {
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
         self.projectId = projectId
         self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+    }
+}
+
+public struct UpdateNetworkRequest: Codable, Sendable {
+    public let dnsServers: [String]?
+    public let domainName: String?
+    public let primaryDnsZoneId: String?
+    public let clearPrimaryDnsZone: Bool?
+
+    public init(
+        dnsServers: [String]? = nil, domainName: String? = nil,
+        primaryDnsZoneId: String? = nil, clearPrimaryDnsZone: Bool? = nil
+    ) {
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.primaryDnsZoneId = primaryDnsZoneId
+        self.clearPrimaryDnsZone = clearPrimaryDnsZone
+    }
+}
+
+// MARK: - DNS (issue #770)
+
+public struct DNSZoneNetworkAttachment: Codable, Sendable {
+    public let networkId: UUID
+    public let networkName: String
+    public let isPrimary: Bool
+}
+
+public struct DNSZone: Codable, Sendable {
+    public let id: UUID
+    public let name: String
+    public let description: String?
+    public let projectId: UUID?
+    public let networks: [DNSZoneNetworkAttachment]?
+    /// Authored records only; derived records are assembled on demand.
+    public let recordCount: Int?
+    public let createdAt: Date?
+}
+
+public struct DNSRecord: Codable, Sendable {
+    public let id: UUID
+    public let zoneId: UUID?
+    public let name: String
+    public let fqdn: String?
+    public let type: String
+    public let value: String
+    public let ttl: Int?
+    public let view: String?
+    public let createdAt: Date?
+}
+
+/// One entry of a zone's assembled record set — derived ∪ authored, as a
+/// realization driver sees it.
+public struct AssembledDNSRecord: Codable, Sendable {
+    public let name: String
+    public let type: String
+    public let values: [String]
+    public let ttl: Int
+    public let view: String
+    /// `derived` or `authored`.
+    public let origin: String
+}
+
+public struct AssembledDNSZone: Codable, Sendable {
+    public let zoneId: UUID
+    public let zoneName: String
+    public let records: [AssembledDNSRecord]
+}
+
+public struct CreateDNSZoneRequest: Codable, Sendable {
+    public let name: String
+    public let description: String?
+    public let projectId: String?
+
+    public init(name: String, description: String? = nil, projectId: String? = nil) {
+        self.name = name
+        self.description = description
+        self.projectId = projectId
+    }
+}
+
+public struct AttachDNSZoneRequest: Codable, Sendable {
+    public let networkId: String
+    public let primary: Bool?
+
+    public init(networkId: String, primary: Bool? = nil) {
+        self.networkId = networkId
+        self.primary = primary
+    }
+}
+
+public struct CreateDNSRecordRequest: Codable, Sendable {
+    public let name: String?
+    public let type: String
+    public let value: String
+    public let ttl: Int?
+    public let view: String?
+
+    public init(name: String?, type: String, value: String, ttl: Int? = nil, view: String? = nil) {
+        self.name = name
+        self.type = type
+        self.value = value
+        self.ttl = ttl
+        self.view = view
     }
 }
 

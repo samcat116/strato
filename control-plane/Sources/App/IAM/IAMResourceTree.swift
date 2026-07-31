@@ -369,6 +369,23 @@ enum IAMResourceTree {
                 try await SecurityGroup.query(on: db).filter(\.$id ~~ idList).all(),
                 id: \.id, projectID: { $0.$project.id })
 
+        case .dnsZone:
+            return projectParents(
+                try await DNSZone.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
+
+        case .dnsRecord:
+            // The one leaf whose parent is another leaf: a record belongs to
+            // its zone, which belongs to a project. The walk handles the extra
+            // level on its own — it just keeps climbing.
+            var steps: [UUID: Step] = [:]
+            for record in try await DNSRecord.query(on: db).filter(\.$id ~~ idList).all() {
+                guard let id = record.id else { continue }
+                steps[id] = Step(
+                    parent: IAMNode(type: .dnsZone, id: record.$zone.id), leaf: IAMLeafFacts())
+            }
+            return steps
+
         case .serviceAccount:
             return projectParents(
                 try await ServiceAccount.query(on: db).filter(\.$id ~~ idList).all(),
