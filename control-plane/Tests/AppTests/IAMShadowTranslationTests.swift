@@ -38,6 +38,11 @@ struct IAMShadowTranslationTests {
             ("resume", "virtual_machine", "vm:resume"),
             ("read", "sandbox", "sandbox:read"),
             ("exec", "sandbox", "sandbox:exec"),
+            // In-guest execution on a VM (issue #804). Two actions because
+            // they differ in what the platform can attest to afterwards, not
+            // in how much they can do — see `guestExecutionActions`.
+            ("exec", "virtual_machine", "vm:exec"),
+            ("run", "virtual_machine", "vm:runCommand"),
             ("snapshot", "sandbox", "sandbox:snapshot"),
             ("snapshot", "volume", "volume:snapshot"),
             // Full-VM checkpoints (issue #564) join the same shape.
@@ -108,7 +113,7 @@ struct IAMShadowTranslationTests {
                 permission: "read", resourceType: "virtual_machine", resourceID: "*",
                 path: "/api/vms") == nil)
         // A verb that exists but not for this service
-        #expect(action("exec", on: "virtual_machine") == nil)
+        #expect(action("run", on: "sandbox") == nil)
         // `export` is snapshot mobility, which only sandboxes have: a full-VM
         // checkpoint lives inside the VM's own disks and cannot leave its host.
         #expect(action("export", on: "virtual_machine") == nil)

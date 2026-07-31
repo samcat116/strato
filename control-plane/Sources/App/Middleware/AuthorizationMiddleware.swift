@@ -55,7 +55,13 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         GuardedResource(
             prefix: "/api/vms",
             resourceType: "virtual_machine",
-            actionVerbs: ["start", "stop", "restart", "pause", "resume"]
+            // `exec` and `run` are listed ahead of the routes that will serve
+            // them (issue #804). The fallback for an unlisted POST subpath is
+            // `update`, so leaving them out would gate in-guest execution on
+            // `vm:update` — an editor permission — the moment the route
+            // appeared, and nothing would fail to announce it. A verb with no
+            // route behind it costs nothing: the path 404s either way.
+            actionVerbs: ["start", "stop", "restart", "pause", "resume", "exec", "run"]
         ),
         GuardedResource(
             prefix: "/api/sandboxes",
@@ -270,12 +276,16 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         }
     }
 
-    private func checkResourcePermissions(
-        request: Request, principal: IAMPrincipal, resource: GuardedResource
-    ) async throws {
-        let method = request.method
-        let pathComponents = request.url.path.split(separator: "/")
-
+    /// The legacy-vocabulary permission a method and path demand on a guarded
+    /// resource — the mapping `IAMActionTranslator` then turns into an IAM
+    /// action. Lifted out of `checkResourcePermissions` so it can be asserted
+    /// directly: this is where a mis-derived verb becomes a route gated on a
+    /// weaker permission than it needs, which no integration test would notice
+    /// as long as the request still succeeds. Returns nil for a method the
+    /// mapping does not cover (the caller answers 405).
+    static func permission(
+        method: HTTPMethod, pathComponents: [Substring], resource: GuardedResource
+    ) -> String? {
         // Snapshot subresource (issue #426, and full-VM checkpoints in #564):
         // creating, deleting, or restoring a snapshot is guarded by the parent
         // resource's `snapshot` permission (finer per-snapshot checks live in
@@ -285,28 +295,42 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // snapshots at the same depth, so one rule covers them.
         let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
 
-        // Determine required permission based on HTTP method and path
-        let permission: String
         switch method {
         case .GET:
-            permission = "read"
+            return "read"
         case .POST:
             // Special handling for lifecycle actions
             if isSnapshotSubresource {
-                permission = "snapshot"
+                return "snapshot"
             } else if pathComponents.count >= 4 {
-                let action = String(pathComponents[3])
-                permission = resource.actionVerbs.contains(action) ? action : "update"
+                // An `/actions/<verb>` subpath names its verb one segment
+                // deeper (issue #804). Without this the segment read below
+                // would find the literal `actions`, miss the verb list, and
+                // fall through to `update` — which for in-guest execution
+                // would mean gating a root shell on an editor permission.
+                let isActionsSubpath = pathComponents[3] == "actions" && pathComponents.count >= 5
+                let action = String(pathComponents[isActionsSubpath ? 4 : 3])
+                return resource.actionVerbs.contains(action) ? action : "update"
             } else {
-                permission = "create"
+                return "create"
             }
         case .PUT, .PATCH:
-            permission = "update"
+            return "update"
         case .DELETE:
-            permission = isSnapshotSubresource ? "snapshot" : "delete"
+            return isSnapshotSubresource ? "snapshot" : "delete"
         default:
-            throw Abort(.methodNotAllowed)
+            return nil
         }
+    }
+
+    private func checkResourcePermissions(
+        request: Request, principal: IAMPrincipal, resource: GuardedResource
+    ) async throws {
+        let pathComponents = request.url.path.split(separator: "/")
+        guard
+            let permission = Self.permission(
+                method: request.method, pathComponents: pathComponents, resource: resource)
+        else { throw Abort(.methodNotAllowed) }
 
         // For object-level operations, extract the resource ID
         var resourceId = "*"  // Default for collection operations

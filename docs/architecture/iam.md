@@ -318,6 +318,11 @@ viewer   ⊂  operator  ⊂  editor  ⊂  admin
 | `editor` | operator + `*:create/update/delete`, `volume:attach/snapshot/…`, `vm:viewConsole` |
 | `admin` | editor + `iam:setPolicy`, `project:transfer`, `quota:manage`, `group:manage`, `folder:create`, `agent:manage` |
 
+A few actions are deliberately in **no** seeded role: `project:create` (bare
+org membership grants it), the identity-plane `user:*` set and
+`agent:updateArtifact` (reached through the tier-1 policies), and in-guest
+execution — see below.
+
 Roles are **global** (one set across all resource types), not per-service;
 narrow per-type roles can be added later if needed. This is deliberately not
 GCP's basic-roles mistake: membership is a curated, reviewable schema change —
@@ -331,6 +336,39 @@ Today's environment roles (`environment_manager`, deployer, approver) become
 **conditioned bindings** (e.g. `editor` on a project where
 `resource.environment == "staging"`), consistent with
 environment-as-attribute.
+
+### In-guest execution is never in a default role (#804)
+
+Running a command inside a VM's guest is two actions, `vm:exec` (interactive
+session) and `vm:runCommand` (non-interactive, output captured), and **no
+seeded role carries either**. They are reachable only through a custom role
+somebody wrote on purpose, or through the tier-1 `platform-system-admin`
+policy.
+
+Both are root-on-VM. That is not the shape of `vm:start`, and folding them into
+`editor` — or even `admin` — would mean a binding written at the org for one
+reason silently conferring a shell on every VM in every project beneath it,
+including projects created long afterwards. An org admin can still reach exec;
+they hold `iam:setPolicy` and can author the role. The difference is that they
+have to do it, and the binding row is then a listable answer to "who has a
+shell on this fleet, and who gave it to them". That is the substance of
+"granted explicitly rather than inherited", without a second inheritance rule
+that would apply to one action and confuse every reader of the other hundred.
+
+The split between the two is about **attribution, not privilege**.
+`vm:runCommand` is not a lesser `vm:exec` — a one-shot `sh -c` is a shell. What
+differs is what the platform can say afterwards: a non-interactive run carries
+its command in the request body and its output in a stored operation record, so
+each invocation is a discrete, attributable row, while an interactive session
+is a byte stream the control plane never parses. Two actions let an
+organization say "automation may run recorded commands here, humans may not
+hold unrecorded shells"; one action cannot express that. Both ride the `vm`
+service group, so an existing `vm:*` ceiling covers them with no edit.
+
+Sandboxes keep a single `sandbox:exec` (in `operator`), and the asymmetry is
+intended: a sandbox is an ephemeral, project-scoped unit of compute that exists
+to be executed in, and its whole lifetime is the blast radius. A VM is a
+durable machine holding durable data.
 
 ### Roles are rows, defaults included (shipped with #604/#605)
 

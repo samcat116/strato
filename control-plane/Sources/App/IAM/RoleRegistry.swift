@@ -202,6 +202,46 @@ enum IAMRoleRegistry {
     /// plumbing.
     static let identityActions: Set<String> = ["user:read", "user:update", "user:delete"]
 
+    /// In-guest command execution on a VM (the guest-agent stack, issue #804).
+    /// Two actions, and **no seeded role carries either**.
+    ///
+    /// Both are root-on-VM: whatever the guest agent runs, it runs with the
+    /// guest agent's privileges, inside a machine whose disks hold the tenant's
+    /// data. That is not the shape of `vm:start` — it is closer to
+    /// `agent:updateArtifact`, and it gets the same treatment: a name of its
+    /// own, carried by no default role, so nothing grants it by accident. A
+    /// custom role (`/api/iam/roles`) can grant it deliberately, and the
+    /// resulting binding row is the audit trail that says who was given a shell
+    /// and where. The tier-1 `platform-system-admin` policy reaches it, as it
+    /// reaches everything.
+    ///
+    /// Keeping it out of `editor`/`admin` rather than folding it into `admin`
+    /// is the deliberate half. A seeded role is inherited down the whole
+    /// subtree it is bound on, so `admin` at the org would confer a shell on
+    /// every VM in every project under it — including projects created years
+    /// later — from a binding written for an entirely different reason. An org
+    /// admin can still reach exec (they hold `iam:setPolicy` and can author the
+    /// role), but they have to *do* it, and the doing is listable. That is the
+    /// substance of "granted explicitly rather than inherited", without a
+    /// second, action-specific inheritance rule the evaluator would have to
+    /// carry forever. The choice is also cheap in exactly one direction: no
+    /// endpoint ships these actions yet, so starting closed costs nobody
+    /// access, while widening later is a one-line change here and narrowing
+    /// later would revoke access people had come to rely on.
+    ///
+    /// **The split is about attribution, not privilege.** `vm:runCommand` is
+    /// not a lesser `vm:exec`: a one-shot `sh -c` is a shell, and anyone who
+    /// doubts it can spawn one. What differs is what the platform can say
+    /// afterwards. A non-interactive run carries its command in the request
+    /// body and its output in a stored operation record, so every invocation is
+    /// a discrete, attributable row; an interactive session is an open-ended
+    /// byte stream whose contents the control plane never parses. Splitting
+    /// lets an organization say "automation may run recorded commands here,
+    /// humans may not hold unrecorded shells" — a real policy, and one a single
+    /// action cannot express. Splitting later would mean migrating live
+    /// bindings and custom roles, so it happens now or not at all.
+    static let guestExecutionActions: Set<String> = ["vm:exec", "vm:runCommand"]
+
     /// Actions no seeded role carries and only the tier-1
     /// `platform-system-admin` policy reaches. `agent:updateArtifact` overrides
     /// the agent's update artifact with an arbitrary URL — that binary is
@@ -224,6 +264,7 @@ enum IAMRoleRegistry {
     static let allActions: Set<String> =
         IAMRole.allCases.reduce(
             into: membershipDerivedActions.union(identityActions).union(systemAdminOnlyActions)
+                .union(guestExecutionActions)
         ) {
             $0.formUnion(actions(for: $1))
         }

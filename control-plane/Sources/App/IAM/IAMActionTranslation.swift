@@ -99,8 +99,18 @@ enum IAMActionTranslator {
             }
 
         // Lifecycle verbs are permissions of their own on VMs and sandboxes.
+        // `exec` now resolves for both (issue #804): the registry guard above
+        // is what kept it sandbox-only, so adding `vm:exec` to the registry is
+        // the whole change on this side.
         case "start", "stop", "restart", "pause", "resume", "exec":
             return "\(service):\(permission)"
+        case "run":
+            // The non-interactive, output-captured half of in-guest execution.
+            // Spelled out rather than folded into the verb-passthrough above
+            // because the action is `runCommand`, not `run` — the registry name
+            // says what it does to the guest, while the route says what the
+            // caller asked for.
+            return service == "vm" ? "vm:runCommand" : nil
         case "snapshot":
             switch service {
             case "sandbox": return "sandbox:snapshot"

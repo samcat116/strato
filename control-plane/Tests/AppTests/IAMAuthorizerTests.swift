@@ -613,4 +613,43 @@ final class IAMAuthorizerBackstopTests {
         #expect(M.classify(path: "/vms/\(id)") == nil)
         #expect(M.classify(path: "/this-route-does-not-exist") == nil)
     }
+
+    @Test("In-guest execution routes derive their own verb, not the update fallback")
+    func guestExecutionRoutesDeriveTheirVerb() {
+        let id = UUID().uuidString
+        typealias M = AuthorizationMiddleware
+        guard case .resource(let vms)? = M.classify(path: "/api/vms/\(id)/exec") else {
+            Issue.record("expected /api/vms to be resource-mapped")
+            return
+        }
+
+        func permission(_ path: String, _ method: HTTPMethod = .POST) -> String? {
+            M.permission(method: method, pathComponents: path.split(separator: "/"), resource: vms)
+        }
+
+        // The two shapes the guest-agent exec endpoints will serve. The
+        // failure this guards is silent: an unlisted POST subpath falls back
+        // to `update`, which translates to `vm:update` — an *editor*
+        // permission gating a root shell.
+        #expect(permission("/api/vms/\(id)/exec") == "exec")
+        #expect(permission("/api/vms/\(id)/actions/run") == "run")
+        let execAction = IAMActionTranslator.translate(
+            permission: "exec", resourceType: "virtual_machine", resourceID: id,
+            path: "/api/vms/\(id)/exec")
+        #expect(execAction?.action == "vm:exec")
+        let runAction = IAMActionTranslator.translate(
+            permission: "run", resourceType: "virtual_machine", resourceID: id,
+            path: "/api/vms/\(id)/actions/run")
+        #expect(runAction?.action == "vm:runCommand")
+
+        // The `/actions/` hop reads one segment deeper and nothing else: an
+        // unrecognized verb still falls back, and the existing shapes are
+        // untouched.
+        #expect(permission("/api/vms/\(id)/actions/frobnicate") == "update")
+        #expect(permission("/api/vms/\(id)/actions") == "update")
+        #expect(permission("/api/vms/\(id)/start") == "start")
+        #expect(permission("/api/vms/\(id)/snapshots") == "snapshot")
+        #expect(permission("/api/vms/\(id)", .DELETE) == "delete")
+        #expect(permission("/api/vms", .GET) == "read")
+    }
 }
