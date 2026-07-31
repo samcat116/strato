@@ -101,7 +101,12 @@ enum IAMActionTranslator {
         // Lifecycle verbs are permissions of their own on VMs and sandboxes.
         // `exec` now resolves for both (issue #804): the registry guard above
         // is what kept it sandbox-only, so adding `vm:exec` to the registry is
-        // the whole change on this side.
+        // the whole change on this side. That guard is coarse by node type,
+        // though — `service(for:)` folds the snapshot types into their parent
+        // service, so `exec` on a `vm_snapshot` translates to `vm:exec` and
+        // clears both the registry and schema checks, exactly as `start` and
+        // `stop` already do. No call site asks that, and nothing here narrows
+        // it; do not read the guard as a per-node-type filter.
         case "start", "stop", "restart", "pause", "resume", "exec":
             return "\(service):\(permission)"
         case "run":

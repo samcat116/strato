@@ -56,11 +56,13 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             prefix: "/api/vms",
             resourceType: "virtual_machine",
             // `exec` and `run` are listed ahead of the routes that will serve
-            // them (issue #804). The fallback for an unlisted POST subpath is
-            // `update`, so leaving them out would gate in-guest execution on
-            // `vm:update` — an editor permission — the moment the route
-            // appeared, and nothing would fail to announce it. A verb with no
-            // route behind it costs nothing: the path 404s either way.
+            // them (issue #804). Both fallbacks are weaker than the act they
+            // would gate: an unlisted POST subpath falls back to `update` and
+            // an unlisted GET to `read`, so leaving these out would hand
+            // in-guest execution an editor — or, for the WebSocket attach, a
+            // *viewer* — permission the moment the route appeared, with
+            // nothing to announce it. A verb with no route behind it costs
+            // nothing: the path 404s either way.
             actionVerbs: ["start", "stop", "restart", "pause", "resume", "exec", "run"]
         ),
         GuardedResource(
@@ -295,22 +297,46 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // snapshots at the same depth, so one rule covers them.
         let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
 
+        // The verb this path names, if any — read once and consulted by both
+        // GET and POST (issue #804).
+        //
+        // Two subpath shapes reach the same verb list. A direct subpath
+        // (`/api/vms/:id/start`) names it at index 3; an `/actions/<verb>`
+        // subpath names it one segment deeper, and without that hop the read
+        // would find the literal `actions` and miss the list entirely. Both
+        // shapes are honored because the two halves of in-guest execution
+        // arrive in different ones — the interactive attach generalizes the
+        // sandbox WebSocket route (`…/exec/:sessionID/attach`), the recorded
+        // run is specified as `…/actions/run` — and a derivation that covered
+        // only one would silently hand the other to a fallback.
+        let subpathVerb: String? = {
+            guard !isSnapshotSubresource, pathComponents.count >= 4 else { return nil }
+            let isActionsSubpath = pathComponents[3] == "actions" && pathComponents.count >= 5
+            let candidate = String(pathComponents[isActionsSubpath ? 4 : 3])
+            return resource.actionVerbs.contains(candidate) ? candidate : nil
+        }()
+
         switch method {
         case .GET:
-            return "read"
+            // A named verb wins over the `read` default, because an
+            // interactive session is a WebSocket *upgrade* — a GET — and
+            // deriving `read` for it would gate a root shell on a **viewer**
+            // permission, which is worse than the `update` fallback the POST
+            // branch already had to guard against. Both of this middleware's
+            // backstops are blind to that shape: the verb list below never
+            // fires on a GET, and `assertHandlerEvaluated` returns early for
+            // GET and for `.switchingProtocols`, so a WebSocket handler that
+            // forgot its own check would not fail the suite either. Nothing
+            // else changes — a GET whose subpath is not a registered verb
+            // (`/status`, `/operations`, `/console`, snapshot listing) still
+            // reads.
+            return subpathVerb ?? "read"
         case .POST:
             // Special handling for lifecycle actions
             if isSnapshotSubresource {
                 return "snapshot"
             } else if pathComponents.count >= 4 {
-                // An `/actions/<verb>` subpath names its verb one segment
-                // deeper (issue #804). Without this the segment read below
-                // would find the literal `actions`, miss the verb list, and
-                // fall through to `update` — which for in-guest execution
-                // would mean gating a root shell on an editor permission.
-                let isActionsSubpath = pathComponents[3] == "actions" && pathComponents.count >= 5
-                let action = String(pathComponents[isActionsSubpath ? 4 : 3])
-                return resource.actionVerbs.contains(action) ? action : "update"
+                return subpathVerb ?? "update"
             } else {
                 return "create"
             }

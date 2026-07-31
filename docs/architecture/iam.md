@@ -370,6 +370,21 @@ intended: a sandbox is an ephemeral, project-scoped unit of compute that exists
 to be executed in, and its whole lifetime is the blast radius. A VM is a
 durable machine holding durable data.
 
+**Both route shapes derive the verb.** `AuthorizationMiddleware` maps a
+method and path to a permission for the two resource-mapped prefixes, and its
+defaults are weaker than in-guest execution: an unlisted POST subpath falls
+back to `update`, an unlisted GET to `read`. That matters because the two
+halves arrive in different shapes — the interactive attach is a WebSocket
+*upgrade*, so a GET (`…/exec/:sessionID/attach`, generalizing the sandbox
+route), while the recorded run is a POST under `…/actions/run`. So the verb
+list is consulted for GET as well as POST, and an `/actions/<verb>` subpath is
+read one segment deeper. Without the first, an exec WebSocket would be gated on
+`vm:read` — a *viewer* permission; without the second, on `vm:update`. Neither
+backstop would have complained: the verb list never fired on a GET, and the
+`assertHandlerEvaluated` check returns early for GET and for
+`.switchingProtocols`. A GET whose subpath is not a registered verb (`/status`,
+`/operations`, `/console`, snapshot listing) still reads.
+
 ### Roles are rows, defaults included (shipped with #604/#605)
 
 The four roles above are not a Swift enum: they are rows in `iam_roles`,
