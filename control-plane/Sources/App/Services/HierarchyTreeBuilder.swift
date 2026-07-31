@@ -50,7 +50,10 @@ struct HierarchyTreeBuilder {
     /// Aggregate counts and resource utilization over an already-loaded snapshot.
     static func stats(for snapshot: HierarchySnapshot) -> HierarchyStats {
         HierarchyStats(
-            totalOUs: snapshot.folders.count,
+            // Folders the caller may read, not the ancestors `readable(on:)`
+            // retains to keep the tree connected: a count is a claim about what
+            // is there, and those rows are scaffolding.
+            totalOUs: snapshot.decidedFolders.count,
             totalProjects: snapshot.projects.count,
             totalVMs: snapshot.vms.count,
             // Every quota in the organization, folder-scoped ones included —

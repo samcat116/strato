@@ -46,6 +46,20 @@ struct ProjectVisibility: Sendable {
     /// admin's list the same way it narrows anyone's.
     let candidateProjectIDs: [UUID]?
 
+    /// The containers behind those projects, on the same terms and nil under
+    /// the same two conditions — the narrowing a list of rows that hang on
+    /// *containers* rather than on projects needs (`/api/quotas`, whose rows
+    /// attach at any of the three levels).
+    ///
+    /// Folders include the subtrees of the folders the caller's grants name, so
+    /// a binding on a parent folder bounds its descendants too. Organizations
+    /// are the org nodes the grants name and nothing else: bare membership
+    /// grants `org:read` without writing a binding, so a caller who needs their
+    /// own organizations in the bound has to union them in — this list is what
+    /// their *grants* reach, not what they can see.
+    let candidateOrganizationIDs: [UUID]?
+    let candidateFolderIDs: [UUID]?
+
     /// True when narrowing found nothing: no project is reachable, so a
     /// project-scoped list has no rows to return and need not query at all.
     var reachesNoProject: Bool { candidateProjectIDs?.isEmpty ?? false }
@@ -68,7 +82,7 @@ struct ProjectVisibility: Sendable {
         // narrowing can only put more projects in front of `req.can`, and
         // every one of them is still decided there — which is what keeps a
         // tier-2 guardrail able to narrow an admin's list.
-        guard !facts.isSystemAdmin else { return ProjectVisibility(candidateProjectIDs: nil) }
+        guard !facts.isSystemAdmin else { return .unnarrowed }
 
         var containers = try await bindingContainers(
             userID: userID, groupIDs: facts.groupIDs, on: req.db)
@@ -76,12 +90,17 @@ struct ProjectVisibility: Sendable {
             // An authored permit whose reach cannot be bounded. Widening to
             // "no narrowing" is the only safe answer; the evaluator still
             // decides every project the rows land in.
-            return ProjectVisibility(candidateProjectIDs: nil)
+            return .unnarrowed
         }
         containers.formUnion(authored)
 
-        return ProjectVisibility(candidateProjectIDs: try await projects(under: containers, on: req.db))
+        return try await scopes(under: containers, on: req.db)
     }
+
+    /// No bound at all — every scope is a candidate, and every row is still
+    /// decided by the evaluator.
+    private static let unnarrowed = ProjectVisibility(
+        candidateProjectIDs: nil, candidateOrganizationIDs: nil, candidateFolderIDs: nil)
 
     /// The org, folder, and project nodes the caller's active role bindings
     /// hang on — theirs and their groups'.
@@ -168,14 +187,19 @@ struct ProjectVisibility: Sendable {
         return containers
     }
 
-    /// Every project inside the given containers: the projects named directly,
-    /// plus those hanging off the organizations and folders (folder subtrees
-    /// included, via the materialized `path`).
-    private static func projects(under containers: Set<IAMNode>, on db: any Database) async throws -> [UUID] {
+    /// Every scope inside the given containers: the organizations and folders
+    /// they name (folder subtrees included, via the materialized `path`), and
+    /// the projects hanging off any of them.
+    private static func scopes(under containers: Set<IAMNode>, on db: any Database) async throws
+        -> ProjectVisibility
+    {
         let organizationIDs = containers.filter { $0.type == .organization }.map(\.id)
         let folderIDs = containers.filter { $0.type == .organizationalUnit }.map(\.id)
         let projectIDs = containers.filter { $0.type == .project }.map(\.id)
-        guard !organizationIDs.isEmpty || !folderIDs.isEmpty || !projectIDs.isEmpty else { return [] }
+        guard !organizationIDs.isEmpty || !folderIDs.isEmpty || !projectIDs.isEmpty else {
+            return ProjectVisibility(
+                candidateProjectIDs: [], candidateOrganizationIDs: [], candidateFolderIDs: [])
+        }
 
         // A project belongs to exactly one of an organization or a folder
         // (`Project.validate`), so reaching an org's projects means reaching
@@ -199,7 +223,7 @@ struct ProjectVisibility: Sendable {
         }
         let allFolderIDs = Array(Set(folderIDs).union(descendantFolderIDs))
 
-        return try await Project.query(on: db)
+        let candidateProjectIDs = try await Project.query(on: db)
             .group(.or) { anyProject in
                 if !organizationIDs.isEmpty {
                     anyProject.filter(\.$organization.$id ~~ organizationIDs)
@@ -213,6 +237,12 @@ struct ProjectVisibility: Sendable {
             }
             .all()
             .compactMap(\.id)
+
+        return ProjectVisibility(
+            candidateProjectIDs: candidateProjectIDs,
+            candidateOrganizationIDs: organizationIDs,
+            candidateFolderIDs: allFolderIDs
+        )
     }
 
     // MARK: - Deciding

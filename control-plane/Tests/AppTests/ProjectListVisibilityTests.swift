@@ -387,4 +387,132 @@ final class ProjectListVisibilityTests {
             #expect(try await quotaNames("/api/quotas") == ["Quota Project Limit"])
         }
     }
+
+    /// The reverse of the leak this file exists for, in the endpoint most at
+    /// risk of it: narrowing on membership rows rather than on grants hides a
+    /// row the evaluator allows. A project binding is a complete grant on its
+    /// own — no `user_organizations` row is implied by it or required for it.
+    @Test("A project grant with no organization membership row still reaches its quota")
+    func quotaListDoesNotRequireAnOrganizationMembershipRow() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Unaffiliated Org")
+            let project = try await builder.createProject(
+                name: "Unaffiliated Project", description: "d", organization: organization)
+            let quota = ResourceQuota(
+                name: "Unaffiliated Limit",
+                projectID: project.id,
+                maxVCPUs: 4,
+                maxMemory: 4 * 1024 * 1024 * 1024,
+                maxStorage: 40 * 1024 * 1024 * 1024,
+                maxVMs: 2
+            )
+            try await quota.save(on: app.db)
+
+            // Deliberately no `addUserToOrganization`.
+            let outsider = try await builder.createUser(
+                username: "unaffiliated", email: "unaffiliated@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: outsider.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let token = try await outsider.generateAPIKey(on: app.db)
+
+            #expect(try await projectNames(app, "/api/projects", token: token) == ["Unaffiliated Project"])
+
+            for path in ["/api/quotas", "/api/quotas?level=project"] {
+                try await app.test(.GET, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok, "\(path) -> \(res.status): \(res.body.string)")
+                    let names = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self).items.map(\.name)
+                    #expect(names == ["Unaffiliated Limit"], "\(path) returned \(names)")
+                }
+            }
+        }
+    }
+
+    /// The unnarrowed path — a system admin holds no bindings, so
+    /// `ProjectVisibility` derives no bound and every row reaches the evaluator.
+    /// The bare-member fixture above can never enter this branch.
+    @Test("A system admin sees quotas in organizations they hold no membership row in")
+    func quotaListIsUnnarrowedForSystemAdmins() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Admin Quota Org")
+            let project = try await builder.createProject(
+                name: "Admin Quota Project", description: "d", organization: organization)
+            let quota = ResourceQuota(
+                name: "Admin Quota Limit",
+                projectID: project.id,
+                maxVCPUs: 8,
+                maxMemory: 8 * 1024 * 1024 * 1024,
+                maxStorage: 80 * 1024 * 1024 * 1024,
+                maxVMs: 4
+            )
+            try await quota.save(on: app.db)
+
+            let admin = try await builder.createUser(
+                username: "quota-admin", email: "quota-admin@example.com", isSystemAdmin: true)
+            let token = try await admin.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/quotas") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+                let names = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self).items.map(\.name)
+                #expect(names == ["Admin Quota Limit"])
+            }
+        }
+    }
+
+    @Test("The flat resource list carries no folder the caller has not been decided on")
+    func flatResourceListOmitsConnectivityAncestors() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Ancestor Org")
+            let outer = try await builder.createOU(
+                name: "Ancestor Outer", description: "secret roadmap", organization: organization)
+            let inner = try await builder.createOU(
+                name: "Ancestor Inner", description: "secret team", organization: organization,
+                parentOU: outer)
+            let project = try await builder.createProject(
+                name: "Ancestor Project", description: "d", ou: inner)
+
+            let member = try await builder.createUser(
+                username: "ancestor-member", email: "ancestor@example.com")
+            try await builder.addUserToOrganization(
+                user: member, organization: organization, role: "member")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: member.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let token = try await member.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/organizations/\(organization.id!)/resources") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+                let resources = try res.content.decode(OrganizationResourcesResponse.self)
+                #expect(resources.projects.map(\.name) == ["Ancestor Project"])
+                // `folder:read` was never granted on either enclosing folder,
+                // and a flat array has no nesting to justify carrying them.
+                #expect(resources.organizationalUnits.isEmpty)
+                #expect(resources.summary.totalOUs == 0)
+            }
+
+            // The tree still nests the project under both, so it keeps them.
+            try await app.test(.GET, "/api/organizations/\(organization.id!)/hierarchy") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+                let tree = try res.content.decode(OrganizationHierarchyResponse.self)
+                let top = tree.organization.organizationalUnits
+                #expect(top.map(\.name) == [outer.name])
+                #expect(top.first?.childOUs.map(\.name) == [inner.name])
+                #expect(top.first?.childOUs.first?.projects.map(\.name) == ["Ancestor Project"])
+                // Counted as zero: the two folders are scaffolding for the
+                // nesting, not folders this caller was allowed.
+                #expect(tree.stats.totalOUs == 0)
+            }
+        }
+    }
 }

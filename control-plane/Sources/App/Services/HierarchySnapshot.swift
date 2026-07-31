@@ -17,6 +17,21 @@ struct HierarchySnapshot {
     let vms: [VM]
     let quotas: [ResourceQuota]
 
+    /// The folders the caller may read in their own right, as opposed to those
+    /// `readable(on:)` additionally retains to keep the tree connected. Equal to
+    /// `folders` until that narrowing runs.
+    ///
+    /// The two differ only for a caller who can read a project but not the
+    /// folders it is nested in, and the distinction matters because only the
+    /// nested tree needs the ancestors: a flat list of folders has nothing to
+    /// connect, so it shows `decidedFolders` and no more.
+    var decidedFolders: [OrganizationalUnit] {
+        guard let decidedFolderIDs else { return folders }
+        return folders.filter { folder in folder.id.map(decidedFolderIDs.contains) ?? false }
+    }
+
+    private let decidedFolderIDs: Set<UUID>?
+
     static func load(organizationID: UUID, on db: Database) async throws -> HierarchySnapshot {
         let folders = try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organizationID)
@@ -52,7 +67,8 @@ struct HierarchySnapshot {
             folders: folders,
             projects: projects,
             vms: vms,
-            quotas: quotas
+            quotas: quotas,
+            decidedFolderIDs: nil
         )
     }
 
@@ -77,6 +93,10 @@ struct HierarchySnapshot {
     ///   own materialized `path` (which `GET /api/projects/{id}/path` already
     ///   hands to any project member) names them anyway. Their quotas are not
     ///   kept — only folders that survive `folder:read` contribute those.
+    ///
+    ///   That argument is about *nesting*, so it only holds for the tree: a
+    ///   consumer with nothing to connect reads `decidedFolders` instead, and
+    ///   never sees a folder it did not earn.
     func readable(on req: Request) async throws -> HierarchySnapshot {
         let readableFolderIDs = Set(
             try await req.canFilter(
@@ -124,7 +144,8 @@ struct HierarchySnapshot {
                 if let projectID = quota.$project.id { return readableProjectIDs.contains(projectID) }
                 if let folderID = quota.$organizationalUnit.id { return readableFolderIDs.contains(folderID) }
                 return true
-            }
+            },
+            decidedFolderIDs: readableFolderIDs
         )
     }
 

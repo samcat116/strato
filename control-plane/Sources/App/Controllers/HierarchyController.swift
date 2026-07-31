@@ -75,7 +75,10 @@ struct HierarchyController: RouteCollection {
         // the ones this caller may read (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
             .readable(on: req)
-        let allOUs = snapshot.folders.sorted { $0.path < $1.path }
+        // A flat array, so it carries only folders decided in their own right —
+        // the ancestors the tree retains for connectivity have nothing to
+        // connect here.
+        let allOUs = snapshot.decidedFolders.sorted { $0.path < $1.path }
         let allProjects = snapshot.projects
         let allVMs = snapshot.vms
         let allQuotas = snapshot.quotas

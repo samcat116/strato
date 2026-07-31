@@ -53,6 +53,14 @@ struct ResourceQuotaController: RouteCollection {
     /// #870). A quota names its scope's limits and, through the `level` filter,
     /// the scope's very existence — so every row is put to the evaluator on the
     /// node it hangs on, the same decision the scope's own item route makes.
+    ///
+    /// The narrowing is per level and comes from the caller's *grants*, not from
+    /// their membership rows. Membership is unioned in only for organizations,
+    /// because bare membership is what grants `org:read` and it writes no
+    /// binding; nothing else may be gated on it, or this endpoint reproduces
+    /// the error the project lists just shed in the other direction — a caller
+    /// whose only grant is a binding on a project, with no `user_organizations`
+    /// row for that project's organization, must still see that project's quota.
     func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -60,33 +68,38 @@ struct ResourceQuotaController: RouteCollection {
 
         let level = req.query[String.self, at: "level"]
 
-        // Narrowing, step 1: the organizations the caller belongs to, and every
-        // folder in them.
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
+        // The scopes the caller's grants reach: organizations and folders
+        // (subtrees included) alongside the projects the resource lists narrow
+        // by. A nil list means "do not narrow", not "everything is visible" —
+        // those rows go to the evaluator below like any other.
+        let visibility = try await ProjectVisibility.resolve(on: req)
 
-        if organizationIDs.isEmpty {
+        try await user.$organizations.load(on: req.db)
+        let membershipOrganizationIDs = user.organizations.compactMap { $0.id }
+        let organizationIDs = visibility.candidateOrganizationIDs.map {
+            Array(Set($0).union(membershipOrganizationIDs))
+        }
+        let folderIDs = visibility.candidateFolderIDs
+
+        // A caller whose grants reach nothing and who belongs to no
+        // organization has no row at any level.
+        if organizationIDs?.isEmpty == true, folderIDs?.isEmpty == true, visibility.reachesNoProject {
             return []
         }
-
-        let ouIDs = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .all()
-            .compactMap { $0.id }
-
-        // Narrowing, step 2: the projects the caller's own grants can reach —
-        // the same superset the resource lists narrow by. A nil candidate set
-        // means "do not narrow", not "everything is visible": those rows go to
-        // the evaluator below like any other.
-        let visibility = try await ProjectVisibility.resolve(on: req)
 
         var query = ResourceQuota.query(on: req.db)
 
         switch level {
         case "organization":
-            query = query.filter(\.$organization.$id ~~ organizationIDs)
-                .filter(\.$organizationalUnit.$id == nil)
+            if organizationIDs?.isEmpty == true {
+                return []
+            }
+            query = query.filter(\.$organizationalUnit.$id == nil)
                 .filter(\.$project.$id == nil)
+                .filter(\.$organization.$id != nil)
+            if let organizationIDs {
+                query = query.filter(\.$organization.$id ~~ organizationIDs)
+            }
         case "project":
             if visibility.reachesNoProject {
                 return []
@@ -96,32 +109,48 @@ struct ResourceQuotaController: RouteCollection {
                 query = query.filter(\.$project.$id ~~ candidates)
             }
         case "organizational_unit":
-            if ouIDs.isEmpty {
+            if folderIDs?.isEmpty == true {
                 return []
             }
-            query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .filter(\.$project.$id == nil)
+            query = query.filter(\.$project.$id == nil)
+                .filter(\.$organizationalUnit.$id != nil)
+            if let folderIDs {
+                query = query.filter(\.$organizationalUnit.$id ~~ folderIDs)
+            }
         default:
             // Every level at once. Folder- and project-scoped rows used to be
             // dropped here (a standing TODO) because nothing decided them; now
             // that each row is decided they belong in the unfiltered list.
+            //
+            // The group is never empty — the early return above is exactly the
+            // case where all three levels contribute nothing — so this cannot
+            // degrade into an unfiltered scan of the table.
             query = query.group(.or) { anyQuota in
-                anyQuota.filter(\.$organization.$id ~~ organizationIDs)
-                if !ouIDs.isEmpty {
-                    anyQuota.filter(\.$organizationalUnit.$id ~~ ouIDs)
-                }
-                if let candidates = visibility.candidateProjectIDs {
-                    if !candidates.isEmpty {
-                        anyQuota.filter(\.$project.$id ~~ candidates)
-                    }
-                } else {
-                    anyQuota.filter(\.$project.$id != nil)
-                }
+                Self.narrow(anyQuota, \.$organization.$id, to: organizationIDs)
+                Self.narrow(anyQuota, \.$organizationalUnit.$id, to: folderIDs)
+                Self.narrow(anyQuota, \.$project.$id, to: visibility.candidateProjectIDs)
             }
         }
 
         let quotas = try await query.sort(\.$name).sort(\.$id).all()
         return try await Self.readable(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
+    }
+
+    /// Add one level's narrowing to a query: bound to `ids` when a bound could
+    /// be derived, and otherwise every row attached at that level, which the
+    /// evaluator then decides. An empty `ids` contributes nothing — no scope at
+    /// that level is reachable, so no row at it can match.
+    private static func narrow(
+        _ query: QueryBuilder<ResourceQuota>,
+        _ field: KeyPath<ResourceQuota, OptionalFieldProperty<ResourceQuota, UUID>>,
+        to ids: [UUID]?
+    ) {
+        guard let ids else {
+            query.filter(field != nil)
+            return
+        }
+        guard !ids.isEmpty else { return }
+        query.filter(field ~~ ids)
     }
 
     /// The quotas whose scope the caller may read, decided in one batch per node
