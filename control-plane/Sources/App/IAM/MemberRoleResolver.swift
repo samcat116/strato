@@ -189,6 +189,13 @@ struct RoleDisplayNames {
         try await load(storedValues.compactMap { UUID(uuidString: $0) }, on: db)
     }
 
+    /// Load names for role ids held directly, with no stored-value decoding in
+    /// between — the shape of a surface backed by `role_bindings` alone, whose
+    /// `role` column has always been a role id (folder grants, STR-109).
+    static func forRoleIDs(_ ids: [UUID], on db: any Database) async throws -> RoleDisplayNames {
+        try await load(ids, on: db)
+    }
+
     private static func load(_ ids: [UUID], on db: any Database) async throws -> RoleDisplayNames {
         let unique = Array(Set(ids))
         guard !unique.isEmpty else { return RoleDisplayNames(namesByID: [:]) }
@@ -213,6 +220,12 @@ struct RoleDisplayNames {
     func projectDisplayName(forStored stored: String) -> String {
         guard let id = Self.projectRoleID(forStored: stored) else { return stored }
         return namesByID[id] ?? Self.deletedRolePlaceholder
+    }
+
+    /// The display name for a role id; an id naming no surviving row renders as
+    /// `"(deleted role)"`, same as everywhere else.
+    func displayName(forRoleID id: UUID) -> String {
+        namesByID[id] ?? Self.deletedRolePlaceholder
     }
 
     /// The display name for an org member's stored role value: a UUID resolves

@@ -2952,6 +2952,165 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/members:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+    get:
+      operationId: listFolderMembers
+      summary: List a folder's user and group role grants
+      description: >-
+        Requires `iam:readPolicy` on the folder. Folder grants are stored as
+        role bindings and nothing else — there is no membership mirror table —
+        so `role` is always a role id.
+      tags: [Folders]
+      responses:
+        "200":
+          description: The folder's role grants.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderMembers"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: grantFolderMember
+      summary: Grant a user a role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Identify the user by `userID`
+        or `userEmail`. Returns an empty body.
+        The grant inherits down every folder, project, and resource beneath
+        the folder, and keeps applying to projects added later.
+        A principal may hold at most one role per folder; use `PATCH` to
+        change it.
+        A user outside the folder's organization can be granted a role, but
+        only by a caller who also holds `iam:grantExternal` on the folder;
+        such cross-org grants are recorded with a distinct
+        `iam.cross_org_grant` audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantFolderMemberRequest"
+      responses:
+        "201":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/members/{userID}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+      - name: userID
+        in: path
+        required: true
+        description: The user's id.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateFolderMemberRole
+      summary: Change a user's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Replaces the user's grant on
+        this folder; returns an empty body.
+        Changing an organization-external user's role is a new cross-org
+        grant: it requires `iam:grantExternal` on the folder and is recorded
+        with a distinct `iam.cross_org_grant` audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFolderMemberRoleRequest"
+      responses:
+        "200":
+          description: The role was updated.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: revokeFolderMember
+      summary: Revoke a user's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Revoking an
+        organization-external user's grant is recorded with a distinct
+        `iam.cross_org_revoke` audit event.
+      tags: [Folders]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/organizations/{organizationID}/ous/{ouID}/groups:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+    post:
+      operationId: grantFolderGroup
+      summary: Grant a group a role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Returns an empty body.
+        A group from another organization can be granted a role, but only by
+        a caller who also holds `iam:grantExternal` on the folder; such
+        cross-org grants are recorded with a distinct `iam.cross_org_grant`
+        audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantFolderGroupRequest"
+      responses:
+        "201":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+      - $ref: "#/components/parameters/GroupID"
+    delete:
+      operationId: revokeFolderGroup
+      summary: Revoke a group's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Revoking an
+        organization-external group's grant is recorded with a distinct
+        `iam.cross_org_revoke` audit event.
+      tags: [Folders]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/organizations/{organizationID}/groups:
     parameters:
       - $ref: "#/components/parameters/OrganizationID"
@@ -9895,6 +10054,125 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FolderTreeNode"
+
+    FolderMembers:
+      type: object
+      description: >-
+        A folder's user role grants and group role grants. Backed by
+        `role_bindings` directly — there is no membership mirror table for
+        folders — so only users and groups appear; machine principals are
+        managed from their own surfaces.
+      required: [users, groups]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderMember"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderGroupGrant"
+
+    FolderMember:
+      type: object
+      required: [username, displayName, email, role, roleDisplayName, external]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        username:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          format: uuid
+          description: The granted role's id.
+        roleDisplayName:
+          type: string
+          description: The role's name, or `(deleted role)` if the role no longer exists.
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the grant expires; absent if it never does.
+        external:
+          type: boolean
+          description: >-
+            The user is not a member of the folder's organization — a
+            cross-org grant, which UIs should render prominently.
+
+    FolderGroupGrant:
+      type: object
+      required: [name, role, roleDisplayName, external]
+      properties:
+        groupId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          format: uuid
+          description: The granted role's id.
+        roleDisplayName:
+          type: string
+          description: The role's name, or `(deleted role)` if the role no longer exists.
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        external:
+          type: boolean
+          description: >-
+            The group belongs to another organization — a cross-org grant,
+            which UIs should render prominently.
+
+    FolderRole:
+      type: string
+      description: >-
+        The role to grant on the folder: a role id, or a seeded role name
+        (`viewer`/`operator`/`editor`/`admin`). A role id must name a role
+        owned at or above the folder. The legacy project vocabulary
+        (`member`) is not accepted here.
+
+    GrantFolderMemberRequest:
+      type: object
+      description: Identify the user by `userID` or `userEmail`; supply exactly one.
+      required: [role]
+      properties:
+        userEmail:
+          type: string
+        userID:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/FolderRole"
+
+    UpdateFolderMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/FolderRole"
+
+    GrantFolderGroupRequest:
+      type: object
+      required: [groupID, role]
+      properties:
+        groupID:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/FolderRole"
 
     GroupDetail:
       type: object
