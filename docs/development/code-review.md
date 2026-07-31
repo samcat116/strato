@@ -86,8 +86,11 @@ catches. Check the parts it can't:
   describes *how it was computed*. `pendingOperation` over `filteredResult2`.
 - **Comments explain why, not what** — the code already says what. Comments
   earn their place by recording the non-obvious: the race being avoided, the
-  reason the ordering matters, the upstream bug being worked around. This
-  repo's CI config is a good model of that density.
+  reason the ordering matters, the upstream bug being worked around.
+  `ResourceOperationCoordinator.recordVerdict` is the local model: its doc
+  comment explains why the method returns a value at all — a lost race means
+  the sweep already resolved the resource — which nothing in the signature
+  conveys.
 - **Function shape** — deep modules, narrow interfaces. A long function
   doing one thing beats five short ones that must be read together to
   understand any of them. Flag "helper" methods that can't be understood
@@ -100,7 +103,10 @@ catches. Check the parts it can't:
   - `CONTEXT.md` when a new domain term is introduced.
   - `docs/adr/` when a decision is made that a future reader would otherwise
     relitigate. If the diff contradicts an existing ADR, say so in review
-    rather than letting it land silently.
+    rather than letting it land silently. (The directory doesn't exist yet —
+    ADRs get created lazily when a decision actually needs recording, per
+    `docs/agents/domain.md`. Don't go looking for it; the first one to write
+    an ADR creates it.)
   - `CLAUDE.md` when a build/test/deploy workflow changes.
 - **Dead code and TODOs** — a TODO without an issue number is a comment that
   will never be actioned. Either file it or delete it.
