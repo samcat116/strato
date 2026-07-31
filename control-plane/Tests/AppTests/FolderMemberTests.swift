@@ -12,6 +12,35 @@ import VaporTesting
 /// actually inherits down to the projects beneath it (the delegation the whole
 /// feature exists for), and that it is gated on `iam:setPolicy` rather than on
 /// anything a folder editor holds.
+/// An analyzer that finds every policy pair overlapping — the mirror image of
+/// `PermissiveGuardrailAnalyzer`.
+///
+/// `disjoint` answering `holds: false` is what a ceiling breach looks like to
+/// `GuardrailWriteCheck`, so installing this turns any guardrail whose actions
+/// overlap the proposed role into a refusal. That is enough to pin *that the
+/// check runs on this path*, which is the property at risk here; whether the
+/// solver's own answers are right is `GuardrailWriteCheckTests`' business, and
+/// this way the folder suite needs no cvc5.
+struct OverlappingGuardrailAnalyzer: GuardrailAnalyzer {
+    func disjoint(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        GuardrailAnalysis(holds: false, counterexample: "test analyzer: everything overlaps")
+    }
+
+    func implies(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        GuardrailAnalysis(holds: true, counterexample: nil)
+    }
+}
+
 @Suite("Folder Member Tests", .serialized)
 struct FolderMemberTests {
 
@@ -341,6 +370,167 @@ struct FolderMemberTests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
+        }
+    }
+
+    // MARK: - Write-time gates (#485, #484)
+
+    /// Ceiling `iam:grantExternal` away across the whole organization, so even
+    /// the org admin — who holds it through the seeded admin role — cannot
+    /// authorize a cross-org grant.
+    ///
+    /// The recipe `CrossOrgBindingTests` uses for the project routes: taking
+    /// the permission away with a guardrail is the supported way to get an
+    /// actor who holds `iam:setPolicy` and lacks `iam:grantExternal`, which is
+    /// the pair that isolates the cross-org gate.
+    private func ceilingGrantExternal(_ app: Application, _ fixture: Fixture) async throws {
+        _ = try await GuardrailStore.create(
+            name: "no-external-grants",
+            description: nil,
+            effect: nil,
+            node: IAMNode(type: .organization, id: try fixture.org.requireID()),
+            actions: ["iam:grantExternal"],
+            principalMatch: .any,
+            resourceMatch: .any,
+            createdBy: nil,
+            on: app.db
+        )
+        let version = try await PolicySetVersionService.current(on: app.db)
+        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+    }
+
+    @Test("Granting an external user without iam:grantExternal is refused")
+    func externalUserGrantRequiresGrantExternal() async throws {
+        try await withFixture { app, fixture in
+            try await ceilingGrantExternal(app, fixture)
+            let outsider = try await fixture.builder.createUser(
+                username: "fm-outside-user", email: "fm-outside-user@example.com")
+
+            try await app.test(.POST, try membersPath(fixture)) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
+                try req.content.encode(
+                    OrganizationalUnitMemberController.GrantMemberRequest(
+                        userEmail: outsider.email, userID: nil, role: "viewer"))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("iam:grantExternal"), "body: \(res.body.string)")
+            }
+
+            let roles = try await folderRoles(
+                fixture, principalType: .user, principalID: try outsider.requireID(), on: app.db)
+            #expect(roles.isEmpty)
+
+            // The ceiling is specific to cross-org grants, so an internal grant
+            // still goes through: this pins the gate rather than a blanket
+            // refusal.
+            try await app.test(.POST, try membersPath(fixture)) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
+                try req.content.encode(
+                    OrganizationalUnitMemberController.GrantMemberRequest(
+                        userEmail: fixture.target.email, userID: nil, role: "viewer"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+        }
+    }
+
+    @Test("Granting a group from another organization without iam:grantExternal is refused")
+    func externalGroupGrantRequiresGrantExternal() async throws {
+        try await withFixture { app, fixture in
+            try await ceilingGrantExternal(app, fixture)
+            let otherOrg = try await fixture.builder.createOrganization(name: "Foreign Org")
+            let foreignGroup = try await fixture.builder.createGroup(
+                name: "Foreign Group", description: "d", organization: otherOrg)
+            let groupID = try foreignGroup.requireID()
+
+            try await app.test(.POST, try groupsPath(fixture)) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
+                try req.content.encode(
+                    OrganizationalUnitMemberController.GrantGroupRequest(
+                        groupID: groupID, role: "viewer"))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("iam:grantExternal"), "body: \(res.body.string)")
+            }
+
+            let roles = try await folderRoles(
+                fixture, principalType: .group, principalID: groupID, on: app.db)
+            #expect(roles.isEmpty)
+        }
+    }
+
+    @Test("A grant that reaches past a ceiling is refused, naming it")
+    func grantBreachingGuardrailIsRefused() async throws {
+        try await withFixture { app, fixture in
+            app.guardrailAnalyzer = OverlappingGuardrailAnalyzer()
+            _ = try await GuardrailStore.create(
+                name: "no-vm-changes",
+                description: nil,
+                effect: nil,
+                node: IAMNode(type: .organization, id: try fixture.org.requireID()),
+                actions: ["vm:*"],
+                principalMatch: .any,
+                resourceMatch: .any,
+                createdBy: nil,
+                on: app.db
+            )
+
+            // `editor` carries vm:create/update/delete, which the ceiling covers.
+            try await app.test(.POST, try membersPath(fixture)) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
+                try req.content.encode(
+                    OrganizationalUnitMemberController.GrantMemberRequest(
+                        userEmail: fixture.target.email, userID: nil, role: "editor"))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("no-vm-changes"))
+            }
+
+            let roles = try await folderRoles(
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+            #expect(roles.isEmpty)
+        }
+    }
+
+    // MARK: - Concurrency
+
+    @Test("Concurrent grants of different roles leave exactly one binding")
+    func concurrentGrantsYieldOneBinding() async throws {
+        try await withFixture { app, fixture in
+            // `role_bindings` is unique on (principal, *role*, node), so nothing
+            // in the schema stops two different roles from both landing. The
+            // folder row lock is what makes this settle on one.
+            let path = try membersPath(fixture)
+            let email = fixture.target.email
+            let token = fixture.actorToken
+            let roles = ["viewer", "operator", "editor", "admin"]
+
+            let statuses = await withTaskGroup(of: HTTPStatus?.self) { group in
+                for role in roles {
+                    group.addTask {
+                        var status: HTTPStatus?
+                        try? await app.test(.POST, path) { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            try req.content.encode(
+                                OrganizationalUnitMemberController.GrantMemberRequest(
+                                    userEmail: email, userID: nil, role: role))
+                        } afterResponse: { res in
+                            status = res.status
+                        }
+                        return status
+                    }
+                }
+                return await group.reduce(into: [HTTPStatus]()) { acc, status in
+                    if let status { acc.append(status) }
+                }
+            }
+
+            #expect(statuses.filter { $0 == .created }.count == 1)
+            #expect(statuses.filter { $0 == .conflict }.count == roles.count - 1)
+
+            let bound = try await folderRoles(
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+            #expect(bound.count == 1)
         }
     }
 

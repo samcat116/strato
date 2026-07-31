@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
 /// Manages folder-level role grants for users and groups (STR-109) — the write
@@ -207,6 +208,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let targetUser = try await resolveUser(body, on: req)
         let userID = try targetUser.requireID()
 
+        // Optimistic: refuse a doomed grant before paying for the guardrail
+        // solver. `insertGrant` re-checks under the folder lock, which is the
+        // check that actually holds.
         try await requireNoExistingGrant(principalType: .user, principalID: userID, node: node, on: req.db)
 
         // A principal outside the folder's org needs the dedicated resource-side
@@ -228,16 +232,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 node: node
             ), req: req)
 
-        let actorID = req.auth.get(User.self)?.id
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: userID,
-            roleID: role.id,
-            nodeType: .organizationalUnit,
-            nodeID: node.id,
-            createdBy: actorID,
-            on: req.db
-        )
+        try await insertGrant(
+            principalType: .user, principalID: userID, roleID: role.id, node: node, req: req)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
@@ -260,10 +256,13 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let role = try await MemberRoleResolver.resolve(
             body.role, scopeNode: node, acceptsLegacyProjectRoles: false, on: req.db)
 
+        // Optimistic 404, so a PATCH for a user who holds nothing here does not
+        // run the guardrail solver first. `replaceGrant` re-checks under the
+        // folder lock.
         let holdsRole = try await RoleBindingService.activeBindings(
-            nodeType: .organizationalUnit, nodeID: node.id, on: req.db
-        ).contains { $0.principalType == IAMPrincipalType.user.rawValue && $0.principalID == userID }
-        guard holdsRole else {
+            principalType: .user, principalID: userID,
+            nodeType: .organizationalUnit, nodeID: node.id, on: req.db)
+        guard !holdsRole.isEmpty else {
             throw Abort(.notFound, reason: "User has no role on this folder")
         }
 
@@ -322,6 +321,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
         guard try await Group.find(body.groupID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Group not found")
         }
+        // Optimistic; `insertGrant` re-checks under the folder lock.
         try await requireNoExistingGrant(
             principalType: .group, principalID: body.groupID, node: node, on: req.db)
 
@@ -342,16 +342,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 node: node
             ), req: req)
 
-        let actorID = req.auth.get(User.self)?.id
-        try await RoleBindingService.grant(
-            principalType: .group,
-            principalID: body.groupID,
-            roleID: role.id,
-            nodeType: .organizationalUnit,
-            nodeID: node.id,
-            createdBy: actorID,
-            on: req.db
-        )
+        try await insertGrant(
+            principalType: .group, principalID: body.groupID, roleID: role.id, node: node, req: req)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
@@ -376,6 +368,40 @@ struct OrganizationalUnitMemberController: RouteCollection {
 
     // MARK: - Shared grant mechanics
 
+    /// Run `body` in a transaction holding an exclusive row lock on the folder,
+    /// serializing this folder's grant writes against each other.
+    ///
+    /// This is what makes "one role per principal per folder" true by
+    /// construction rather than by convention. Projects get the same invariant
+    /// from the database — `project_members` is `unique(project_id, user_id)`,
+    /// and the mirror insert shares the binding's transaction, so the loser of a
+    /// race rolls back. Dropping the mirror table for folders removed that, and
+    /// `role_bindings`' own uniqueness key includes `role`: two concurrent
+    /// grants of *different* roles to one principal never collide, so an
+    /// unguarded check-then-act lets both land and the principal ends up holding
+    /// the union, inherited down the whole subtree.
+    ///
+    /// Locking the folder row rather than adding a partial unique index keeps
+    /// the property that this feature needs no migration; grants are rare, so
+    /// serializing them per folder costs nothing. The lock is taken before any
+    /// binding read inside `body`, so every re-check below sees a settled state.
+    private func withFolderLocked<T: Sendable>(
+        _ node: IAMNode, req: Request, _ body: @Sendable @escaping (any Database) async throws -> T
+    ) async throws -> T {
+        try await req.db.transaction { db in
+            guard let sql = db as? any SQLDatabase else {
+                // Postgres is the only supported backend. Continuing without the
+                // lock would silently restore the race this exists to close, so
+                // it fails loudly instead.
+                throw Abort(
+                    .internalServerError,
+                    reason: "Folder grant writes require a SQL database that can lock the folder row")
+            }
+            try await sql.raw("SELECT id FROM organizational_units WHERE id = \(bind: node.id) FOR UPDATE").run()
+            return try await body(db)
+        }
+    }
+
     /// Replace whatever the principal holds on the folder with exactly one
     /// binding for `roleID`.
     ///
@@ -383,11 +409,23 @@ struct OrganizationalUnitMemberController: RouteCollection {
     /// with `role_bindings` as the only store there is no mirror row to read the
     /// old role from, and clearing the node outright is what makes "one role per
     /// principal per folder" true after the write rather than merely intended.
+    ///
+    /// The membership re-check happens under the lock, so the 404 cannot race a
+    /// concurrent revoke into a grant that resurrects it.
     private func replaceGrant(
         principalType: IAMPrincipalType, principalID: UUID, roleID: UUID, node: IAMNode, req: Request
     ) async throws {
         let actorID = req.auth.get(User.self)?.id
-        try await req.db.transaction { db in
+        try await withFolderLocked(node, req: req) { db in
+            let existing = try await RoleBindingService.activeBindings(
+                principalType: principalType, principalID: principalID,
+                nodeType: .organizationalUnit, nodeID: node.id, on: db)
+            guard !existing.isEmpty else {
+                throw Abort(
+                    .notFound,
+                    reason: principalType == .group
+                        ? "Group has no role on this folder" : "User has no role on this folder")
+            }
             try await RoleBindingService.revoke(
                 principalType: principalType,
                 principalID: principalID,
@@ -408,42 +446,71 @@ struct OrganizationalUnitMemberController: RouteCollection {
         }
     }
 
+    /// Write the one binding a fresh grant creates, refusing under the lock if
+    /// the principal already holds a live role here.
+    ///
+    /// The caller has already made the same check optimistically, outside the
+    /// lock, so an obviously-doomed request is refused before the guardrail
+    /// solver runs. This one is the authoritative one.
+    private func insertGrant(
+        principalType: IAMPrincipalType, principalID: UUID, roleID: UUID, node: IAMNode, req: Request
+    ) async throws {
+        let actorID = req.auth.get(User.self)?.id
+        try await withFolderLocked(node, req: req) { db in
+            try await requireNoExistingGrant(
+                principalType: principalType, principalID: principalID, node: node, on: db)
+            try await RoleBindingService.grant(
+                principalType: principalType,
+                principalID: principalID,
+                roleID: roleID,
+                nodeType: .organizationalUnit,
+                nodeID: node.id,
+                createdBy: actorID,
+                on: db
+            )
+        }
+    }
+
     /// Revoke everything the principal holds on the folder, 404-ing when it
     /// holds nothing, and keeping the cross-org revoke loud (issue #485).
     private func revokeGrant(
         principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, req: Request
     ) async throws {
-        let bindings = try await RoleBindingService.activeBindings(
-            nodeType: .organizationalUnit, nodeID: node.id, on: req.db
-        ).filter { $0.principalType == principalType.rawValue && $0.principalID == principalID }
-        guard let binding = bindings.first else {
-            throw Abort(
-                .notFound,
-                reason: principalType == .group
-                    ? "Group has no role on this folder" : "User has no role on this folder")
-        }
-
         let crossOrg = try await CrossOrgBindingGate.isCrossOrg(
             principalType: principalType, principalID: principalID, node: node, on: req.db)
 
-        // `roleID: nil` also sweeps any expired row for this principal here,
-        // which the active-only conflict check in `requireNoExistingGrant`
-        // deliberately allows to be granted around.
-        try await RoleBindingService.revoke(
-            principalType: principalType,
-            principalID: principalID,
-            roleID: nil,
-            nodeType: .organizationalUnit,
-            nodeID: node.id,
-            on: req.db
-        )
+        // Read and delete under the folder lock, so the 404 reflects the state
+        // the delete then acts on.
+        let revokedRole = try await withFolderLocked(node, req: req) { db -> String in
+            let bindings = try await RoleBindingService.activeBindings(
+                principalType: principalType, principalID: principalID,
+                nodeType: .organizationalUnit, nodeID: node.id, on: db)
+            guard let binding = bindings.first else {
+                throw Abort(
+                    .notFound,
+                    reason: principalType == .group
+                        ? "Group has no role on this folder" : "User has no role on this folder")
+            }
+            // `roleID: nil` also sweeps any expired row for this principal here,
+            // which the active-only conflict check in `requireNoExistingGrant`
+            // deliberately allows to be granted around.
+            try await RoleBindingService.revoke(
+                principalType: principalType,
+                principalID: principalID,
+                roleID: nil,
+                nodeType: .organizationalUnit,
+                nodeID: node.id,
+                on: db
+            )
+            return binding.role
+        }
         if crossOrg {
             // Revokes need no gate — taking cross-org access away is always
             // allowed — but they stay loud, so external access has a visible end
             // in the trail (issue #485).
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgRevoke, principalType: principalType, principalID: principalID,
-                role: binding.role, node: node, req: req)
+                role: revokedRole, node: node, req: req)
         }
     }
 
@@ -456,9 +523,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
         principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, on db: any Database
     ) async throws {
         let existing = try await RoleBindingService.activeBindings(
-            nodeType: .organizationalUnit, nodeID: node.id, on: db
-        ).contains { $0.principalType == principalType.rawValue && $0.principalID == principalID }
-        guard !existing else {
+            principalType: principalType, principalID: principalID,
+            nodeType: .organizationalUnit, nodeID: node.id, on: db)
+        guard existing.isEmpty else {
             throw Abort(
                 .conflict,
                 reason: principalType == .group
