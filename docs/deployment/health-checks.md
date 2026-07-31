@@ -19,9 +19,10 @@ All three return the same JSON shape:
   "status": "healthy",
   "timestamp": "2026-07-20T18:22:04Z",
   "checks": [
-    { "name": "database",   "status": "up" },
-    { "name": "migrations", "status": "up" },
-    { "name": "valkey",     "status": "up" }
+    { "name": "database",      "status": "up" },
+    { "name": "migrations",    "status": "up" },
+    { "name": "coordination",  "status": "up" },
+    { "name": "session-store", "status": "up" }
   ],
   "identity": {
     "instanceId": "6F2C…",
@@ -57,10 +58,23 @@ Checks are graded, because the dependencies are not equally fatal:
   process finished applying schema to it. (Authorization needs no check of its
   own: the Cedar evaluator is in-process and reads its data from the same
   Postgres the **database** check covers.)
-- **valkey** — **degraded only**. Coordination is deliberately fail-open (see
-  [multi-replica](../architecture/multi-replica.md)); agents still converge via
-  the periodic sync. Pulling every replica out of rotation because Valkey blipped
-  would be a worse outage than the blip.
+- **coordination** — **degraded only**. The coordination store is deliberately
+  fail-open (see [multi-replica](../architecture/multi-replica.md)); agents still
+  converge via the periodic sync. Pulling every replica out of rotation because
+  it blipped would be a worse outage than the blip.
+- **session-store** — **fatal**. Also Valkey-backed, and graded the opposite way,
+  which is exactly why the two are configured separately. Sessions cannot fail
+  open: a replica that cannot read them cannot authenticate anyone, so it should
+  leave the rotation rather than serve logouts. Absent from the payload when
+  sessions are not Valkey-backed (the test environment uses Fluent sessions).
+
+::: warning Both stores are one instance by default
+Unless you set `SESSION_VALKEY_HOST`, sessions share the coordination Valkey — so
+a blip on that single instance trips the **fatal** session check and returns 503,
+not just `degraded`. Splitting the two (see
+[docker-compose](./docker-compose.md)) is what buys the fail-open behavior for
+coordination in practice.
+:::
 
 ### Liveness never follows readiness
 

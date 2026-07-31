@@ -105,29 +105,52 @@ public func configure(_ app: Application) async throws {
         )
     }
 
-    // Valkey backs the coordination layer (agent presence, singleton sweep
-    // locks, scheduler placement reservations — issue #258) and session
-    // storage. Coordination *requires* it: without a shared store, replicas
-    // disagree about agent liveness and race on placement, so startup fails
-    // hard when Valkey is missing or unreachable rather than silently
-    // degrading. Tests run without external services and use an in-process
-    // coordination store (and Fluent sessions) instead.
+    // Valkey backs two stores with opposite failure contracts, so they are
+    // configured separately (issue #855):
+    //
+    //  - **Coordination** (agent presence, singleton sweep locks, scheduler
+    //    placement reservations — issue #258) is fail-open by design: losing it
+    //    degrades convergence, never correctness.
+    //  - **Session storage** cannot fail open at all. Losing it logs every
+    //    signed-in user out at once, and passkeys are the only interactive auth,
+    //    so everyone re-authenticates with a security key.
+    //
+    // Coordination keeps the historical `VALKEY_*` variables and is required —
+    // without a shared store, replicas disagree about agent liveness and race on
+    // placement, so startup fails hard rather than silently degrading. Sessions
+    // follow that same endpoint unless `SESSION_VALKEY_HOST` names another, so a
+    // deployment that only ever set `VALKEY_HOST` upgrades untouched, down to
+    // opening the same single connection pool.
+    //
+    // Tests run without external services and use an in-process coordination
+    // store (and Fluent sessions) instead.
     if app.environment == .testing {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
         app.sessions.use(.fluent)
     } else {
-        guard let valkeyConfig = ValkeyConfiguration.fromEnvironment() else {
-            let error = CoordinationConfigurationError.valkeyNotConfigured
+        guard let valkeyConfig = ValkeyStoreConfiguration.fromEnvironment() else {
+            let error = ValkeyConfigurationError.notConfigured
             app.logger.critical("\(error.description)")
             throw error
         }
         app.configureValkey(valkeyConfig)
-        app.sessions.use(.valkey)
+
+        // Held on the application as well as handed to the driver, so
+        // `/health/ready` can probe session storage without reaching through
+        // Vapor's session provider.
+        let sessionStore = ValkeySessionStore(client: app.sessionValkey)
+        app.sessionStore = sessionStore
+        app.sessions.use(.valkey(store: sessionStore))
+
         app.coordination = CoordinationService(store: ValkeyCoordinationStore(app: app), logger: app.logger)
-        // Fail fast at boot (after the Valkey run loop starts) if Valkey is unreachable.
-        app.lifecycle.use(
-            CoordinationLifecycleHandler(hostname: valkeyConfig.hostname, port: valkeyConfig.port))
-        app.logger.info("Using Valkey for coordination and session storage")
+        // Fail fast at boot (after the run loops start) if either endpoint is
+        // unreachable. Both are fatal: coordination fails open against a runtime
+        // blip, but an endpoint that is wrong at boot is a misconfiguration.
+        app.lifecycle.use(ValkeyReachabilityLifecycleHandler(configuration: valkeyConfig))
+        app.logger.info(
+            valkeyConfig.sharesOneInstance
+                ? "Using one Valkey endpoint for coordination and session storage"
+                : "Using separate Valkey endpoints for coordination and session storage")
     }
     app.middleware.use(app.sessions.middleware)
 
@@ -201,7 +224,10 @@ public func configure(_ app: Application) async throws {
             RateLimitMiddleware(
                 config: rateLimitConfig,
                 fallbackStore: InMemoryRateLimitStore(),
-                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.valkey) : nil
+                // Coordination, not sessions: these are cross-replica counters
+                // that fail open to the in-memory store, which is exactly the
+                // coordination contract.
+                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
             ))
         app.logger.info(
             "Rate limiting enabled",

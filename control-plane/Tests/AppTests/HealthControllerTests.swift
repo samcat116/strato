@@ -210,7 +210,49 @@ struct HealthControllerTests {
 
             // A readiness probe that only knows about Postgres would keep a
             // replica in rotation while another gating dependency is down.
-            #expect(names == ["database", "migrations", "valkey"])
+            // No `session-store` check here: `.testing` uses Fluent sessions, so
+            // there is no Valkey-backed session store to probe.
+            #expect(names == ["database", "migrations", "coordination"])
+        }
+        try await app.shutdownForTesting()
+    }
+
+    /// The two Valkey-backed stores are graded oppositely, which is the point of
+    /// splitting them (issue #855): coordination fails open, sessions do not.
+    @Test("An unreachable session store fails readiness closed")
+    func testReadinessFailsWhenSessionStoreIsDown() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+        app.sessionStore = UnreachableSessionStore()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .serviceUnavailable)
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "unhealthy")
+
+            let sessionCheck = health.checks.first { $0.name == "session-store" }
+            #expect(sessionCheck?.status == "down")
+            // Coordination is unaffected: the two stores are probed separately.
+            #expect(health.checks.first { $0.name == "coordination" }?.status == "up")
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("A reachable session store is reported up and keeps readiness at 200")
+    func testReadinessReportsHealthySessionStore() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+        app.sessionStore = ReachableSessionStore()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .ok)
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "healthy")
+            #expect(health.checks.first { $0.name == "session-store" }?.status == "up")
         }
         try await app.shutdownForTesting()
     }
@@ -332,4 +374,24 @@ struct HealthControllerTests {
         try await app.shutdownForTesting()
     }
 
+}
+
+// MARK: - Session store stubs
+
+/// Stands in for a Valkey-backed session store whose endpoint is gone. Only
+/// `read` matters — the readiness probe is a single read.
+private struct UnreachableSessionStore: SessionStore {
+    struct Unreachable: Error {}
+
+    func read(_ key: String, refreshingTTL ttl: Int) async throws -> ByteBuffer? { throw Unreachable() }
+    func write(_ key: String, value: ByteBuffer, ttl: Int) async throws { throw Unreachable() }
+    func delete(_ key: String) async throws { throw Unreachable() }
+}
+
+/// A healthy store. Returns nil for the probe key, which is the expected miss —
+/// readiness cares only that the round trip completed.
+private struct ReachableSessionStore: SessionStore {
+    func read(_ key: String, refreshingTTL ttl: Int) async throws -> ByteBuffer? { nil }
+    func write(_ key: String, value: ByteBuffer, ttl: Int) async throws {}
+    func delete(_ key: String) async throws {}
 }

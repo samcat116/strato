@@ -229,4 +229,34 @@ struct ValkeySessionDriverTests {
         let ttl = ValkeySessionDriver.ttlFromEnvironment(logger: Logger(label: "test"))
         #expect(ttl == ValkeySessionDriver.defaultTTL)
     }
+
+    /// `/health/ready` probes session storage on every poll, on every replica —
+    /// so the probe has to be one read and nothing else. A write would put the
+    /// readiness interval's worth of traffic into the session keyspace.
+    @Test("The readiness probe is a single read that writes nothing")
+    func readinessProbeOnlyReads() async throws {
+        let store = RecordingSessionStore()
+        try await store.probeReachability()
+
+        #expect(await store.reads == 1)
+        #expect(await store.writes == 0)
+        #expect(await store.deletes == 0)
+        #expect(await store.entries.isEmpty)
+    }
+
+    /// A store that cannot answer must surface the error rather than reporting a
+    /// miss — readiness distinguishes "no such session" from "store is gone".
+    @Test("The readiness probe propagates a store failure")
+    func readinessProbePropagatesFailure() async throws {
+        struct Unreachable: Error {}
+        struct FailingStore: SessionStore {
+            func read(_ key: String, refreshingTTL ttl: Int) async throws -> ByteBuffer? { throw Unreachable() }
+            func write(_ key: String, value: ByteBuffer, ttl: Int) async throws {}
+            func delete(_ key: String) async throws {}
+        }
+
+        await #expect(throws: Unreachable.self) {
+            try await FailingStore().probeReachability()
+        }
+    }
 }

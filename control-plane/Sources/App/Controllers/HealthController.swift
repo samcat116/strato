@@ -50,10 +50,16 @@ struct HealthController: RouteCollection {
     /// - **database** (fatal) — nothing works without Postgres; authorization
     ///   itself evaluates in-process against it, so no separate authz probe.
     /// - **migrations** (fatal) — schema application must have finished.
-    /// - **valkey** (degraded) — coordination is documented as fail-open
-    ///   (`docs/architecture/multi-replica.md`); agents still converge via the
-    ///   periodic sync. Reported, but never a reason to pull a replica out of
-    ///   rotation.
+    /// - **coordination** (degraded) — the coordination store is documented as
+    ///   fail-open (`docs/architecture/multi-replica.md`); agents still converge
+    ///   via the periodic sync. Reported, but never a reason to pull a replica
+    ///   out of rotation.
+    /// - **session-store** (fatal) — Valkey-backed like coordination, and graded
+    ///   the opposite way, which is the whole reason the two are configured
+    ///   separately (issue #855). Sessions cannot fail open: a replica that
+    ///   cannot read them cannot authenticate anyone, so it should leave the
+    ///   rotation rather than serve logouts. Absent under `.testing`, which uses
+    ///   Fluent sessions.
     /// - **drain** (fatal) — set once SIGTERM arrives.
     func readiness(req: Request) async throws -> Response {
         var checks: [HealthCheck] = []
@@ -95,13 +101,28 @@ struct HealthController: RouteCollection {
             failed = true
         }
 
-        // Valkey. Degraded-only by design: coordination fails open.
+        // Coordination store. Degraded-only by design: coordination fails open.
         do {
             _ = try await req.application.coordination.probe()
-            checks.append(HealthCheck(name: "valkey", status: "up"))
+            checks.append(HealthCheck(name: "coordination", status: "up"))
         } catch {
-            checks.append(HealthCheck(name: "valkey", status: "degraded", error: String(reflecting: error)))
+            checks.append(HealthCheck(name: "coordination", status: "degraded", error: String(reflecting: error)))
             degraded = true
+        }
+
+        // Session store. Fatal, unlike coordination above: an unreachable
+        // session store means no request can be authenticated, so serving
+        // traffic would only produce logouts.
+        if let sessionStore = req.application.sessionStore {
+            do {
+                try await withStoreProbeTimeout(CoordinationService.probeDeadline) {
+                    try await sessionStore.probeReachability()
+                }
+                checks.append(HealthCheck(name: "session-store", status: "up"))
+            } catch {
+                checks.append(HealthCheck(name: "session-store", status: "down", error: String(reflecting: error)))
+                failed = true
+            }
         }
 
         let status: String
@@ -120,7 +141,9 @@ struct HealthController: RouteCollection {
             identity: ServiceIdentity(req.instanceIdentity)
         )
         // Degraded still serves traffic: pulling every replica out of rotation
-        // because Valkey blipped would be a worse outage than the blip.
+        // because the coordination store blipped would be a worse outage than
+        // the blip. A failed session store is a different matter and lands in
+        // `failed` above.
         return try await response.encodeResponse(status: failed ? .serviceUnavailable : .ok, for: req)
     }
 }
