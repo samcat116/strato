@@ -35,7 +35,6 @@ Build & test notes:
 
 - **Swift**: CI runs `swift format lint --strict --recursive` over all `Sources/` and `Tests/` directories, using the `.swift-format` config at the repo root (4-space indent, 120-col lines). Format before pushing: `swift format --in-place --recursive <changed dirs>`.
 - **Frontend**: `cd control-plane/web && bun run lint` and `bun run build` — CI runs both with Bun (`bun install --frozen-lockfile`). The frontend uses Bun, not npm.
-- Legacy JS in `control-plane/Public/js`: `cd control-plane && npm run lint` (eslint).
 
 ### Local development
 

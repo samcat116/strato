@@ -74,8 +74,11 @@ no credential is stored on disk, so restarts and reboots just work. See the
 
 ### Local development
 
-The three Swift packages build and test with no infrastructure at all — the
-control-plane test suite runs against in-memory SQLite:
+The three Swift packages build and test independently. The agent and shared
+suites need no infrastructure; the control-plane suite runs against Postgres
+(`DATABASE_*` env vars, defaults `localhost:5432` / `strato` / `strato_test` —
+the [local development guide](docs/development/local-development.md) has a
+matching `docker run` one-liner):
 
 ```bash
 swift test --package-path control-plane
