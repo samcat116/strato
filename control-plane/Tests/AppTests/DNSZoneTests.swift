@@ -308,7 +308,9 @@ final class DNSZoneTests {
                 let foreignID = try foreignNetwork.requireID()
                 try req.content.encode(AttachDNSZoneRequest(networkId: foreignID))
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                // The one status every cross-project refusal answers with
+                // (issue #777); was 409 here.
+                #expect(res.status == .badRequest)
             }
         }
     }

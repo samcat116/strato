@@ -448,9 +448,6 @@ struct FloatingIPController: RouteCollection {
         guard let vm = try await VM.find(request.vmId, on: req.db) else {
             throw Abort(.badRequest, reason: "VM \(request.vmId) does not exist")
         }
-        guard vm.$project.id == floatingIP.$project.id else {
-            throw Abort(.conflict, reason: "VM belongs to a different project than the floating IP")
-        }
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
         // the VM too (the volume-attach rule).
@@ -458,6 +455,12 @@ struct FloatingIPController: RouteCollection {
         guard hasVMPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
+        // After the VM check, never before: a containment refusal handed to a
+        // caller who can't touch the VM would tell them it exists in another
+        // project (issue #777).
+        try ProjectContainment.require(
+            "VM", in: vm.$project.id,
+            sameProjectAs: "the floating IP", in: floatingIP.$project.id)
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
             .filter(\.$vm.$id == request.vmId)

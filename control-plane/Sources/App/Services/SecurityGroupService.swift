@@ -135,11 +135,11 @@ enum SecurityGroupService {
             guard let remote = try await SecurityGroup.find(remoteGroupId, on: db) else {
                 throw Abort(.badRequest, reason: "Referenced security group not found")
             }
-            guard remote.$project.id == groupProjectID else {
-                // Cross-project references would leak membership information
-                // across tenancy boundaries and complicate sync scoping.
-                throw Abort(.badRequest, reason: "A rule can only reference a security group in the same project")
-            }
+            // Cross-project references would leak membership information
+            // across tenancy boundaries and complicate sync scoping.
+            try ProjectContainment.require(
+                "Referenced security group \(remoteGroupId)", in: remote.$project.id,
+                sameProjectAs: "this rule's group", in: groupProjectID)
         }
 
         return protocolName

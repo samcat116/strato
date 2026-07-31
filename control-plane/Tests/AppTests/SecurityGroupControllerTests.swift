@@ -396,7 +396,8 @@ final class SecurityGroupControllerTests {
                 .count()
             #expect(memberships == 2)
 
-            // Cross-project attach → 409.
+            // Cross-project attach → 400, the one status every cross-project
+            // refusal answers with (issue #777); was 409.
             let builder = TestDataBuilder(db: app.db)
             let otherProject = try await builder.createProject(
                 name: "Elsewhere", description: "p", organization: org)
@@ -406,7 +407,7 @@ final class SecurityGroupControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .badRequest)
             }
 
             // Detach down to one group; detaching the last is refused.

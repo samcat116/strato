@@ -305,6 +305,11 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   authority.
 - New entity types or actions need the Cedar schema and policy set updated
   together, plus tests.
+- "These two resources are in different projects" goes through
+  `ProjectContainment.require` — one status (`400`) and one wording for every
+  site. Place it **after** the authorization checks on both resources: a
+  containment refusal reaching a caller who can't see the other resource tells
+  them it exists in a project they aren't in.
 
 **Networking and IPAM**
 - The **control plane** allocates IPs; the agent never invents them.

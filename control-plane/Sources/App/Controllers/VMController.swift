@@ -294,9 +294,9 @@ struct VMController: RouteCollection {
             guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Security group \(groupId) does not exist")
             }
-            guard group.$project.id == projectId else {
-                throw Abort(.badRequest, reason: "Security group \(groupId) belongs to a different project")
-            }
+            try ProjectContainment.require(
+                "Security group \(groupId)", in: group.$project.id,
+                sameProjectAs: "the VM", in: projectId)
         }
 
         // Create the VM instance from the image.

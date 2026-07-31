@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create a virtual machine
-         * @description Records the VM and a pending `create` operation, returning the operation to poll.
+         * @description Records the VM and a pending `create` operation, returning the operation to poll. A `securityGroupIds` entry outside the VM's own project is refused with `400` — the status every cross-project refusal answers with; a `networkId` or `networkName` outside it is instead reported as `404`, since names are per-project and confirming one exists elsewhere would disclose another tenant's networks.
          */
         post: operations["createVM"];
         delete?: never;
@@ -896,7 +896,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a volume to a VM */
+        /**
+         * Attach a volume to a VM
+         * @description Requires `attach` on the volume and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachVolume"];
         delete?: never;
         options?: never;
@@ -1157,7 +1160,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a floating IP to a VM NIC */
+        /**
+         * Attach a floating IP to a VM NIC
+         * @description Requires `update` on the floating IP and on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachFloatingIP"];
         delete?: never;
         options?: never;
@@ -1242,7 +1248,7 @@ export interface paths {
         put?: never;
         /**
          * Add a rule to a security group
-         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer. A `remoteGroupId` in another project is refused with `400` — the status every cross-project refusal answers with.
          */
         post: operations["createSecurityGroupRule"];
         delete?: never;
@@ -1285,7 +1291,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a security group to a VM NIC */
+        /**
+         * Attach a security group to a VM NIC
+         * @description Requires `attach` on the group and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachSecurityGroup"];
         delete?: never;
         options?: never;
@@ -1450,7 +1459,7 @@ export interface paths {
         put?: never;
         /**
          * Attach a zone to a logical network
-         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it.
+         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it. Requires `attach` on the zone and `update` on the network, and is refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
          */
         post: operations["attachDNSZoneToNetwork"];
         delete?: never;
@@ -8910,6 +8919,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };
