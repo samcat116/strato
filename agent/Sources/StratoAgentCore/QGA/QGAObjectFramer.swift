@@ -20,12 +20,17 @@ final class QGAObjectFramer {
     private static let backslash: UInt8 = 0x5C  // \
     private static let syncMarker: UInt8 = 0xFF
 
-    /// Upper bound on buffered bytes. A guest that streams a never-closing
-    /// object would otherwise grow memory unbounded within a probe's budget;
-    /// qga replies are small, so 1 MiB is far above any legitimate one.
-    private let maxBufferedBytes: Int
+    /// Upper bound on buffered bytes for an ordinary qga reply. A guest that
+    /// streams a never-closing object would otherwise grow memory unbounded
+    /// within a probe's budget; qga's status and query replies are small, so
+    /// 1 MiB is far above any legitimate one. A `guest-exec-status` carrying a
+    /// command's captured output is the exception, and sizes its own framer.
+    static let defaultMaxBufferedBytes = 1 << 20
 
-    init(maxBufferedBytes: Int = 1 << 20) {
+    /// Upper bound on buffered bytes for this framer.
+    let maxBufferedBytes: Int
+
+    init(maxBufferedBytes: Int = QGAObjectFramer.defaultMaxBufferedBytes) {
         self.maxBufferedBytes = maxBufferedBytes
     }
 

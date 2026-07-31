@@ -260,6 +260,40 @@ pre-qga behavior:
   hot path, caching the result the observed-state report reads. This is the only
   way DHCP/SLAAC addresses the control plane never allocated become visible.
 
+### Running commands in a guest (`guest-exec`)
+
+`QGAClient.runCommand` executes a `GuestCommand` in the guest and returns its
+exit status with captured stdout/stderr. qga models exec as **spawn-and-poll**:
+`guest-exec` returns a PID, and `guest-exec-status` reports completion, handing
+over each captured stream base64-encoded and *whole* in the reply that first
+says `exited: true`. There is no completion notification, no PTY, no way to
+write further stdin, and no way to signal a running process — which is why this
+is a run-a-command primitive and can never back an interactive session.
+
+Three consequences shape the implementation:
+
+- **Polling is bounded by a caller-supplied deadline** (`StageBudget.guestExecSeconds`
+  by default) and is an ordinary backoff loop over cancellable awaits, not a
+  background task, so a timed-out or cancelled call leaves nothing running
+  agent-side. It does *not* stop the guest process — qga cannot signal it — so
+  the thrown `executionTimedOut` carries the PID. For the same reason the spawn
+  is never retried; only the polls are.
+- **Captured output is capped per stream** (1 MiB by default). Since the whole
+  stream arrives in one JSON object, the cap is enforced by sizing that read's
+  framer budget: an oversized reply is refused mid-stream as `responseTooLarge`
+  rather than buffered and then rejected. qga's own 16 MiB in-guest cap surfaces
+  separately as the result's `stdoutTruncated`/`stderrTruncated`.
+- **Each round trip opens its own channel**, so a long-running command doesn't
+  hold the one-client-at-a-time chardev away from shutdown and guest-info
+  probes. A poll that loses that race is retried until the deadline.
+
+Exec is not universally available: distros filter the RPC set, and the RHEL
+family ships an `--allow-rpcs` allowlist that omits `guest-exec` (Ubuntu,
+Debian, and Fedora do not filter — see issue #803). `queryCapabilities`
+(`guest-info`) reports which commands the agent will answer, so a caller can
+say "this guest can't run commands" up front; attempting it anyway comes back
+as `commandUnavailable` rather than a generic failure.
+
 ## Balloon memory stats (virtio-balloon)
 
 Every QEMU VM gets a `virtio-balloon-pci` device with `free-page-hint=on`

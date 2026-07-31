@@ -23,13 +23,19 @@ struct QGAClientTests {
         case close
     }
 
-    /// Records every `execute` seen across channels, guarded by a scoped lock
-    /// (safe to touch from the fake's actor-isolated methods).
+    /// Records every request seen across channels — the `execute` name and the
+    /// raw request object, so argument-shaping can be asserted — guarded by a
+    /// scoped lock (safe to touch from the fake's actor-isolated methods).
     final class Recorder: @unchecked Sendable {
         private let lock = NSLock()
-        private var items: [String] = []
-        func record(_ execute: String) { lock.withLock { items.append(execute) } }
-        var all: [String] { lock.withLock { items } }
+        private var items: [(execute: String, object: [UInt8])] = []
+        func record(_ execute: String, object: [UInt8]) {
+            lock.withLock { items.append((execute, object)) }
+        }
+        var all: [String] { lock.withLock { items.map(\.execute) } }
+        func objects(for execute: String) -> [[UInt8]] {
+            lock.withLock { items.filter { $0.execute == execute }.map(\.object) }
+        }
     }
 
     /// A transport whose channels answer requests from a caller-supplied
@@ -47,6 +53,7 @@ struct QGAClientTests {
         }
 
         var executes: [String] { recorder.all }
+        func requests(for execute: String) -> [[UInt8]] { recorder.objects(for: execute) }
 
         func openChannel() async throws -> any QGAByteChannel {
             FakeQGAChannel(handler: handler, chunkSize: chunkSize, recorder: recorder)
@@ -83,7 +90,7 @@ struct QGAClientTests {
             let json = try JSONSerialization.jsonObject(with: Data(object)) as? [String: Any]
             let execute = json?["execute"] as? String ?? ""
             let syncId = (json?["arguments"] as? [String: Any])?["id"] as? Int
-            recorder.record(execute)
+            recorder.record(execute, object: object)
 
             switch handler(execute, syncId) {
             case .object(var bytes):
@@ -264,5 +271,290 @@ struct QGAClientTests {
         await #expect(throws: QGAClient.QGAError.connectionClosed) {
             try await makeClient(transport).ping()
         }
+    }
+
+    // MARK: - guest-exec (STR-74)
+
+    /// A fake agent answering the spawn-and-poll pair: `guest-exec` hands back a
+    /// PID, and `guest-exec-status` reports "still running" until the
+    /// `pollsBeforeExit`th ask. A nil `terminalStatus` models a command that
+    /// never exits.
+    final class FakeExecAgent: @unchecked Sendable {
+        let pid: Int
+        private let pollsBeforeExit: Int
+        private let terminalStatus: String?
+        private let lock = NSLock()
+        private var statusPolls = 0
+
+        init(pid: Int = 4242, pollsBeforeExit: Int = 0, terminalStatus: String?) {
+            self.pid = pid
+            self.pollsBeforeExit = pollsBeforeExit
+            self.terminalStatus = terminalStatus
+        }
+
+        /// How many `guest-exec-status` requests the client has issued.
+        var polls: Int { lock.withLock { statusPolls } }
+
+        var handler: @Sendable (String, Int?) -> Reply {
+            { [self] execute, syncId in
+                switch execute {
+                case "guest-sync-delimited":
+                    return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+                case "guest-exec":
+                    return .object(QGAClientTests.returnObject(#"{"pid": \#(pid)}"#))
+                case "guest-exec-status":
+                    let poll = lock.withLock {
+                        statusPolls += 1
+                        return statusPolls
+                    }
+                    guard let terminalStatus, poll > pollsBeforeExit else {
+                        return .object(QGAClientTests.returnObject(#"{"exited": false}"#))
+                    }
+                    return .object(QGAClientTests.returnObject(terminalStatus))
+                default:
+                    return .object(Array(#"{"error": {"class": "CommandNotFound", "desc": "\#(execute)"}}"#.utf8))
+                }
+            }
+        }
+    }
+
+    /// A latch that reads `true` exactly once, so a handler can fail the first
+    /// request of a kind and answer the rest.
+    final class OneShot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+        func fire() -> Bool {
+            lock.withLock {
+                defer { fired = true }
+                return !fired
+            }
+        }
+    }
+
+    private static func exitedStatus(
+        exitCode: Int? = nil, signal: Int? = nil, stdout: Data = Data(), stderr: Data = Data()
+    ) -> String {
+        var fields = [#""exited": true"#]
+        if let exitCode { fields.append(#""exitcode": \#(exitCode)"#) }
+        if let signal { fields.append(#""signal": \#(signal)"#) }
+        if !stdout.isEmpty { fields.append(#""out-data": "\#(stdout.base64EncodedString())""#) }
+        if !stderr.isEmpty { fields.append(#""err-data": "\#(stderr.base64EncodedString())""#) }
+        return "{\(fields.joined(separator: ", "))}"
+    }
+
+    @Test("runCommand spawns with argv/env/stdin and polls until the guest reports exit")
+    func runCommandPollsToCompletion() async throws {
+        let agent = FakeExecAgent(
+            pollsBeforeExit: 2,
+            terminalStatus: Self.exitedStatus(
+                exitCode: 0, stdout: Data("hello\n".utf8), stderr: Data("warned\n".utf8)))
+        let transport = FakeQGATransport(handler: agent.handler)
+
+        let result = try await makeClient(transport).runCommand(
+            GuestCommand(
+                path: "/bin/sh",
+                arguments: ["-c", "echo hello"],
+                environment: ["FOO=bar"],
+                input: Data("stdin payload".utf8)))
+
+        #expect(result.exitCode == 0)
+        #expect(result.signal == nil)
+        #expect(String(decoding: result.stdout, as: UTF8.self) == "hello\n")
+        #expect(String(decoding: result.stderr, as: UTF8.self) == "warned\n")
+        #expect(!result.stdoutTruncated)
+        // Two "still running" answers, then the terminal one.
+        #expect(agent.polls == 3)
+
+        // The spawn carries qga's hyphenated argument names, and `arg` is the
+        // list *after* the program name (qga supplies no argv[0]).
+        let spawn = try #require(transport.requests(for: "guest-exec").first)
+        let spawnJSON = try JSONSerialization.jsonObject(with: Data(spawn))
+        let request = try #require(spawnJSON as? [String: Any])
+        let arguments = try #require(request["arguments"] as? [String: Any])
+        #expect(arguments["path"] as? String == "/bin/sh")
+        #expect(arguments["arg"] as? [String] == ["-c", "echo hello"])
+        #expect(arguments["env"] as? [String] == ["FOO=bar"])
+        #expect(arguments["capture-output"] as? Bool == true)
+        #expect(arguments["input-data"] as? String == Data("stdin payload".utf8).base64EncodedString())
+
+        // The status poll asks by the PID the spawn returned.
+        let poll = try #require(transport.requests(for: "guest-exec-status").first)
+        let pollJSON = try JSONSerialization.jsonObject(with: Data(poll))
+        let pollRequest = try #require(pollJSON as? [String: Any])
+        #expect((pollRequest["arguments"] as? [String: Any])?["pid"] as? Int == agent.pid)
+    }
+
+    @Test("a command killed by a signal reports the signal and no exit code")
+    func runCommandReportsSignal() async throws {
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(signal: 9))
+        let transport = FakeQGATransport(handler: agent.handler)
+        let result = try await makeClient(transport).runCommand(GuestCommand(path: "/bin/sleep"))
+        #expect(result.exitCode == nil)
+        #expect(result.signal == 9)
+        #expect(result.stdout.isEmpty)
+    }
+
+    @Test("qga's own truncation flags are reported rather than treated as failure")
+    func runCommandReportsGuestTruncation() async throws {
+        let encoded = Data("partial".utf8).base64EncodedString()
+        let agent = FakeExecAgent(
+            terminalStatus: #"{"exited": true, "exitcode": 0, "out-data": "\#(encoded)", "out-truncated": true}"#)
+        let transport = FakeQGATransport(handler: agent.handler)
+        let result = try await makeClient(transport).runCommand(GuestCommand(path: "/bin/cat"))
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutTruncated)
+        #expect(!result.stderrTruncated)
+    }
+
+    @Test("a command that never exits fails at its deadline, naming the guest pid")
+    func runCommandTimesOut() async throws {
+        // terminalStatus nil: the guest always answers "still running".
+        let agent = FakeExecAgent(terminalStatus: nil)
+        let transport = FakeQGATransport(handler: agent.handler)
+        await #expect(throws: QGAClient.QGAError.executionTimedOut(pid: agent.pid, seconds: 1)) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/sleep", arguments: ["infinity"]), timeoutSeconds: 1)
+        }
+        // The polling was a plain loop, not a task left running: it stopped at
+        // the deadline, having actually polled.
+        #expect(agent.polls > 1)
+    }
+
+    @Test("output past the caller's cap fails cleanly instead of being buffered")
+    func runCommandRefusesOversizedOutput() async throws {
+        // Comfortably past the framer's budget for a 1 KiB cap, so the reply is
+        // refused mid-stream rather than held whole.
+        let huge = Data(repeating: UInt8(ascii: "x"), count: 512 * 1024)
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(exitCode: 0, stdout: huge))
+        let transport = FakeQGATransport(handler: agent.handler)
+        do {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/cat"), timeoutSeconds: 5, maxCapturedBytes: 1024)
+            Issue.record("expected an oversized reply to fail")
+        } catch let error as QGAClient.QGAError {
+            guard case .responseTooLarge = error else {
+                Issue.record("expected responseTooLarge, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("output that fits the stream but not the cap is refused at decode")
+    func runCommandEnforcesTheExactCap() async throws {
+        // Small enough that the framer's (necessarily loose, base64-inflated)
+        // budget admits it — only the exact per-stream check rejects it.
+        let output = Data(repeating: UInt8(ascii: "y"), count: 4096)
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(exitCode: 0, stdout: output))
+        let transport = FakeQGATransport(handler: agent.handler)
+        await #expect(throws: QGAClient.QGAError.responseTooLarge(limitBytes: 1024)) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/cat"), timeoutSeconds: 5, maxCapturedBytes: 1024)
+        }
+    }
+
+    @Test("a guest whose agent filters guest-exec away reports it as unavailable")
+    func runCommandOnFilteredAgent() async throws {
+        // The RHEL family's --allow-rpcs allowlist omits guest-exec; qga answers
+        // CommandNotFound with a desc that says it was disabled (issue #803).
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-sync-delimited" {
+                return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+            }
+            return .object(
+                Array(
+                    #"{"error": {"class": "CommandNotFound", "desc": "Command guest-exec has been disabled: the command is not allowed"}}"#
+                        .utf8))
+        }
+        do {
+            _ = try await makeClient(transport).runCommand(GuestCommand(path: "/bin/true"))
+            Issue.record("expected a filtered guest-exec to fail")
+        } catch let error as QGAClient.QGAError {
+            guard case .commandUnavailable = error else {
+                Issue.record("expected commandUnavailable, got \(error)")
+                return
+            }
+        }
+        // Unavailable is an answer, not a transport hiccup: no retrying it.
+        #expect(transport.executes.filter { $0 == "guest-exec" }.count == 1)
+    }
+
+    @Test("a spawn that loses its channel is never retried — the command may have started")
+    func runCommandDoesNotRetryTheSpawn() async throws {
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-sync-delimited" {
+                return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+            }
+            return .close  // the agent drops the connection mid-spawn
+        }
+        await #expect(throws: QGAClient.QGAError.connectionClosed) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/true"), timeoutSeconds: 5)
+        }
+        #expect(transport.executes.filter { $0 == "guest-exec" }.count == 1)
+    }
+
+    @Test("a poll that loses the one-client-at-a-time socket is retried until the deadline")
+    func runCommandRetriesATransientPollFailure() async throws {
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(exitCode: 3))
+        let inner = agent.handler
+        // The first status poll finds the chardev gone (a concurrent probe owns
+        // it); later polls get through.
+        let firstPoll = OneShot()
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-exec-status", firstPoll.fire() { return .close }
+            return inner(execute, syncId)
+        }
+
+        let result = try await makeClient(transport).runCommand(
+            GuestCommand(path: "/bin/false"), timeoutSeconds: 5)
+        #expect(result.exitCode == 3)
+    }
+
+    @Test("queryCapabilities separates the commands an agent will answer from those it won't")
+    func queryCapabilitiesReportsFilteredCommands() async throws {
+        let transport = FakeQGATransport { execute, syncId in
+            switch execute {
+            case "guest-sync-delimited":
+                return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+            case "guest-info":
+                return .object(
+                    Self.returnObject(
+                        """
+                        {"version": "10.1.0", "supported_commands": [
+                          {"name": "guest-ping", "enabled": true, "success-response": true},
+                          {"name": "guest-exec", "enabled": false, "success-response": true},
+                          {"name": "guest-exec-status", "enabled": false, "success-response": true}
+                        ]}
+                        """))
+            default:
+                return .object(Array(#"{"error": {"class": "CommandNotFound", "desc": "\#(execute)"}}"#.utf8))
+            }
+        }
+        let capabilities = try await makeClient(transport).queryCapabilities()
+        #expect(capabilities.version == "10.1.0")
+        #expect(capabilities.enabledCommands == ["guest-ping"])
+        #expect(capabilities.disabledCommands == ["guest-exec", "guest-exec-status"])
+        // Both halves of the pair are required, and neither is enabled here.
+        #expect(!capabilities.supportsCommandExecution)
+    }
+
+    @Test("an agent that enables both exec commands reports exec support")
+    func queryCapabilitiesReportsExecSupport() async throws {
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-sync-delimited" {
+                return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+            }
+            return .object(
+                Self.returnObject(
+                    """
+                    {"version": "8.2.2", "supported_commands": [
+                      {"name": "guest-exec", "enabled": true},
+                      {"name": "guest-exec-status", "enabled": true}
+                    ]}
+                    """))
+        }
+        let capabilities = try await makeClient(transport).queryCapabilities()
+        #expect(capabilities.supportsCommandExecution)
+        #expect(capabilities.disabledCommands.isEmpty)
     }
 }
