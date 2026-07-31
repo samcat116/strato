@@ -46,7 +46,13 @@ struct ResourceQuotaController: RouteCollection {
         return paging.page(quotas)
     }
 
-    /// Every quota in the caller's organizations, by name, ready for slicing.
+    /// Every quota hanging on a scope the caller may read, by name, ready for
+    /// slicing.
+    ///
+    /// Organization membership narrows this query; it does not decide it (issue
+    /// #870). A quota names its scope's limits and, through the `level` filter,
+    /// the scope's very existence — so every row is put to the evaluator on the
+    /// node it hangs on, the same decision the scope's own item route makes.
     func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -54,13 +60,25 @@ struct ResourceQuotaController: RouteCollection {
 
         let level = req.query[String.self, at: "level"]
 
-        // Get all organizations the user belongs to
+        // Narrowing, step 1: the organizations the caller belongs to, and every
+        // folder in them.
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
 
         if organizationIDs.isEmpty {
             return []
         }
+
+        let ouIDs = try await OrganizationalUnit.query(on: req.db)
+            .filter(\.$organization.$id ~~ organizationIDs)
+            .all()
+            .compactMap { $0.id }
+
+        // Narrowing, step 2: the projects the caller's own grants can reach —
+        // the same superset the resource lists narrow by. A nil candidate set
+        // means "do not narrow", not "everything is visible": those rows go to
+        // the evaluator below like any other.
+        let visibility = try await ProjectVisibility.resolve(on: req)
 
         var query = ResourceQuota.query(on: req.db)
 
@@ -70,51 +88,70 @@ struct ResourceQuotaController: RouteCollection {
                 .filter(\.$organizationalUnit.$id == nil)
                 .filter(\.$project.$id == nil)
         case "project":
-            // Get all projects in user's organizations
-            let directProjects = try await Project.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
-
-            let ouProjects =
-                !ouIDs.isEmpty
-                ? try await Project.query(on: req.db)
-                    .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                    .all() : []
-
-            let allProjects = directProjects + ouProjects
-            let projectIDs = allProjects.compactMap { $0.id }
-
-            if projectIDs.isEmpty {
+            if visibility.reachesNoProject {
                 return []
             }
-            query = query.filter(\.$project.$id ~~ projectIDs)
+            query = query.filter(\.$project.$id != nil)
+            if let candidates = visibility.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
         case "organizational_unit":
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
             if ouIDs.isEmpty {
                 return []
             }
             query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
                 .filter(\.$project.$id == nil)
         default:
-            // No level specified, return all quotas in user's organizations
-            query = query.group(.or) { or in
-                or.filter(\.$organization.$id ~~ organizationIDs)
-                // TODO: Add project and OU quota filtering for user access
+            // Every level at once. Folder- and project-scoped rows used to be
+            // dropped here (a standing TODO) because nothing decided them; now
+            // that each row is decided they belong in the unfiltered list.
+            query = query.group(.or) { anyQuota in
+                anyQuota.filter(\.$organization.$id ~~ organizationIDs)
+                if !ouIDs.isEmpty {
+                    anyQuota.filter(\.$organizationalUnit.$id ~~ ouIDs)
+                }
+                if let candidates = visibility.candidateProjectIDs {
+                    if !candidates.isEmpty {
+                        anyQuota.filter(\.$project.$id ~~ candidates)
+                    }
+                } else {
+                    anyQuota.filter(\.$project.$id != nil)
+                }
             }
         }
 
         let quotas = try await query.sort(\.$name).sort(\.$id).all()
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await Self.readable(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
+    }
+
+    /// The quotas whose scope the caller may read, decided in one batch per node
+    /// type.
+    private static func readable(_ quotas: [ResourceQuota], on req: Request) async throws -> [ResourceQuota] {
+        func allowed(_ action: String, _ nodeType: IAMNodeType, _ ids: [UUID]) async throws -> Set<UUID> {
+            guard !ids.isEmpty else { return [] }
+            let nodes = Set(ids).map { IAMNode(type: nodeType, id: $0) }
+            return Set(try await req.canFilter(action, on: nodes).map(\.id))
+        }
+
+        let organizations = try await allowed(
+            "org:read", .organization, quotas.compactMap { $0.$organization.id })
+        let folders = try await allowed(
+            "folder:read", .organizationalUnit, quotas.compactMap { $0.$organizationalUnit.id })
+        let projects = try await allowed(
+            "project:read", .project, quotas.compactMap { $0.$project.id })
+
+        return quotas.filter { quota in
+            // Innermost scope first — the tightest node the row hangs on is the
+            // one that decides it. (`ResourceQuotaResponse.entityType` reports
+            // the outermost instead; the two can only disagree for a row
+            // attached at more than one level, which no create path writes, and
+            // where the tighter reading is the safe one.)
+            if let projectID = quota.$project.id { return projects.contains(projectID) }
+            if let folderID = quota.$organizationalUnit.id { return folders.contains(folderID) }
+            if let organizationID = quota.$organization.id { return organizations.contains(organizationID) }
+            // A quota attached to nothing belongs to nobody.
+            return false
+        }
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {

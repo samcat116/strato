@@ -48,10 +48,11 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Build complete hierarchy
-        let hierarchy = try await HierarchyTreeBuilder.buildCompleteHierarchy(organization: organization, on: req.db)
-
-        return hierarchy
+        // Build the complete hierarchy — over the rows this caller may read,
+        // not every row in the organization (issue #870).
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+            .readable(on: req)
+        return try HierarchyTreeBuilder.buildCompleteHierarchy(organization: organization, snapshot: snapshot)
     }
 
     func getAllResources(req: Request) async throws -> OrganizationResourcesResponse {
@@ -70,8 +71,10 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Every row the response reports on, in four flat queries.
+        // Every row the response reports on, in four flat queries, narrowed to
+        // the ones this caller may read (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+            .readable(on: req)
         let allOUs = snapshot.folders.sorted { $0.path < $1.path }
         let allProjects = snapshot.projects
         let allVMs = snapshot.vms
@@ -131,8 +134,11 @@ struct HierarchyController: RouteCollection {
         }
 
         // Usage totals, the organization's quotas and the hierarchy stats all
-        // come off one load instead of re-deriving the same rows three times.
+        // come off one load instead of re-deriving the same rows three times —
+        // and off the caller's own view of it, so the totals never count rows
+        // the tree above would not show them (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+            .readable(on: req)
         let quotaCompliance = try await QuotaComplianceService.complianceInfos(for: snapshot.quotas, on: req.db)
 
         return ResourceSummaryResponse(
@@ -164,11 +170,14 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let results = try await HierarchySearchService.search(
-            organizationID: organizationID,
-            query: query,
-            entityType: entityType,
-            on: req.db
+        let results = try await HierarchySearchService.readable(
+            try await HierarchySearchService.search(
+                organizationID: organizationID,
+                query: query,
+                entityType: entityType,
+                on: req.db
+            ),
+            on: req
         )
 
         return HierarchySearchResponse(
@@ -203,11 +212,14 @@ struct HierarchyController: RouteCollection {
             )
         }
 
-        let results = try await HierarchySearchService.globalSearch(
-            organizationIDs: organizationIDs,
-            query: query,
-            entityType: entityType,
-            on: req.db
+        let results = try await HierarchySearchService.readable(
+            try await HierarchySearchService.globalSearch(
+                organizationIDs: organizationIDs,
+                query: query,
+                entityType: entityType,
+                on: req.db
+            ),
+            on: req
         )
 
         return HierarchySearchResponse(

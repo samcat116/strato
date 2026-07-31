@@ -243,6 +243,36 @@ final class HierarchyIntegrationTests {
         }
     }
 
+    /// The organization-scoped search matched projects and VMs through their
+    /// folder with a join declared *inside* an `.or` group. Fluent drops such a
+    /// join from the emitted SQL but keeps its filter, so the statement named a
+    /// table it never joined and every call answered 500. Nothing covered the
+    /// route — `/api/hierarchy/search` above takes a different code path.
+    @Test("Search within one organization reaches folder-scoped projects and VMs")
+    func testOrganizationScopedHierarchySearch() async throws {
+        try await withHierarchyTestApp { app, builder, _, testOrganization, authToken in
+            let platform = try await builder.createOU(
+                name: "Platform", description: "Platform group", organization: testOrganization)
+            let folderProject = try await builder.createProject(
+                name: "Platform Ingress", description: "Folder-scoped", ou: platform)
+            _ = try await builder.createProject(
+                name: "Ingress Root", description: "Organization-scoped", organization: testOrganization)
+            _ = try await builder.createVM(name: "ingress-vm", project: folderProject)
+
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/search?q=ingress") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok, "\(res.status): \(res.body.string)")
+
+                let response = try res.content.decode(HierarchySearchResponse.self)
+                let names = Set(response.results.map(\.name))
+                #expect(names.contains("Platform Ingress"))
+                #expect(names.contains("Ingress Root"))
+                #expect(names.contains("ingress-vm"))
+            }
+        }
+    }
+
     // MARK: - VM Creation with Hierarchy Tests
 
     @Test("Create VM with proper hierarchy context")

@@ -24,36 +24,15 @@ struct ProjectsAPIService: APIProtocol {
 
     func listProjects(_ input: Operations.ListProjects.Input) async throws -> Operations.ListProjects.Output {
         let req = try OpenAPIRequestContext.require()
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        try Self.requireAuthenticated(req)
 
-        // Every organization the caller belongs to.
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
-        if organizationIDs.isEmpty {
-            return .ok(.init(body: .json([])))
-        }
-
-        var allProjects = try await Project.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .sort(\.$name)
-            .all()
-
-        // Projects nested under folders (OUs) within those organizations.
-        let ous = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .all()
-        let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            allProjects.append(contentsOf: ouProjects)
-        }
-
-        return .ok(.init(body: .json(try await summaries(for: allProjects, on: req.db))))
+        // No scope of its own: the caller's grants *are* the scope. The
+        // organization-membership filter this replaced was the leak (issue
+        // #870), and it erred in the other direction too — a binding that
+        // reaches a project in an organization the caller holds no membership
+        // row in made the project readable everywhere except here.
+        let projects = try await Self.visibleProjects(on: req)
+        return .ok(.init(body: .json(try await summaries(for: projects, on: req.db))))
     }
 
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output {
@@ -225,25 +204,25 @@ struct ProjectsAPIService: APIProtocol {
         try Self.requireAuthenticated(req)
         let organizationID = try Self.uuid(input.path.organizationID, name: "organization ID")
 
+        // Reaching the organization is not reaching what is inside it: this
+        // gate says the caller may see the container, and the per-project
+        // decision below says which of its contents they may see.
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        // The full project set within the organization's hierarchy, so callers
+        // The whole of the organization's hierarchy is in scope, so callers
         // (e.g. the project switcher) can reach folder-scoped projects too.
-        var projects = try await Project.query(on: req.db)
+        let folderIDs = try await OrganizationalUnit.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
-            .sort(\.$name)
             .all()
+            .compactMap { $0.id }
 
-        let ous = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-        let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            projects.append(contentsOf: ouProjects)
+        let projects = try await Self.visibleProjects(on: req) { query in
+            query.group(.or) { anyProject in
+                anyProject.filter(\.$organization.$id == organizationID)
+                if !folderIDs.isEmpty {
+                    anyProject.filter(\.$organizationalUnit.$id ~~ folderIDs)
+                }
+            }
         }
 
         return .ok(.init(body: .json(try await summaries(for: projects, on: req.db))))
@@ -303,10 +282,9 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.notFound, reason: "Folder not found")
         }
 
-        let projects = try await Project.query(on: req.db)
-            .filter(\.$organizationalUnit.$id == ouID)
-            .sort(\.$name)
-            .all()
+        let projects = try await Self.visibleProjects(on: req) { query in
+            query.filter(\.$organizationalUnit.$id == ouID)
+        }
 
         return .ok(.init(body: .json(try await summaries(for: projects, on: req.db))))
     }
@@ -536,6 +514,39 @@ struct ProjectsAPIService: APIProtocol {
     }
 
     // MARK: - Helpers
+
+    /// The projects a list endpoint's own scope selects that the caller may
+    /// actually read — the question every project list has to ask (issue #870).
+    ///
+    /// Organization membership is not project visibility: bare membership grants
+    /// `org:read` and `project:create` and nothing else, so a list narrowed on
+    /// `organization_id` alone hands back projects whose `GET
+    /// /api/projects/{id}` answers 403. Routing through `ProjectVisibility`
+    /// gives these endpoints the same narrow-in-SQL-then-decide-in-the-evaluator
+    /// split the resource lists use (`/api/volumes`, `/api/networks`,
+    /// `/api/security-groups`, `/api/floating-ips`), so a list and the item
+    /// reads that follow it answer the same question.
+    ///
+    /// `applyScope` is the endpoint's own narrowing — an organization, a folder
+    /// — and, like the visibility narrowing itself, decides nothing: it only
+    /// keeps the row query off projects the route was never asked about.
+    private static func visibleProjects(
+        on req: Request,
+        scopedBy applyScope: (QueryBuilder<Project>) -> Void = { _ in }
+    ) async throws -> [Project] {
+        let visibility = try await ProjectVisibility.resolve(on: req)
+        guard !visibility.reachesNoProject else { return [] }
+
+        let query = Project.query(on: req.db).sort(\.$name)
+        applyScope(query)
+        if let candidates = visibility.candidateProjectIDs {
+            query.filter(\.$id ~~ candidates)
+        }
+
+        let projects = try await query.all()
+        let readable = try await visibility.readableProjects(among: projects.compactMap { $0.id }, on: req)
+        return projects.filter { project in project.id.map(readable.contains) ?? false }
+    }
 
     /// `GET /api/projects` backs the frontend's project switcher, so its VM
     /// counts come from one grouped aggregate rather than a `COUNT` per project.

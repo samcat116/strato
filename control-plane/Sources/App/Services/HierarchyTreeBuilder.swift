@@ -14,8 +14,18 @@ struct HierarchyTreeBuilder {
     static func buildCompleteHierarchy(organization: Organization, on db: Database) async throws
         -> OrganizationHierarchyResponse
     {
+        try buildCompleteHierarchy(
+            organization: organization,
+            snapshot: try await HierarchySnapshot.load(organizationID: organization.requireID(), on: db))
+    }
+
+    /// Builds the response over a snapshot the caller already holds — the shape
+    /// the handlers use, so the rows can be narrowed to what the caller may read
+    /// (`HierarchySnapshot.readable(on:)`) before the tree is assembled.
+    static func buildCompleteHierarchy(organization: Organization, snapshot: HierarchySnapshot) throws
+        -> OrganizationHierarchyResponse
+    {
         let organizationID = try organization.requireID()
-        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: db)
 
         let orgNode = OrganizationNode(
             id: organizationID,
