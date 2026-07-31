@@ -298,6 +298,43 @@ Get the Valkey password secret key
 {{- end }}
 
 {{/*
+Whether session storage has its own Valkey endpoint. Empty host (the default)
+means sessions share the coordination instance, which is the pre-split behavior.
+*/}}
+{{- define "strato-control-plane.sessionValkeyEnabled" -}}
+{{- if .Values.sessionValkey.host }}true{{- end }}
+{{- end }}
+
+{{/*
+Get the session Valkey host. Deliberately not `required`: an empty host is the
+valid default, unlike the coordination endpoint which the control plane needs.
+*/}}
+{{- define "strato-control-plane.sessionValkeyHost" -}}
+{{- .Values.sessionValkey.host }}
+{{- end }}
+
+{{/*
+Get the session Valkey port
+*/}}
+{{- define "strato-control-plane.sessionValkeyPort" -}}
+{{- .Values.sessionValkey.port | default 6379 }}
+{{- end }}
+
+{{/*
+Get the session Valkey password secret name
+*/}}
+{{- define "strato-control-plane.sessionValkeySecretName" -}}
+{{- printf "%s-session-valkey" (include "strato-control-plane.fullname" .) }}
+{{- end }}
+
+{{/*
+Get the session Valkey password secret key
+*/}}
+{{- define "strato-control-plane.sessionValkeySecretKey" -}}
+{{- "session-valkey-password" }}
+{{- end }}
+
+{{/*
 Valkey labels
 */}}
 {{- define "strato-control-plane.valkey.labels" -}}

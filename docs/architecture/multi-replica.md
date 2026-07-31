@@ -17,6 +17,21 @@ what happens during deploys and failures.
 | Imperative RPC forwarding | Valkey pub/sub `replica:{id}:rpc`, `replica:{id}:rpc-replies` | Volume operations and reboot |
 | Placement reservations, sweep locks | Valkey (`resv:*`, `lock:sweep:*`) | Phase 0 (issue #258) |
 | Image download grants | Valkey `imggrant:agent:{agentId}:image:{imageId}` (TTL 30m) | Written by the replica that emits the download URLs; read by whichever replica serves the fetch (issue #562) |
+| Browser sessions | Valkey `vrs-{sessionID}` (idle TTL, `SESSION_TTL_SECONDS`) | **Not** coordination state — a separate store with the opposite failure contract (below) |
+
+Everything above the session row is coordination state, and every key in it
+satisfies one invariant: flushing the store degrades to slower convergence, never
+to incorrect state. Presence keys are rewritten by the next heartbeat, sweep
+locks gate work that is idempotent, and losing a reservation reopens a race
+rather than corrupting anything.
+
+Sessions satisfy nothing of the sort — losing them logs every signed-in user out
+at once, and passkeys are the only interactive authentication. So the two stores
+are **separately configurable** (issue #855): coordination uses `VALKEY_*`,
+sessions use `SESSION_VALKEY_*` and fall back to the coordination endpoint when
+unset. One instance by default; two clients whenever the endpoints differ. Until
+an operator splits them, a coordination-store problem still logs everyone out —
+that is the coupling the split exists to let you remove.
 
 The cross-replica seam is `ReplicaMessageBridge` (`app.replicaBridge`): it owns
 socket-route recording, the routing decision (local vs. which replica), the
@@ -76,9 +91,18 @@ agent errors propagate; an unroutable agent fails fast.
   operations are not lost — they live in PostgreSQL and complete from
   observed-state reports (or are failed by the sweep and surfaced to the
   client, never silently dropped).
-- **Valkey outage**: coordination fails open (issue #258 policy). Agents keep
-  converging via their socket-holding replica's periodic sync; cross-replica
-  nudges and RPC are unavailable until Valkey returns.
+- **Coordination-store outage**: coordination fails open (issue #258 policy).
+  Agents keep converging via their socket-holding replica's periodic sync;
+  cross-replica nudges and RPC are unavailable until Valkey returns.
+  `/health/ready` reports `coordination: degraded` and keeps serving traffic.
+- **Session-store outage**: no fail-open path exists for browser auth. Every
+  signed-in user is logged out and must re-authenticate with a passkey. Agents
+  (SPIFFE mTLS) and API-key/CLI clients are unaffected, and the reconciler needs
+  only Postgres. `/health/ready` grades this fatal (503) **only when session
+  storage has its own endpoint** — that failure is replica-local, so leaving the
+  rotation sends browser auth to a healthy replica. When both stores share one
+  instance (the default), every replica fails together and 503 would shift
+  traffic nowhere, so it is graded `degraded` instead.
 - **Dropped subscription connection**: pub/sub subscriptions live on a
   dedicated connection that the client library does not restore after a drop
   (Valkey restart, failover, network blip) — and a dead subscription is

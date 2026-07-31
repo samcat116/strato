@@ -733,6 +733,28 @@ externalValkey:
   password: ""
   database: 0
 
+# Optional: give session storage its own Valkey, separate from the coordination
+# store configured above.
+#
+# The two have opposite failure contracts. Coordination is fail-open — losing it
+# degrades convergence, never correctness, and readiness grades it `degraded`.
+# Session storage cannot fail open at all: losing it logs every signed-in user
+# out at once, passkeys are the only interactive auth, and readiness grades it
+# fatal. Separating them stops a coordination problem from taking sessions down.
+#
+# Leave `host` empty (the default) and sessions share the coordination instance,
+# exactly as before — no second instance is required or bundled.
+#
+# These fields are all-or-nothing: setting `host` does NOT inherit the port or
+# password from `externalValkey`, so set each field you need. Pointing `host` at
+# the same server with a different `database` is the cheap middle ground —
+# separate keyspaces, one instance.
+sessionValkey:
+  host: ""
+  port: 6379
+  password: ""
+  database: 0
+
 # SPIRE configuration for agent mTLS authentication.
 #
 # Required, not optional: agents authenticate to the control plane solely with

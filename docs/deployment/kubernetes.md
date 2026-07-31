@@ -89,6 +89,32 @@ Further hardening options (network policies, pod disruption budgets,
 resource limits, external database) are documented in the
 [chart README](https://github.com/samcat116/strato/blob/main/helm/strato-control-plane/README.md).
 
+### Separating session storage from coordination
+
+The bundled Valkey backs two stores with opposite failure contracts.
+Coordination (agent presence, sweep locks, scheduler reservations) is fail-open:
+`/health/ready` reports it `degraded` and the replica keeps serving. Session
+storage is not: losing it logs every signed-in user out, and readiness grades it
+fatal (503). Sharing one instance therefore lets the store that is allowed to
+fail take down the one that must not.
+
+`sessionValkey` points session storage at its own endpoint. Leave `host` empty
+(the default) and sessions share the coordination instance, exactly as before:
+
+```yaml
+sessionValkey:
+  host: sessions-valkey-master.sessions.svc.cluster.local
+  port: 6379
+  password: <session-valkey-password>
+  database: 0
+```
+
+The chart bundles only one Valkey — this block configures an *external* endpoint
+you provide. The fields are all-or-nothing: `host` does not inherit the port or
+password from `externalValkey`, so set each one the endpoint needs. Pointing
+`host` at the coordination server with a different `database` is the cheap
+middle ground — separate keyspaces on one instance.
+
 ## Workload identity (SPIRE)
 
 The chart always deploys a SPIRE server (StatefulSet), a spire-agent

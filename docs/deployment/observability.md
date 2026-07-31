@@ -265,7 +265,10 @@ query, but the Valkey and HTTP clients resolve it once, when their
   get-modify-set property, so even reading it to set an unrelated option
   materializes a config that has already captured a tracer.
 - `ValkeyTracingConfiguration.tracer` defaults the same way, captured when
-  `ValkeyClientConfiguration` is built in `configureValkey`.
+  `ValkeyClientConfiguration` is built in `configureValkey`. Both the
+  coordination and session clients are built there, for exactly this reason:
+  constructing either configuration anywhere earlier — a global, a lazy
+  initializer — would leave that client spanless for the process lifetime.
 
 Whatever tracer is installed at that moment is the one those clients use for the
 life of the process. Bootstrapping afterwards left both holding the `NoOpTracer`

@@ -1,0 +1,68 @@
+# CI Test values for a session store split off from the coordination store.
+#
+# The two Valkey-backed stores have opposite failure contracts (coordination
+# fails open, sessions cannot), so they are separately configurable. This file
+# drives the "Template with a split session store" step in
+# .github/workflows/helm-test.yml, whose assertions cover all four template
+# branches the split adds: SESSION_VALKEY_* on the Deployment *and* on the
+# migration Job (which boots the full application, and whose env block is a
+# verbatim copy that has no other guard against drift), the session password
+# Secret, and the extra NetworkPolicy egress rule.
+#
+# The same step asserts the negative on the default render: with
+# `sessionValkey.host` unset — every other ci/ values file, and every existing
+# deployment — no SESSION_VALKEY_* is emitted at all, so sessions keep sharing
+# the coordination endpoint and a single client.
+
+image:
+  repository: nginx  # Using nginx for CI tests
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  webauthn:
+    relyingPartyId: "session-valkey.local"
+    relyingPartyName: "Strato Session Valkey"
+    relyingPartyOrigin: "http://session-valkey.local:8080"
+
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: session-valkey-test-password
+    postgresPassword: session-valkey-postgres-password
+  primary:
+    persistence:
+      enabled: false
+
+# Coordination stays on the bundled instance.
+valkey:
+  enabled: true
+
+# Sessions get their own endpoint, on a non-default port so the rendered
+# NetworkPolicy rule is distinguishable from the coordination one.
+sessionValkey:
+  host: session-valkey.example.svc.cluster.local
+  port: 6380
+  password: session-valkey-secret
+  database: 0
+
+# Exercised because it renders the SESSION_VALKEY_* block a second time; the
+# migration Job boots the full application and so needs both endpoints.
+migration:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+
+replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+ingress:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false

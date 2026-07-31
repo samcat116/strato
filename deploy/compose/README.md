@@ -71,6 +71,9 @@ are invisible to unit tests and direct-to-container curl.
   in-process by the control plane's Cedar engine; no separate authz service).
 - **Valkey** — control-plane coordination (agent presence, singleton sweeps,
   scheduler reservations) and session storage; required, password-protected.
+  The two are separately configurable — coordination fails open, sessions do
+  not — but share this one instance by default. See the commented
+  `SESSION_VALKEY_*` block in `docker-compose.yml` to split them.
 - **Control plane + frontend** — published images
   (`ghcr.io/samcat116/strato-*`), defaulting to the `main` tag (rebuilt on
   every main-branch merge). Database migrations run automatically at startup.

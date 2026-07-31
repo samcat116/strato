@@ -270,9 +270,28 @@ services:
       # plaintext is acceptable. Override with DATABASE_TLS=require (and
       # DATABASE_TLS_CA_CERT_PATH) if you point this at an external database.
       DATABASE_TLS: ${DATABASE_TLS:-disable}
+      # Coordination store: agent presence, socket routing, sweep locks,
+      # scheduler reservations, rate-limit counters. Fails open — losing it
+      # degrades convergence, never correctness.
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+      # Session storage follows the coordination endpoint above unless
+      # SESSION_VALKEY_HOST names another. It is the store that cannot fail
+      # open: losing it logs every signed-in user out, and passkeys are the only
+      # interactive auth, so everyone re-authenticates with a security key.
+      #
+      # These variables are all-or-nothing — SESSION_VALKEY_HOST does not
+      # inherit the port or password above, so set every field you need:
+      #   SESSION_VALKEY_HOST: session-valkey
+      #   SESSION_VALKEY_PORT: 6379
+      #   SESSION_VALKEY_PASSWORD: ${SESSION_VALKEY_PASSWORD}
+      #
+      # The cheap middle ground is one server, two keyspaces — a coordination
+      # FLUSHDB then no longer logs everyone out:
+      #   SESSION_VALKEY_HOST: valkey
+      #   SESSION_VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+      #   SESSION_VALKEY_DATABASE: 1
       # At-rest encryption key for stored secrets (OIDC client secrets).
       # Optional so .env files generated before it existed keep working — the
       # control plane warns and stores plaintext when it's unset.
