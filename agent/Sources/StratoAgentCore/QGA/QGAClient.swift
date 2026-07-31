@@ -209,6 +209,13 @@ public actor QGAClient {
     /// hold in memory for one command — not a truncation point.
     public static let defaultMaxCapturedBytes = 1 << 20  // 1 MiB
 
+    /// Ceiling any requested cap is clamped to. qga's own in-guest capture cap
+    /// is 16 MiB per stream, so asking for more buys nothing and only widens
+    /// what a hostile or broken guest can make the agent buffer. Clamping also
+    /// keeps the `* 4` in `replyBudget` away from overflow, which a public
+    /// parameter could otherwise reach.
+    public static let maxCapturedBytesCeiling = 16 << 20  // 16 MiB
+
     /// Runs `command` in the guest and waits for it to exit, returning its exit
     /// status and captured output.
     ///
@@ -224,43 +231,76 @@ public actor QGAClient {
     ///
     /// **A timeout does not stop the guest process.** qga cannot signal it, so
     /// it keeps running (and keeps buffering output) inside the guest; the
-    /// thrown `executionTimedOut` carries its PID. For the same reason the
-    /// spawn is never retried — a retried `guest-exec` whose first attempt did
-    /// reach the guest would run the command twice.
+    /// thrown `executionTimedOut` carries its PID so a caller can name it — and
+    /// can keep polling `commandStatus(pid:)` to eventually collect it, which
+    /// is also what frees qga's in-guest entry (and the up-to-16 MiB per stream
+    /// it pins). For the same reason the spawn is never retried — a retried
+    /// `guest-exec` whose first attempt did reach the guest would run the
+    /// command twice.
     ///
     /// Each round trip opens and closes its own channel rather than holding the
     /// qga chardev — which serves one client at a time — for the whole run, so
     /// a long command doesn't starve shutdown and guest-info probes for the
     /// same VM. A poll that loses that race is retried until the deadline.
     ///
+    /// The deadline is checked between round trips, and each round trip is
+    /// itself bounded by `StageBudget.guestAgentSeconds`, so the worst-case wall
+    /// clock is `timeoutSeconds` plus one round-trip budget.
+    ///
     /// - Parameters:
     ///   - command: what to run; see `GuestCommand` for the no-shell caveat.
     ///   - timeoutSeconds: how long the command may run before it is abandoned.
-    ///   - maxCapturedBytes: per-stream cap on captured output. A command that
-    ///     produces more fails with `responseTooLarge` rather than buffering
-    ///     unbounded guest output in the agent.
+    ///   - maxCapturedBytes: per-stream cap on captured output, clamped to
+    ///     `maxCapturedBytesCeiling`. A command that produces more fails with
+    ///     `responseTooLarge` rather than buffering unbounded guest output in
+    ///     the agent.
     public func runCommand(
         _ command: GuestCommand,
         timeoutSeconds: Int = StageBudget.guestExecSeconds,
         maxCapturedBytes: Int = QGAClient.defaultMaxCapturedBytes
     ) async throws -> GuestCommandResult {
-        let pid = try await spawn(command)
+        let pid = try await spawnCommand(command)
         return try await awaitExit(
-            pid: pid, timeoutSeconds: timeoutSeconds, maxCapturedBytes: maxCapturedBytes)
+            pid: pid, timeoutSeconds: timeoutSeconds,
+            maxCapturedBytes: Self.clamped(maxCapturedBytes))
     }
 
-    /// Issues `guest-exec` and returns the guest PID of the spawned process.
-    private func spawn(_ command: GuestCommand) async throws -> Int {
+    /// Brings a caller's requested cap into the range the guest agent can
+    /// actually produce, so neither a negative nor an enormous value reaches
+    /// the budget arithmetic.
+    private static func clamped(_ maxCapturedBytes: Int) -> Int {
+        min(max(maxCapturedBytes, 0), maxCapturedBytesCeiling)
+    }
+
+    /// Spawns `command` in the guest and returns its PID without waiting.
+    ///
+    /// Exposed alongside `commandStatus(pid:)` so a caller can own the waiting
+    /// itself — resuming a poll across separate calls, which is what modelling
+    /// a long guest command as an async operation needs, and what lets a
+    /// `runCommand` that timed out still be collected later.
+    ///
+    /// The caller inherits the obligation this splits out: a spawned process
+    /// whose status is never collected keeps its captured output pinned in the
+    /// guest agent for the life of the agent.
+    public func spawnCommand(_ command: GuestCommand) async throws -> Int {
         let arguments = QGA.ExecArguments(
             path: command.path,
             arg: command.arguments.isEmpty ? nil : command.arguments,
-            env: command.environment.isEmpty ? nil : command.environment,
+            env: command.environment.isEmpty ? nil : command.environmentEntries,
             inputData: command.input?.base64EncodedString(),
             captureOutput: command.captureOutput
         )
-        return try await roundTrip(stage: "qga-exec-spawn") {
+        let pid = try await roundTrip(stage: "qga-exec-spawn") {
             try await self.spawnOnce(arguments)
         }
+        // Auditable trace that something ran in this guest, and as what. The
+        // path only: arguments, environment, and stdin all routinely carry
+        // secrets, and this runs as whatever qga runs as — root, on a stock
+        // install.
+        logger.info(
+            "Spawned guest command",
+            metadata: ["path": .string(command.path), "pid": .stringConvertible(pid)])
+        return pid
     }
 
     private func spawnOnce(_ arguments: QGA.ExecArguments) async throws -> Int {
@@ -277,8 +317,10 @@ public actor QGAClient {
     ) async throws -> GuestCommandResult {
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeoutSeconds))
         var delay = Self.initialPollInterval
-        // The last failure to reach the agent, if the deadline arrives without
-        // a single successful poll — more useful to report than "timed out".
+        // Whether the agent ever answered a poll. If it did, the deadline is
+        // the operative reason we stopped and the caller wants the PID; if it
+        // never did, the failure that kept us away is the more useful report.
+        var everReachedAgent = false
         var lastFailure: (any Error)?
 
         while true {
@@ -287,6 +329,7 @@ public actor QGAClient {
                 if let result = try await fetchStatus(pid: pid, maxCapturedBytes: maxCapturedBytes) {
                     return result
                 }
+                everReachedAgent = true
                 lastFailure = nil
             } catch let error where Self.isRetryablePollFailure(error) {
                 logger.debug(
@@ -297,11 +340,24 @@ public actor QGAClient {
 
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard remaining > .zero else {
-                throw lastFailure ?? QGAError.executionTimedOut(pid: pid, seconds: timeoutSeconds)
+                if !everReachedAgent, let lastFailure { throw lastFailure }
+                throw QGAError.executionTimedOut(pid: pid, seconds: timeoutSeconds)
             }
             try await Task.sleep(for: min(delay, remaining))
             delay = min(delay * 2, Self.maxPollInterval)
         }
+    }
+
+    /// Asks the guest agent whether the process `pid` has exited, returning its
+    /// result if so and `nil` while it is still running.
+    ///
+    /// Collecting a result is what frees the guest agent's entry for that PID,
+    /// so a caller driving its own polling should keep going until this returns
+    /// non-nil (or the guest is gone).
+    public func commandStatus(
+        pid: Int, maxCapturedBytes: Int = QGAClient.defaultMaxCapturedBytes
+    ) async throws -> GuestCommandResult? {
+        try await fetchStatus(pid: pid, maxCapturedBytes: Self.clamped(maxCapturedBytes))
     }
 
     /// One `guest-exec-status` round trip. Returns nil while the process is
@@ -313,7 +369,15 @@ public actor QGAClient {
         guard status.exited else { return nil }
         let stdout = try Self.decodeCapture(status.outData, limit: maxCapturedBytes)
         let stderr = try Self.decodeCapture(status.errData, limit: maxCapturedBytes)
+        logger.info(
+            "Guest command exited",
+            metadata: [
+                "pid": .stringConvertible(pid),
+                "exitCode": .string(status.exitcode.map(String.init) ?? "none"),
+                "signal": .string(status.signal.map(String.init) ?? "none"),
+            ])
         return GuestCommandResult(
+            pid: pid,
             exitCode: status.exitcode,
             signal: status.signal,
             stdout: stdout,
@@ -360,6 +424,10 @@ public actor QGAClient {
     private static func isRetryablePollFailure(_ error: any Error) -> Bool {
         if error is CancellationError { return false }
         guard let qga = error as? QGAError else {
+            // A reply we can't decode will not decode differently next time —
+            // a guest whose qga reports a shape `QGA.ExecStatus` doesn't model
+            // is a permanent answer, exactly like a bad base64 capture below.
+            if error is DecodingError { return false }
             // Transport level: connect refused, socket busy, a round trip that
             // blew its budget. All transient by nature.
             return true

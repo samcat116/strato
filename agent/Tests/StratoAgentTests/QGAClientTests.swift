@@ -354,9 +354,10 @@ struct QGAClientTests {
             GuestCommand(
                 path: "/bin/sh",
                 arguments: ["-c", "echo hello"],
-                environment: ["FOO=bar"],
+                environment: ["FOO": "bar", "BAZ": "qux"],
                 input: Data("stdin payload".utf8)))
 
+        #expect(result.pid == agent.pid)
         #expect(result.exitCode == 0)
         #expect(result.signal == nil)
         #expect(String(decoding: result.stdout, as: UTF8.self) == "hello\n")
@@ -373,7 +374,9 @@ struct QGAClientTests {
         let arguments = try #require(request["arguments"] as? [String: Any])
         #expect(arguments["path"] as? String == "/bin/sh")
         #expect(arguments["arg"] as? [String] == ["-c", "echo hello"])
-        #expect(arguments["env"] as? [String] == ["FOO=bar"])
+        // The dictionary is flattened to qga's KEY=VALUE form, key-sorted so
+        // the request bytes don't depend on dictionary ordering.
+        #expect(arguments["env"] as? [String] == ["BAZ=qux", "FOO=bar"])
         #expect(arguments["capture-output"] as? Bool == true)
         #expect(arguments["input-data"] as? String == Data("stdin payload".utf8).base64EncodedString())
 
@@ -536,6 +539,121 @@ struct QGAClientTests {
         #expect(capabilities.disabledCommands == ["guest-exec", "guest-exec-status"])
         // Both halves of the pair are required, and neither is enabled here.
         #expect(!capabilities.supportsCommandExecution)
+    }
+
+    @Test("a large reply arriving in socket-sized chunks reassembles correctly")
+    func runCommandReassemblesAChunkedReply() async throws {
+        // The path a real socket always takes: the framer sees the reply in
+        // pieces and has to resume its scan across every boundary. Not
+        // hypothetical at this size — 384 KiB of stdout is ~512 KiB of base64.
+        var stdout = Data()
+        for line in 0..<12_000 {
+            stdout.append(Data("line \(line): the quick brown fox\n".utf8))
+        }
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(exitCode: 0, stdout: stdout))
+        let transport = FakeQGATransport(chunkSize: 16 * 1024, handler: agent.handler)
+
+        let result = try await makeClient(transport).runCommand(GuestCommand(path: "/bin/cat"))
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == stdout)
+    }
+
+    @Test("capture-output: false asks for no capture and still reports the exit status")
+    func runCommandWithoutCapture() async throws {
+        let agent = FakeExecAgent(terminalStatus: Self.exitedStatus(exitCode: 7))
+        let transport = FakeQGATransport(handler: agent.handler)
+        let result = try await makeClient(transport).runCommand(
+            GuestCommand(path: "/usr/bin/logger", arguments: ["hi"], captureOutput: false))
+
+        #expect(result.exitCode == 7)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+
+        let spawn = try #require(transport.requests(for: "guest-exec").first)
+        let spawnJSON = try JSONSerialization.jsonObject(with: Data(spawn))
+        let request = try #require(spawnJSON as? [String: Any])
+        let arguments = try #require(request["arguments"] as? [String: Any])
+        #expect(arguments["capture-output"] as? Bool == false)
+        // No stdin was given, so the key is omitted rather than sent as null.
+        #expect(arguments["input-data"] == nil)
+    }
+
+    @Test("a poll failure at the deadline still reports the timeout, keeping the pid")
+    func runCommandTimingOutOnAFailedPoll() async throws {
+        // Polls succeed ("still running") until the deadline is close, then the
+        // channel drops. The command was demonstrably running the whole time,
+        // so the deadline — not the dropped channel — is what the caller needs
+        // to hear, and the pid has to survive with it.
+        let agent = FakeExecAgent(terminalStatus: nil)
+        let inner = agent.handler
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-exec-status", agent.polls >= 3 { return .close }
+            return inner(execute, syncId)
+        }
+        await #expect(throws: QGAClient.QGAError.executionTimedOut(pid: agent.pid, seconds: 1)) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/sleep"), timeoutSeconds: 1)
+        }
+    }
+
+    @Test("a guest that never answers a poll reports why, not a bare timeout")
+    func runCommandNeverReachingTheAgent() async throws {
+        // Every status poll drops the channel: the agent was never reached, so
+        // "still running at the deadline" would be a fabrication.
+        let agent = FakeExecAgent(terminalStatus: nil)
+        let inner = agent.handler
+        let transport = FakeQGATransport { execute, syncId in
+            execute == "guest-exec-status" ? .close : inner(execute, syncId)
+        }
+        await #expect(throws: QGAClient.QGAError.connectionClosed) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/sleep"), timeoutSeconds: 1)
+        }
+    }
+
+    @Test("a reply that can't be decoded fails at once instead of polling to the deadline")
+    func runCommandOnUndecodableStatus() async throws {
+        // `exitcode` as a string: a shape ExecStatus doesn't model. It will
+        // decode identically next time, so retrying until the deadline would
+        // just be a slower way to fail.
+        let agent = FakeExecAgent(terminalStatus: #"{"exited": true, "exitcode": "zero"}"#)
+        let transport = FakeQGATransport(handler: agent.handler)
+        await #expect(throws: DecodingError.self) {
+            _ = try await makeClient(transport).runCommand(
+                GuestCommand(path: "/bin/true"), timeoutSeconds: 30)
+        }
+        // One poll, not thirty seconds of them.
+        #expect(agent.polls == 1)
+    }
+
+    @Test("undecodable captured output surfaces as a malformed reply")
+    func runCommandOnUndecodableCapture() async throws {
+        let agent = FakeExecAgent(
+            terminalStatus: #"{"exited": true, "exitcode": 0, "out-data": "not valid base64!!"}"#)
+        let transport = FakeQGATransport(handler: agent.handler)
+        await #expect(throws: QGAClient.QGAError.malformedResponse) {
+            _ = try await makeClient(transport).runCommand(GuestCommand(path: "/bin/cat"))
+        }
+    }
+
+    @Test("an agent too old to know guest-info reports the query as unavailable")
+    func queryCapabilitiesOnAnOldAgent() async throws {
+        let transport = FakeQGATransport { execute, syncId in
+            if execute == "guest-sync-delimited" {
+                return .object(Array(#"{"return": \#(syncId ?? -1)}"#.utf8))
+            }
+            return .object(
+                Array(#"{"error": {"class": "CommandNotFound", "desc": "guest-info"}}"#.utf8))
+        }
+        do {
+            _ = try await makeClient(transport).queryCapabilities()
+            Issue.record("expected an unknown guest-info to fail")
+        } catch let error as QGAClient.QGAError {
+            guard case .commandUnavailable = error else {
+                Issue.record("expected commandUnavailable, got \(error)")
+                return
+            }
+        }
     }
 
     @Test("an agent that enables both exec commands reports exec support")

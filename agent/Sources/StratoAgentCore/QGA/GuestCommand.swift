@@ -11,9 +11,14 @@ public struct GuestCommand: Sendable, Equatable {
     public var path: String
     /// Arguments after the program name.
     public var arguments: [String]
-    /// `KEY=VALUE` entries. Empty means the agent's own environment, which for
-    /// a systemd-launched qga is a bare service environment, not a login shell's.
-    public var environment: [String]
+    /// Environment variables for the process. Empty means the agent's own
+    /// environment, which for a systemd-launched qga is a bare service
+    /// environment, not a login shell's.
+    ///
+    /// Modelled as a dictionary rather than qga's `KEY=VALUE` wire shape: the
+    /// wire shape lets a caller pass a string with no `=` at all, which the
+    /// guest accepts and silently does nothing useful with.
+    public var environment: [String: String]
     /// Bytes written to the process's stdin, which qga then closes. There is no
     /// way to write more once the process is running.
     public var input: Data?
@@ -24,7 +29,7 @@ public struct GuestCommand: Sendable, Equatable {
     public init(
         path: String,
         arguments: [String] = [],
-        environment: [String] = [],
+        environment: [String: String] = [:],
         input: Data? = nil,
         captureOutput: Bool = true
     ) {
@@ -34,10 +39,21 @@ public struct GuestCommand: Sendable, Equatable {
         self.input = input
         self.captureOutput = captureOutput
     }
+
+    /// `environment` in qga's `KEY=VALUE` wire form, or nil when empty. Sorted
+    /// so the request bytes don't depend on dictionary ordering — env order is
+    /// meaningless to the guest but a stable encoding is worth having.
+    var environmentEntries: [String]? {
+        guard !environment.isEmpty else { return nil }
+        return environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+    }
 }
 
 /// The outcome of a `GuestCommand` that ran to completion in the guest.
 public struct GuestCommandResult: Sendable, Equatable {
+    /// The guest PID this result belongs to, so a caller driving its own
+    /// polling can correlate a result with the process it spawned.
+    public let pid: Int
     /// The process's exit status, or nil when it was killed by a signal.
     public let exitCode: Int?
     /// The signal that killed the process, or nil when it exited normally.
@@ -50,6 +66,7 @@ public struct GuestCommandResult: Sendable, Equatable {
     public let stderrTruncated: Bool
 
     public init(
+        pid: Int,
         exitCode: Int?,
         signal: Int?,
         stdout: Data,
@@ -57,6 +74,7 @@ public struct GuestCommandResult: Sendable, Equatable {
         stdoutTruncated: Bool = false,
         stderrTruncated: Bool = false
     ) {
+        self.pid = pid
         self.exitCode = exitCode
         self.signal = signal
         self.stdout = stdout

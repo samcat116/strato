@@ -277,12 +277,23 @@ Three consequences shape the implementation:
   background task, so a timed-out or cancelled call leaves nothing running
   agent-side. It does *not* stop the guest process — qga cannot signal it — so
   the thrown `executionTimedOut` carries the PID. For the same reason the spawn
-  is never retried; only the polls are.
-- **Captured output is capped per stream** (1 MiB by default). Since the whole
-  stream arrives in one JSON object, the cap is enforced by sizing that read's
-  framer budget: an oversized reply is refused mid-stream as `responseTooLarge`
-  rather than buffered and then rejected. qga's own 16 MiB in-guest cap surfaces
-  separately as the result's `stdoutTruncated`/`stderrTruncated`.
+  is never retried; only the polls are, and only on transport-level failures —
+  a reply the agent gave us (an error object, an undecodable shape) will not
+  read differently next time. `spawnCommand`/`commandStatus` are public
+  alongside `runCommand` so a caller can drive the waiting itself: that is what
+  modelling a long guest command as an async operation needs, and it is the
+  only way to collect a command `runCommand` abandoned at its deadline —
+  collecting the status is also what frees qga's in-guest entry and the output
+  it pins.
+- **Captured output is capped per stream** (1 MiB by default, clamped to qga's
+  own 16 MiB in-guest cap). Since the whole stream arrives in one JSON object,
+  the cap is enforced by sizing that read's framer budget: an oversized reply is
+  refused mid-stream as `responseTooLarge` rather than buffered and then
+  rejected. qga's own truncation surfaces separately as the result's
+  `stdoutTruncated`/`stderrTruncated`. Replies at this size are also why
+  `QGAObjectFramer` carries its scan cursor across appends — re-scanning the
+  buffer per socket chunk was free for a few-hundred-byte reply and quadratic
+  for a megabyte one.
 - **Each round trip opens its own channel**, so a long-running command doesn't
   hold the one-client-at-a-time chardev away from shutdown and guest-info
   probes. A poll that loses that race is retried until the deadline.
