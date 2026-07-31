@@ -18,7 +18,8 @@ final class FloatingIPPool: Model, @unchecked Sendable {
     @ID(key: .id)
     var id: UUID?
 
-    /// Unique operator-facing name.
+    /// Operator-facing name, unique within the pool's owning org or folder
+    /// (STR-105) — two organizations may each own a pool named `public`.
     @Field(key: "name")
     var name: String
 
