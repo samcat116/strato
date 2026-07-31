@@ -663,6 +663,14 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(RekeyInterfacesToLogicalNetworkID())
     app.migrations.add(ScopeLogicalNetworksToProjects())
 
+    // DNS phase 1 (issue #770): project-owned zones, their many-to-many
+    // attachment to networks, authored records, and the two columns derived
+    // records are placed by (`vms.hostname`, `logical_networks
+    // .primary_dns_zone_id`). Nothing realizes any of it yet — phase 3 writes
+    // the OVN `DNS` table.
+    app.migrations.add(CreateDNSZone())
+    app.migrations.add(EnforceDNSRecordEnums())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

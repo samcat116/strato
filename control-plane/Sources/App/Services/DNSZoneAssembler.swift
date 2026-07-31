@@ -1,0 +1,206 @@
+import Fluent
+import StratoShared
+import Vapor
+
+/// One assembled resource record set: an owner name, a type, and every value
+/// published at that name for that type.
+///
+/// Values are a list because an RRset genuinely is one — a hostname with both
+/// an IPv4 and an IPv6 address produces an `A` entry and an `AAAA` entry, and
+/// a round-robin service produces several `A` values. Keeping the family in
+/// `type` rather than flattening addresses into one blob is what makes the
+/// output realization-agnostic: the OVN driver (phase 3) joins the A and AAAA
+/// values for a name into the single space-separated string
+/// `Logical_Switch.dns_records` takes, while a CoreDNS zone file (phase 4)
+/// keeps them apart. Neither shape is baked in here.
+struct AssembledDNSRecord: Content, Hashable, Sendable {
+    /// Where the entry came from — the two tiers the roadmap keeps separate.
+    enum Origin: String, Content, Sendable {
+        /// Generated from a VM's hostname and its IPAM allocations. Never
+        /// stored; recomputed on every assembly.
+        case derived
+        /// A `DNSRecord` row somebody wrote.
+        case authored
+    }
+
+    /// Fully-qualified owner name, lowercased and without a trailing dot.
+    let name: String
+    let type: DNSRecordType
+    /// The RRset's values, deduplicated and sorted so two assemblies of the
+    /// same data compare equal (phase 3 hashes this to decide whether to
+    /// rewrite the OVN row).
+    let values: [String]
+    let ttl: Int
+    let view: DNSRecordView
+    let origin: Origin
+}
+
+/// A zone's complete effective contents.
+struct AssembledDNSZone: Content, Sendable {
+    let zoneId: UUID
+    let zoneName: String
+    /// Sorted by `(name, type)` — a stable order, so callers can diff two
+    /// assemblies without sorting first.
+    let records: [AssembledDNSRecord]
+}
+
+/// Computes a zone's record set as **derived ∪ authored**, on demand.
+///
+/// This is the seam the roadmap's realization drivers sit behind: the OVN
+/// `DNS` table writer (phase 3) and the per-network CoreDNS (phase 4) both
+/// consume this output rather than re-deriving names from VM rows, so there is
+/// exactly one place that knows what a zone contains.
+///
+/// Nothing is stored. Derived records are a pure function of the VM, NIC, and
+/// address rows the control plane already owns — it is the only component that
+/// knows every name → address mapping, because it owns IPAM — and persisting a
+/// second copy would just be a cache to invalidate on every VM lifecycle
+/// event.
+enum DNSZoneAssembler {
+
+    /// Assemble one zone.
+    static func assemble(zone: DNSZone, on db: any Database) async throws -> AssembledDNSZone {
+        let zoneID = try zone.requireID()
+        let derived = try await derivedRecords(zoneID: zoneID, zoneName: zone.name, on: db)
+        let authored = try await authoredRecords(zoneID: zoneID, zoneName: zone.name, on: db)
+        return AssembledDNSZone(
+            zoneId: zoneID,
+            zoneName: zone.name,
+            records: merge(derived: derived, authored: authored)
+        )
+    }
+
+    // MARK: - Derived
+
+    /// The forward and reverse records generated for every VM that registers
+    /// into this zone.
+    ///
+    /// A VM registers into the zone once for each NIC it has on a network
+    /// whose *primary* zone is this one — so a VM with two NICs on two
+    /// networks that share a primary zone publishes both NICs' addresses under
+    /// one name, which is the DNS-correct answer for a multi-homed host.
+    ///
+    /// VMs with no hostname (rows predating the column that were never
+    /// backfilled) contribute nothing rather than falling back to a slug of
+    /// their name: deriving on read is exactly what `VM.hostname` exists to
+    /// avoid.
+    static func derivedRecords(
+        zoneID: UUID, zoneName: String, on db: any Database
+    ) async throws -> [AssembledDNSRecord] {
+        let networkIDs = try await LogicalNetwork.query(on: db)
+            .filter(\.$primaryDNSZone.$id == zoneID)
+            .all()
+            .compactMap(\.id)
+        guard !networkIDs.isEmpty else { return [] }
+
+        let interfaces = try await VMNetworkInterface.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ networkIDs)
+            .with(\.$addresses)
+            .all()
+        guard !interfaces.isEmpty else { return [] }
+
+        let vmIDs = Array(Set(interfaces.map { $0.$vm.id }))
+        var hostnames: [UUID: String] = [:]
+        for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs).all() {
+            guard let id = vm.id, let hostname = vm.hostname else { continue }
+            hostnames[id] = hostname
+        }
+
+        // Group by (fqdn, family) so a multi-NIC VM's addresses land in one
+        // RRset, then emit the matching PTR for each address.
+        var forward: [DNSRecordType: [String: Set<String>]] = [:]
+        var reverse: [String: Set<String>] = [:]
+        for interface in interfaces {
+            guard let hostname = hostnames[interface.$vm.id] else { continue }
+            let fqdn = DNSName.qualified(name: hostname, inZone: zoneName)
+            for address in interface.allocatedAddresses {
+                guard let family = address.ipFamily else { continue }
+                let type: DNSRecordType = family == .ipv6 ? .aaaa : .a
+                forward[type, default: [:]][fqdn, default: []].insert(address.address)
+                if let reverseName = DNSName.reverseName(forAddress: address.address) {
+                    reverse[reverseName, default: []].insert(fqdn)
+                }
+            }
+        }
+
+        var records: [AssembledDNSRecord] = []
+        for (type, byName) in forward {
+            for (name, values) in byName {
+                records.append(
+                    AssembledDNSRecord(
+                        name: name, type: type, values: values.sorted(),
+                        ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+            }
+        }
+        for (name, targets) in reverse {
+            records.append(
+                AssembledDNSRecord(
+                    name: name, type: .ptr, values: targets.sorted(),
+                    ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+        }
+        return records
+    }
+
+    /// The names derived records occupy in a zone — what an authored write is
+    /// checked against, so a collision is rejected at write time with a clear
+    /// error instead of being silently shadowed at realization time.
+    static func derivedNames(
+        zoneID: UUID, zoneName: String, on db: any Database
+    ) async throws -> [String: Set<DNSRecordType>] {
+        var names: [String: Set<DNSRecordType>] = [:]
+        for record in try await derivedRecords(zoneID: zoneID, zoneName: zoneName, on: db) {
+            names[record.name, default: []].insert(record.type)
+        }
+        return names
+    }
+
+    // MARK: - Authored
+
+    static func authoredRecords(
+        zoneID: UUID, zoneName: String, on db: any Database
+    ) async throws -> [AssembledDNSRecord] {
+        let rows = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).all()
+        // One entry per (name, type, ttl, view): rows sharing all four are one
+        // RRset, and rows that differ in TTL or view are genuinely different
+        // entries a driver has to keep apart.
+        struct Key: Hashable {
+            let name: String
+            let type: DNSRecordType
+            let ttl: Int
+            let view: DNSRecordView
+        }
+        var grouped: [Key: Set<String>] = [:]
+        for row in rows {
+            let key = Key(
+                name: DNSName.qualified(name: row.name, inZone: zoneName),
+                type: row.type, ttl: row.ttl, view: row.view)
+            grouped[key, default: []].insert(row.value)
+        }
+        return grouped.map { key, values in
+            AssembledDNSRecord(
+                name: key.name, type: key.type, values: values.sorted(),
+                ttl: key.ttl, view: key.view, origin: .authored)
+        }
+    }
+
+    // MARK: - Merge
+
+    /// Union the two tiers into one deterministically ordered set.
+    ///
+    /// Derived wins a collision, and the write path is what makes that never
+    /// happen: authored writes are rejected against `derivedNames`. Preferring
+    /// derived here is the safe direction for the race that check cannot
+    /// close (a VM created between the check and the write) — a machine's own
+    /// address answering for its own name is the one thing that must not
+    /// silently break.
+    private static func merge(
+        derived: [AssembledDNSRecord], authored: [AssembledDNSRecord]
+    ) -> [AssembledDNSRecord] {
+        var occupied: Set<String> = []
+        for record in derived { occupied.insert("\(record.name)|\(record.type.rawValue)") }
+        let surviving = authored.filter { !occupied.contains("\($0.name)|\($0.type.rawValue)") }
+        return (derived + surviving).sorted {
+            ($0.name, $0.type.rawValue) < ($1.name, $1.type.rawValue)
+        }
+    }
+}

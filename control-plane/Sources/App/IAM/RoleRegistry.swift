@@ -62,6 +62,13 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case network
     case floatingIP = "floating_ip"
     case securityGroup = "security_group"
+    /// A DNS zone (issue #770) — a project-scoped resource, like a network.
+    case dnsZone = "dns_zone"
+    /// An authored DNS record. Unlike the snapshot types, whose container is
+    /// the project because they only *reference* their parent resource, a
+    /// record's container really is its zone: it cannot exist without one, and
+    /// delegating a zone must carry its records with it.
+    case dnsRecord = "dns_record"
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
@@ -125,6 +132,7 @@ enum IAMRoleRegistry {
             "network:read", "network:list",
             "floatingip:read", "floatingip:list",
             "securitygroup:read", "securitygroup:list",
+            "dns:read", "dns:list",
             "serviceaccount:read", "serviceaccount:list",
             "project:read",
             "folder:read",
@@ -157,6 +165,12 @@ enum IAMRoleRegistry {
             "floatingip:attach", "floatingip:detach",
             "securitygroup:create", "securitygroup:update", "securitygroup:delete",
             "securitygroup:attach", "securitygroup:detach",
+            // Zones and records share one service: they are one authoring
+            // surface, and a role that can write records but not the zone
+            // holding them isn't a distinction anyone has asked for.
+            // `attach`/`detach` gate binding a zone to a logical network.
+            "dns:create", "dns:update", "dns:delete",
+            "dns:attach", "dns:detach",
             "serviceaccount:create", "serviceaccount:update", "serviceaccount:delete",
             "project:update",
         ],

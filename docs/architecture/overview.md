@@ -112,6 +112,13 @@ typed attachments consumed by the hypervisor drivers; Linux uses OVN/OVS
 for real SDN, macOS falls back to user-mode SLIRP (dev/test only).
 Details: [networking](./networking.md).
 
+Name resolution is a separate, control-plane-owned model: project-scoped
+`DNSZone`s attach many-to-many to logical networks, each network optionally
+naming one as the zone its VMs register into. A zone's contents are
+**derived ∪ authored** — VM hostname → allocated addresses plus PTR, unioned
+with user-written records — assembled on demand and never stored, so
+realization is a swappable driver. Details: [dns](./dns.md).
+
 ## Storage and images
 
 Agents implement a `StorageBackend` protocol (currently filesystem +
@@ -227,6 +234,7 @@ external backends, with retention pruning.
 | [scheduler](./scheduler.md) | Placement strategies and integration |
 | [multi-replica](./multi-replica.md) | Running multiple control-plane replicas |
 | [networking](./networking.md) | OVN/OVS design, IPAM, roadmap |
+| [dns](./dns.md) | Zones, hostnames, record assembly, and the realization layers |
 | [storage](./storage.md) | StorageBackend, volumes, snapshots, image materialization |
 | [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
 | [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |

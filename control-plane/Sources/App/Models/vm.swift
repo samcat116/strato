@@ -44,6 +44,18 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    /// The VM's DNS label (issue #770) — the leftmost label of the name it
+    /// registers under in the primary zone of each network it has a NIC on.
+    ///
+    /// Stored rather than derived from `name` on read, for two reasons: a
+    /// slug is lossy, so renaming a VM would otherwise silently move its
+    /// records out from under whatever depends on them; and operators need to
+    /// pick a name a slug can't produce. Defaulted from a slugified `name` at
+    /// create time. Nil for VMs that predate the column — they get no derived
+    /// records until one is set.
+    @OptionalField(key: "hostname")
+    var hostname: String?
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -443,6 +455,10 @@ struct VMDetailResponse: Content {
     let disk: Int64
     let diskFormatted: String
     let networkInterfaces: [NetworkInterfaceResponse]
+    /// The VM's DNS label (issue #770) — what it registers as in the primary
+    /// zone of each network it sits on. Distinct from `observedHostname`,
+    /// which is whatever the guest OS calls itself.
+    let hostname: String?
     /// Machine profile (issue #565): whether the guest boots with UEFI Secure
     /// Boot and whether it has an emulated TPM 2.0.
     let secureBoot: Bool
@@ -492,6 +508,7 @@ struct VMDetailResponse: Content {
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map(NetworkInterfaceResponse.init)
+        self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
         self.qgaAvailable = vm.qgaAvailable

@@ -457,6 +457,39 @@ struct NetworkController: RouteCollection {
             network.leaseTime = leaseTime
         }
 
+        // The zone this network's VMs register into (issue #770). Only ever a
+        // zone already attached to the network — attachment is what grants
+        // resolution, and registering into a zone the network cannot resolve
+        // would publish names its own VMs can't look up.
+        if request.clearPrimaryDnsZone == true {
+            guard request.primaryDnsZoneId == nil else {
+                throw Abort(
+                    .badRequest,
+                    reason: "primaryDnsZoneId cannot be combined with clearPrimaryDnsZone=true")
+            }
+            network.$primaryDNSZone.id = nil
+        } else if let zoneID = request.primaryDnsZoneId, zoneID != network.$primaryDNSZone.id {
+            guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
+                throw Abort(.badRequest, reason: "DNS zone \(zoneID) does not exist")
+            }
+            let attached = try await DNSZoneNetwork.query(on: req.db)
+                .filter(\.$zone.$id == zoneID)
+                .filter(\.$logicalNetwork.$id == networkID)
+                .count()
+            guard attached > 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "DNS zone '\(zone.name)' is not attached to this network; attach it first")
+            }
+            let allowed = try await req.can("update", on: "dns_zone", id: zoneID.uuidString)
+            guard allowed else {
+                throw Abort(.forbidden, reason: "You don't have permission to modify this DNS zone")
+            }
+            try await DNSZoneService.assertPrimaryZoneAssignable(
+                zone: zone, networkID: networkID, on: req.db)
+            network.$primaryDNSZone.id = zoneID
+        }
+
         do {
             let pendingRename = renamedTo
             try await req.db.transaction { db in
