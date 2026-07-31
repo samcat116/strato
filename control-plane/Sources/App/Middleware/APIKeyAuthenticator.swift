@@ -90,11 +90,24 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
 ///
 /// Requests that are not API-key authenticated (session cookie, dev bypass, or
 /// no credentials at all) carry no `request.apiKey` and pass through untouched.
+///
+/// A refusal here is an authorization denial the Cedar evaluator never sees,
+/// so it is recorded in `iam_decision_logs` as `scope_denied` before the 403
+/// is thrown — otherwise it would be the one kind of denial with no decision
+/// row behind it (STR-116).
 struct APIKeyScopeMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         let required = APIKeyScope.required(for: request.method)
 
         if let apiKey = request.apiKey, !apiKey.grants(required) {
+            await recordDenial(
+                request: request,
+                subject: apiKey.$user.id.uuidString,
+                denial: CredentialScopeDenial(
+                    credentialType: "api_key",
+                    credentialID: apiKey.id,
+                    requiredScope: required.rawValue
+                ))
             throw Abort(
                 .forbidden,
                 reason: "API key lacks the required '\(required.rawValue)' scope for this operation"
@@ -104,6 +117,14 @@ struct APIKeyScopeMiddleware: AsyncMiddleware {
         // CLI access tokens carry the scopes the user approved at login and
         // are enforced identically.
         if let cliSession = request.cliSession, !cliSession.grants(required) {
+            await recordDenial(
+                request: request,
+                subject: cliSession.$user.id.uuidString,
+                denial: CredentialScopeDenial(
+                    credentialType: "cli_session",
+                    credentialID: cliSession.id,
+                    requiredScope: required.rawValue
+                ))
             throw Abort(
                 .forbidden,
                 reason: "CLI session lacks the required '\(required.rawValue)' scope for this operation"
@@ -111,5 +132,15 @@ struct APIKeyScopeMiddleware: AsyncMiddleware {
         }
 
         return try await next.respond(to: request)
+    }
+
+    private func recordDenial(
+        request: Request, subject: String, denial: CredentialScopeDenial
+    ) async {
+        await request.application.iamDecisionRecorder.recordScopeDenial(
+            subject: subject,
+            denial: denial,
+            context: IAMCheckContext(
+                path: request.url.path, method: request.method.rawValue, requestID: request.id))
     }
 }

@@ -478,6 +478,49 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("A scope denial writes a scope_denied decision row")
+    func testScopeDenialRecorded() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+        // Enable decision-row recording (off by default under .testing), after
+        // configure resets the config and before the recorder is lazily built.
+        app.iamDecisionLogConfig.recordDecisions = true
+
+        let user = try await createTestUser(on: app.db)
+        let (apiKey, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["read"])
+        registerScopedRoutes(on: app)
+
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
+            #expect(res.status == .forbidden)
+        }
+
+        // A scope refusal never reaches the evaluator, so without an explicit
+        // row it would be an authorization denial the decision log cannot
+        // explain (STR-116). The row names the principal, the credential, and
+        // the scope the request needed.
+        await app.iamDecisionRecorder.flush()
+        let entries = try await IAMDecisionLog.query(on: app.db).all()
+        #expect(entries.count == 1)
+        let entry = try #require(entries.first)
+        let userID = try user.requireID()
+        let apiKeyID = try apiKey.requireID()
+        #expect(entry.cedarDecision == "scope_denied")
+        #expect(entry.subject == userID.uuidString)
+        #expect(entry.spicedbPermission == "scope:write")
+        #expect(entry.resourceType == "api_key")
+        #expect(entry.resourceID == apiKeyID.uuidString)
+        #expect(entry.path == "/resource")
+        #expect(entry.method == "POST")
+
+        try await app.shutdownForTesting()
+    }
+
     @Test("Write key can perform both read and write requests")
     func testWriteScopeAllowsReadAndWrite() async throws {
         let app = try await Application.makeForTesting()

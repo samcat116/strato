@@ -114,7 +114,33 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         let quotas = try await query.sort(\.$name).sort(\.$id).all()
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await readableQuotas(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
+    }
+
+    /// Drop the project-scoped quota rows the caller may not read.
+    ///
+    /// The membership filters above bound every row to the caller's
+    /// organizations — the right gate for org- and folder-scoped quotas, which
+    /// is what the item route's `verifyQuotaAccess` also asks (`requireMember`).
+    /// A **project** quota, though, is gated on the item route by
+    /// `requireProjectMember` (`view_project`), and org membership alone must
+    /// not reveal it — otherwise a bare member reads every project's quota, and
+    /// with it the project inventory (STR-116). So project rows go through the
+    /// per-project read decision here; org/folder rows pass unchanged.
+    private func readableQuotas(_ quotas: [ResourceQuota], on req: Request) async throws
+        -> [ResourceQuota]
+    {
+        let projectIDs = Set(quotas.compactMap { $0.$project.id })
+        guard !projectIDs.isEmpty else { return quotas }
+
+        let readable = try await req.canFilter(
+            "project:read", on: projectIDs.map { IAMNode(type: .project, id: $0) })
+        let readableProjectIDs = Set(readable.map(\.id))
+
+        return quotas.filter { quota in
+            guard let projectID = quota.$project.id else { return true }
+            return readableProjectIDs.contains(projectID)
+        }
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {

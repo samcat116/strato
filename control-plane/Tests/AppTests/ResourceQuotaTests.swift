@@ -328,6 +328,40 @@ final class ResourceQuotaTests {
         }
     }
 
+    @Test("Project quota list omits projects the caller may not read")
+    func testProjectQuotaListFiltersPerRow() async throws {
+        try await withQuotaTestApp { app, _, testOrganization, testProject, _ in
+            // A quota on a project the member has no binding on.
+            let projectQuota = ResourceQuota(
+                name: "Hidden Project Quota",
+                organizationID: nil, organizationalUnitID: nil, projectID: testProject.id,
+                maxVCPUs: 20, maxMemory: Int64(40.0 * 1024 * 1024 * 1024),
+                maxStorage: Int64(200.0 * 1024 * 1024 * 1024), maxVMs: 10)
+            try await projectQuota.save(on: app.db)
+
+            // A bare org member: no project binding, so no `project:read` on the
+            // project this quota scopes. The item route already refuses it via
+            // `requireProjectMember`; before STR-116 the list handed it over
+            // anyway, on org membership alone.
+            let member = User(
+                username: "quota-bare-member", email: "quota-member@example.com",
+                displayName: "Bare Member", isSystemAdmin: false)
+            try await member.save(on: app.db)
+            try await UserOrganization(
+                userID: member.id!, organizationID: testOrganization.id!, role: "member"
+            ).save(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/quotas?level=project") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let quotas = try res.content.decode(PagedResponse<ResourceQuotaResponse>.self).items
+                #expect(!quotas.contains { $0.name == "Hidden Project Quota" })
+            }
+        }
+    }
+
     // MARK: - Update Quota Tests
 
     @Test("Update quota limits")
