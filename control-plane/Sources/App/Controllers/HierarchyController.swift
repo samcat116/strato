@@ -142,7 +142,12 @@ struct HierarchyController: RouteCollection {
         // the tree above would not show them (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
             .readable(on: req)
-        let quotaCompliance = try await QuotaComplianceService.complianceInfos(for: snapshot.quotas, on: req.db)
+
+        // The snapshot's quotas are already the ones this caller may read
+        // (`QuotaVisibility`), and compliance measures exactly what that gate
+        // covers — so there is no second decision to make here.
+        let quotaCompliance = try await QuotaComplianceService.complianceInfos(
+            for: snapshot.quotas, on: req.db)
 
         return ResourceSummaryResponse(
             organizationId: organizationID,
@@ -248,12 +253,15 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let pathComponents = try await HierarchyPathResolver.buildEntityPath(
+        let fullPath = try await HierarchyPathResolver.buildEntityPath(
             entityType: entityType,
             entityID: entityID,
             organizationID: organizationID,
             on: req.db
         )
+        // Names, decided per component — the same filter the tree and the search
+        // results next door apply (issue #870).
+        let pathComponents = try await HierarchyPathResolver.visibleComponents(fullPath, on: req)
 
         return EntityPathResponse(
             entityId: entityID,
