@@ -58,6 +58,10 @@ public struct ResolvedNetworkAttachment: Sendable {
     /// DNS resolvers for this NIC. Delivered over DHCP when `dhcpEnabled`;
     /// otherwise written into the static guest config as `nameservers`.
     public let dnsServers: [String]
+    /// DNS search domain for this NIC. Delivered over DHCP (`domain_name` /
+    /// `domain_search`) when `dhcpEnabled`; otherwise written into the static
+    /// guest config as the `nameservers` `search` list.
+    public let domainName: String?
 
     public init(
         network: String,
@@ -71,7 +75,8 @@ public struct ResolvedNetworkAttachment: Sendable {
         gateway6: String? = nil,
         mtu: Int? = nil,
         dhcpEnabled: Bool = false,
-        dnsServers: [String] = []
+        dnsServers: [String] = [],
+        domainName: String? = nil
     ) {
         self.network = network
         self.attachment = attachment
@@ -85,6 +90,7 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.mtu = mtu
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
+        self.domainName = domainName
     }
 }
 

@@ -438,8 +438,9 @@ public struct CloudInitProvisioner {
 
     /// Renders a NoCloud `network-config` (version 2), matched by MAC address:
     /// DHCP-managed NICs are set to `dhcp4: true` (OVN's responder delivers
-    /// IP/gateway/DNS), and NICs with a control-plane static allocation get an
-    /// explicit address/gateway/nameservers block.
+    /// IP/gateway/DNS/domain), and NICs with a control-plane static allocation
+    /// get an explicit address/gateway/nameservers block, including the
+    /// network's search domain.
     ///
     /// Returns nil when no NIC needs configuring — no `network-config` is written
     /// and the guest keeps its default behavior (DHCP), which is also what
@@ -505,8 +506,20 @@ public struct CloudInitProvisioner {
                 section += "\n    ipv6-address-generation: eui64"
             }
             let dns = nic.dnsServers.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            if !dns.isEmpty {
-                section += "\n    nameservers:\n      addresses: [\(dns.joined(separator: ", "))]"
+            // The network's domain reaches DHCP guests as the OVN responder's
+            // domain_name/domain_search option; static guests only get it here,
+            // so unqualified lookups need this `search` list to behave the same.
+            let searchDomain = nic.domainName
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            if !dns.isEmpty || searchDomain != nil {
+                section += "\n    nameservers:"
+                if let searchDomain {
+                    section += "\n      search: [\(searchDomain)]"
+                }
+                if !dns.isEmpty {
+                    section += "\n      addresses: [\(dns.joined(separator: ", "))]"
+                }
             }
             if let mtu = nic.mtu {
                 section += "\n    mtu: \(mtu)"
