@@ -1166,6 +1166,9 @@ actor AgentService {
         on db: Database,
         telemetry: (() -> Void)? = nil
     ) async throws {
+        // Deliberately not `kind.displayName`: that is a mid-sentence noun
+        // ("sandbox"), and these labels open the log message, so reusing it
+        // would lowercase the sentence-initial word on the sandbox path.
         let (label, idKey): (String, String) =
             switch kind {
             case .virtualMachine: ("VM", "vmId")

@@ -1273,6 +1273,44 @@ final class SandboxTests {
         }
     }
 
+    @Test("The sweep errors a transitional sandbox with no pending operation")
+    func sweepResolvesTransitionalSandboxWithoutOperation() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            // The sandbox half of the transitional backstop: the operation
+            // completed (or never existed) but the confirming report never
+            // landed, so only elapsed time is left to go on.
+            sandbox.setStatus(.starting, at: Date(timeIntervalSinceNow: -400))
+            try await sandbox.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.status == .error)
+        }
+    }
+
+    @Test("The sweep leaves a transitional sandbox alone while an operation is still pending")
+    func sweepLeavesTransitionalSandboxWithPendingOperationAlone() async throws {
+        try await withSandboxTestApp { app, user, _, sandbox, _ in
+            // Past the transitional backstop's 120s timeout, but the fresh
+            // operation is inside its own budget and owns the resolution.
+            sandbox.setStatus(.starting, at: Date(timeIntervalSinceNow: -400))
+            try await sandbox.save(on: app.db)
+
+            let operation = ResourceOperation(
+                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let fresh = try #require(await ResourceOperation.find(operation.id, on: app.db))
+            #expect(fresh.status == .pending)
+
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.status == .starting)
+        }
+    }
+
     @Test("A timed-out sandbox delete keeps converging on absent instead of resurrecting it")
     func sweepLeavesStuckDeleteConvergingOnAbsent() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
