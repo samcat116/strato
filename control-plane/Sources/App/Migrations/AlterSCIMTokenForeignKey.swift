@@ -5,11 +5,11 @@ import FluentPostgresDriver
 /// This prevents accidentally deleting all SCIM tokens when a user is deleted,
 /// which could disrupt SCIM synchronization for an entire organization.
 ///
-/// Note: This migration only runs on PostgreSQL as SQLite doesn't support
-/// altering foreign key constraints.
+/// Note: altering a foreign key needs raw Postgres DDL, so the migration
+/// guards on the database type.
 struct AlterSCIMTokenForeignKey: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // Only run on PostgreSQL - SQLite doesn't support altering foreign keys
+        // Postgres-specific DDL.
         guard database is PostgresDatabase else {
             return
         }
@@ -28,7 +28,7 @@ struct AlterSCIMTokenForeignKey: AsyncMigration {
     }
 
     func revert(on database: Database) async throws {
-        // Only run on PostgreSQL - SQLite doesn't support altering foreign keys
+        // Postgres-specific DDL.
         guard database is PostgresDatabase else {
             return
         }

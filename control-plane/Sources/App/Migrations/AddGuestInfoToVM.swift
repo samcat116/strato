@@ -7,8 +7,6 @@ import Foundation
 /// informational — populated only once the agent's guest-info poll reports them.
 struct AddGuestInfoToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // Single action per update() call: SQLite cannot combine multiple
-        // ALTER TABLE actions in one statement.
         try await database.schema("vms")
             .field("qga_available", .bool)
             .update()

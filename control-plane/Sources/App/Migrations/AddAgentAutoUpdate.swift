@@ -9,8 +9,7 @@ import Fluent
 /// (`update_desired_version`, carried on desired-state syncs as
 /// `desiredAgentUpdate`), when it was assigned (`update_attempted_at`, the
 /// health-budget clock), and the agent's last reported blocked reason /
-/// terminal failure. One field per `.update()` call: SQLite cannot combine
-/// multiple ALTER TABLE actions in one step.
+/// terminal failure.
 struct AddAgentAutoUpdate: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("agents")

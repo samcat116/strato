@@ -10,9 +10,6 @@ import SQLKit
 ///   desired-state syncs so agents can reject stale ones.
 /// * `observed_generation` — the last generation an agent confirmed converging
 ///   to. Pending operations complete when it catches up to `generation`.
-///
-/// SQLite cannot combine multiple ALTER TABLE actions in one step, so each
-/// column is added with its own `.update()` call.
 struct AddDesiredStateToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("vms")

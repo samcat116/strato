@@ -9,14 +9,12 @@ import SQLKit
 /// with them — `idx_vm_interface_addresses_network_address` took over its job.
 struct DropLegacyVMInterfaceAddressColumns: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // The index must go before its column: SQLite refuses to drop a
-        // column that an index references (Postgres drops it implicitly).
+        // The index is dropped explicitly rather than left to Postgres, which
+        // would drop it implicitly with the column it references.
         if let sql = database as? SQLDatabase {
             try await sql.raw("DROP INDEX IF EXISTS idx_vm_network_interfaces_network_ip").run()
         }
 
-        // Single action per update() call: SQLite cannot combine multiple
-        // ALTER TABLE actions in one statement.
         try await database.schema("vm_network_interfaces")
             .deleteField("ip_address")
             .update()

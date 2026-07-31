@@ -371,19 +371,17 @@ struct OIDCController: RouteCollection {
             throw Abort(.badRequest, reason: "Missing 'organization' query parameter")
         }
 
-        // Case-insensitive name match. Exact match first; the fallback scan
-        // keeps case-insensitivity portable across Postgres and the SQLite
-        // test databases (org counts are small, so the scan is cheap).
+        // Case-insensitive name match. Exact match first, then a fallback scan
+        // (org counts are small, so the scan is cheap).
         var organization = try await Organization.query(on: req.db)
             .filter(\.$name == rawName)
             .first()
         if organization == nil, let sql = req.db as? SQLDatabase {
-            // Case-insensitive fallback done in SQL (LOWER works on both
-            // Postgres and SQLite) with LIMIT 2 — enough to detect ambiguity
-            // without scanning the org table on a public, unauthenticated
-            // endpoint. Ambiguous matches (org names differing only by case)
-            // must not route the user to an arbitrary tenant's IdP — exact
-            // casing is required in that situation.
+            // Case-insensitive fallback done in SQL (LOWER) with LIMIT 2 —
+            // enough to detect ambiguity without scanning the org table on a
+            // public, unauthenticated endpoint. Ambiguous matches (org names
+            // differing only by case) must not route the user to an arbitrary
+            // tenant's IdP — exact casing is required in that situation.
             let rows = try await sql.select()
                 .column("id")
                 .from(Organization.schema)

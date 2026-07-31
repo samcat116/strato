@@ -4,8 +4,6 @@ import SQLKit
 
 struct EnhanceVM: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // For SQLite compatibility, add fields one at a time
-
         // VM status and hypervisor tracking
         try await database.schema("vms")
             .field("status", .string, .required, .sql(.default("Created")))
@@ -104,7 +102,6 @@ struct EnhanceVM: AsyncMigration {
     }
 
     func revert(on database: Database) async throws {
-        // Delete fields one at a time for SQLite compatibility
         let fieldsToDelete = [
             "status", "hypervisor_id", "max_cpu", "memory_new", "hugepages", "shared_memory",
             "disk_new", "disk_path", "readonly_disk", "kernel_path", "initramfs_path",

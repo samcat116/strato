@@ -34,8 +34,6 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
     }
 
     func prepare(on database: Database) async throws {
-        // Single action per update() call: SQLite cannot combine multiple
-        // ALTER TABLE actions in one statement.
         try await database.schema("logical_networks")
             .field("subnet6", .string)
             .update()

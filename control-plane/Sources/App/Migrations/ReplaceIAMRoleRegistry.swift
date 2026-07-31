@@ -14,8 +14,7 @@ import SQLKit
 ///
 /// The backfill is data-only on purpose: `role_bindings.role` stays a string
 /// column that now holds UUID strings. Swapping it for a typed uuid column
-/// would mean dropping the table's five-column unique constraint, which
-/// SQLite cannot do without a full table rebuild.
+/// would mean dropping the table's five-column unique constraint.
 ///
 /// Seeded rows get empty `cedar_text`: `RoleRegistrySync` runs right after
 /// migrations on every boot and writes the canonical text before the first

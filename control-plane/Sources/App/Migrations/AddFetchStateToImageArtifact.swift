@@ -5,9 +5,6 @@ import Fluent
 /// whole images are. Existing artifacts are fully materialized, so `status`
 /// defaults to `ready`; only URL-sourced artifacts move through
 /// pending → downloading → ready/error.
-///
-/// Columns are added one `.update()` at a time: SQLite's ALTER TABLE cannot
-/// combine multiple actions in a single migration step.
 struct AddFetchStateToImageArtifact: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("image_artifacts")

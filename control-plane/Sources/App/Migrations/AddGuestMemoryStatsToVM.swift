@@ -8,8 +8,6 @@ import Foundation
 /// populated only for guests whose virtio_balloon driver reports.
 struct AddGuestMemoryStatsToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // Single action per update() call: SQLite cannot combine multiple
-        // ALTER TABLE actions in one statement.
         try await database.schema("vms")
             .field("guest_memory_total_bytes", .int64)
             .update()

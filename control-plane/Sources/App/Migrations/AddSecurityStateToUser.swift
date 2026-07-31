@@ -9,7 +9,6 @@ import Fluent
 ///   (RISC account-disabled), cleared on account-enabled.
 struct AddSecurityStateToUser: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // SQLite doesn't support multiple ADD clauses in a single ALTER TABLE statement
         try await database.schema("users")
             .field("session_epoch", .int64, .required, .custom("DEFAULT 0"))
             .update()

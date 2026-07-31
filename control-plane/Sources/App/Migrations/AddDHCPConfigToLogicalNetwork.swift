@@ -11,8 +11,6 @@ import SQLKit
 /// can flip it back to fall through to the pre-DHCP cloud-init static path.
 struct AddDHCPConfigToLogicalNetwork: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // One action per update() call: SQLite cannot combine multiple ALTER
-        // TABLE actions in a single statement.
         try await database.schema("logical_networks")
             .field("dhcp_enabled", .bool, .required, .sql(.default(true)))
             .update()

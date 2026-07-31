@@ -2,7 +2,6 @@ import Fluent
 
 struct AddProjectToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // Add fields one at a time for SQLite compatibility
         try await database.schema("vms")
             .field("project_id", .uuid, .references("projects", "id", onDelete: .cascade))
             .update()
@@ -20,7 +19,6 @@ struct AddProjectToVM: AsyncMigration {
     }
 
     func revert(on database: Database) async throws {
-        // Delete fields one at a time for SQLite compatibility
         try await database.schema("vms")
             .deleteField("project_id")
             .update()

@@ -8,8 +8,7 @@ import SQLKit
 ///
 /// `max_sandboxes` backfills from each row's `max_vms`: a quota sized for N
 /// machines admits up to N sandboxes besides, with the shared vCPU/memory
-/// pools remaining the real ceiling. Each column is added in its own step —
-/// SQLite cannot combine multiple ALTER TABLE actions.
+/// pools remaining the real ceiling.
 ///
 /// Both count columns are then recomputed from the workload rows actually in
 /// each quota's scope. Sandboxes created before this migration were reserved
@@ -39,8 +38,7 @@ struct AddSandboxCountToResourceQuota: AsyncMigration {
         }
     }
 
-    /// Correlated-subquery recount of one workload table into one counter
-    /// column, portable across SQLite and Postgres.
+    /// Correlated-subquery recount of one workload table into one counter column.
     static func recountSQL(workloadTable: String, countColumn: String) -> String {
         """
         UPDATE resource_quotas SET \(countColumn) = (
