@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Before creating a PR (and again before declaring work done), run `git fetch origin main && git merge origin/main` and resolve conflicts locally. Parallel sessions land PRs frequently, so branches go stale within hours — don't wait for the merge-conflict notification.
 - Review comments from `chatgpt-codex-connector[bot]` that only report Codex usage limits are noise: do not reply, push, or take any action on them.
 - Use `/pr-comments` to fetch and address unresolved review threads on the current branch's PR.
+- `docs/development/code-review.md` is the review checklist — what to check when reviewing, and the author's pre-review pass. Its "Strato-specific traps" section lists the invariants that break most often (generation bumps, verdict paths, Valkey failing open, agent-owned paths).
 
 ## Development Commands
 
