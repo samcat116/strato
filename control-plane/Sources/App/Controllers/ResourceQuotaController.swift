@@ -46,7 +46,20 @@ struct ResourceQuotaController: RouteCollection {
         return paging.page(quotas)
     }
 
-    /// Every quota in the caller's organizations, by name, ready for slicing.
+    /// Every quota hanging on a scope the caller may read, by name, ready for
+    /// slicing.
+    ///
+    /// `readableQuotas` below is the gate; everything here is only the bound
+    /// that runs before it. Which matters because the two must not be derived
+    /// from the same thing: a bound taken from membership rows silently decides
+    /// too, by never putting a row in front of the evaluator. Project rows are
+    /// therefore bounded by the caller's *grants* (`ProjectVisibility`, as every
+    /// other project-scoped list does), so a caller whose only grant is a
+    /// binding on a project — with no `user_organizations` row for that
+    /// project's organization — still reaches that project's quota. Org and
+    /// folder rows keep the membership bound, because `readableQuotas` decides
+    /// both on `org:read` of the owning organization and no wider bound would
+    /// survive that.
     func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -58,58 +71,65 @@ struct ResourceQuotaController: RouteCollection {
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
 
-        if organizationIDs.isEmpty {
-            return []
-        }
+        let ouIDs =
+            organizationIDs.isEmpty
+            ? []
+            : try await OrganizationalUnit.query(on: req.db)
+                .filter(\.$organization.$id ~~ organizationIDs)
+                .all()
+                .compactMap { $0.id }
+
+        // The projects the caller's own grants reach. Nil means "no bound"
+        // (a system admin, an unbounded authored permit), not "everything is
+        // visible" — those rows are still decided below.
+        let visibility = try await ProjectVisibility.resolve(on: req)
 
         var query = ResourceQuota.query(on: req.db)
 
         switch level {
         case "organization":
+            if organizationIDs.isEmpty {
+                return []
+            }
             query = query.filter(\.$organization.$id ~~ organizationIDs)
                 .filter(\.$organizationalUnit.$id == nil)
                 .filter(\.$project.$id == nil)
         case "project":
-            // Get all projects in user's organizations
-            let directProjects = try await Project.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
-
-            let ouProjects =
-                !ouIDs.isEmpty
-                ? try await Project.query(on: req.db)
-                    .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                    .all() : []
-
-            let allProjects = directProjects + ouProjects
-            let projectIDs = allProjects.compactMap { $0.id }
-
-            if projectIDs.isEmpty {
+            if visibility.reachesNoProject {
                 return []
             }
-            query = query.filter(\.$project.$id ~~ projectIDs)
+            query = query.filter(\.$project.$id != nil)
+            if let candidates = visibility.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
         case "organizational_unit":
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
             if ouIDs.isEmpty {
                 return []
             }
             query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
                 .filter(\.$project.$id == nil)
         default:
-            // No level specified, return all quotas in user's organizations
-            query = query.group(.or) { or in
-                or.filter(\.$organization.$id ~~ organizationIDs)
-                // TODO: Add project and OU quota filtering for user access
+            // Every level at once. Folder- and project-scoped rows used to be
+            // dropped here (a standing TODO) because nothing decided them; now
+            // that `readableQuotas` decides each one they belong in the
+            // unfiltered list.
+            if organizationIDs.isEmpty, ouIDs.isEmpty, visibility.reachesNoProject {
+                return []
+            }
+            query = query.group(.or) { anyQuota in
+                if !organizationIDs.isEmpty {
+                    anyQuota.filter(\.$organization.$id ~~ organizationIDs)
+                }
+                if !ouIDs.isEmpty {
+                    anyQuota.filter(\.$organizationalUnit.$id ~~ ouIDs)
+                }
+                if let candidates = visibility.candidateProjectIDs {
+                    if !candidates.isEmpty {
+                        anyQuota.filter(\.$project.$id ~~ candidates)
+                    }
+                } else {
+                    anyQuota.filter(\.$project.$id != nil)
+                }
             }
         }
 

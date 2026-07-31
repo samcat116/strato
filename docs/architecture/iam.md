@@ -939,6 +939,31 @@ in an organization bound an admin on `GET /api/sites/:id` and not on
 `GET /api/sites`. Every list endpoint now filters per row through `req.can`
 for every caller, admins included.
 
+The pre-cutover audit looked for handler-level *allows* that bypassed the
+evaluator, so it could not see the other shape of the same gap: a list that
+never asked at all. The container lists — projects, folders, quotas, and the
+hierarchy tree, search and resource dumps under `/api/organizations/:id` —
+gated on `view_organization` and then returned everything inside the
+organization, which is exactly the `inherited_member` behaviour the invariant
+above deliberately reverses: bare membership let you enumerate every project
+name, description, folder and VM count in the org while every individual
+`GET /api/projects/:id` answered 403 (issue #870). They route through the
+evaluator now — projects and quota rows in STR-116, folders, the hierarchy
+tree, its resource dumps and both search routes in STR-113 — on
+`project:read` / `folder:read` / `vm:read` / the quota's own scope.
+**Reaching a container is not reaching its contents**: an organization-level
+gate says the caller may see the container, and each row inside it is still a
+decision of its own. `docs/architecture/authorization-edge-audit.md` carries
+the per-endpoint table and what remains open.
+
+Two things the fix has to keep apart, because collapsing them is how the leak
+happened: the query **bound** and the **gate**. A bound derived from
+membership rows decides too — silently, by never putting a row in front of the
+evaluator — which is the same defect pointing the other way, and it costs a
+caller rows they hold a real grant on. So a bound has to come from the
+caller's grants (`ProjectVisibility`) wherever the gate can see further than
+membership does.
+
 What legitimately remains admin-conditional in controllers, in exactly two
 shapes:
 
@@ -957,8 +982,9 @@ shapes:
 
 - **The list-scoping narrowing** in `ProjectVisibility` (issue #688). The
   project-scoped list endpoints (`/api/volumes`, `/api/networks`,
-  `/api/security-groups`, `/api/floating-ips`) used to load every project in
-  the installation and evaluate each one; they now derive a *superset* of the
+  `/api/security-groups`, `/api/floating-ips`, `/api/dns-zones`, and since
+  issue #870 the project-scoped rows of `/api/quotas`) used to load every
+  project in the installation and evaluate each one; they now derive a *superset* of the
   caller's reachable projects from their own grants and narrow the row query to
   it, then decide each project the surviving rows land in through `req.can` as
   before. An admin holds no bindings, so a bindings-derived superset would be

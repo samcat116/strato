@@ -124,30 +124,50 @@ their parent — a VM's operations/logs/snapshots, a project's members/service
 accounts, the IAM policy/role/guardrail lists gated on `iam:readPolicy` of the
 owner — correctly use a container gate whose action matches the rows.
 
-### Open findings (documented, not fixed here)
+### Fixed in the aggregation pass ([#882](https://github.com/samcat116/strato/issues/882))
 
-These are real leaks of the same class, deferred because a correct fix is a
-product/design decision (admin-gate the aggregate vs filter the whole tree
-per-row) that runs through shared aggregation services and deserves its own
-tracked change rather than a rushed edit inside the audit PR. Tracked as
-[#882](https://github.com/samcat116/strato/issues/882).
+The deferred aggregation leaks are closed. The design question they were
+deferred on — admin-gate the aggregate or filter the whole tree per-row —
+resolved to *filter*: `HierarchySnapshot.readable(on:)` narrows one loaded
+snapshot through three batched decisions, and the tree, the flat dump and the
+summary are all assembled from it, so there is one answer rather than three.
+
+| Endpoint | Was | Now |
+| -- | -- | -- |
+| `GET /api/organizations/:id/resources` | the org's entire VM fleet, projects, folders, quotas | snapshot narrowed on `project:read` / `folder:read` / `vm:read`; folders from `decidedFolders` |
+| `GET /api/organizations/:id/hierarchy` | VM summaries for every project | same snapshot; ancestor folders retained only to keep the tree connected |
+| `GET /api/organizations/:id/resources/summary` | org-wide usage + per-quota compliance | same snapshot, so the totals count what the tree would show |
+| `GET /api/organizations/:id/search` / `GET /api/hierarchy/search` | matching folders/projects/VMs org-wide | `HierarchySearchService.readable`, one batch per result kind |
+| `GET /api/organizations/:id/ous`, `.../ous/:ouID/ous` | the org's whole folder structure | `folder:read` per folder |
+
+Two rows survive without a decision of their own, both documented at the call
+site: organization-scoped quotas (the handler's `view_organization` gate has
+already passed and they describe that organization), and folders on the path
+down to a readable project — dropping those disconnects the tree, and the
+project's own materialized `path` names them anyway. The second only applies to
+the nested tree; flat consumers read `decidedFolders` and never see them.
+
+`GET /api/organizations/:id/search` was additionally **500ing for every
+caller**: it declared its folder join inside an `.or` group, which Fluent drops
+from the emitted SQL while keeping its filter, so the statement named a table it
+never joined. Nothing covered the route.
+
+### Open findings (documented, not fixed)
 
 | Endpoint | Leaks | Notes |
 | -- | -- | -- |
-| `GET /api/organizations/:id/resources` | the org's **entire VM fleet** (`VMResponse`), projects, folders, quotas | worst instance — a side channel around `GET /api/vms` |
-| `GET /api/organizations/:id/hierarchy` | VM summaries for every project | via `HierarchyTreeBuilder` |
-| `GET /api/organizations/:id/resources/summary` | org-wide usage + per-quota compliance | aggregate disclosure |
-| `GET /api/organizations/:id/search` / `GET /api/hierarchy/search` | matching folders/projects/**VMs** org-wide | `hierarchy/search` gates on org membership only, no `requireMember` |
-| `GET /api/organizations/:id/path/:type/:id` | folder/project names for an arbitrary entity | single-entity variant of the above |
+| `GET /api/organizations/:id/path/:type/:id` | folder/project names for an arbitrary entity | single-entity variant of the search leak |
+| `GET /api/organizations/:id/groups` | every group in the org, and `getMembers` discloses emails | `group:read` exists, so this is fixable the same way; identity-plane inventory rather than the project one |
+| `GET /api/organizations/:id/webhooks` | every subscription in the org, **including delivery URLs** | no `webhook:*` actions in the registry, so there is nothing to decide on yet — registering them comes first |
+| `GET /api/organizations/:id/ous/:ouID` and the folder mutation routes | any folder in the org, by id | an *item*-route gap, not a list one: the controller gates on `requireMember` where `folder:read` / `folder:update` exist |
+| `GET /api/projects` candidate set | nothing — an under-grant | bounded by membership rows, so a binding reaching a project in an org the caller holds no membership row in is hidden from the list while the item route allows it. A bound must come from grants, not membership, or it decides silently |
 
-Weaker container gates worth revisiting (SUSPECT, not confirmed leaks): folder
-and group lists (`view_organization` where `folder:read`/`group:read` exist and
-`getMembers` discloses emails), `GET /api/projects/:id/images`
-(`view_project` where `image` is its own node type with per-image guardrails),
-DNS record lists and VM/sandbox/volume snapshot lists (container `read` where
-the item routes authorize on the child node type). Each is defensible — a child
-cannot outlive its parent's read grant — but none honours a row-level forbid the
-way its item route does.
+Weaker container gates worth revisiting (SUSPECT, not confirmed leaks):
+`GET /api/projects/:id/images` (`view_project` where `image` is its own node
+type with per-image guardrails), DNS record lists and VM/sandbox/volume snapshot
+lists (container `read` where the item routes authorize on the child node type).
+Each is defensible — a child cannot outlive its parent's read grant — but none
+honours a row-level forbid the way its item route does.
 
 ---
 
