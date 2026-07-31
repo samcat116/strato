@@ -217,14 +217,16 @@ struct HealthControllerTests {
         try await app.shutdownForTesting()
     }
 
-    /// The two Valkey-backed stores are graded oppositely, which is the point of
-    /// splitting them (issue #855): coordination fails open, sessions do not.
-    @Test("An unreachable session store fails readiness closed")
-    func testReadinessFailsWhenSessionStoreIsDown() async throws {
+    /// A session store on its own endpoint can fail while this replica is
+    /// otherwise healthy, so leaving the rotation sends browser auth to a
+    /// replica that can serve it. This is the case the split exists to enable.
+    @Test("An unreachable session store on its own endpoint fails readiness closed")
+    func testReadinessFailsWhenIsolatedSessionStoreIsDown() async throws {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
         try await app.autoMigrate()
+        app.valkeyConfiguration = Self.storeConfiguration(sessionHost: "sessions")
         app.sessionStore = UnreachableSessionStore()
 
         try await app.test(.GET, "/health/ready") { res async throws in
@@ -238,6 +240,36 @@ struct HealthControllerTests {
             #expect(health.checks.first { $0.name == "coordination" }?.status == "up")
         }
         try await app.shutdownForTesting()
+    }
+
+    /// The default deployment shares one Valkey, so every replica fails together
+    /// and 503 shifts traffic nowhere — it only drops the traffic sessions do
+    /// not back (agent mTLS, API keys, the reconciler). Grade it degraded, which
+    /// is what this endpoint returned before the stores were split at all.
+    @Test("An unreachable shared session store degrades readiness rather than failing it")
+    func testReadinessDegradesWhenSharedSessionStoreIsDown() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+        app.valkeyConfiguration = Self.storeConfiguration(sessionHost: nil)
+        app.sessionStore = UnreachableSessionStore()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .ok)
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "degraded")
+            #expect(health.checks.first { $0.name == "session-store" }?.status == "degraded")
+        }
+        try await app.shutdownForTesting()
+    }
+
+    /// Resolved config for a deployment whose session store either shares the
+    /// coordination endpoint (`sessionHost` nil) or has its own.
+    private static func storeConfiguration(sessionHost: String?) -> ValkeyStoreConfiguration {
+        var env = ["VALKEY_HOST": "coordination"]
+        if let sessionHost { env["SESSION_VALKEY_HOST"] = sessionHost }
+        return ValkeyStoreConfiguration.resolve { env[$0] }!
     }
 
     @Test("A reachable session store is reported up and keeps readiness at 200")

@@ -62,18 +62,25 @@ Checks are graded, because the dependencies are not equally fatal:
   fail-open (see [multi-replica](../architecture/multi-replica.md)); agents still
   converge via the periodic sync. Pulling every replica out of rotation because
   it blipped would be a worse outage than the blip.
-- **session-store** — **fatal**. Also Valkey-backed, and graded the opposite way,
-  which is exactly why the two are configured separately. Sessions cannot fail
-  open: a replica that cannot read them cannot authenticate anyone, so it should
-  leave the rotation rather than serve logouts. Absent from the payload when
+- **session-store** — **fatal when session storage has its own endpoint,
+  `degraded` when it shares the coordination one**. The grade follows whether the
+  failure can be replica-local, because that is the only case where pulling this
+  replica helps. A separate session Valkey can fail while this replica is
+  otherwise healthy, and a replica that cannot read sessions cannot authenticate
+  a browser — so 503 lets the load balancer send that traffic to one that can.
+  A *shared* endpoint fails for every replica at once, so 503 everywhere shifts
+  traffic nowhere and merely drops the traffic sessions do not back: agents
+  authenticate by SPIFFE/SPIRE mTLS, API-key and CLI clients by key, and the
+  reconciler needs only Postgres to converge. Absent from the payload when
   sessions are not Valkey-backed (the test environment uses Fluent sessions).
 
-::: warning Both stores are one instance by default
-Unless you set `SESSION_VALKEY_HOST`, sessions share the coordination Valkey — so
-a blip on that single instance trips the **fatal** session check and returns 503,
-not just `degraded`. Splitting the two (see
-[docker-compose](./docker-compose.md)) is what buys the fail-open behavior for
-coordination in practice.
+::: tip Both stores are one instance by default
+Unless you set `SESSION_VALKEY_HOST`, sessions share the coordination Valkey, and
+a blip there reports `degraded` at 200 — the same behavior as before the two
+stores were separable. Giving sessions their own endpoint (see
+[docker-compose](./docker-compose.md#splitting-session-storage)) is what makes
+the fatal grade meaningful, because only then can session storage fail without
+the coordination store failing too.
 :::
 
 ### Liveness never follows readiness

@@ -95,11 +95,14 @@ agent errors propagate; an unroutable agent fails fast.
   Agents keep converging via their socket-holding replica's periodic sync;
   cross-replica nudges and RPC are unavailable until Valkey returns.
   `/health/ready` reports `coordination: degraded` and keeps serving traffic.
-- **Session-store outage**: no fail-open path exists. Every signed-in user is
-  logged out and must re-authenticate with a passkey. `/health/ready` grades this
-  fatal (503) so the replica leaves the load-balancer rotation instead of serving
-  logouts. When both stores share one instance — the default — an outage there is
-  a session outage, so it is graded fatal too.
+- **Session-store outage**: no fail-open path exists for browser auth. Every
+  signed-in user is logged out and must re-authenticate with a passkey. Agents
+  (SPIFFE mTLS) and API-key/CLI clients are unaffected, and the reconciler needs
+  only Postgres. `/health/ready` grades this fatal (503) **only when session
+  storage has its own endpoint** — that failure is replica-local, so leaving the
+  rotation sends browser auth to a healthy replica. When both stores share one
+  instance (the default), every replica fails together and 503 would shift
+  traffic nowhere, so it is graded `degraded` instead.
 - **Dropped subscription connection**: pub/sub subscriptions live on a
   dedicated connection that the client library does not restore after a drop
   (Valkey restart, failover, network blip) — and a dead subscription is
