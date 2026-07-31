@@ -196,10 +196,6 @@ struct VMPlacementRequirements: Sendable {
     /// resolve a signed firmware set (or fail the create loudly if its host
     /// has none).
     let requiresSecureBoot: Bool
-    /// Whether the VM carries any security group (network ACL). These are
-    /// enforced only by v20+ agents, so a VM with one must not be placed on an
-    /// older agent that would silently realize the NIC with no ACLs (fail-open).
-    let requiresSecurityGroups: Bool
 
     init(
         cpu: Int,
@@ -211,8 +207,7 @@ struct VMPlacementRequirements: Sendable {
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
         requiresVTPM: Bool = false,
-        requiresSecureBoot: Bool = false,
-        requiresSecurityGroups: Bool = false
+        requiresSecureBoot: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -224,7 +219,6 @@ struct VMPlacementRequirements: Sendable {
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresVTPM = requiresVTPM
         self.requiresSecureBoot = requiresSecureBoot
-        self.requiresSecurityGroups = requiresSecurityGroups
     }
 }
 
@@ -238,7 +232,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
     case machineProfileUnsatisfied(eligibleAgents: Int)
-    case securityGroupsUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -275,10 +268,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
             return
                 "No eligible agent is new enough to realize Secure Boot or a TPM (\(eligibleAgents) agent(s) "
                 + "checked) — upgrade the agents on your hypervisor nodes"
-        case .securityGroupsUnsatisfied(let eligibleAgents):
-            return
-                "No eligible agent is new enough to enforce this VM's security groups (\(eligibleAgents) agent(s) "
-                + "checked) — upgrade the agents on your hypervisor nodes so the firewall isn't silently dropped"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -337,8 +326,7 @@ final class SchedulerService: @unchecked Sendable {
     /// agents. It becomes derivable once VMs can express attachment to a
     /// shared/tenant network at creation time.
     static func placementRequirements(
-        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil,
-        requiresSecurityGroups: Bool = false
+        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
     ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: vm.cpu,
@@ -348,8 +336,7 @@ final class SchedulerService: @unchecked Sendable {
             architecture: architecture,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
-            requiresSecureBoot: vm.secureBoot,
-            requiresSecurityGroups: requiresSecurityGroups
+            requiresSecureBoot: vm.secureBoot
         )
     }
 
@@ -584,23 +571,6 @@ final class SchedulerService: @unchecked Sendable {
                 throw SchedulerError.vtpmUnsatisfied(eligibleAgents: machineCapable.count)
             }
             machineCapable = tpmCapable
-        }
-
-        // Security groups (network ACLs) are enforced only by v20+ agents. A VM
-        // carrying any security group must not be placed — or rescheduled —
-        // onto an older agent, which would silently realize the NIC with no
-        // ACLs (fail-open), leaving a VM the tenant believes is firewalled fully
-        // reachable. Refuse rather than degrade, mirroring the vTPM/machine
-        // constraints above; the attach path is already gated, this closes the
-        // placement/reschedule path.
-        if requirements.requiresSecurityGroups {
-            let sgCapable = machineCapable.filter {
-                WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0)
-            }
-            guard !sgCapable.isEmpty else {
-                throw SchedulerError.securityGroupsUnsatisfied(eligibleAgents: machineCapable.count)
-            }
-            machineCapable = sgCapable
         }
 
         // An agent with unknown architecture cannot prove it satisfies an
