@@ -6,7 +6,7 @@ import VaporTesting
 
 /// Tests project-level role grants (users and groups): the relational mirror rows are
 /// written, the `role_bindings` rows follow (including revoke-old-then-grant-new on a
-/// role change), and listing/mutations are gated by view_project / manage_project.
+/// role change), and listing/mutations are gated by view_project / iam:setPolicy.
 @Suite("Project Member Tests", .serialized)
 final class ProjectMemberTests {
 
@@ -347,7 +347,7 @@ final class ProjectMemberTests {
         }
     }
 
-    @Test("Granting requires manage_project")
+    @Test("Granting requires iam:setPolicy")
     func grantRequiresManageProject() async throws {
         try await withApp { app, project, _, target, _, _ in
             // A viewer can list members but holds no project:update, so the

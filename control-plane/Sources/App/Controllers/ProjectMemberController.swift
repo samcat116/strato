@@ -6,7 +6,7 @@ import Foundation
 /// source of truth for authorization; the `ProjectMember` / `ProjectGroupGrant`
 /// tables mirror the grants so the members list renders from a fast relational query.
 ///
-/// Listing requires `view_project`; all mutations require `manage_project` (enforced
+/// Listing requires `view_project`; all mutations require `iam:setPolicy` (enforced
 /// via `OrganizationAccessService`, which delegates to the Cedar evaluator).
 ///
 /// A grant whose principal is outside the project's organization additionally

@@ -11,7 +11,7 @@ import Fluent
 ///
 /// Org-scoped checks map to the `organization` object's `view_organization` /
 /// `manage_members` permissions; project-scoped checks map to the `project` object's
-/// `view_project` / `manage_project` permissions, which resolve org/OU inheritance
+/// `view_project` and explicit IAM actions, which resolve org/OU inheritance
 /// (and, once granted, project-level roles) through the schema.
 ///
 /// - Note: `OIDCController` keeps its own request-based variants for their distinct
@@ -41,11 +41,25 @@ struct OrganizationAccessService {
         }
     }
 
-    /// Throws `.forbidden` unless the current user can manage the project (via a direct
-    /// project admin role, a group admin grant, or inherited org/OU admin).
+    /// Throws `.forbidden` unless the current user can change project IAM policy (via a
+    /// direct project admin role, a group admin grant, or inherited org/OU admin).
+    ///
+    /// This intentionally does not use the legacy `manage_project` permission. That
+    /// permission translates to `project:update`, which editors hold, and therefore
+    /// must only gate project metadata updates.
     static func requireProjectAdmin(project: Project, on req: Request) async throws {
+        try await requireProjectAction("iam:setPolicy", project: project, on: req)
+    }
+
+    /// Throws `.forbidden` unless the current user may manage project quotas.
+    static func requireProjectQuotaAdmin(project: Project, on req: Request) async throws {
+        try await requireProjectAction("quota:manage", project: project, on: req)
+    }
+
+    /// Enforces a canonical IAM action against a project node.
+    static func requireProjectAction(_ action: String, project: Project, on req: Request) async throws {
         let projectID = try project.requireID()
-        guard try await req.can("manage_project", on: "project", id: projectID.uuidString) else {
+        guard try await req.can(action, on: IAMNode(type: .project, id: projectID)) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }

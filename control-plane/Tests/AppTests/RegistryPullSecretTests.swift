@@ -230,7 +230,7 @@ final class RegistryPullSecretTests {
         }
     }
 
-    @Test("Mutations require manage_project; denial is a 403")
+    @Test("Mutations require iam:setPolicy; denial is a 403")
     func mutationsRequirePermission() async throws {
         try await withPullSecretTestApp { app, _, project, _, _ in
             // A project viewer can read but holds no project:update, so the

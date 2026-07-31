@@ -148,7 +148,19 @@ final class OrganizationAccessServiceTests {
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
             try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
-            // A viewer can see the project but not manage it.
+            // Editors may update project metadata, but cannot administer IAM policy.
+            let editor = try await builder.createUser(username: "a2", email: "a2@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: editor.id!, role: .editor,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let editorRequest = self.authedRequest(app, user: editor)
+            try await OrganizationAccessService.requireProjectAction(
+                "project:update", project: project, on: editorRequest)
+            await self.expectAbort(.forbidden, reason: "Admin access required") {
+                try await OrganizationAccessService.requireProjectAdmin(project: project, on: editorRequest)
+            }
+
+            // A viewer can see the project but cannot administer it.
             let viewer = try await builder.createUser(username: "a3", email: "a3@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
