@@ -481,14 +481,16 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
     private func applyAttributeFilter(
         path: String,
         op: SCIMFilterOperator,
-        value: String,
+        value: SCIMComparisonValue,
         to query: QueryBuilder<App.Group>
     ) throws -> QueryBuilder<App.Group> {
         let lowercasePath = path.lowercased()
 
         switch lowercasePath {
         case "displayname":
-            return applyStringFilter(keyPath: \App.Group.$name, column: "name", op: op, value: value, to: query)
+            return applyStringFilter(
+                keyPath: \App.Group.$name, column: "name", op: op,
+                value: try value.requireText(path: path), to: query)
 
         case "externalid":
             // Would need to join with scim_external_ids

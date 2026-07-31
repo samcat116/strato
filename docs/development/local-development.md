@@ -6,7 +6,10 @@ full stack goes through the same Docker Compose deployment operators use.
 
 ## Prerequisites
 
-- **Swift 6.2 or later** — for `control-plane/`, `agent/`, and `shared/`
+- **Swift 6.3 or later** — for `control-plane/`, `agent/`, `cli/`, and `shared/`.
+  6.2 no longer resolves: swift-toml (a dependency of `agent/` and `cli/`)
+  declares `swift-tools-version:6.3`, and an older toolchain rejects the
+  manifest before it builds anything. CI and the Dockerfiles pin 6.3.2.
 - **Bun** — for the frontend in `control-plane/web/` (not npm)
 - **Docker** — only needed to run the full stack
 - **cvc5** — optional locally, needed to run the IAM symbolic-analysis suites

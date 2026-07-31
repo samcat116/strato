@@ -1,5 +1,5 @@
 {
-  "originHash" : "4e9d7ba2a3e5cfaf75fd3a5b7a952374bdb03cbba19fd489d5228057661d8799",
+  "originHash" : "53ff6a445a1f9757223e8062b3e2c4fba4e84ecd7f3f3003f3d520684096cc1a",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -204,7 +204,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-ovn.git",
       "state" : {
-        "revision" : "50843804ae82bf44cb684d508b48539cf17dd74d"
+        "revision" : "e53651361eb3bd7e9a0de1f08e3ad9fd13f3341a"
       }
     },
     {
@@ -222,7 +222,7 @@
       "location" : "https://github.com/samcat116/swift-qemu",
       "state" : {
         "branch" : "main",
-        "revision" : "c8eb4cd07f89c6356251e37a5c22249c5ffd8256"
+        "revision" : "10a5057eb503248a58d5d7ef80a1469e971c3e40"
       }
     },
     {
@@ -267,7 +267,7 @@
       "location" : "https://github.com/samcat116/swift-toml.git",
       "state" : {
         "branch" : "master",
-        "revision" : "40cf79dae968d1b576a396142290a945e7a7389f"
+        "revision" : "90e754d90ea19550c45db973f1932235c239ff80"
       }
     },
     {

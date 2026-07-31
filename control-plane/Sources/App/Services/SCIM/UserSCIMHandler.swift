@@ -354,24 +354,29 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
     private func applyAttributeFilter(
         path: String,
         op: SCIMFilterOperator,
-        value: String,
+        value: SCIMComparisonValue,
         to query: QueryBuilder<User>
     ) throws -> QueryBuilder<User> {
         let lowercasePath = path.lowercased()
 
         switch lowercasePath {
         case "username":
-            return applyStringFilter(keyPath: \User.$username, column: "username", op: op, value: value, to: query)
+            return applyStringFilter(
+                keyPath: \User.$username, column: "username", op: op,
+                value: try value.requireText(path: path), to: query)
 
         case "displayname":
             return applyStringFilter(
-                keyPath: \User.$displayName, column: "display_name", op: op, value: value, to: query)
+                keyPath: \User.$displayName, column: "display_name", op: op,
+                value: try value.requireText(path: path), to: query)
 
         case "emails.value", "emails[type eq \"work\"].value":
-            return applyStringFilter(keyPath: \User.$email, column: "email", op: op, value: value, to: query)
+            return applyStringFilter(
+                keyPath: \User.$email, column: "email", op: op,
+                value: try value.requireText(path: path), to: query)
 
         case "active":
-            if let boolValue = Bool(value.lowercased()) {
+            if let boolValue = Bool(try value.requireText(path: path).lowercased()) {
                 return query.filter(\.$scimActive == boolValue)
             }
             return query
