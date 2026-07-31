@@ -6,7 +6,7 @@ struct NetworkCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "network",
         abstract: "Manage logical networks.",
-        subcommands: [List.self, Get.self, Create.self, Delete.self],
+        subcommands: [List.self, Get.self, Create.self, Update.self, Delete.self],
         defaultSubcommand: List.self
     )
 
@@ -88,17 +88,72 @@ struct NetworkCommand: AsyncParsableCommand {
         @Flag(name: .long, inversion: .prefixedNo, help: "Program OVN's DHCP responder for guests.")
         var dhcp = true
 
+        @Option(
+            name: .customLong("dns-server"), parsing: .singleValue,
+            help: "Resolver advertised to guests over DHCP. Repeat for several.")
+        var dnsServers: [String] = []
+
+        @Option(name: .long, help: "Search domain advertised over DHCP (the domain_name option).")
+        var domainName: String?
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let request = CreateNetworkRequest(
                     name: name, subnet: subnet, gateway: gateway,
-                    projectId: project ?? env.context.project, dhcpEnabled: dhcp
+                    projectId: project ?? env.context.project, dhcpEnabled: dhcp,
+                    dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName
                 )
                 let network: Network = try await env.makeClient().post("/api/networks", body: request)
                 switch global.output {
                 case .table:
                     print("Network '\(network.name)' created (\(formatUUID(network.id))).")
+                case .json:
+                    print(try renderJSON(network))
+                }
+            }
+        }
+    }
+
+    struct Update: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Update a network's DHCP-delivered DNS settings or its primary DNS zone.")
+
+        @OptionGroup var global: GlobalOptions
+
+        @Argument(help: "Network id.")
+        var id: String
+
+        @Option(
+            name: .customLong("dns-server"), parsing: .singleValue,
+            help: "Replace the advertised resolvers. Repeat for several.")
+        var dnsServers: [String] = []
+
+        @Option(name: .long, help: "Search domain advertised over DHCP.")
+        var domainName: String?
+
+        @Option(
+            name: .long,
+            help: "Zone id VMs on this network register into. Must already be attached to the network.")
+        var primaryDnsZone: String?
+
+        @Flag(name: .long, help: "Unset the network's primary DNS zone.")
+        var clearPrimaryDnsZone = false
+
+        func run() async throws {
+            try await runHandlingCLIErrors {
+                let environment = try CLIEnvironment.resolve(global)
+                let request = UpdateNetworkRequest(
+                    dnsServers: dnsServers.isEmpty ? nil : dnsServers,
+                    domainName: domainName,
+                    primaryDnsZoneId: primaryDnsZone,
+                    clearPrimaryDnsZone: clearPrimaryDnsZone ? true : nil
+                )
+                let network: Network = try await environment.makeClient()
+                    .put("/api/networks/\(id)", body: request)
+                switch global.output {
+                case .table:
+                    print("Network '\(network.name)' updated.")
                 case .json:
                     print(try renderJSON(network))
                 }

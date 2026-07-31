@@ -1316,6 +1316,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dns-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List DNS zones */
+        get: operations["listDNSZones"];
+        put?: never;
+        /**
+         * Create a DNS zone
+         * @description Zone names are validated as fully-qualified domain names but are not constrained to `.internal`, and are unique per project rather than globally — two tenants may both serve `corp.example.com` internally.
+         */
+        post: operations["createDNSZone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /** Get a DNS zone */
+        get: operations["getDNSZone"];
+        /**
+         * Update a DNS zone's name or description
+         * @description Renaming a zone moves every record in it, derived and authored alike.
+         */
+        put: operations["updateDNSZone"];
+        post?: never;
+        /**
+         * Delete a DNS zone
+         * @description Refused while any network is attached; detach first, so losing resolution is always an explicit act. Records cascade with the zone.
+         */
+        delete: operations["deleteDNSZone"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/recordset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a zone's effective record set
+         * @description The zone's contents as **derived ∪ authored**, computed on demand and never stored — exactly what a realization driver consumes. Derived entries come from the hostnames and IPAM allocations of VMs on networks whose primary zone is this one, plus the matching PTRs.
+         */
+        get: operations["getDNSZoneRecordSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /** List a zone's authored records */
+        get: operations["listDNSRecords"];
+        put?: never;
+        /**
+         * Author a record in a zone
+         * @description Refused with `409` when the record would collide with one derived from a VM, or would break CNAME's exclusivity rule — a shadowed record is rejected at write time rather than silently never answered. Also `409` when `ttl` or `view` disagrees with the record set this joins: those belong to the whole RRset (RFC 2181 §5.2), not to individual records.
+         */
+        post: operations["createDNSRecord"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/records/{recordId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        /** Get an authored record */
+        get: operations["getDNSRecord"];
+        /** Update an authored record's value, TTL, or view */
+        put: operations["updateDNSRecord"];
+        post?: never;
+        /** Delete an authored record */
+        delete: operations["deleteDNSRecord"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach a zone to a logical network
+         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it.
+         */
+        post: operations["attachDNSZoneToNetwork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/networks/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The attached logical network's id. */
+                networkId: components["parameters"]["DNSZoneNetworkID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach a zone from a logical network
+         * @description Refused while this zone is the network's primary — clear the network's primary zone first, so its VMs' derived records are never stranded.
+         */
+        delete: operations["detachDNSZoneFromNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users": {
         parameters: {
             query?: never;
@@ -4950,6 +5118,8 @@ export interface components {
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
             name: string;
+            /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
+            hostname?: string;
             description?: string;
             /**
              * Format: uuid
@@ -5004,6 +5174,8 @@ export interface components {
         };
         UpdateVMRequest: {
             name?: string;
+            /** @description The VM's DNS label. Renaming the VM deliberately does not move its records, so this is the only way its name in DNS changes. */
+            hostname?: string;
             description?: string;
             /** @description Target boot vCPU count. On a running VM it must not exceed `maxCpu`. */
             cpu?: number;
@@ -5017,6 +5189,8 @@ export interface components {
             /** Format: uuid */
             id?: string;
             name: string;
+            /** @description The VM's DNS label — what it registers as in the primary zone of each network it sits on. Distinct from `observedHostname`, which is whatever the guest OS calls itself. */
+            hostname?: string;
             description: string;
             image: string;
             /** Format: uuid */
@@ -5454,6 +5628,13 @@ export interface components {
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
+            /**
+             * Format: uuid
+             * @description The DNS zone this network's VMs auto-register into. Must already be attached to the network.
+             */
+            primaryDnsZoneId?: string;
+            /** @description Unset the primary zone. A JSON `null` is indistinguishable from an omitted field, so the clear is its own flag. */
+            clearPrimaryDnsZone?: boolean;
         };
         Network: {
             /** Format: uuid */
@@ -5475,6 +5656,11 @@ export interface components {
             externalAccess: boolean;
             /** Format: uuid */
             siteId?: string;
+            /**
+             * Format: uuid
+             * @description The DNS zone this network's VMs auto-register into, if any.
+             */
+            primaryDnsZoneId?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5633,6 +5819,119 @@ export interface components {
              * @description The VM NIC; defaults to the VM's first interface.
              */
             interfaceId?: string;
+        };
+        /**
+         * @description Deliberately wider than any realization driver: the OVN `DNS` table answers A/AAAA/PTR only, and the per-network resolver is what makes the rest resolvable. Drivers reject what they cannot do with a clear error rather than the model pretending those records don't exist.
+         * @enum {string}
+         */
+        DNSRecordType: "A" | "AAAA" | "CNAME" | "TXT" | "SRV" | "PTR";
+        /**
+         * @description Which side of a split horizon the record belongs to. Carried so split-horizon is not a retrofit; nothing consumes it yet, so every record is served internally regardless of its value.
+         * @default both
+         * @enum {string}
+         */
+        DNSRecordView: "internal" | "external" | "both";
+        DNSZoneNetworkAttachment: {
+            /** Format: uuid */
+            networkId: string;
+            networkName: string;
+            /** @description Whether this zone is the network's primary — i.e. whether the network's VMs auto-register their derived records here. */
+            isPrimary: boolean;
+        };
+        DNSZone: {
+            /** Format: uuid */
+            id: string;
+            /** @description The zone's fully-qualified name, lowercased and without a trailing dot. Not constrained to `.internal`: a tenant may serve `corp.example.com` internally. Unique per project, never globally. */
+            name: string;
+            description?: string;
+            /** Format: uuid */
+            projectId: string;
+            /** @description The logical networks that can resolve this zone. */
+            networks: components["schemas"]["DNSZoneNetworkAttachment"][];
+            /** @description Authored records only. Derived records are assembled on demand and never stored — fetch the record set for the effective view. */
+            recordCount: number;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateDNSZoneRequest: {
+            /** @description Fully-qualified zone name, e.g. `acme.internal`. */
+            name: string;
+            description?: string;
+            /**
+             * Format: uuid
+             * @description Defaults to the caller's default project when omitted.
+             */
+            projectId?: string;
+        };
+        UpdateDNSZoneRequest: {
+            name?: string;
+            description?: string;
+        };
+        AttachDNSZoneRequest: {
+            /** Format: uuid */
+            networkId: string;
+            /**
+             * @description Also make this zone the network's primary — the zone its VMs auto-register into. Attaching alone only grants resolution.
+             * @default false
+             */
+            primary: boolean;
+        };
+        DNSRecord: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            zoneId: string;
+            /** @description Owner name relative to the zone; `@` is the apex. */
+            name: string;
+            /** @description The same name fully qualified. */
+            fqdn: string;
+            type: components["schemas"]["DNSRecordType"];
+            /** @description RDATA in zone-file text form: an address for A/AAAA, a target name for CNAME/PTR, the string contents for TXT, and `priority weight port target` for SRV. */
+            value: string;
+            ttl: number;
+            view: components["schemas"]["DNSRecordView"];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateDNSRecordRequest: {
+            /** @description Owner name relative to the zone; omitted means the apex (`@`). A leftmost `*` label is a wildcard, including a bare `*` for the zone-apex wildcard. */
+            name?: string;
+            type: components["schemas"]["DNSRecordType"];
+            value: string;
+            /** @default 300 */
+            ttl: number;
+            view?: components["schemas"]["DNSRecordView"];
+        };
+        /** @description Name and type are the record's identity; change those by deleting and recreating, so the rename is conflict-checked as the create it is. `ttl` and `view` belong to the whole RRset (RFC 2181 §5.2), so changing either applies to every record sharing this one's name and type. */
+        UpdateDNSRecordRequest: {
+            value?: string;
+            ttl?: number;
+            view?: components["schemas"]["DNSRecordView"];
+        };
+        AssembledDNSRecord: {
+            /** @description Fully-qualified owner name. */
+            name: string;
+            type: components["schemas"]["DNSRecordType"];
+            /** @description The RRset's values, deduplicated and sorted. A list because an RRset is one: a dual-stack VM yields an A entry and an AAAA entry, and a round-robin name yields several values. */
+            values: string[];
+            ttl: number;
+            view: components["schemas"]["DNSRecordView"];
+            /**
+             * @description `derived` entries are generated from VM hostnames and their IPAM allocations and are never stored; `authored` entries are record rows.
+             * @enum {string}
+             */
+            origin: "derived" | "authored";
+        };
+        AssembledDNSZone: {
+            /** Format: uuid */
+            zoneId: string;
+            zoneName: string;
+            /** @description Sorted by name then type, so two assemblies diff cleanly. */
+            records: components["schemas"]["AssembledDNSRecord"][];
         };
         /** @description The publicly readable projection of a user account. */
         UserPublic: {
@@ -7779,6 +8078,20 @@ export interface components {
             limit: number;
             offset: number;
         };
+        DNSZoneListPage: {
+            items: components["schemas"]["DNSZone"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        DNSRecordListPage: {
+            items: components["schemas"]["DNSRecord"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
         UserListPage: {
             items: components["schemas"]["UserPublic"][];
             /** @description Total visible items, ignoring `limit`/`offset`. */
@@ -8464,6 +8777,12 @@ export interface components {
         SecurityGroupID: string;
         /** @description The security group rule's id. */
         SecurityGroupRuleID: string;
+        /** @description The DNS zone's id. */
+        DNSZoneID: string;
+        /** @description The DNS record's id. */
+        DNSRecordID: string;
+        /** @description The attached logical network's id. */
+        DNSZoneNetworkID: string;
         /** @description Scope results to one organization. */
         OrganizationIdQuery: string;
         /** @description Scope results to one project. */
@@ -10876,6 +11195,372 @@ export interface operations {
                 "application/json": components["schemas"]["AttachSecurityGroupRequest"];
             };
         };
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listDNSZones: {
+        parameters: {
+            query?: {
+                /** @description Scope results to one project. */
+                project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the visible DNS zones. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZoneListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The created zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSZoneRecordSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assembled record set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssembledDNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listDNSRecords: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the zone's authored records. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecordListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDNSRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description The created record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDNSRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    attachDNSZoneToNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The zone, with its updated attachments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    detachDNSZoneFromNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The attached logical network's id. */
+                networkId: components["parameters"]["DNSZoneNetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             204: components["responses"]["NoContent"];
             400: components["responses"]["BadRequest"];

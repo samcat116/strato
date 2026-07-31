@@ -71,6 +71,10 @@ func routes(_ app: Application) throws {
     try app.register(collection: FloatingIPController())
     try app.register(collection: SecurityGroupController())
 
+    // DNS zones, records, and zone↔network attachments (issue #770). Model
+    // only — nothing realizes these yet.
+    try app.register(collection: DNSController())
+
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 

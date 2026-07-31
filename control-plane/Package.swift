@@ -28,7 +28,7 @@ let package = Package(
         // issue #38). No tagged releases yet, so pin by revision.
         .package(
             url: "https://github.com/samcat116/swift-ssf.git",
-            revision: "09f66f1414bb314778cd3f156781eac0e82b6fb8"),
+            revision: "5fe0c0247c02922876a8a76f93f42102625ba635"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
