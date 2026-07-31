@@ -114,7 +114,74 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         let quotas = try await query.sort(\.$name).sort(\.$id).all()
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await readableQuotas(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
+    }
+
+    /// Drop the quota rows the caller may not read, deciding each through the
+    /// evaluator exactly as the matching item route (`verifyQuotaAccess`) does.
+    ///
+    /// The membership filters above only bound the candidate set to the
+    /// caller's organizations; they are not the item route's gate. Each scope
+    /// goes through its own decision here (STR-116), so a guardrail forbid or a
+    /// revoked binding narrows the list the same way it narrows the object read
+    /// — otherwise the list keeps showing a quota the item route now 403s:
+    ///
+    /// - **project** quota → `project:read` (item route: `requireProjectMember`)
+    /// - **org / folder** quota → `org:read` on the owning organization (item
+    ///   route: `requireMember`, which asks `view_organization` → `org:read`; a
+    ///   folder quota resolves to its folder's organization).
+    ///
+    /// A scopeless row is never in the input — the queries above always filter
+    /// on a scope FK — but is dropped defensively; the item route requires
+    /// system admin for one.
+    private func readableQuotas(_ quotas: [ResourceQuota], on req: Request) async throws
+        -> [ResourceQuota]
+    {
+        // Folder quotas are gated on their folder's organization, so resolve
+        // the folder → organization mapping for the folder ids present.
+        let folderIDs = Set(quotas.compactMap { $0.$organizationalUnit.id })
+        var folderOrganization: [UUID: UUID] = [:]
+        if !folderIDs.isEmpty {
+            let folders = try await OrganizationalUnit.query(on: req.db)
+                .filter(\.$id ~~ Array(folderIDs))
+                .all()
+            for folder in folders {
+                if let id = folder.id { folderOrganization[id] = folder.$organization.id }
+            }
+        }
+
+        var organizationIDs = Set(quotas.compactMap { $0.$organization.id })
+        organizationIDs.formUnion(folderOrganization.values)
+        let projectIDs = Set(quotas.compactMap { $0.$project.id })
+
+        let readableOrganizationIDs =
+            organizationIDs.isEmpty
+            ? []
+            : Set(
+                try await req.canFilter(
+                    "org:read", on: organizationIDs.map { IAMNode(type: .organization, id: $0) }
+                ).map(\.id))
+        let readableProjectIDs =
+            projectIDs.isEmpty
+            ? []
+            : Set(
+                try await req.canFilter(
+                    "project:read", on: projectIDs.map { IAMNode(type: .project, id: $0) }
+                ).map(\.id))
+
+        return quotas.filter { quota in
+            if let projectID = quota.$project.id {
+                return readableProjectIDs.contains(projectID)
+            }
+            if let organizationID = quota.$organization.id {
+                return readableOrganizationIDs.contains(organizationID)
+            }
+            if let folderID = quota.$organizationalUnit.id {
+                guard let organizationID = folderOrganization[folderID] else { return false }
+                return readableOrganizationIDs.contains(organizationID)
+            }
+            return false
+        }
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {

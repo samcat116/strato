@@ -564,6 +564,34 @@ of the current system are unchanged by the migration:
 - API keys are unchanged. The short-lived-credential successor path is
   JWT-SVIDs (below), which sits alongside them rather than replacing them.
 
+### Credential scopes are a parallel gate, to be folded in (STR-115)
+
+API keys and CLI sessions carry a `scopes` array (`read`/`write`/`admin`)
+enforced by `APIKeyScopeMiddleware` entirely outside the evaluator, with the
+required scope derived from the HTTP method alone. That is this section's
+invariant violated in-tree: a scoped credential is identity carrying
+authorization. The consequences are concrete: `admin` is never *required* by
+anything (safe methods need `read`, everything else `write`), so `read`+`write`
+is full account power; a default CLI login asks for and receives `read write`;
+guardrails cannot ceiling what a credential may do; and none of the canonical
+narrowing use cases (a CI token for one project, a monitoring key that reads
+VMs but not images) is expressible.
+
+**Decided direction** (STR-115 is the implementation): a credential is issued
+*on behalf of* a principal and optionally carries a **restriction** in the
+existing action/role vocabulary — a role id, an action list, or a node scope —
+and enforcement moves into the evaluator so the effective permission is
+`bindings ∩ restriction`, recorded in `iam_decision_logs` with tier
+attribution like every other decision. Guardrails then cover credentials for
+free. The current scopes become a compatibility shim (`read` → the viewer
+action set; `write`/`admin` → unrestricted) so existing keys keep working;
+the bespoke three-value enum takes on no new consumers.
+
+Until then, the one repair already made (STR-116): a scope refusal writes a
+`scope_denied` row to `iam_decision_logs` naming the principal, the credential
+(`api_key`/`cli_session` + id), and the missing scope — previously it was the
+only authorization denial that left no decision row at all.
+
 ### The workload registry (issue #491)
 
 SPIFFE identities become principals by **registration**, never by parsing.

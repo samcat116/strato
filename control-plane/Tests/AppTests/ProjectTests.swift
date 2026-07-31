@@ -362,6 +362,78 @@ final class ProjectTests {
         }
     }
 
+    @Test("Project list returns only projects the caller may read, not the org inventory")
+    func testListProjectsFiltersPerRow() async throws {
+        try await withProjectTestApp { app, _, testOrganization, testOU, _ in
+            // Two projects directly in the org.
+            let visibleProject = Project(
+                name: "Visible Project", description: "member has a binding here",
+                organizationID: testOrganization.id, path: "")
+            try await visibleProject.save(on: app.db)
+            let hiddenProject = Project(
+                name: "Hidden Project", description: "member has no binding here",
+                organizationID: testOrganization.id, path: "")
+            try await hiddenProject.save(on: app.db)
+
+            // A folder project the member also has no binding on — covers the
+            // folder-scoped list endpoint (`listFolderProjects`).
+            let hiddenFolderProject = Project(
+                name: "Hidden Folder Project", description: "member has no binding here",
+                organizationalUnitID: testOU.id, path: "")
+            try await hiddenFolderProject.save(on: app.db)
+
+            // A bare org member: a membership mirror row and nothing else —
+            // under the redesign that grants `org:read` + `project:create`, no
+            // project visibility (docs/architecture/iam.md).
+            let member = User(
+                username: "bare-member", email: "member@example.com",
+                displayName: "Bare Member", isSystemAdmin: false)
+            try await member.save(on: app.db)
+            try await UserOrganization(
+                userID: member.id!, organizationID: testOrganization.id!, role: "member"
+            ).save(on: app.db)
+            // One explicit project binding — the only project they may read.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: member.id!, role: .viewer,
+                nodeType: .project, nodeID: visibleProject.id!, createdBy: nil, on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app.db)
+
+            // Before STR-113 this handed back every project in the org; now the
+            // evaluator decides per row, so the unbound project never appears.
+            try await app.test(.GET, "/api/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let projects = try res.content.decode([ProjectResponse].self)
+                #expect(projects.contains { $0.name == "Visible Project" })
+                #expect(!projects.contains { $0.name == "Hidden Project" })
+            }
+
+            // Same story on the org-scoped list.
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let projects = try res.content.decode([ProjectResponse].self)
+                #expect(projects.contains { $0.name == "Visible Project" })
+                #expect(!projects.contains { $0.name == "Hidden Project" })
+            }
+
+            // ...and on the folder-scoped list: the member has no binding in
+            // the folder, so it comes back empty rather than leaking the
+            // folder's projects.
+            try await app.test(
+                .GET, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let projects = try res.content.decode([ProjectResponse].self)
+                #expect(!projects.contains { $0.name == "Hidden Folder Project" })
+            }
+        }
+    }
+
     // MARK: - Transfer Project Tests
 
     @Test("Transfer project between OUs")

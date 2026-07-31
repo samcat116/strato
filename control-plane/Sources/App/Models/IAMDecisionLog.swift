@@ -67,7 +67,9 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
 
     /// `allow` / `deny` — what actually gated the request — or why there is no
     /// verdict: `untranslated` (no IAM mapping), `skipped` (no compiled policy
-    /// set yet), `error` (evaluation failed).
+    /// set yet), `error` (evaluation failed), `scope_denied` (refused by the
+    /// credential-scope middleware before any evaluation; `resource_type`
+    /// names the credential kind and `spicedb_permission` the missing scope).
     @Field(key: "cedar_decision")
     var cedarDecision: String
 

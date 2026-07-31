@@ -56,6 +56,21 @@ enum PendingIAMDecision: Sendable {
     /// A check the legacy-vocabulary boundary could not translate, denied
     /// closed at the boundary before any evaluation happened.
     case untranslated(subject: String, equivalent: LegacyCheckEquivalent, context: IAMCheckContext)
+    /// A request refused by `APIKeyScopeMiddleware` because the credential's
+    /// scopes do not cover the HTTP method — a denial the evaluator never
+    /// sees, recorded so every authorization refusal is attributable here
+    /// (STR-116; the scope system itself is STR-115's business).
+    case scopeDenied(subject: String, denial: CredentialScopeDenial, context: IAMCheckContext)
+}
+
+/// The coordinates of a credential-scope refusal: which credential, and the
+/// scope the request needed but the credential lacks.
+struct CredentialScopeDenial: Sendable {
+    /// `api_key` or `cli_session` — carried in the row's `resource_type`
+    /// column, since the denied "resource" here is the credential itself.
+    let credentialType: String
+    let credentialID: UUID?
+    let requiredScope: String
 }
 
 /// The buffer between a check and its decision row (issue #736).
@@ -258,6 +273,16 @@ final class IAMDecisionRecorder: Sendable {
         await enqueue([.untranslated(subject: subject, equivalent: equivalent, context: context)])
     }
 
+    /// Record a credential-scope refusal. Scope enforcement is the one
+    /// authorization gate outside the evaluator (STR-115), and until it folds
+    /// in, its denials were the one kind that left no decision row — an
+    /// unexplainable 403 in the log that exists to explain 403s.
+    func recordScopeDenial(
+        subject: String, denial: CredentialScopeDenial, context: IAMCheckContext
+    ) async {
+        await enqueue([.scopeDenied(subject: subject, denial: denial, context: context)])
+    }
+
     private func enqueue(_ decisions: [PendingIAMDecision]) async {
         guard config.recordDecisions, !decisions.isEmpty else { return }
         let outcome = await queue.enqueue(decisions)
@@ -356,6 +381,20 @@ final class IAMDecisionRecorder: Sendable {
             entry.resourceID = equivalent.resourceID
             entry.spicedbDecision = Self.noComparison
             entry.cedarDecision = "untranslated"
+            return entry
+        case .scopeDenied(let subject, let denial, let context):
+            let entry = IAMDecisionLog()
+            entry.requestID = context.requestID
+            entry.path = context.path
+            entry.method = context.method
+            entry.subject = subject
+            // The "permission" asked for was a credential scope, not an IAM
+            // action; the prefix keeps the two namespaces unmistakable.
+            entry.spicedbPermission = "scope:\(denial.requiredScope)"
+            entry.resourceType = denial.credentialType
+            entry.resourceID = denial.credentialID?.uuidString ?? ""
+            entry.spicedbDecision = Self.noComparison
+            entry.cedarDecision = "scope_denied"
             return entry
         }
     }

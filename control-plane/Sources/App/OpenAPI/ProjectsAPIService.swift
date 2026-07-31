@@ -53,7 +53,7 @@ struct ProjectsAPIService: APIProtocol {
             allProjects.append(contentsOf: ouProjects)
         }
 
-        return .ok(.init(body: .json(try await summaries(for: allProjects, on: req.db))))
+        return .ok(.init(body: .json(try await readableSummaries(for: allProjects, on: req))))
     }
 
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output {
@@ -246,7 +246,7 @@ struct ProjectsAPIService: APIProtocol {
             projects.append(contentsOf: ouProjects)
         }
 
-        return .ok(.init(body: .json(try await summaries(for: projects, on: req.db))))
+        return .ok(.init(body: .json(try await readableSummaries(for: projects, on: req))))
     }
 
     func createOrganizationProject(
@@ -308,7 +308,7 @@ struct ProjectsAPIService: APIProtocol {
             .sort(\.$name)
             .all()
 
-        return .ok(.init(body: .json(try await summaries(for: projects, on: req.db))))
+        return .ok(.init(body: .json(try await readableSummaries(for: projects, on: req))))
     }
 
     func createFolderProject(
@@ -551,6 +551,48 @@ struct ProjectsAPIService: APIProtocol {
             summaries.append(try .init(project: project, vmCount: vmCounts[projectID] ?? 0))
         }
         return summaries
+    }
+
+    /// Summarize only the projects the caller may actually read.
+    ///
+    /// The list endpoints load a *candidate* set by organization/folder
+    /// membership — a superset — and then this hands the evaluator the last
+    /// word per row, exactly as the item route's `view_project` check would
+    /// (STR-113). Bare org membership grants `org:read` and `project:create`
+    /// and nothing else (docs/architecture/iam.md), so a member with no
+    /// project binding gets an empty list here rather than the organization's
+    /// entire project inventory. `project:read` is what `view_project`
+    /// translates to, so a listed project and the object read that follows it
+    /// are the same decision, answered once from the request memo (#686).
+    ///
+    /// `ProjectVisibility` is used the way every other list endpoint uses it:
+    /// its SQL narrowing bounds the set *before* the evaluator decides, so a
+    /// caller whose bindings reach only a handful of projects sends a
+    /// handful-sized Cedar batch — not one node per project in the org — and
+    /// writes only that many decision rows. `nil` candidates means "no bound"
+    /// (a system admin, an unbounded authored permit), and every candidate is
+    /// still decided below.
+    private func readableSummaries(for projects: [Project], on req: Request) async throws
+        -> [Components.Schemas.ProjectSummary]
+    {
+        let visibility = try await ProjectVisibility.resolve(on: req)
+        if visibility.reachesNoProject { return [] }
+
+        // Bound the candidates to the SQL-narrowed set before deciding, when
+        // one exists (nil = no bound, e.g. a system admin).
+        let narrowed: [Project]
+        if let candidateIDs = visibility.candidateProjectIDs.map(Set.init) {
+            narrowed = projects.filter { $0.id.map(candidateIDs.contains) ?? false }
+        } else {
+            narrowed = projects
+        }
+
+        let readable = try await visibility.readableProjects(
+            among: narrowed.compactMap(\.id), on: req)
+        let filtered = narrowed.filter { project in
+            project.id.map(readable.contains) ?? false
+        }
+        return try await summaries(for: filtered, on: req.db)
     }
 
     /// The authentication middlewares run ahead of every API route, so this only
