@@ -13,10 +13,13 @@ name. That arrives with phase 3.
 
 ## What exists before this
 
-DHCP option delivery only. `LogicalNetwork.dnsServers` / `domainName` ship over
-the wire and the agent renders them into OVN `DHCP_Options`
-(`agent/Sources/StratoAgentCore/DHCPOptions.swift`), seeded with public
-resolvers so guests can look up *public* names. Nothing resolves a
+Resolver-setting delivery only. `LogicalNetwork.dnsServers` / `domainName` ship
+over the wire and reach the guest on whichever path addresses its NIC: DHCP NICs
+get them as OVN `DHCP_Options` (`dns_server` plus `domain_name`/`domain_search`,
+`agent/Sources/StratoAgentCore/DHCPOptions.swift`), and statically addressed NICs
+get them as the `nameservers` `addresses`/`search` block of the cloud-init
+network-config (`CloudInitProvisioner.networkConfigYAML`). They are seeded with
+public resolvers so guests can look up *public* names. Nothing resolves a
 Strato-owned name, and the OVN `DNS` table is never touched.
 
 ## Why the control plane owns the record model
