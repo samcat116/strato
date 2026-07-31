@@ -1048,31 +1048,16 @@ actor AgentService {
                 .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
-            for vm in transitional {
-                guard let vmID = vm.id else { continue }
-
-                let hasPendingOperation =
-                    try await ResourceOperation.query(on: db)
-                    .filter(\.$resourceKind == .virtualMachine)
-                    .filter(\.$resourceID == vmID)
-                    .filter(\.$status == .pending)
-                    .count() > 0
-                // A pending operation owns this VM's resolution via its own budget.
-                guard !hasPendingOperation else { continue }
-
-                let previous = vm.status
-                vm.setStatus(.error)
-                try await vm.save(on: db)
-                Telemetry.vmEnteredError(reason: "stuck_transition")
-
-                app.logger.warning(
-                    "VM stuck in transitional state past timeout; marking as error",
-                    metadata: [
-                        "vmId": .string(vmID.uuidString),
-                        "stuckStatus": .string(previous.rawValue),
-                        "timeoutSeconds": .string("\(Int(timeout))"),
-                    ])
-            }
+            try await markStuckTransitionalResources(
+                transitional.compactMap { vm -> StuckTransitionalResource? in
+                    guard let vmID = vm.id else { return nil }
+                    return StuckTransitionalResource(id: vmID, stuckStatus: vm.status.rawValue) {
+                        vm.setStatus(.error)
+                        try await vm.save(on: db)
+                    }
+                },
+                kind: .virtualMachine, timeout: timeout, on: db,
+                telemetry: { Telemetry.vmEnteredError(reason: "stuck_transition") })
 
             // Same backstop for sandboxes: transitional with no pending
             // operation means the confirming report never landed.
@@ -1081,29 +1066,15 @@ actor AgentService {
                 .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
-            for sandbox in transitionalSandboxes {
-                guard let sandboxID = sandbox.id else { continue }
-
-                let hasPendingOperation =
-                    try await ResourceOperation.query(on: db)
-                    .filter(\.$resourceKind == .sandbox)
-                    .filter(\.$resourceID == sandboxID)
-                    .filter(\.$status == .pending)
-                    .count() > 0
-                guard !hasPendingOperation else { continue }
-
-                let previous = sandbox.status
-                sandbox.setStatus(.error)
-                try await sandbox.save(on: db)
-
-                app.logger.warning(
-                    "Sandbox stuck in transitional state past timeout; marking as error",
-                    metadata: [
-                        "sandboxId": .string(sandboxID.uuidString),
-                        "stuckStatus": .string(previous.rawValue),
-                        "timeoutSeconds": .string("\(Int(timeout))"),
-                    ])
-            }
+            try await markStuckTransitionalResources(
+                transitionalSandboxes.compactMap { sandbox -> StuckTransitionalResource? in
+                    guard let sandboxID = sandbox.id else { return nil }
+                    return StuckTransitionalResource(id: sandboxID, stuckStatus: sandbox.status.rawValue) {
+                        sandbox.setStatus(.error)
+                        try await sandbox.save(on: db)
+                    }
+                },
+                kind: .sandbox, timeout: timeout, on: db)
 
             // Volumes are the one resource kind mutated through the same
             // async-agent-RPC pattern that was never brought under the
@@ -1171,6 +1142,56 @@ actor AgentService {
             }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
+        }
+    }
+
+    /// One resource the stuck sweep found in a transitional status: enough to
+    /// decide on it (`id`), to log it (`stuckStatus`, captured before the
+    /// transition to `.error`), and to resolve it (`markError`).
+    private struct StuckTransitionalResource {
+        let id: UUID
+        let stuckStatus: String
+        let markError: () async throws -> Void
+    }
+
+    /// Marks resources stuck in a transitional status past `timeout` as
+    /// `.error`, skipping any whose resolution a pending operation still owns
+    /// via its own budget. Shared by the VM and sandbox backstops, which differ
+    /// only in the model queried, the `resourceKind` filter, and the VM-only
+    /// telemetry counter.
+    private func markStuckTransitionalResources(
+        _ resources: [StuckTransitionalResource],
+        kind: OperationResourceKind,
+        timeout: TimeInterval,
+        on db: Database,
+        telemetry: (() -> Void)? = nil
+    ) async throws {
+        let (label, idKey): (String, String) =
+            switch kind {
+            case .virtualMachine: ("VM", "vmId")
+            case .sandbox: ("Sandbox", "sandboxId")
+            }
+
+        for resource in resources {
+            let hasPendingOperation =
+                try await ResourceOperation.query(on: db)
+                .filter(\.$resourceKind == kind)
+                .filter(\.$resourceID == resource.id)
+                .filter(\.$status == .pending)
+                .count() > 0
+            // A pending operation owns this resource's resolution via its own budget.
+            guard !hasPendingOperation else { continue }
+
+            try await resource.markError()
+            telemetry?()
+
+            app.logger.warning(
+                "\(label) stuck in transitional state past timeout; marking as error",
+                metadata: [
+                    idKey: .string(resource.id.uuidString),
+                    "stuckStatus": .string(resource.stuckStatus),
+                    "timeoutSeconds": .string("\(Int(timeout))"),
+                ])
         }
     }
 
