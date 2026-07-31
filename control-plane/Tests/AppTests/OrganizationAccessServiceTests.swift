@@ -135,8 +135,8 @@ final class OrganizationAccessServiceTests {
         }
     }
 
-    @Test("requireProjectAdmin checks the project resource")
-    func testRequireProjectAdmin() async throws {
+    @Test("Project policy administration checks iam:setPolicy on the project resource")
+    func testRequireProjectPolicyAdmin() async throws {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
             let project = try await builder.createProject(name: "P", description: "d", organization: org)
@@ -146,15 +146,27 @@ final class OrganizationAccessServiceTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+            try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
 
-            // A viewer can see the project but not manage it.
+            // Editors may update project metadata, but cannot administer IAM policy.
+            let editor = try await builder.createUser(username: "a2", email: "a2@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: editor.id!, role: .editor,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+            let editorRequest = self.authedRequest(app, user: editor)
+            try await OrganizationAccessService.requireProjectAction(
+                "project:update", project: project, on: editorRequest)
+            await self.expectAbort(.forbidden, reason: "Admin access required") {
+                try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: editorRequest)
+            }
+
+            // A viewer can see the project but cannot administer it.
             let viewer = try await builder.createUser(username: "a3", email: "a3@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
             await self.expectAbort(.forbidden, reason: "Admin access required") {
-                try await OrganizationAccessService.requireProjectAdmin(
+                try await OrganizationAccessService.requireProjectPolicyAdmin(
                     project: project, on: self.authedRequest(app, user: viewer))
             }
         }

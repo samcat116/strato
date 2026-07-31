@@ -31,6 +31,7 @@ func routes(_ app: Application) throws {
     // Projects themselves are served by generated handlers — see
     // `registerGeneratedAPIHandlers` below.
     try app.register(collection: OrganizationalUnitController())
+    try app.register(collection: OrganizationalUnitMemberController())
     try app.register(collection: ProjectMemberController())
     // Registry pull secrets for private sandbox images (issue #414)
     try app.register(collection: RegistryPullSecretController())

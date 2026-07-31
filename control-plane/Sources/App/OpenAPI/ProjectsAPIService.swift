@@ -61,7 +61,7 @@ struct ProjectsAPIService: APIProtocol {
             }
         let project = try await Self.findProject(projectID, on: req.db)
 
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
         if let name = update.name {
             try await Self.validateNameUniqueness(
@@ -141,7 +141,7 @@ struct ProjectsAPIService: APIProtocol {
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
         let project = try await Self.findProject(projectID, on: req.db)
 
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction("project:delete", project: project, on: req)
 
         let vmCount = try await Self.vmCount(projectID, on: req.db)
         if vmCount > 0 {
@@ -341,7 +341,7 @@ struct ProjectsAPIService: APIProtocol {
             }
         let project = try await Self.findProject(projectID, on: req.db)
 
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
         project.addEnvironment(environment)
         try await project.save(on: req.db)
@@ -359,7 +359,7 @@ struct ProjectsAPIService: APIProtocol {
         let environment = input.path.environment
         let project = try await Self.findProject(projectID, on: req.db)
 
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
         let vmsUsingEnv = try await VM.query(on: req.db)
             .filter(\.$project.$id == projectID)
@@ -469,7 +469,7 @@ struct ProjectsAPIService: APIProtocol {
         let destinationOUID = try transfer.organizationalUnitId.map { try Self.uuid($0, name: "folder ID") }
         let project = try await Self.findProject(projectID, on: req.db)
 
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction("project:transfer", project: project, on: req)
 
         // Resolve and validate the destination, deriving its root organization.
         let destinationOrganizationID: UUID?
