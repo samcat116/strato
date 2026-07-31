@@ -1403,7 +1403,7 @@ export interface paths {
         put?: never;
         /**
          * Author a record in a zone
-         * @description Refused with `409` when the record would collide with one derived from a VM, or would break CNAME's exclusivity rule — a shadowed record is rejected at write time rather than silently never answered.
+         * @description Refused with `409` when the record would collide with one derived from a VM, or would break CNAME's exclusivity rule — a shadowed record is rejected at write time rather than silently never answered. Also `409` when `ttl` or `view` disagrees with the record set this joins: those belong to the whole RRset (RFC 2181 §5.2), not to individual records.
          */
         post: operations["createDNSRecord"];
         delete?: never;
@@ -5786,7 +5786,7 @@ export interface components {
             updatedAt?: string;
         };
         CreateDNSRecordRequest: {
-            /** @description Owner name relative to the zone; omitted means the apex (`@`). */
+            /** @description Owner name relative to the zone; omitted means the apex (`@`). A leftmost `*` label is a wildcard, including a bare `*` for the zone-apex wildcard. */
             name?: string;
             type: components["schemas"]["DNSRecordType"];
             value: string;
@@ -5794,7 +5794,7 @@ export interface components {
             ttl: number;
             view?: components["schemas"]["DNSRecordView"];
         };
-        /** @description Name and type are the record's identity; change those by deleting and recreating, so the rename is conflict-checked as the create it is. */
+        /** @description Name and type are the record's identity; change those by deleting and recreating, so the rename is conflict-checked as the create it is. `ttl` and `view` belong to the whole RRset (RFC 2181 §5.2), so changing either applies to every record sharing this one's name and type. */
         UpdateDNSRecordRequest: {
             value?: string;
             ttl?: number;

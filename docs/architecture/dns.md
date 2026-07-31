@@ -138,6 +138,42 @@ realization-agnostic:
 
 Neither shape is baked into the assembler. Both drivers consume the same output.
 
+TTL and view are properties of the **RRset**, not of its member records
+(RFC 2181 §5.2), so the assembler emits exactly one entry per `(name, type)`
+and the write path refuses a record whose TTL or view disagrees with the set it
+joins. That is a deliberate narrowing of what the schema can express — the
+unique index is `(zone_id, name, type, value)`, so mixed TTLs are *storable* —
+and it is enforced because neither planned driver could realize them: OVN keeps
+one row per name, and a zone file writes one TTL per RRset. Editing a TTL or
+view through the record API applies it to the whole set. For rows that predate
+the rule, assembly degrades safely: lowest TTL and narrowest view win, so a
+disagreement caches less and publishes less rather than more.
+
+### Where reverse records live
+
+Derived PTRs are emitted **into the forward zone's record set**, under names
+like `20.1.168.192.in-addr.arpa` that are not beneath the zone's own name. That
+is out of bailiwick in zone-file terms, and it is deliberate: the OVN `DNS`
+table is a flat name → value map with no notion of a zone apex, so reverse and
+forward entries are co-tenants of one row set and nothing needs to own
+`in-addr.arpa`.
+
+Two consequences to settle before the driver phases, rather than in them:
+
+- **The CoreDNS driver (phase 4) cannot put these in the forward zone's file.**
+  It will need to synthesize a separate reverse zone from the same assembled
+  set — filtering PTR entries out of the forward file and grouping them by
+  their `in-addr.arpa` / `ip6.arpa` suffix. The assembler's output already
+  carries everything needed to do that; what it does not carry is a *decision*,
+  and this paragraph is it.
+- **A hand-made reverse zone is not reconciled against derived PTRs.**
+  `2.0.192.in-addr.arpa` is a legal `DNSZone` name, so an operator can create
+  one and author PTRs in it. Those are never compared against the PTRs derived
+  into a forward zone, so the write-time conflict check — careful everywhere
+  else — has a blind spot here. Nothing today realizes either, so nothing is
+  broken yet; closing it means deciding whether reverse space is a zone of its
+  own at all, which is phase 3's business.
+
 ### Conflict handling
 
 An authored record that collides with a derived one is **rejected at write
@@ -214,7 +250,8 @@ Two consequences for how records get written, when that time comes:
   security-group precedent: dead quota plumbing would be worse than an honest
   cap.
 - **Whether authored `PTR` records are user-writable or always derived.** They
-  are writable today.
+  are writable today — see "Where reverse records live" for the reconciliation
+  gap that leaves.
 
 ## References
 

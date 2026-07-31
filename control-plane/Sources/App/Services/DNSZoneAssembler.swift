@@ -160,27 +160,49 @@ enum DNSZoneAssembler {
         zoneID: UUID, zoneName: String, on db: any Database
     ) async throws -> [AssembledDNSRecord] {
         let rows = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).all()
-        // One entry per (name, type, ttl, view): rows sharing all four are one
-        // RRset, and rows that differ in TTL or view are genuinely different
-        // entries a driver has to keep apart.
+        // One entry per (name, type) — an RRset. TTL and view are properties of
+        // the set, not of its members (RFC 2181 §5.2), and the write path
+        // enforces that, so every row here agrees with its siblings and the
+        // first one's values stand for the set.
+        //
+        // Grouping any finer would let one `(name, type)` yield several entries,
+        // which neither planned driver can express: OVN keeps one row per name
+        // and a zone file writes one TTL per RRset. See `DNSZoneService`.
         struct Key: Hashable {
             let name: String
             let type: DNSRecordType
-            let ttl: Int
-            let view: DNSRecordView
         }
-        var grouped: [Key: Set<String>] = [:]
+        var values: [Key: Set<String>] = [:]
+        var settings: [Key: (ttl: Int, view: DNSRecordView)] = [:]
         for row in rows {
-            let key = Key(
-                name: DNSName.qualified(name: row.name, inZone: zoneName),
-                type: row.type, ttl: row.ttl, view: row.view)
-            grouped[key, default: []].insert(row.value)
+            let key = Key(name: DNSName.qualified(name: row.name, inZone: zoneName), type: row.type)
+            values[key, default: []].insert(row.value)
+            // Lowest TTL and narrowest view win, so a row that predates the
+            // write-time rule (or slipped through a race) degrades toward
+            // caching less and publishing less, never the other way.
+            let existing = settings[key]
+            settings[key] = (
+                ttl: min(existing?.ttl ?? row.ttl, row.ttl),
+                view: Self.narrower(existing?.view ?? row.view, row.view)
+            )
         }
-        return grouped.map { key, values in
-            AssembledDNSRecord(
+        return values.map { key, values in
+            let setting = settings[key] ?? (ttl: DNSRecord.defaultTTL, view: .both)
+            return AssembledDNSRecord(
                 name: key.name, type: key.type, values: values.sorted(),
-                ttl: key.ttl, view: key.view, origin: .authored)
+                ttl: setting.ttl, view: setting.view, origin: .authored)
         }
+    }
+
+    /// The more restrictive of two views, for the degradation rule above:
+    /// `both` publishes everywhere, so anything else narrows it, and two
+    /// disagreeing single-sided views collapse to `internal` (the side that
+    /// never leaves the deployment).
+    private static func narrower(_ lhs: DNSRecordView, _ rhs: DNSRecordView) -> DNSRecordView {
+        if lhs == rhs { return lhs }
+        if lhs == .both { return rhs }
+        if rhs == .both { return lhs }
+        return .internal
     }
 
     // MARK: - Merge
@@ -199,8 +221,16 @@ enum DNSZoneAssembler {
         var occupied: Set<String> = []
         for record in derived { occupied.insert("\(record.name)|\(record.type.rawValue)") }
         let surviving = authored.filter { !occupied.contains("\($0.name)|\($0.type.rawValue)") }
+        // Ordered on every field, not just `(name, type)`. Both tiers now emit
+        // one entry per `(name, type)` so ties should be impossible — but
+        // `sort` is not stable and the input comes from `Dictionary` iteration,
+        // so a tie that did arise would order differently on each assembly and
+        // phase 3 would hash it to a spurious OVN rewrite. Ordering totally
+        // costs nothing and removes the failure mode rather than relying on an
+        // invariant enforced somewhere else.
         return (derived + surviving).sorted {
-            ($0.name, $0.type.rawValue) < ($1.name, $1.type.rawValue)
+            ($0.name, $0.type.rawValue, $0.ttl, $0.view.rawValue, $0.values.joined(separator: ","))
+                < ($1.name, $1.type.rawValue, $1.ttl, $1.view.rawValue, $1.values.joined(separator: ","))
         }
     }
 }

@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -115,6 +116,36 @@ final class DNSZoneTests {
         // Nothing usable survives — still needs somewhere to land.
         #expect(DNSName.slugify("日本語") == "vm")
         #expect(DNSName.slugify(String(repeating: "a", count: 100)).count == 63)
+    }
+
+    @Test("Record owner names accept the apex, multi-label names, and wildcards")
+    func recordNameValidation() throws {
+        // `@` and the empty string are both the apex.
+        let apexFromSymbol = try DNSName.normalizedRecordName("@")
+        #expect(apexFromSymbol == DNSName.apex)
+        let apexFromEmpty = try DNSName.normalizedRecordName("")
+        #expect(apexFromEmpty == DNSName.apex)
+
+        let simple = try DNSName.normalizedRecordName("API")
+        #expect(simple == "api")
+        let multiLabel = try DNSName.normalizedRecordName("api.staging")
+        #expect(multiLabel == "api.staging")
+
+        // A bare `*` is the zone-apex wildcard — the common one, and the case
+        // that stripping the star leaves nothing behind.
+        let apexWildcard = try DNSName.normalizedRecordName("*")
+        #expect(apexWildcard == "*")
+        let subtreeWildcard = try DNSName.normalizedRecordName("*.api")
+        #expect(subtreeWildcard == "*.api")
+
+        #expect(throws: (any Error).self) { try DNSName.normalizedRecordName("-bad") }
+        #expect(throws: (any Error).self) { try DNSName.normalizedRecordName("a..b") }
+        #expect(throws: (any Error).self) { try DNSName.normalizedRecordName("under_score") }
+        // A star anywhere but leftmost is a label, and `*` is not a legal one.
+        #expect(throws: (any Error).self) { try DNSName.normalizedRecordName("api.*") }
+        #expect(throws: (any Error).self) {
+            try DNSName.normalizedRecordName(String(repeating: "a", count: 64))
+        }
     }
 
     @Test("Reverse names follow in-addr.arpa and ip6.arpa")
@@ -289,6 +320,13 @@ final class DNSZoneTests {
         let v4 = try DNSZoneService.validatedValue("192.0.2.5", type: .a)
         #expect(v4 == "192.0.2.5")
         #expect(throws: (any Error).self) { try DNSZoneService.validatedValue("not-an-ip", type: .a) }
+        // Swift's integer parsing accepts leading zeros and a leading `+`, so
+        // without canonicalization these would be three storable rows for one
+        // address — and three A values on the wire for one name.
+        let paddedV4 = try DNSZoneService.validatedValue("010.0.0.1", type: .a)
+        #expect(paddedV4 == "10.0.0.1")
+        let signedV4 = try DNSZoneService.validatedValue("+10.0.0.1", type: .a)
+        #expect(signedV4 == "10.0.0.1")
         // Canonicalized so the uniqueness index means what it says.
         let v6 = try DNSZoneService.validatedValue("2001:0DB8::0001", type: .aaaa)
         #expect(v6 == "2001:db8::1")
@@ -366,6 +404,116 @@ final class DNSZoneTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
+            }
+        }
+    }
+
+    @Test("An RRset shares one TTL and view, on write and through the assembler")
+    func rrsetSettingsAreUniform() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let zoneResponse = try await createZone(app: app, token: token, project: project)
+            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
+
+            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.10", ttl: 120))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // A second value at the same name and type joins the RRset, so a
+            // disagreeing TTL is refused rather than stored — RFC 2181 §5.2,
+            // and neither planned driver could express two TTLs at one name.
+            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.11", ttl: 900))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            // A disagreeing view is refused for the same reason.
+            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateDNSRecordRequest(
+                        name: "www", type: .a, value: "192.0.2.11", ttl: 120, view: .internal))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            var secondID: UUID?
+            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.11", ttl: 120))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(DNSRecordResponse.self)
+                secondID = created.id
+            }
+
+            // The set is one assembled entry, not one per member.
+            var assembled = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
+            let entries = assembled.records.filter { $0.name == "www.acme.internal" && $0.type == .a }
+            #expect(entries.count == 1)
+            #expect(entries.first?.values == ["192.0.2.10", "192.0.2.11"])
+            #expect(entries.first?.ttl == 120)
+
+            // Editing the TTL of one member moves the whole set — the
+            // alternative would leave a multi-value RRset's TTL uneditable.
+            try await app.test(.PUT, "/api/dns-zones/\(zone.id!)/records/\(try #require(secondID))") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateDNSRecordRequest(ttl: 60))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let ttls = try await DNSRecord.query(on: app.db)
+                .filter(\.$zone.$id == zone.id!)
+                .filter(\.$name == "www")
+                .all()
+                .map(\.ttl)
+            #expect(ttls == [60, 60])
+            assembled = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
+            #expect(assembled.records.first { $0.name == "www.acme.internal" }?.ttl == 60)
+        }
+    }
+
+    @Test("Assembly is byte-stable across repeated runs, so phase 3 can hash it")
+    func assemblyOrderingIsDeterministic() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-order", project: project)
+            let zoneResponse = try await createZone(app: app, token: token, project: project)
+            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
+            try await DNSZoneNetwork(
+                zoneID: zone.id!, logicalNetworkID: try network.requireID()
+            ).save(on: app.db)
+            network.$primaryDNSZone.id = zone.id
+            try await network.save(on: app.db)
+
+            for index in 0..<6 {
+                try await createVM(
+                    app: app, project: project, network: network, hostname: "host-\(index)",
+                    addresses: [("192.168.1.\(100 + index)", .ipv4, 24)])
+                try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateDNSRecordRequest(
+                            name: "svc-\(index)", type: .txt, value: "v\(index)", ttl: 60 + index))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+
+            // Dictionary iteration order varies run to run and `sort` is not
+            // stable, so identical data must still serialize identically —
+            // otherwise phase 3 hashes a spurious OVN rewrite.
+            let first = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
+            for _ in 0..<5 {
+                let again = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
+                #expect(again.records == first.records)
             }
         }
     }
@@ -750,6 +898,53 @@ final class DNSZoneTests {
                 #expect(res.status == .ok)
                 let page = try res.content.decode(PagedResponse<DNSZoneResponse>.self)
                 #expect(page.items.isEmpty)
+            }
+        }
+    }
+
+    /// The `CreateDNSZone` backfill reimplements `DNSName.slugify` in SQL, so
+    /// the two can drift with nothing failing. They only run against each
+    /// other once per deployment, and a divergence would surface as a handful
+    /// of VMs carrying hostnames the API would never have produced — long
+    /// after the change that caused it. This pins them together.
+    @Test("The migration's SQL slug expression agrees with DNSName.slugify")
+    func migrationSlugMatchesSwiftSlugify() async throws {
+        let names = [
+            "Web Server",
+            "My VM (prod)",
+            "  spaced  out  ",
+            "---leading-and-trailing---",
+            "UPPER_snake.Case",
+            "日本語",
+            "",
+            "a",
+            String(repeating: "a", count: 100),
+            // Truncation landing on a hyphen: the second trim has to run after
+            // the cut, on both sides.
+            String(repeating: "ab", count: 31) + " tail",
+            "9-lives",
+        ]
+
+        try await withTestApp { app in
+            let sql = try #require(app.db as? any SQLDatabase)
+            for name in names {
+                // Kept in sync with the UPDATE in `CreateDNSZone.prepare`.
+                let row = try await sql.raw(
+                    """
+                    SELECT COALESCE(
+                        NULLIF(
+                            TRIM(BOTH '-' FROM LEFT(TRIM(BOTH '-' FROM REGEXP_REPLACE(
+                                LOWER(\(bind: name)), '[^a-z0-9]+', '-', 'g')), 63)),
+                            ''
+                        ),
+                        'vm'
+                    ) AS slug
+                    """
+                ).first()
+                let fromSQL = try #require(row).decode(column: "slug", as: String.self)
+                #expect(
+                    fromSQL == DNSName.slugify(name),
+                    "slug mismatch for \(String(reflecting: name)): SQL gave '\(fromSQL)'")
             }
         }
     }

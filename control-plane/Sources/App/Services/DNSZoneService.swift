@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -27,10 +28,15 @@ enum DNSZoneService {
 
         switch type {
         case .a:
-            guard IPAMService.parseIPv4(value) != nil else {
+            // Rendered back from the parsed value rather than stored as typed:
+            // Swift's integer parsing accepts leading zeros and a leading `+`,
+            // so `10.0.0.1`, `010.0.0.1`, and `+10.0.0.1` all parse to one
+            // address and would otherwise be three storable rows past the
+            // uniqueness index — and three A values on the wire for one name.
+            guard let parsed = IPAMService.parseIPv4(value) else {
                 throw Abort(.badRequest, reason: "An A record's value must be an IPv4 address, got '\(raw)'")
             }
-            return value
+            return IPAMService.formatIPv4(parsed)
         case .aaaa:
             guard let canonical = IPv6Address.canonicalize(value) else {
                 throw Abort(.badRequest, reason: "An AAAA record's value must be an IPv6 address, got '\(raw)'")
@@ -89,6 +95,37 @@ enum DNSZoneService {
         return "\(numbers[0]) \(numbers[1]) \(numbers[2]) \(target)"
     }
 
+    // MARK: - Serializing a zone's record writes
+
+    /// Take the zone's advisory lock for the rest of the transaction.
+    ///
+    /// The record-write invariants — CNAME exclusivity, the RRset's shared
+    /// TTL, the per-zone cap — are all read-then-write and none is expressible
+    /// as an index, so they only hold if a zone's writes are serialized.
+    /// Follows `LogicalNetworkService.lockName`: a transaction-scoped Postgres
+    /// advisory lock, released on commit or rollback, and a no-op on any
+    /// non-Postgres database.
+    static func lockZone(_ zoneID: UUID, on db: any Database) async throws {
+        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "dnszone:\(zoneID.uuidString)")))")
+            .run()
+    }
+
+    /// Apply one TTL/view to every record in an RRset — see the type doc on
+    /// `assertRRsetSettingsAgree` for why the set, not the record, owns them.
+    static func applyRRsetSettings(
+        zoneID: UUID, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
+        on db: any Database
+    ) async throws {
+        try await DNSRecord.query(on: db)
+            .filter(\.$zone.$id == zoneID)
+            .filter(\.$name == name)
+            .filter(\.$type == type)
+            .set(\.$ttl, to: ttl)
+            .set(\.$view, to: view)
+            .update()
+    }
+
     // MARK: - Authored/derived conflicts
 
     /// Refuse an authored record that would collide with the zone's derived
@@ -137,6 +174,45 @@ enum DNSZoneService {
             throw Abort(
                 .conflict,
                 reason: "'\(fqdn)' is a CNAME; a CNAME cannot share an owner name with other data")
+        }
+    }
+
+    /// Refuse a record whose TTL or view disagrees with the RRset it joins.
+    ///
+    /// RFC 2181 §5.2: the records of an RRset share one TTL. Nothing in the
+    /// schema can express that — the unique index is
+    /// `(zone_id, name, type, value)`, so two rows at one `(name, type)` with
+    /// different TTLs are storable — and neither planned realization driver
+    /// could represent it if they were: OVN keeps one row per name, and a zone
+    /// file writes one TTL per RRset. Rejecting here is what keeps the model
+    /// from carrying a state its drivers would each have to invent a
+    /// resolution for.
+    static func assertRRsetSettingsAgree(
+        zone: DNSZone, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
+        excluding recordID: UUID? = nil, on db: any Database
+    ) async throws {
+        let zoneID = try zone.requireID()
+        var query = DNSRecord.query(on: db)
+            .filter(\.$zone.$id == zoneID)
+            .filter(\.$name == name)
+            .filter(\.$type == type)
+        if let recordID {
+            query = query.filter(\.$id != recordID)
+        }
+        guard let sibling = try await query.first() else { return }
+        let fqdn = DNSName.qualified(name: name, inZone: zone.name)
+        guard sibling.ttl == ttl else {
+            throw Abort(
+                .conflict,
+                reason: "The \(type.rawValue) records at '\(fqdn)' share a TTL of \(sibling.ttl) "
+                    + "(RFC 2181 §5.2); pass ttl=\(sibling.ttl), or update the record set's TTL first")
+        }
+        guard sibling.view == view else {
+            throw Abort(
+                .conflict,
+                reason: "The \(type.rawValue) records at '\(fqdn)' are published to the "
+                    + "'\(sibling.view.rawValue)' view; pass view=\(sibling.view.rawValue), or update the "
+                    + "record set's view first")
         }
     }
 

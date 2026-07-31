@@ -281,8 +281,12 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
+                    // Both enums are case-normalized here so `--type a` and
+                    // `--view Internal` behave the same way; the wire format
+                    // spells types upper and views lower.
                     let request = CreateDNSRecordRequest(
-                        name: name, type: type.uppercased(), value: value, ttl: ttl, view: view)
+                        name: name, type: type.uppercased(), value: value, ttl: ttl,
+                        view: view?.lowercased())
                     let record: DNSRecord = try await environment.makeClient()
                         .post("/api/dns-zones/\(zone)/records", body: request)
                     switch global.output {

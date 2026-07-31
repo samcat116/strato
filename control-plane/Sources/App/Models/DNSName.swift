@@ -76,7 +76,8 @@ enum DNSName {
     /// more labels, so `api.staging` in `acme.internal` owns
     /// `api.staging.acme.internal`. Wildcards (`*.foo`) are permitted as the
     /// leftmost label — every record type in the vocabulary can legitimately
-    /// carry one.
+    /// carry one — including a bare `*`, the zone-apex wildcard, which leaves
+    /// no ordinary labels behind once the star is stripped.
     static func normalizedRecordName(_ raw: String) throws -> String {
         let normalized = normalize(raw)
         if normalized.isEmpty || normalized == apex { return apex }
@@ -84,8 +85,9 @@ enum DNSName {
             throw Abort(.badRequest, reason: "Record name must not exceed \(maxNameLength) characters")
         }
         var labels = normalized.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        if labels.first == "*" { labels.removeFirst() }
-        guard !labels.isEmpty, labels.allSatisfy(isValidLabel) else {
+        let isWildcard = labels.first == "*"
+        if isWildcard { labels.removeFirst() }
+        guard isWildcard || !labels.isEmpty, labels.allSatisfy(isValidLabel) else {
             throw Abort(
                 .badRequest,
                 reason: "Record name '\(raw)' is not a valid DNS name: each label must be 1–\(maxLabelLength) "

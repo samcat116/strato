@@ -233,15 +233,6 @@ struct DNSController: RouteCollection {
         let value = try DNSZoneService.validatedValue(request.value, type: request.type)
         let ttl = try Self.validatedTTL(request.ttl)
 
-        let count = try await DNSRecord.query(on: req.db).filter(\.$zone.$id == zoneID).count()
-        guard count < DNSZone.maxRecordsPerZone else {
-            throw Abort(
-                .forbidden,
-                reason: "Record limit reached: \(DNSZone.maxRecordsPerZone) records per zone")
-        }
-        try await DNSZoneService.assertNoConflict(
-            zone: zone, name: name, type: request.type, on: req.db)
-
         let record = DNSRecord(
             zoneID: zoneID,
             name: name,
@@ -252,7 +243,31 @@ struct DNSController: RouteCollection {
             createdByID: try user.requireID()
         )
         do {
-            try await record.save(on: req.db)
+            // Every check here is read-then-write, and none of them is backed
+            // by an index: the unique index is `(zone, name, type, value)`,
+            // which cannot see the CNAME-exclusivity rule, the RRset's shared
+            // TTL, or the per-zone cap. Two concurrent creates would otherwise
+            // land a CNAME and an A at one owner name and leave the zone
+            // permanently invalid, with no idempotent recovery to lean on (the
+            // way `attachNetwork` has one). Serializing a zone's record writes
+            // on an advisory lock costs nothing — record writes are rare — and
+            // makes the checks mean what they say.
+            try await req.db.transaction { db in
+                try await DNSZoneService.lockZone(zoneID, on: db)
+
+                let count = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).count()
+                guard count < DNSZone.maxRecordsPerZone else {
+                    throw Abort(
+                        .forbidden,
+                        reason: "Record limit reached: \(DNSZone.maxRecordsPerZone) records per zone")
+                }
+                try await DNSZoneService.assertNoConflict(
+                    zone: zone, name: name, type: request.type, on: db)
+                try await DNSZoneService.assertRRsetSettingsAgree(
+                    zone: zone, name: name, type: request.type, ttl: record.ttl, view: record.view, on: db)
+
+                try await record.save(on: db)
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
@@ -273,9 +288,15 @@ struct DNSController: RouteCollection {
     /// The owner name and type are the record's identity; change those by
     /// deleting and recreating, so a rename can be checked for conflicts as
     /// the create it effectively is.
+    ///
+    /// TTL and view belong to the whole RRset (RFC 2181 §5.2), so changing
+    /// either applies to every record sharing this one's name and type. The
+    /// alternative — rejecting the edit — would leave a multi-value RRset's
+    /// TTL uneditable without deleting members first.
     @Sendable
     func updateRecord(req: Request) async throws -> DNSRecordResponse {
         let (zone, record) = try await fetchRecord(req: req, permission: "update")
+        let zoneID = try zone.requireID()
         let request = try req.content.decode(UpdateDNSRecordRequest.self)
 
         if let value = request.value {
@@ -287,9 +308,18 @@ struct DNSController: RouteCollection {
         if let view = request.view {
             record.view = view
         }
+        let ttlOrViewChanged = request.ttl != nil || request.view != nil
 
         do {
-            try await record.save(on: req.db)
+            try await req.db.transaction { db in
+                try await DNSZoneService.lockZone(zoneID, on: db)
+                try await record.save(on: db)
+                if ttlOrViewChanged {
+                    try await DNSZoneService.applyRRsetSettings(
+                        zoneID: zoneID, name: record.name, type: record.type,
+                        ttl: record.ttl, view: record.view, on: db)
+                }
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
