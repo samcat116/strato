@@ -1,5 +1,5 @@
 {
-  "originHash" : "fd0dae8a9fc07ef50bdcb1973f662027800130e1bca1763ebf02d28704ea184d",
+  "originHash" : "ab0fad13c4278004345edcd37bad80d2b8c7c8fc87ae2be5319101039654fe21",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -447,7 +447,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-ssf.git",
       "state" : {
-        "revision" : "09f66f1414bb314778cd3f156781eac0e82b6fb8"
+        "revision" : "5fe0c0247c02922876a8a76f93f42102625ba635"
       }
     },
     {

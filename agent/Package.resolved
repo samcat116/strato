@@ -222,7 +222,7 @@
       "location" : "https://github.com/samcat116/swift-qemu",
       "state" : {
         "branch" : "main",
-        "revision" : "10a5057eb503248a58d5d7ef80a1469e971c3e40"
+        "revision" : "b8001d6ddf4c8c4e839250fb5706302ed9dbe66e"
       }
     },
     {
@@ -267,7 +267,7 @@
       "location" : "https://github.com/samcat116/swift-toml.git",
       "state" : {
         "branch" : "master",
-        "revision" : "90e754d90ea19550c45db973f1932235c239ff80"
+        "revision" : "9ec7aa0da2fd7cc26dfe3de300f2c096e0c365e3"
       }
     },
     {
