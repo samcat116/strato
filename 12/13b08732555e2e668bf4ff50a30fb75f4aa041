@@ -1,0 +1,21 @@
+agent/Package.resolved
+  s_7531fb684dded0::t_c69cc46706c659 225,270
+cli/Package.resolved
+  s_7531fb684dded0::t_c69cc46706c659 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "1213b08732555e2e668bf4ff50a30fb75f4aa041",
+  "prompts": {},
+  "sessions": {
+    "s_7531fb684dded0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b83081fd-b5b3-4ae1-9399-c0841a71d935",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
