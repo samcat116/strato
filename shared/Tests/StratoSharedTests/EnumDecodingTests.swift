@@ -56,8 +56,36 @@ struct EnumDecodingTests {
         for mode in ConsoleMode.allCases {
             #expect(try roundTrip([mode]) == [mode])
         }
+        // Graphics is a separate axis (issue #566), not a console mode: `Vnc`
+        // still has no business decoding here.
         #expect(throws: DecodingError.self) {
             try decodeJSON([ConsoleMode].self, from: #"["Vnc"]"#)
+        }
+    }
+
+    @Test func graphicsModeRoundTripsAndRejectsUnknown() throws {
+        // `headless` in source, `"None"` on the wire — the case was renamed to
+        // keep `== .none` from colliding with `Optional.none` at use sites.
+        #expect(GraphicsMode.headless.rawValue == "None")
+        #expect(GraphicsMode.vnc.rawValue == "Vnc")
+        for mode in GraphicsMode.allCases {
+            #expect(try roundTrip([mode]) == [mode])
+        }
+        // Strict, like DesiredVMStatus: a mode this build cannot realize must
+        // not degrade to "no display" on a VM the API says has one.
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([GraphicsMode].self, from: #"["Spice"]"#)
+        }
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([GraphicsMode].self, from: #"["vnc"]"#)
+        }
+    }
+
+    @Test func consoleStreamRoundTripsAndRejectsUnknown() throws {
+        #expect(ConsoleStream.serial.rawValue == "Serial")
+        #expect(ConsoleStream.vnc.rawValue == "Vnc")
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([ConsoleStream].self, from: #"["Spice"]"#)
         }
     }
 

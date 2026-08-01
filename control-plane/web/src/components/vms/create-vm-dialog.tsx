@@ -52,6 +52,10 @@ export function CreateVMDialog({
   // firmware build and an swtpm process, and only Windows-class guests need them.
   const [secureBoot, setSecureBoot] = useState(false);
   const [tpm, setTpm] = useState(false);
+  // Graphics console (backend issue #566). Off by default — headless is
+  // cheaper, and most guests are reached over SSH — but it cannot be turned on
+  // later, so this is the only chance to ask for it.
+  const [graphicsConsole, setGraphicsConsole] = useState(false);
   // Security groups for the VM's NIC (max 5). Empty → the server falls back
   // to the project's default group.
   const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
@@ -146,6 +150,9 @@ export function CreateVMDialog({
         // Never sent for Firecracker, which the API rejects outright.
         secureBoot: !isFirecracker && secureBoot ? true : undefined,
         tpm: !isFirecracker && tpm ? true : undefined,
+        // Same omit-unless-on rule (issue #566); Firecracker emulates no
+        // display device and the API rejects the combination.
+        graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
         // Omitted when empty → the server uses the project's default group.
         securityGroupIds:
           securityGroupIds.length > 0 ? securityGroupIds : undefined,
@@ -168,6 +175,7 @@ export function CreateVMDialog({
       });
       setSecureBoot(false);
       setTpm(false);
+      setGraphicsConsole(false);
       setSecurityGroupIds([]);
       setQuotaError(null);
     } catch (error) {
@@ -479,6 +487,40 @@ export function CreateVMDialog({
                   Secure Boot boots signed firmware with Microsoft&apos;s keys
                   enrolled. TPM 2.0 is emulated per VM and only places on nodes
                   with <code>swtpm</code> installed.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">Display</p>
+                <p className="text-xs text-muted-foreground">
+                  Needed to run a graphical OS installer, or to reach a guest
+                  that never brings up a network.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  id="graphicsConsole"
+                  type="checkbox"
+                  checked={!isFirecracker && graphicsConsole}
+                  onChange={(e) => setGraphicsConsole(e.target.checked)}
+                  disabled={isLoading || isFirecracker}
+                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                Graphics console
+              </label>
+              {isFirecracker ? (
+                <p className="text-xs text-muted-foreground">
+                  Unavailable for this image: it boots under Firecracker, which
+                  emulates no display device. Use a QEMU image.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Adds a virtual display and a VNC server, shown in the VM&apos;s
+                  Display tab. <strong>This cannot be changed later</strong> —
+                  the display is fixed when the VM is created. The serial console
+                  works either way.
                 </p>
               )}
             </div>

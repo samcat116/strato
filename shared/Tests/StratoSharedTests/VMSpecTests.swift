@@ -288,6 +288,43 @@ struct VMSpecTests {
         #expect(!decoded.secureBoot)
     }
 
+    // MARK: - Graphics console (issue #566)
+
+    @Test func graphicsConsoleRoundTrip() throws {
+        let spec = VMSpec(
+            cpus: 2, memoryBytes: 1 << 32, boot: .disk(firmware: nil),
+            console: ConsoleSpec(console: .pty, serial: .pty, graphics: .vnc))
+        let decoded = try roundTrip(spec)
+        #expect(decoded.console?.graphics == .vnc)
+        #expect(decoded.console?.effectiveGraphics == .vnc)
+    }
+
+    /// A console spec from a control plane that predates the graphics console
+    /// has no `graphics` key, and must read as headless rather than throwing.
+    @Test func consoleSpecWithoutGraphicsDecodesToHeadless() throws {
+        let decoded = try decodeJSON(ConsoleSpec.self, from: #"{"console":"Pty","serial":"Pty"}"#)
+        #expect(decoded.graphics == nil)
+        #expect(decoded.effectiveGraphics == .headless)
+    }
+
+    /// The other direction, and the reason `graphics` is Optional rather than a
+    /// defaulted `GraphicsMode`: a headless VM's spec must stay byte-identical
+    /// to what a pre-v23 agent already receives, so the key is absent — not
+    /// present as `"None"`.
+    @Test func headlessConsoleSpecOmitsGraphicsKey() throws {
+        let json = String(decoding: try encodeJSON(ConsoleSpec(console: .pty, serial: .pty)), as: UTF8.self)
+        #expect(!json.contains("graphics"))
+    }
+
+    /// Graphics decoding is strict, like `DesiredVMStatus` and unlike
+    /// `VMStatus`: a mode this build does not know must not degrade to "no
+    /// display" on a VM the API describes as having one.
+    @Test func unknownGraphicsModeFailsDecode() {
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(ConsoleSpec.self, from: #"{"console":"Pty","serial":"Pty","graphics":"Spice"}"#)
+        }
+    }
+
     /// `networkId` is the one NIC field with no tolerant fallback (wire v21,
     /// issue #765): without it the agent cannot tell which switch the port
     /// belongs on, and the name — unique only within a project — cannot stand

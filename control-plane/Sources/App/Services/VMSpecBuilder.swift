@@ -155,7 +155,12 @@ struct VMSpecBuilder {
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: legacyVolumeSpecs(from: vm),
             networks: networkSpecs(from: networkInterfaces, networks: networks),
-            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
+            console: ConsoleSpec(
+                console: vm.consoleMode, serial: vm.serialMode,
+                // nil, not an explicit `.headless`, so the key is omitted
+                // entirely: a headless VM's spec has to stay byte-identical to
+                // what a pre-v23 agent already receives (issue #566).
+                graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )
@@ -201,7 +206,12 @@ struct VMSpecBuilder {
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
                 securityGroupsByInterface: securityGroupsByInterface, logger: logger),
-            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
+            console: ConsoleSpec(
+                console: vm.consoleMode, serial: vm.serialMode,
+                // nil, not an explicit `.headless`, so the key is omitted
+                // entirely: a headless VM's spec has to stay byte-identical to
+                // what a pre-v23 agent already receives (issue #566).
+                graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )

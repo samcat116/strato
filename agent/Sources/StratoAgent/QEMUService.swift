@@ -503,6 +503,13 @@ actor QEMUService: HypervisorService {
             logger.debug("Removed serial socket: \(socketPath)")
         }
 
+        // Clean up the deterministic VNC socket (issue #566). Unconditional,
+        // like the QMP sockets below: a VM re-adopted from a previous agent
+        // incarnation has one on disk that this process never recorded.
+        try? FileManager.default.removeItem(
+            atPath: QEMUGraphicsDevice.socketPath(
+                vmDirectory: (vmStoragePath as NSString).appendingPathComponent(vmId)))
+
         // Clean up the deterministic re-adoption QMP socket
         try? FileManager.default.removeItem(
             atPath: Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
@@ -579,12 +586,39 @@ actor QEMUService: HypervisorService {
         return nil
     }
 
-    /// Console access for QEMU VMs: the serial and/or virtio-console Unix sockets.
-    /// Returns nil when neither socket exists (VM not running or console not enabled).
+    /// Returns the VNC socket path for a VM, or nil when no socket file exists
+    /// — which is the case for the headless VMs that are the default, and for
+    /// a VM whose QEMU exited cleanly.
+    ///
+    /// Existence of the socket file is the authority, not the cache: QEMU owns
+    /// the listener, so a VM re-adopted after an agent restart still has one
+    /// even though this process never spawned it. Conversely a VM created
+    /// headless never has one, and cannot gain one without being recreated —
+    /// the display device is fixed in the QEMU process's arguments.
+    ///
+    /// Note this proves the *file* is there, not that anything is listening: a
+    /// SIGKILLed QEMU can leave the socket behind where a clean stop unlinks
+    /// it. The connect attempt is what settles that, and its failure is
+    /// reported to the browser as a console that could not be opened.
+    func getVNCSocketPath(vmId: String) -> String? {
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vncSocketPath = QEMUGraphicsDevice.socketPath(vmDirectory: vmDir)
+
+        guard FileManager.default.fileExists(atPath: vncSocketPath) else {
+            logger.debug("VNC socket not found at: \(vncSocketPath)")
+            return nil
+        }
+        return vncSocketPath
+    }
+
+    /// Console access for QEMU VMs: the serial and/or virtio-console Unix
+    /// sockets, plus the VNC socket when the VM was spawned with a display.
+    /// Returns nil when no socket at all exists (VM not running).
     func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
         let endpoint = ConsoleEndpoint(
             serialSocketPath: getSerialSocketPath(vmId: vmId),
-            consoleSocketPath: getConsoleSocketPath(vmId: vmId)
+            consoleSocketPath: getConsoleSocketPath(vmId: vmId),
+            vncSocketPath: getVNCSocketPath(vmId: vmId)
         )
         return endpoint.isEmpty ? nil : endpoint
     }
@@ -1685,7 +1719,30 @@ actor QEMUService: HypervisorService {
         }
         #endif
 
-        qemuConfig.noGraphic = true
+        // Display (issue #566). A headless VM keeps `-nographic` and appends
+        // nothing, so its argument vector is unchanged. A graphics VM drops
+        // `-nographic` — whose job is to force `-display none` and redirect the
+        // *default* serial and monitor to stdio — because `-vnc` is itself a
+        // display backend and is what exports the framebuffer. Its serial
+        // console is unaffected either way: the `-serial unix:` appended below
+        // is explicit, and an explicit `-serial` is what `-nographic` defers to.
+        //
+        // The display device is fixed for the life of the QEMU process, so this
+        // is settled at create and a VM cannot gain or lose a display without
+        // being recreated.
+        if spec.console?.effectiveGraphics == .vnc {
+            let socketPath = QEMUGraphicsDevice.socketPath(vmDirectory: vmDir)
+            // QEMU cannot bind over a socket file left by a dead process.
+            try? FileManager.default.removeItem(atPath: socketPath)
+            qemuConfig.noGraphic = false
+            qemuConfig.additionalArgs.append(
+                contentsOf: QEMUGraphicsDevice.arguments(
+                    vncSocketPath: socketPath, architecture: CPUArchitecture.current))
+            logger.info(
+                "Graphics console enabled", metadata: ["vmId": .string(vmId), "vncSocket": .string(socketPath)])
+        } else {
+            qemuConfig.noGraphic = true
+        }
         // Honor the create contract (`ReconcileStep.create`: ends "exists, not
         // running"): spawn with CPUs frozen (-S) and let bootVM issue the QMP
         // `cont`. Spawning live booted every fresh VM once, and the next

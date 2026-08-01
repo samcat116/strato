@@ -99,11 +99,12 @@ Firecracker images — Firecracker has no UEFI firmware and no TPM device, so
 the API rejects the combination with a 400 rather than booting a machine that
 does not match what was asked for.
 
-You also want a **graphics console**. Windows Setup is a graphical installer
-and is unusable over a serial console, which is all Strato exposes today. The
-graphics console is tracked separately; until it lands, plan on reaching the
-installer through your own VNC/SPICE path on the hypervisor node, or install
-from an image that was prepared elsewhere.
+You also want the **graphics console**. Windows Setup is a graphical installer
+and is unusable over a serial console, so turn on **Display** in the create-VM
+dialog alongside the two switches above. Setup is then driven from the VM's
+**Display** tab, keyboard and mouse included. Enable it at creation: the display
+device is fixed in the hypervisor process's arguments, so a VM created without
+one cannot gain it later.
 
 ## What the VM actually gets
 
@@ -128,8 +129,9 @@ the VM.
   macOS-only fleet fails loudly rather than degrading.
 - **No virtio driver automation.** The driver ISO is attached and loaded by
   hand, per the steps above.
-- **No graphics console yet.** Tracked separately; serial-only means the
-  Windows installer is not reachable through Strato's own console today.
+- **The display must be chosen at creation.** A VM created without one cannot
+  gain a display later — recreate it. (The serial console is always present
+  either way.)
 - **A dead swtpm needs a stop/start.** swtpm outlives the agent the same way
   QEMU does, so restarting or upgrading an agent leaves running Windows VMs
   alone. But if a VM's swtpm dies underneath a live QEMU, it cannot be

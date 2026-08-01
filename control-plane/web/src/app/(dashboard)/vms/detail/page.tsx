@@ -11,6 +11,7 @@ import {
   Clock,
   Terminal,
   ScrollText,
+  Monitor,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +26,20 @@ import {
   VMSnapshotsCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
+
+// Dynamically import VNCDisplay: noVNC touches `document` while its module is
+// evaluated, so it cannot be server-rendered (issue #566).
+const VNCDisplay = dynamic(
+  () => import("@/components/vms/vnc-display").then((mod) => mod.VNCDisplay),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-[500px] bg-background rounded-lg flex items-center justify-center">
+        <p className="text-muted-foreground">Loading display...</p>
+      </div>
+    ),
+  }
+);
 
 // Dynamically import ConsoleTerminal to avoid SSR issues with xterm.js
 const ConsoleTerminal = dynamic(
@@ -133,6 +148,22 @@ export default function VMDetailPage() {
             {!isRunning && (
               <span className="ml-2 text-xs text-muted-foreground">(VM not running)</span>
             )}
+          </TabsTrigger>
+          {/* The display needs both a running VM and a VM that was created
+              with one — headless is the default, and it cannot be changed
+              afterwards, so the hint says which condition failed. */}
+          <TabsTrigger
+            value="display"
+            className="data-[state=active]:bg-muted"
+            disabled={!isRunning || !vm.graphicsConsole}
+          >
+            <Monitor className="h-4 w-4 mr-2" />
+            Display
+            {!vm.graphicsConsole ? (
+              <span className="ml-2 text-xs text-muted-foreground">(no display)</span>
+            ) : !isRunning ? (
+              <span className="ml-2 text-xs text-muted-foreground">(VM not running)</span>
+            ) : null}
           </TabsTrigger>
           <TabsTrigger
             value="logs"
@@ -338,6 +369,46 @@ export default function VMDetailPage() {
                 <p className="text-muted-foreground text-sm mt-2">
                   Start the VM to access the console.
                 </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="display" className="mt-6">
+          {vm.graphicsConsole && isRunning ? (
+            <Card className="bg-background border-border">
+              <CardContent className="p-0">
+                <VNCDisplay
+                  vmId={id}
+                  className="h-[500px] rounded-lg overflow-hidden"
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-card border-border">
+              <CardContent className="py-12 text-center">
+                <Monitor className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                {vm.graphicsConsole ? (
+                  <>
+                    <p className="text-muted-foreground">
+                      The display is only available when the VM is running.
+                    </p>
+                    <p className="text-muted-foreground text-sm mt-2">
+                      Start the VM to access the display.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-muted-foreground">
+                      This VM was created without a display.
+                    </p>
+                    <p className="text-muted-foreground text-sm mt-2">
+                      The display device is fixed when the VM is created, so it
+                      cannot be added later. Create a new VM with the display
+                      enabled to use a graphical console.
+                    </p>
+                  </>
+                )}
               </CardContent>
             </Card>
           )}

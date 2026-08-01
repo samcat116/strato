@@ -89,6 +89,15 @@ are lucide-react.
 
 The most involved pieces:
 
+- **Graphics console** (`components/vms/vnc-display.tsx` + `lib/hooks/use-vnc.ts`):
+  noVNC (`@novnc/novnc`) rendering a VM's framebuffer in the Display tab. Two
+  steps, like sandbox exec: POST mints a session, then the returned
+  `websocketPath` is opened and — after the server's `{"type":"ready"}` — the
+  **live WebSocket** is handed to `RFB`. Passing the socket rather than a URL is
+  what lets that handshake gate exist; given a URL, noVNC would emit the RFB
+  version string before the agent's end of the relay existed and stall with no
+  error. noVNC touches `document` at module scope, so it is imported inside the
+  effect and the component is loaded through `next/dynamic` with `ssr: false`.
 - **Terminals** (`components/terminal/`): `console-terminal.tsx` (VM serial
   console) and `sandbox-terminal.tsx` drive xterm.js; the WebSocket logic is
   in `lib/hooks/use-console.ts` and `use-sandbox-exec.ts`. Sockets are opened

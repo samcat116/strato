@@ -5,6 +5,15 @@ import NIOWebSocket
 import Fluent
 
 struct AgentWebSocketController: RouteCollection {
+    /// Message types whose bodies are base64 payload rather than anything worth
+    /// reading in a log, and which arrive at a rate no log should try to keep
+    /// up with. Matched against the envelope's leading bytes, where `type` is.
+    private static let streamingFrameTypes = [
+        MessageType.consoleData.rawValue,
+        MessageType.sandboxExecOutput.rawValue,
+        MessageType.sandboxLog.rawValue,
+    ]
+
     func boot(routes: RoutesBuilder) throws {
         let agentRoutes = routes.grouped("agent")
         // Observed-state reports carry an entry per VM on the agent, so frames
@@ -235,13 +244,23 @@ struct AgentWebSocketController: RouteCollection {
         // on a single host: every agent's heartbeat and observed-state report
         // lands here (issue #705). The raw-frame dump is noisier still, so it
         // sits a level below the decoded envelope.
-        req.logger.trace(
-            "Processing WebSocket message",
-            metadata: [
-                "agentName": .string(agentName),
-                "messageLength": .string("\(text.count)"),
-                "rawTextPreview": .string(String(text.prefix(500))),
-            ])
+        //
+        // Streaming frames are logged by length alone, mirroring the agent's
+        // own send path: a graphics console (issue #566) reads up to 64 KiB at
+        // a time and streams continuously while the screen changes, so even a
+        // 500-character slice of each frame is enough to swamp a journal for
+        // anyone who turns trace on with a Display tab open. The envelope
+        // encodes `type` first, so a short leading window identifies the frame
+        // without scanning an 88 KiB body.
+        let isStreamingFrame = Self.streamingFrameTypes.contains { text.prefix(64).contains($0) }
+        var traceMetadata: Logger.Metadata = [
+            "agentName": .string(agentName),
+            "messageLength": .string("\(text.count)"),
+        ]
+        if !isStreamingFrame {
+            traceMetadata["rawTextPreview"] = .string(String(text.prefix(500)))
+        }
+        req.logger.trace("Processing WebSocket message", metadata: traceMetadata)
 
         guard let data = text.data(using: .utf8) else {
             req.logger.error("Failed to convert WebSocket text to data")
@@ -404,9 +423,12 @@ struct AgentWebSocketController: RouteCollection {
                         "sessionId": .string(message.sessionId),
                         "reason": .string(message.reason ?? "unknown"),
                     ])
-                // Clean up the session
-                req.consoleSessionManager.removeSession(
-                    sessionId: message.sessionId, fromAgentKey: agentKey)
+                // Close the browser socket as well as cleaning up: this is the
+                // only routable signal the agent has for "I could not open
+                // that console", so dropping it here would leave the tab
+                // waiting on a connection that will never come.
+                req.consoleSessionManager.closeSession(
+                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
             case .sandboxExecStarted:
                 let message = try envelope.decode(as: SandboxExecStartedMessage.self)

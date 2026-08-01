@@ -43,7 +43,8 @@ struct SchedulerServiceTests {
         supportsInterVMNetworking: Bool = false,
         supportsSandboxWorkloads: Bool = false,
         supportsVTPM: Bool = false,
-        supportsMachineProfile: Bool = false
+        supportsMachineProfile: Bool = false,
+        supportsGraphicsConsole: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -61,7 +62,8 @@ struct SchedulerServiceTests {
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsVTPM: supportsVTPM,
-            supportsMachineProfile: supportsMachineProfile
+            supportsMachineProfile: supportsMachineProfile,
+            supportsGraphicsConsole: supportsGraphicsConsole
         )
     }
 
@@ -814,5 +816,77 @@ struct SchedulerServiceTests {
         let windowsRequirements = SchedulerService.placementRequirements(for: windows)
         #expect(windowsRequirements.requiresVTPM)
         #expect(windowsRequirements.requiresSecureBoot)
+    }
+
+    // MARK: - Graphics console (issue #566)
+
+    /// Requirements for a VM that asks for a display.
+    private func graphicsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu, memory: memory, disk: 0, hypervisorType: .qemu, requiresGraphicsConsole: true)
+    }
+
+    /// A pre-v23 agent decodes the sync fine and ignores `ConsoleSpec.graphics`,
+    /// so the guest boots headless while the API reports a display and the
+    /// Display tab shows nothing. Same silent divergence the machine profile is
+    /// gated on, so placement is refused rather than degraded.
+    @Test("An agent too old to realize a graphics console is not eligible")
+    func testGraphicsConsoleRequiresNewEnoughAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents)
+            Issue.record("Expected graphicsConsoleUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .graphicsConsoleUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected graphicsConsoleUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
+    }
+
+    /// The gate narrows to the capable agents rather than failing outright when
+    /// some of the fleet can serve the VM.
+    @Test("A graphics VM places on the one agent new enough to serve it")
+    func testGraphicsConsolePlacesOnCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", availableCPU: 8, supportsGraphicsConsole: false),
+            createTestAgent(id: "new", name: "new", availableCPU: 2, supportsGraphicsConsole: true),
+        ]
+
+        // "old" has more free CPU, so a strategy-only choice would pick it.
+        #expect(try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents) == "new")
+    }
+
+    /// The default must not narrow placement: a headless VM still takes any
+    /// agent, including one that predates the feature entirely.
+    @Test("A headless VM places on a pre-v23 agent")
+    func testHeadlessVMIgnoresGraphicsGate() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
+        ]
+
+        #expect(try scheduler.selectAgent(for: createTestVM(cpu: 2), from: agents) == "old")
+    }
+
+    /// The gate only engages if the VM's intent reaches the requirements, so
+    /// the real create path has to carry it.
+    @Test("Placement requirements carry the VM's graphics console intent")
+    func testPlacementRequirementsCarryGraphicsConsole() throws {
+        let headless = createTestVM(cpu: 2)
+        #expect(!SchedulerService.placementRequirements(for: headless).requiresGraphicsConsole)
+
+        let graphical = createTestVM(cpu: 2)
+        graphical.graphicsConsole = true
+        #expect(SchedulerService.placementRequirements(for: graphical).requiresGraphicsConsole)
     }
 }

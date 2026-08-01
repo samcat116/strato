@@ -705,6 +705,11 @@ public func configure(_ app: Application) async throws {
     // (a routing identity and an ownerless row).
     app.migrations.add(ScopeFloatingIPPoolNamesToOwners())
 
+    // Graphics console (issue #566): per-VM intent to boot with a display
+    // device, so the framebuffer can be relayed to the web UI. Defaults false,
+    // so every existing VM stays headless with an unchanged QEMU command line.
+    app.migrations.add(AddGraphicsConsoleToVM())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
