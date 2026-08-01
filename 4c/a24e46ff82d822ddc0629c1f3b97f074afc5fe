@@ -1,0 +1,270 @@
+control-plane/Tests/AppIAMTests/IAMDecisionLogEndpointTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-290
+control-plane/Tests/AppPlatformTests/ReplicaRoutingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-390
+control-plane/Tests/AppIdentityTests/LastUsedTrackingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-297
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1847
+control-plane/Tests/AppIAMTests/VMAuthorizationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-214
+control-plane/Tests/AppIdentityTests/JWTSVIDAuthenticationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-587
+control-plane/Tests/AppIdentityTests/SCIMFilterTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-250
+control-plane/Tests/AppPlatformTests/BackgroundTaskRegistryTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-127
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-680
+control-plane/Tests/AppIAMTests/FolderMemberTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-613
+control-plane/Tests/AppIdentityTests/OrgSPIREClientRegistryTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-399
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-806
+control-plane/Tests/AppIAMTests/GuardrailEndpointTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-312
+control-plane/Tests/AppIAMTests/OrganizationMemberAuthzTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-120
+control-plane/Tests/AppResourceTests/ImageDownloadMTLSTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-298
+control-plane/Tests/AppPlatformTests/AgentControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-113
+control-plane/Tests/AppPlatformTests/PersistedEnumConstraintTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-158
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-953
+control-plane/Tests/AppPlatformTests/AgentLogIngestorTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-170
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-397
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-172
+control-plane/Tests/AppPlatformTests/TracingContextPropagationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-124
+control-plane/Tests/AppIdentityTests/GroupTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-292
+control-plane/Tests/AppResourceTests/VolumeSnapshotGuardTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-133
+control-plane/Tests/AppPlatformTests/AgentModelTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-489
+control-plane/Tests/AppPlatformTests/AgentUpdateEndpointTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-288
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-685
+control-plane/Tests/AppIdentityTests/ServiceAccountAPITests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-441
+control-plane/Tests/AppIAMTests/IAMBatchDecisionTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-361
+control-plane/Tests/AppIdentityTests/UserControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-200
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-550
+control-plane/Tests/AppIdentityTests/WebAuthnChallengeTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-187
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-209
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1139
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-964
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-213
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-976
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-785
+control-plane/Tests/AppIAMTests/CedarPolicySetCacheTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-243
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-124
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-679
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-399
+.github/workflows/build.yaml
+  s_2c6bd12f00837c::t_133a32deb29acf 532-544
+  s_2c6bd12f00837c::t_b9b39e03cd7591 531
+  s_2c6bd12f00837c::t_4c281ee3cdff89 528
+control-plane/Tests/AppIAMTests/OrganizationAccessServiceTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-175
+control-plane/Tests/AppIAMTests/WhoCanCeilingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-199
+control-plane/Tests/AppPlatformTests/MigrationEnumSafetyTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-85
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-281
+control-plane/Tests/AppIAMTests/ProjectMemberTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-378
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-465
+control-plane/Tests/AppIdentityTests/OrgTrustDomainTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-505
+control-plane/Tests/AppIdentityTests/APIKeyOwnershipTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-88
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-190
+docs/architecture/control-plane.md
+  s_2c6bd12f00837c::t_809382a8070842 37-42
+  s_2c6bd12f00837c::t_c0ce4f5d54e61e 357,360-372
+control-plane/Tests/AppIAMTests/AdminExceptionPathTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-295
+control-plane/Tests/AppIAMTests/HierarchyIntegrationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-381
+control-plane/Tests/AppIdentityTests/BaseTestCase.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-69
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-827
+control-plane/Tests/AppIdentityTests/RegistrationPolicyTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-200
+control-plane/Tests/AppIAMTests/ProjectVisibilityTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-315
+control-plane/Tests/AppIAMTests/HierarchyPathResolverTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-99
+control-plane/Tests/AppIAMTests/VolumeAuthorizationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-130
+control-plane/Tests/AppIdentityTests/OIDCControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1115
+control-plane/Tests/AppIdentityTests/ConsoleSessionManagerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-92
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-603
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-486
+control-plane/Package.swift
+  s_2c6bd12f00837c::t_66b4a1b6c824e0 139-167,169,173,183-213
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-106
+control-plane/Tests/AppResourceTests/SandboxExecTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-530
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-472
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-705
+control-plane/Tests/AppIAMTests/IAMPolicySetVersionTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-228
+control-plane/Sources/App/openapi.yaml
+  s_2c6bd12f00837c::t_f83ebfd7bc84b9 77-79
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1155
+control-plane/Tests/AppIAMTests/WhoCanEvaluatorAgreementTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-258
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-380
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-493
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-221
+control-plane/Tests/AppPlatformTests/SecurityHeadersTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-81
+control-plane/Tests/AppIdentityTests/SSFTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-790
+control-plane/Tests/AppIdentityTests/ListPaginationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-131
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-306
+control-plane/Tests/AppIdentityTests/OIDCAuthFlowTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1028
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-336
+control-plane/Tests/AppIdentityTests/WorkloadPrincipalTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-482
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-258
+control-plane/Tests/AppIAMTests/RoleEndpointTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-738
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_2c6bd12f00837c::t_3653532984b4f0 1-658
+control-plane/Tests/AppIAMTests/PolicyEndpointTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-564
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-143
+control-plane/Tests/AppIAMTests/ListAuthorizationScalingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-494
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-712
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-415
+control-plane/Tests/AppResourceTests/SandboxExecAttachIntegrationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-419
+control-plane/Tests/AppResourceTests/SandboxExpiryTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-393
+control-plane/Tests/AppIAMTests/IAMRoleBindingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-359
+control-plane/Tests/AppIAMTests/CrossOrgBindingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-406
+control-plane/Tests/AppIAMTests/IAMGuardrailTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-692
+control-plane/Tests/AppIdentityTests/UserCreationAndClaimTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-396
+control-plane/Tests/AppIdentityTests/ValkeySessionDriverTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-233
+control-plane/Tests/AppIAMTests/GuardrailWriteCheckTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-392
+control-plane/Tests/AppIdentityTests/SCIMProvisioningIntegrationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-230
+control-plane/Tests/AppIAMTests/FolderSubtreeTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-123
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-621
+control-plane/Tests/AppIAMTests/ProjectListVisibilityTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-521
+control-plane/Tests/AppResourceTests/VMListScalingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-166
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-217
+control-plane/Tests/AppIAMTests/IAMWhoCanTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-665
+control-plane/Tests/AppIAMTests/EntitySliceLoaderTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-662
+control-plane/Tests/AppResourceTests/VMInterfaceAddressMigrationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-175
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-868
+control-plane/Tests/AppIAMTests/OrganizationalUnitTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-391
+control-plane/Tests/AppIdentityTests/PasskeyManagementTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-370
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-1351
+control-plane/Tests/AppPlatformTests/ResourceOperationCoordinatorTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-378
+control-plane/Tests/AppIdentityTests/OAuthDeviceFlowTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-571
+control-plane/Tests/AppIAMTests/OrganizationMemberRoleTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-240
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-89
+control-plane/Tests/AppIAMTests/AuthorizationCheckTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-177
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-652
+docs/api-reference.md
+  s_2c6bd12f00837c::t_4c281ee3cdff89 63
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-141
+control-plane/Tests/AppResourceTests/BackfillImageArtifactsTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-48
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-421
+control-plane/Tests/AppIdentityTests/WorkloadIdentityControllerTests.swift
+  s_2c6bd12f00837c::t_792772b1db8fc8 1-426
+control-plane/Tests/AppIdentityTests/AgentOrganizationScopeTests.swift
+  s_2c6bd12f00837c::t_91658135e375f0 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "4ca24e46ff82d822ddc0629c1f3b97f074afc5fe",
+  "prompts": {},
+  "sessions": {
+    "s_2c6bd12f00837c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f581f91-6e20-4702-b193-65365de48102",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
