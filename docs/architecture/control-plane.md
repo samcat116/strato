@@ -53,12 +53,17 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    (SSF revocation enforcement), and `AuthorizationMiddleware` — the
    structurally default-deny authorization gate, which runs in every
    environment including tests.
-3. **Coordination**: Valkey (`ValkeyCoordinationStore` + Valkey-backed
-   sessions) in real deployments — startup fails hard if it's missing;
-   `InMemoryCoordinationStore` + Fluent sessions under `.testing`. Session
-   keys carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every
-   read slides, and the driver skips the write-back when a request left the
-   session data unchanged.
+3. **Coordination and sessions**: two Valkey-backed stores, configured
+   separately because their failure contracts are opposites (issue #855).
+   `ValkeyCoordinationStore` fails open — flushing it degrades convergence, not
+   correctness — while losing session storage logs every user out. Coordination
+   reads `VALKEY_*`; sessions read `SESSION_VALKEY_*` and fall back wholesale to
+   the coordination endpoint when unset, so they share one client unless the
+   endpoints differ. Startup fails hard if either is missing or unreachable.
+   Under `.testing`: `InMemoryCoordinationStore` + Fluent sessions. Session keys
+   carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every read
+   slides, and the driver skips the write-back when a request left the session
+   data unchanged.
 4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
    ~87 ordered migrations and `autoMigrate()`. Migrations run at startup;
    there is no separate migrate step.

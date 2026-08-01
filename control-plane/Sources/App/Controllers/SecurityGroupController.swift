@@ -487,6 +487,16 @@ struct SecurityGroupController: RouteCollection {
     /// the hosting agent (which binds port-group membership) and, for a sited
     /// host, the site's network controller (which authors the ACLs). An
     /// unplaced VM passes — see the call site.
+    ///
+    /// Also refuses when nothing would author those ACLs at all: no designated
+    /// controller, or one that is offline past the grace window or came back
+    /// unable to author topology (issue #833). This used to no-op silently —
+    /// the group attached, the API reported it, and the ACL was realized
+    /// nowhere. Resolving through `SiteNetworkAuthority` rather than reading
+    /// the column keeps it in step with assembly, which notably keeps a *pre-v4
+    /// host* on legacy per-node scoping: such a host authors its own ACLs and
+    /// the site controller realizes nothing for it, so `.selfAuthored` correctly
+    /// leaves it as the sole realizer.
     static func assertRealizersSupportSecurityGroups(for vm: VM, on db: Database) async throws {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
@@ -494,12 +504,13 @@ struct SecurityGroupController: RouteCollection {
         else { return }
 
         var realizers = [host]
-        if let siteID = host.$site.id,
-            let site = try await Site.find(siteID, on: db),
-            let controllerID = site.$networkControllerAgent.id,
-            let controller = try await Agent.find(controllerID, on: db),
-            controller.id != host.id
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
+        if let refusal = SiteNetworkAuthority.refusal(
+            authority, host: host, consequence: "the group's ACLs would be realized nowhere")
         {
+            throw refusal
+        }
+        if case .controller(let controller) = authority, controller.id != host.id {
             realizers.append(controller)
         }
         for agent in realizers {

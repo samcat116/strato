@@ -139,13 +139,44 @@ summary are all assembled from it, so there is one answer rather than three.
 | `GET /api/organizations/:id/resources/summary` | org-wide usage + per-quota compliance | same snapshot, so the totals count what the tree would show |
 | `GET /api/organizations/:id/search` / `GET /api/hierarchy/search` | matching folders/projects/VMs org-wide | `HierarchySearchService.readable`, one batch per result kind |
 | `GET /api/organizations/:id/ous`, `.../ous/:ouID/ous` | the org's whole folder structure | `folder:read` per folder |
+| `GET /api/organizations/:id/path/:type/:id` | folder/project/VM names for an arbitrary entity | `HierarchyPathResolver.visibleComponents`, one batch per component type |
 
-Two rows survive without a decision of their own, both documented at the call
-site: organization-scoped quotas (the handler's `view_organization` gate has
-already passed and they describe that organization), and folders on the path
-down to a readable project — dropping those disconnects the tree, and the
-project's own materialized `path` names them anyway. The second only applies to
-the nested tree; flat consumers read `decidedFolders` and never see them.
+One row survives without a decision of its own, documented at the call site:
+folders on the path down to a readable project — dropping those disconnects the
+tree, and the project's own materialized `path` names them anyway. It only
+applies to the nested tree; flat consumers read `decidedFolders` and never see
+them.
+
+Organization-scoped quotas no longer ride the handler's `view_organization`
+gate. A quota is not only a limit: `ResourceQuotaResponse` ships `usage` and
+`utilization` off the stored counters, `/api/quotas/:id/usage` measures them
+fresh with a per-VM breakdown, and `/resources/summary` derives per-quota
+compliance. Those are one quantity — `QuotaEnforcementService` writes the
+counters straight from `QuotaUsageAggregator.measure` — and for an
+organization-scoped quota it is the organization's whole vCPU, memory and VM
+consumption. That makes the quota the scalar form of the inventory these
+endpoints filter per row, so every door onto it now asks `quota:read` on the
+node the quota hangs on (`QuotaVisibility`):
+
+| Route | Was | Now |
+| -- | -- | -- |
+| `/resources`, `/hierarchy`, `/resources/summary` | org-scoped rows kept on the handler's `view_organization` | `quota:read` in `HierarchySnapshot.readable(on:)` |
+| `GET /api/quotas` | `org:read` for org/folder rows, `project:read` for project rows | `quota:read` for every scope |
+| `GET /api/quotas/:id`, `GET /api/quotas/:id/usage` | `verifyQuotaAccess` → `requireMember` / `requireProjectMember` | `quota:read` |
+
+Unlike the `org:read` that admits a *container*, `quota:read` is role-derived,
+so bare membership does not reach it, while anyone with a viewer role at
+organization level already sees the rows the total is drawn from. Gating one
+field or one route would only have moved the number: an earlier revision of
+this work decided `quotaCompliance` alone, leaving the same figures on the row
+DTO across three endpoints and, fresher still, on `/api/quotas/:id/usage`.
+
+The check node must follow `QuotaUsageAggregator.projects(of:)` — project,
+then folder, then organization — since that is what decides the rows the
+measurement sums. `QuotaComplianceService.quotaScope` and
+`ResourceQuotaResponse.init` walk the opposite order for their own descriptive
+purposes; copying either would gate a wide measurement on a narrow node and
+nothing would fail.
 
 `GET /api/organizations/:id/search` was additionally **500ing for every
 caller**: it declared its folder join inside an `.or` group, which Fluent drops
@@ -156,7 +187,6 @@ never joined. Nothing covered the route.
 
 | Endpoint | Leaks | Notes |
 | -- | -- | -- |
-| `GET /api/organizations/:id/path/:type/:id` | folder/project names for an arbitrary entity | single-entity variant of the search leak |
 | `GET /api/organizations/:id/groups` | every group in the org, and `getMembers` discloses emails | `group:read` exists, so this is fixable the same way; identity-plane inventory rather than the project one |
 | `GET /api/organizations/:id/webhooks` | every subscription in the org, **including delivery URLs** | no `webhook:*` actions in the registry, so there is nothing to decide on yet — registering them comes first |
 | `GET /api/organizations/:id/ous/:ouID` and the folder mutation routes | any folder in the org, by id | an *item*-route gap, not a list one: the controller gates on `requireMember` where `folder:read` / `folder:update` exist |

@@ -676,7 +676,9 @@ struct FloatingIPController: RouteCollection {
     ///   requirement, so a later placement could land on a too-old agent);
     /// - the host is sited but the site has no designated network controller
     ///   (assembly then sends *no* agent the network state — unlike the
-    ///   site-less model, the hosting agent has no topology authority).
+    ///   site-less model, the hosting agent has no topology authority);
+    /// - the site's controller is offline past the grace window, or came back
+    ///   unable to author topology (issue #833).
     static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
@@ -686,12 +688,25 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
         }
-        switch try await SiteNetworkAuthority.resolve(forAgent: agent, on: db) {
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
+        if let refusal = SiteNetworkAuthority.refusal(
+            authority, host: agent, consequence: "nothing would realize the NAT rule")
+        {
+            throw refusal
+        }
+        switch authority {
         case .selfAuthored(let host):
             return host
         case .controller(let controller):
             return controller
+        case .controllerUnavailable(_, let controller, _):
+            // Only reachable through `refusal`'s host exemption — the hosting
+            // agent *is* the unavailable controller, and it is still the agent
+            // that realizes this NAT once it comes back.
+            return controller
         case .unassigned(let site):
+            // Already refused above — restated rather than force-unwrapped so
+            // the switch stays exhaustive without a fatal path.
             throw SiteNetworkAuthority.missingControllerAbort(
                 site: site, consequence: "nothing would realize the NAT rule")
         }

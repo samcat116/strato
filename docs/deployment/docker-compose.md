@@ -72,7 +72,7 @@ directly and `docker compose up -d` again.
 | Service | Purpose | Notes |
 |---|---|---|
 | `db` | PostgreSQL 16 | Control-plane DB (durable truth, including authorization data) |
-| `valkey` | Coordination + sessions | Required by the control plane (agent presence, sweep locks, scheduler reservations); password-protected |
+| `valkey` | Coordination + sessions | Required by the control plane (agent presence, sweep locks, scheduler reservations); password-protected. Backs both stores by default — see [Splitting session storage](#splitting-session-storage) |
 | `control-plane` | API + core | Runs DB migrations automatically at startup |
 | `frontend` | Web UI | Next.js |
 | `proxy` | nginx | The only service with a published port |
@@ -97,6 +97,40 @@ expected.
 
 There is nothing to rotate before production use; the values never leave the
 host.
+
+## Splitting session storage
+
+The single `valkey` service backs two stores with opposite failure contracts:
+
+- **Coordination** (agent presence, socket routing, sweep locks, scheduler
+  reservations, rate-limit counters) is *fail-open*. Losing it degrades
+  convergence, never correctness — agents keep converging via the periodic sync,
+  and `/health/ready` grades it `degraded` while still serving traffic.
+- **Session storage** cannot fail open at all. Losing it logs every signed-in
+  user out at once, and since passkeys are the only interactive authentication,
+  everyone re-authenticates with a security key. `/health/ready` grades it fatal.
+
+Sharing one instance means the store that is *allowed* to fail takes down the one
+that must not. To separate them, set the `SESSION_VALKEY_*` variables on the
+`control-plane` service (a commented block in `docker-compose.yml` shows both
+forms). Leave them unset and sessions follow the coordination endpoint, which is
+the default and needs no change on upgrade.
+
+These variables are **all-or-nothing**: `SESSION_VALKEY_HOST` does *not* inherit
+`VALKEY_PORT` or `VALKEY_PASSWORD`, so a partially-set group can never produce a
+half-merged endpoint. Set every field the session endpoint needs.
+
+| Variable | Default |
+|---|---|
+| `SESSION_VALKEY_HOST` | unset — sessions use the coordination endpoint |
+| `SESSION_VALKEY_PORT` | `6379` |
+| `SESSION_VALKEY_PASSWORD` | none |
+| `SESSION_VALKEY_DATABASE` | `0` |
+
+The cheapest useful split is one server, two keyspaces — point
+`SESSION_VALKEY_HOST` at the same `valkey` service with
+`SESSION_VALKEY_DATABASE=1`. A coordination `FLUSHDB` then no longer logs
+everyone out, at no extra infrastructure. A second instance buys full isolation.
 
 ## Version pinning
 

@@ -89,6 +89,17 @@ spec:
           port: 8081
     {{- end }}
     {{- end }}
+    {{- if include "strato-control-plane.sessionValkeyEnabled" . }}
+    # Session storage on its own Valkey, which may be on a different port than
+    # the coordination one. Appended outside the egress with/else — same reason
+    # as the Prometheus rule below: the chart's own default egress list is a
+    # static value, so a conditional rule cannot live inside it and would
+    # otherwise be dead for every deployment that keeps the default.
+    - to: []
+      ports:
+        - protocol: TCP
+          port: {{ include "strato-control-plane.sessionValkeyPort" . }}
+    {{- end }}
     {{- if and .Values.spire.enabled .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
     # Allow the Workload Identity issuance panel to query the chart's Prometheus
     # (SPIRE_METRICS_PROMETHEUS_URL). Appended outside the egress with/else so it

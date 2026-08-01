@@ -144,12 +144,13 @@ struct ResourceQuotaController: RouteCollection {
     /// caller's organizations; they are not the item route's gate. Each scope
     /// goes through its own decision here (STR-116), so a guardrail forbid or a
     /// revoked binding narrows the list the same way it narrows the object read
-    /// — otherwise the list keeps showing a quota the item route now 403s:
+    /// — otherwise the list keeps showing a quota the item route now 403s.
     ///
-    /// - **project** quota → `project:read` (item route: `requireProjectMember`)
-    /// - **org / folder** quota → `org:read` on the owning organization (item
-    ///   route: `requireMember`, which asks `view_organization` → `org:read`; a
-    ///   folder quota resolves to its folder's organization).
+    /// The question is `quota:read` on the node the row hangs on, for every
+    /// scope. It was `org:read` for org- and folder-scoped rows, matching the
+    /// `requireMember` the item route then used; both moved together, because
+    /// the row ships `usage`/`utilization` — the scope's measured consumption —
+    /// and bare membership must not reach it. See ``QuotaVisibility``.
     ///
     /// A scopeless row is never in the input — the queries above always filter
     /// on a scope FK — but is dropped defensively; the item route requires
@@ -157,51 +158,7 @@ struct ResourceQuotaController: RouteCollection {
     private func readableQuotas(_ quotas: [ResourceQuota], on req: Request) async throws
         -> [ResourceQuota]
     {
-        // Folder quotas are gated on their folder's organization, so resolve
-        // the folder → organization mapping for the folder ids present.
-        let folderIDs = Set(quotas.compactMap { $0.$organizationalUnit.id })
-        var folderOrganization: [UUID: UUID] = [:]
-        if !folderIDs.isEmpty {
-            let folders = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$id ~~ Array(folderIDs))
-                .all()
-            for folder in folders {
-                if let id = folder.id { folderOrganization[id] = folder.$organization.id }
-            }
-        }
-
-        var organizationIDs = Set(quotas.compactMap { $0.$organization.id })
-        organizationIDs.formUnion(folderOrganization.values)
-        let projectIDs = Set(quotas.compactMap { $0.$project.id })
-
-        let readableOrganizationIDs =
-            organizationIDs.isEmpty
-            ? []
-            : Set(
-                try await req.canFilter(
-                    "org:read", on: organizationIDs.map { IAMNode(type: .organization, id: $0) }
-                ).map(\.id))
-        let readableProjectIDs =
-            projectIDs.isEmpty
-            ? []
-            : Set(
-                try await req.canFilter(
-                    "project:read", on: projectIDs.map { IAMNode(type: .project, id: $0) }
-                ).map(\.id))
-
-        return quotas.filter { quota in
-            if let projectID = quota.$project.id {
-                return readableProjectIDs.contains(projectID)
-            }
-            if let organizationID = quota.$organization.id {
-                return readableOrganizationIDs.contains(organizationID)
-            }
-            if let folderID = quota.$organizationalUnit.id {
-                guard let organizationID = folderOrganization[folderID] else { return false }
-                return readableOrganizationIDs.contains(organizationID)
-            }
-            return false
-        }
+        try await QuotaVisibility.readable(quotas, on: req)
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {
@@ -598,19 +555,25 @@ struct ResourceQuotaController: RouteCollection {
 
     // MARK: - Helper Methods
 
+    /// Gate reading a quota — the row itself (`show`) and its freshly measured
+    /// usage (`getUsage`).
+    ///
+    /// One question, `quota:read` on the node the quota hangs on, for every
+    /// scope (``QuotaVisibility``). `getUsage` is the sharpest reason it cannot
+    /// be the `requireMember` it used to be: it measures the scope live and
+    /// returns the per-VM breakdown alongside the totals, so on an
+    /// organization-scoped quota a bare member was handed the organization's
+    /// vCPU/memory/VM consumption and its VMs by environment and status — the
+    /// inventory the hierarchy endpoints filter per row, in scalar form, from
+    /// the one route nothing had narrowed.
     private func verifyQuotaAccess(quota: ResourceQuota, on req: Request) async throws {
-        if let orgID = quota.$organization.id {
-            try await OrganizationAccessService.requireMember(organizationID: orgID, on: req)
-        } else if let ouID = quota.$organizationalUnit.id {
-            guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-                throw Abort(.notFound, reason: "Folder not found")
-            }
-            try await OrganizationAccessService.requireMember(organizationID: ou.$organization.id, on: req)
-        } else if let projectID = quota.$project.id {
-            let project = try await req.requireProject(id: projectID)
-            try await OrganizationAccessService.requireProjectMember(project: project, on: req)
-        } else {
+        guard QuotaVisibility.measuredNode(of: quota) != nil else {
+            // A scopeless row measures nothing and belongs to no organization.
             try requireSystemAdminForScopelessQuota(on: req)
+            return
+        }
+        guard try await QuotaVisibility.canRead(quota, on: req) else {
+            throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }
 

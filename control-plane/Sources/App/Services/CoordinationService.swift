@@ -2,22 +2,24 @@ import Foundation
 import Valkey
 import Vapor
 
-/// Errors thrown at startup when the coordination layer cannot be configured.
+/// Errors thrown at startup when a Valkey-backed store cannot be configured.
 /// Valkey is required for control-plane coordination (issue #258): without a
 /// shared store, replicas disagree about agent liveness, background sweeps
-/// double-act, and concurrent placements race on capacity.
-enum CoordinationConfigurationError: Error, CustomStringConvertible {
-    case valkeyNotConfigured
-    case valkeyUnreachable(host: String, port: Int, underlying: String)
+/// double-act, and concurrent placements race on capacity. It is equally
+/// required for session storage, which cannot fail open at all.
+enum ValkeyConfigurationError: Error, CustomStringConvertible {
+    case notConfigured
+    case unreachable(role: ValkeyRole, host: String, port: Int, underlying: String)
 
     var description: String {
         switch self {
-        case .valkeyNotConfigured:
+        case .notConfigured:
             return
                 "Valkey is required for control-plane coordination but VALKEY_HOST is not set. "
-                + "Point VALKEY_HOST (and optionally VALKEY_PORT/VALKEY_PASSWORD) at a Valkey or Redis-compatible instance."
-        case .valkeyUnreachable(let host, let port, let underlying):
-            return "Valkey at \(host):\(port) is not reachable: \(underlying)"
+                + "Point VALKEY_HOST (and optionally VALKEY_PORT/VALKEY_PASSWORD) at a Valkey or Redis-compatible instance. "
+                + "Session storage follows the same endpoint unless SESSION_VALKEY_HOST names another."
+        case .unreachable(let role, let host, let port, let underlying):
+            return "Valkey (\(role.rawValue) store) at \(host):\(port) is not reachable: \(underlying)"
         }
     }
 }
@@ -128,11 +130,19 @@ protocol CoordinationStore: Sendable {
 /// hash tags to co-locate them).
 struct ValkeyCoordinationStore: CoordinationStore {
     let app: Application
+    /// Resolved once: this store talks only to the coordination endpoint, which
+    /// is a different server from session storage whenever an operator split
+    /// them. `app` is still held for the logger and the subscription-task box.
+    private let client: ValkeyClient
+    /// One script executor per client. Its digest cache is keyed by script name
+    /// only, so an executor shared across two clients could `EVALSHA` a digest
+    /// against a server that never loaded it.
     private let scripts: ValkeyScriptExecutor
 
     init(app: Application) {
         self.app = app
-        self.scripts = ValkeyScriptExecutor(client: app.valkey)
+        self.client = app.coordinationValkey
+        self.scripts = ValkeyScriptExecutor(client: app.coordinationValkey)
     }
 
     private static let setAgentLivenessScript = """
@@ -203,17 +213,17 @@ struct ValkeyCoordinationStore: CoordinationStore {
         """
 
     func setKey(_ key: String, ttlSeconds: Int) async throws {
-        _ = try await app.valkey.set(
+        _ = try await client.set(
             ValkeyKey(key), value: "1", expiration: .seconds(max(1, ttlSeconds)))
     }
 
     func keyExists(_ key: String) async throws -> Bool {
-        try await app.valkey.exists(keys: [ValkeyKey(key)]) == 1
+        try await client.exists(keys: [ValkeyKey(key)]) == 1
     }
 
     func keysExist(_ keys: [String]) async throws -> [Bool] {
         guard !keys.isEmpty else { return [] }
-        let response = try await app.valkey.mget(keys: keys.map { ValkeyKey($0) })
+        let response = try await client.mget(keys: keys.map { ValkeyKey($0) })
         guard response.count == keys.count else {
             throw CoordinationStoreError.unexpectedResponse
         }
@@ -225,7 +235,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
 
     func acquireLock(_ key: String, ttlSeconds: Int) async throws -> Bool {
         // SET ... NX replies +OK when the key was set and Null when it existed.
-        let response = try await app.valkey.set(
+        let response = try await client.set(
             ValkeyKey(key), value: "1", condition: .nx, expiration: .seconds(max(1, ttlSeconds)))
         return response != nil
     }
@@ -257,12 +267,12 @@ struct ValkeyCoordinationStore: CoordinationStore {
     }
 
     func releaseReservation(agentKey: String, vmId: String) async throws {
-        _ = try await app.valkey.del(keys: [ValkeyKey(Self.vmKeyPrefix(agentKey) + vmId)])
-        _ = try await app.valkey.srem(ValkeyKey(Self.indexKey(agentKey)), members: [vmId])
+        _ = try await client.del(keys: [ValkeyKey(Self.vmKeyPrefix(agentKey) + vmId)])
+        _ = try await client.srem(ValkeyKey(Self.indexKey(agentKey)), members: [vmId])
     }
 
     func reservedVMIds(agentKey: String) async throws -> [String] {
-        let response = try await app.valkey.smembers(ValkeyKey(Self.indexKey(agentKey)))
+        let response = try await client.smembers(ValkeyKey(Self.indexKey(agentKey)))
         return response.compactMap { try? $0.decode(as: String.self) }
     }
 
@@ -292,7 +302,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
     }
 
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
-        _ = try await app.valkey.set(
+        _ = try await client.set(
             ValkeyKey(key), value: value, expiration: .seconds(max(1, ttlSeconds)))
     }
 
@@ -302,7 +312,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
         replicaId: String,
         ttlSeconds: Int
     ) async throws {
-        _ = try await app.valkey.eval(
+        _ = try await client.eval(
             script: Self.setAgentLivenessScript,
             keys: [ValkeyKey(presenceKey), ValkeyKey(routeKey)],
             args: [replicaId, String(max(1, ttlSeconds))]
@@ -310,7 +320,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
     }
 
     func getValue(_ key: String) async throws -> String? {
-        try await app.valkey.get(ValkeyKey(key)).map(String.init)
+        try await client.get(ValkeyKey(key)).map(String.init)
     }
 
     /// GET-compare-DEL as a Lua script so the check and the delete are atomic:
@@ -333,7 +343,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
     }
 
     func publish(channel: String, message: String) async throws {
-        _ = try await app.valkey.publish(channel: channel, message: message)
+        _ = try await client.publish(channel: channel, message: message)
     }
 
     /// valkey-swift subscriptions are scoped (`subscribe(to:)` runs a closure
@@ -344,7 +354,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
     /// while re-subscribing are lost, which is fine: pub/sub here is a latency
     /// optimization and the periodic sync is the correctness backstop.
     func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws {
-        let client = app.valkey
+        let client = self.client
         let logger = app.logger
         app.valkeyTasks.spawn {
             while !Task.isCancelled {
@@ -684,7 +694,7 @@ actor CoordinationService {
     /// surfaces as the thrown error readiness grades as `degraded` (still 200).
     func probe() async throws {
         let store = self.store
-        try await withCoordinationProbeTimeout(Self.probeDeadline) {
+        try await withStoreProbeTimeout(Self.probeDeadline) {
             _ = try await store.keyExists("health:probe")
         }
     }
@@ -999,50 +1009,66 @@ extension Application {
     }
 }
 
-/// Verifies at boot that Valkey — required for coordination — is actually
-/// reachable, so a misconfigured deployment fails fast with a clear error
-/// instead of limping along and failing on the first coordinated operation.
-/// Runs in `didBootAsync` because the Valkey client's run loop is started
-/// during boot (by `ValkeyLifecycleHandler`, registered first), after
-/// `configure` returns.
-struct CoordinationLifecycleHandler: LifecycleHandler {
-    let hostname: String
-    let port: Int
+/// Verifies at boot that every Valkey endpoint this process depends on is
+/// actually reachable, so a misconfigured deployment fails fast with a clear
+/// error instead of limping along and failing on the first coordinated
+/// operation — or, for the session store, on the first login.
+///
+/// Both roles are fatal. Coordination is fail-open *at runtime* (a blip
+/// degrades convergence, it does not corrupt state), but an endpoint that is
+/// wrong at boot is a configuration error, not a blip, and the session store
+/// cannot fail open at all.
+///
+/// Runs in `didBootAsync` because the clients' run loops are started during
+/// boot (by `ValkeyLifecycleHandler`, registered first), after `configure`
+/// returns. Pings each *distinct* client once: when both roles share an
+/// endpoint they share the instance, and one ping settles both.
+struct ValkeyReachabilityLifecycleHandler: LifecycleHandler {
+    let configuration: ValkeyStoreConfiguration
 
     func didBootAsync(_ application: Application) async throws {
-        do {
-            _ = try await application.valkey.ping()
-            application.logger.info(
-                "Valkey coordination layer ready",
-                metadata: ["hostname": .string(hostname), "port": .stringConvertible(port)])
-        } catch {
-            let configError = CoordinationConfigurationError.valkeyUnreachable(
-                host: hostname, port: port, underlying: "\(error)")
-            application.logger.critical("\(configError.description)")
-            throw configError
+        for (role, client) in application.valkeyClients.distinctClients {
+            let endpoint = configuration.configuration(for: role)
+            do {
+                _ = try await client.ping()
+                application.logger.info(
+                    "Valkey ready",
+                    metadata: [
+                        "role": .string(
+                            configuration.sharesOneInstance ? "coordination+session" : role.rawValue),
+                        "hostname": .string(endpoint.hostname),
+                        "port": .stringConvertible(endpoint.port),
+                    ])
+            } catch {
+                let configError = ValkeyConfigurationError.unreachable(
+                    role: role, host: endpoint.hostname, port: endpoint.port, underlying: "\(error)")
+                application.logger.critical("\(configError.description)")
+                throw configError
+            }
         }
     }
 }
 
-/// Thrown by `CoordinationService.probe()` when the coordination round-trip does
-/// not complete within its deadline. Readiness grades this as `degraded` (still
-/// 200) under the fail-open policy — the point is only that the verdict arrives
-/// fast rather than after the client's 30s `commandTimeout`.
-struct CoordinationProbeTimeoutError: Error, CustomStringConvertible {
+/// Thrown by a readiness probe whose round-trip does not complete within its
+/// deadline. How it is graded depends on which store timed out: coordination is
+/// `degraded` (still 200) under the fail-open policy, session storage is fatal.
+/// Either way the point is that the verdict arrives fast rather than after the
+/// client's 30s `commandTimeout`.
+struct StoreProbeTimeoutError: Error, CustomStringConvertible {
     let deadline: Duration
-    var description: String { "coordination probe exceeded its \(deadline) deadline" }
+    var description: String { "store probe exceeded its \(deadline) deadline" }
 }
 
-/// Run `operation`, throwing `CoordinationProbeTimeoutError` if it has not
-/// finished within `deadline`. Whichever child finishes first decides the
-/// result; the loser is cancelled. valkey-swift honors task cancellation, so a
-/// timed-out command stops awaiting the connection instead of running to the
-/// client's `commandTimeout`.
+/// Run `operation`, throwing `StoreProbeTimeoutError` if it has not finished
+/// within `deadline`. Whichever child finishes first decides the result; the
+/// loser is cancelled. valkey-swift honors task cancellation, so a timed-out
+/// command stops awaiting the connection instead of running to the client's
+/// `commandTimeout`.
 ///
 /// Internal rather than private so the timeout behavior is unit-testable without
-/// standing up a Valkey; `CoordinationService.probe()` is its only production
-/// caller.
-func withCoordinationProbeTimeout(
+/// standing up a Valkey. Production callers: `CoordinationService.probe()` and
+/// the session-store readiness check in `HealthController`.
+func withStoreProbeTimeout(
     _ deadline: Duration,
     _ operation: @escaping @Sendable () async throws -> Void
 ) async throws {
@@ -1050,7 +1076,7 @@ func withCoordinationProbeTimeout(
         group.addTask { try await operation() }
         group.addTask {
             try await Task.sleep(for: deadline)
-            throw CoordinationProbeTimeoutError(deadline: deadline)
+            throw StoreProbeTimeoutError(deadline: deadline)
         }
         // Propagate the first outcome (the operation's success/failure or the
         // timeout), then cancel the loser on the way out.

@@ -1018,19 +1018,26 @@ struct VMController: RouteCollection {
 
         // A boot the network path can't complete is refused up front rather
         // than accepted as a 202 that never finishes: on an OVN host whose
-        // site designates no network controller, the VM's logical switch is
-        // authored by nobody and the agent parks the workload forever
-        // (issue #743). Placement guards the same condition at create time;
-        // this catches a site that lost its controller since.
+        // site designates no network controller — or one whose controller is
+        // long offline or came back unable to author (issue #833) — the VM's
+        // logical switch is authored by nobody and the agent parks the workload
+        // forever (issue #743). Placement guards the same condition at create
+        // time; this catches a site that lost its controller since. Passing the
+        // host lets `refusal` exempt the single-node site whose own node is the
+        // offline controller: there the boot is simply waiting on that node to
+        // come back, which is what desired state is for.
         if let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let agent = try await Agent.find(agentUUID, on: req.db),
-            agent.supportsInterVMNetworking,
-            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
-                forAgent: agent, on: req.db)
+            agent.supportsInterVMNetworking
         {
-            throw SiteNetworkAuthority.missingControllerAbort(
-                site: site, consequence: "this VM's network cannot be realized and it would never boot")
+            let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: req.db)
+            if let refusal = SiteNetworkAuthority.refusal(
+                authority, host: agent,
+                consequence: "this VM's network cannot be realized and it would never boot")
+            {
+                throw refusal
+            }
         }
 
         // The desired status and generation bump are the mutation;

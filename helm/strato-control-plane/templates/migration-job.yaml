@@ -79,6 +79,24 @@ spec:
                   name: "{{ include "strato-control-plane.valkeySecretName" . }}"
                   key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
             {{- end }}
+            {{- if include "strato-control-plane.sessionValkeyEnabled" . }}
+            # Session storage on its own Valkey (issue #855). Unset by default,
+            # in which case sessions share the coordination endpoint above.
+            # All-or-nothing: nothing here inherits from the VALKEY_* group.
+            - name: SESSION_VALKEY_HOST
+              value: "{{ include "strato-control-plane.sessionValkeyHost" . }}"
+            - name: SESSION_VALKEY_PORT
+              value: "{{ include "strato-control-plane.sessionValkeyPort" . }}"
+            - name: SESSION_VALKEY_DATABASE
+              value: "{{ .Values.sessionValkey.database | default 0 }}"
+            {{- if .Values.sessionValkey.password }}
+            - name: SESSION_VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.sessionValkeySecretName" . }}"
+                  key: "{{ include "strato-control-plane.sessionValkeySecretKey" . }}"
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Same passthrough as the Deployment: the migrate command boots the
             # full app, so bootstrap vars (e.g. STRATO_DEFAULT_NETWORK_*) that

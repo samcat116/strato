@@ -190,6 +190,26 @@ export default function SitesPage() {
           : a.capabilities.includes("ovn_networking"))
     );
 
+  // The designate-a-controller picker, shared by the "none designated" and
+  // "designated but unable to author" states — one PUT fixes both.
+  const designateSelect = (site: Site, placeholder: string) => (
+    <Select
+      onValueChange={(agentId) => setController.mutate({ site, agentId })}
+      disabled={setController.isPending && setController.variables?.site.id === site.id}
+    >
+      <SelectTrigger className="h-8 w-[180px] border-border bg-background">
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {eligibleControllers(site.id).map((agent) => (
+          <SelectItem key={agent.id} value={agent.id}>
+            {agent.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
   const locationSummary = (site: Site) => {
     const parts: string[] = [];
     if (site.locationLabel) parts.push(site.locationLabel);
@@ -368,35 +388,14 @@ export default function SitesPage() {
                         {memberCount(site.id)}
                       </TableCell>
                       <TableCell className="text-foreground/80">
-                        {site.networkControllerAgentId ? (
-                          controllerName(site.networkControllerAgentId)
-                        ) : (
+                        {!site.networkControllerAgentId ? (
                           <div className="space-y-1">
                             <Badge variant="destructive">No network controller</Badge>
                             <p className="text-xs text-muted-foreground">
                               This site&apos;s networks are not reconciled.
                             </p>
                             {eligibleControllers(site.id).length ? (
-                              <Select
-                                onValueChange={(agentId) =>
-                                  setController.mutate({ site, agentId })
-                                }
-                                disabled={
-                                  setController.isPending &&
-                                  setController.variables?.site.id === site.id
-                                }
-                              >
-                                <SelectTrigger className="h-8 w-[180px] border-border bg-background">
-                                  <SelectValue placeholder="Designate an agent" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {eligibleControllers(site.id).map((agent) => (
-                                    <SelectItem key={agent.id} value={agent.id}>
-                                      {agent.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                              designateSelect(site, "Designate an agent")
                             ) : (
                               <p className="text-xs text-muted-foreground">
                                 Enroll an OVN-capable agent here — the first one
@@ -404,6 +403,34 @@ export default function SitesPage() {
                               </p>
                             )}
                           </div>
+                        ) : site.networkControllerIssue ? (
+                          // Designated, but nothing is authoring this site's
+                          // topology: new networked workloads, site-pinned
+                          // networks and floating-IP attaches here are refused
+                          // until it recovers or is replaced.
+                          <div className="space-y-1">
+                            <div>{controllerName(site.networkControllerAgentId)}</div>
+                            <Badge variant="destructive">Controller unavailable</Badge>
+                            <p className="text-xs text-muted-foreground">
+                              {site.networkControllerIssue}
+                            </p>
+                            {eligibleControllers(site.id).length
+                              ? designateSelect(site, "Designate a replacement")
+                              : null}
+                          </div>
+                        ) : site.networkControllerStatus &&
+                          site.networkControllerStatus !== "online" ? (
+                          // Gone quiet, but still inside the grace window:
+                          // level-triggered syncs converge when it returns, so
+                          // nothing is being refused yet.
+                          <div className="space-y-1">
+                            <div>{controllerName(site.networkControllerAgentId)}</div>
+                            <Badge variant="outline">
+                              {site.networkControllerStatus}
+                            </Badge>
+                          </div>
+                        ) : (
+                          controllerName(site.networkControllerAgentId)
                         )}
                       </TableCell>
                       <TableCell>

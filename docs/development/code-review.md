@@ -314,6 +314,24 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   don't disclose containment at all — scope the lookup to the caller's project
   and answer plain not-found, as VM create does for `networkId` and
   `securityGroupIds`.
+- **A container gate is not a row filter.** `requireMember` /
+  `view_organization` says the caller may know the container exists — bare org
+  membership grants `org:read` and `project:create` and nothing else. Anything
+  returning *rows* underneath it filters them too (issue #870). The easy misses
+  are the shapes that don't look like lists: a tree, a breadcrumb, a rollup, a
+  bare count.
+- **A derived number needs the same filter as the rows it came from.** An
+  org-wide `totalVMs`, or a quota's measured `used`, is the inventory in scalar
+  form. Check both directions of a response: `/resources/summary` filtered
+  `resourceUsage` per row while handing the same totals straight back through
+  `quotaCompliance`.
+- **Gate the quantity, not the field.** Once you find a number that needs a
+  gate, find every route that ships it before claiming it closed — a stored
+  counter on a DTO, a live-measured endpoint, and a derived summary are one
+  quantity if the same aggregator produces them, and the weakest gate is the
+  real one. `QuotaVisibility` exists because gating `quotaCompliance` alone
+  left the identical figures on the quota row across three endpoints and on
+  `/api/quotas/:id/usage`.
 
 **Networking and IPAM**
 - The **control plane** allocates IPs; the agent never invents them.
@@ -329,6 +347,16 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   staging path, then atomic rename. A direct write to a live path can be read
   half-finished.
 - Backing formats are **detected**, never assumed.
+
+**Fluent query building**
+- A `.join` issued **inside** a `.group(.or) { … }` closure is dropped from the
+  emitted SQL while its filter is kept, so the statement names a table it never
+  joined and the route 500s for every caller. Nothing catches it at compile
+  time. Resolve the ids in their own query and filter with `~~`, as
+  `Project.all(inOrganization:folders:on:)` does. This shipped undetected in
+  the org-scoped hierarchy search.
+- `~~ []` matches nothing but reads like "unfiltered" — guard the empty case
+  rather than letting an empty id list reach the query.
 
 **Frontend**
 - Bun, not npm.

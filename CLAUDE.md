@@ -92,6 +92,7 @@ Multiple control-plane replicas are supported (see `docs/architecture/multi-repl
 - Agent liveness: `agent:{name}:presence` keys with 60s TTL. Socket routing: `agent:{name}:replica` records which replica holds the agent's WebSocket.
 - **Sync nudges**: a mutation on replica A for an agent socketed to replica B publishes to B's `replica:{id}:nudges` pub/sub channel; B pushes a fresh sync. Lost nudges are backstopped by the periodic sync timer.
 - Imperative actions that aren't states (volume ops, reboot) forward over `replica:{id}:rpc` channels. Scheduler placement reservations (`resv:*`) and singleton sweep locks (`lock:sweep:*`) also live in Valkey.
+- **Sessions are a separate Valkey store, not coordination state** (issue #855). Coordination fails open; session storage cannot — losing it logs every user out, and passkeys are the only interactive auth. Coordination reads `VALKEY_*`, sessions read `SESSION_VALKEY_*` and fall back *wholesale* (never per-field) to the coordination endpoint, sharing one client when the endpoints match. `/health/ready` grades `coordination` degraded-only, and `session-store` fatal *only when it has its own endpoint* — a shared endpoint fails on every replica at once, so 503 would shift traffic nowhere.
 
 ### Scheduler
 

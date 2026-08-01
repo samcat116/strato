@@ -2647,7 +2647,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get an organization's resource usage and quota compliance */
+        /**
+         * Get an organization's resource usage and quota compliance
+         * @description Usage totals and hierarchy statistics cover the rows the caller may read. A quota appears only when the caller holds `quota:read` at the org, folder, or project it hangs on: its figures are measured over everything beneath that node, so an organization-scoped quota describes the whole organization.
+         */
         get: operations["getOrganizationResourceSummary"];
         put?: never;
         post?: never;
@@ -2744,7 +2747,7 @@ export interface paths {
         };
         /**
          * Resolve an entity's breadcrumb path
-         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity.
+         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity, reduced to the components the caller may read. A component the caller cannot read is omitted rather than refused, so a project readable inside an unreadable folder comes back directly under the organization; a caller who can read none of the chain gets the organization alone.
          */
         get: operations["getHierarchyEntityPath"];
         put?: never;
@@ -3255,7 +3258,7 @@ export interface paths {
         };
         /**
          * Get a quota's reserved and actual usage
-         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status.
+         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status. Requires `quota:read` on the org, folder, or project the quota hangs on — the figures cover everything beneath that node, so an organization-scoped quota reports the whole organization's consumption.
          */
         get: operations["getResourceQuotaUsage"];
         put?: never;
@@ -7386,6 +7389,10 @@ export interface components {
              * @description The member agent that authors this site's shared OVN northbound database; null when none is designated.
              */
             networkControllerAgentId?: string | null;
+            /** @description Heartbeat-derived status of the designated network controller; omitted when the site designates none. Reported as soon as the heartbeat lapses, before the API begins refusing work. */
+            networkControllerStatus?: components["schemas"]["AgentStatus"];
+            /** @description Why the designated network controller cannot author this site's topology right now — offline past the grace window, or re-registered without the capabilities it was designated under. Null while it can. When non-null, creating networked workloads, pinning networks to this site, attaching floating IPs and attaching security groups here are refused with 409. */
+            networkControllerIssue?: string | null;
             /** Format: uuid */
             organizationId?: string | null;
             /** Format: uuid */

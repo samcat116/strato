@@ -82,6 +82,25 @@ final class SiteTests {
         return uuid.uuidString
     }
 
+    /// Backdates an agent's heartbeat, the state a node that crashed or is
+    /// rebooting reaches. `registerAgent` stamps a fresh heartbeat, so this is
+    /// how a test lands inside or past
+    /// `SiteNetworkAuthority.controllerOfflineGrace` deterministically —
+    /// without touching the environment the grace window is read from.
+    @discardableResult
+    private func backdateHeartbeat(
+        app: Application, agentId: String, bySeconds seconds: TimeInterval
+    ) async throws -> Agent {
+        let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
+        agent.lastHeartbeat = Date().addingTimeInterval(-seconds)
+        try await agent.save(on: app.db)
+        return agent
+    }
+
+    /// Comfortably past `SiteNetworkAuthority.controllerOfflineGrace` at any
+    /// plausible configured value the suite runs under.
+    private var wellPastGrace: TimeInterval { SiteNetworkAuthority.controllerOfflineGrace + 600 }
+
     /// A site owned by the harness's organization, so the site↔agent same-org
     /// invariant holds for agents registered via `registerAgent`.
     private func makeSite(app: Application, name: String) async throws -> Site {
@@ -1098,6 +1117,294 @@ final class SiteTests {
             try await app.agentService.createVM(vm: vm, db: app.db)
             let placed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(placed.hypervisorId == agentId)
+        }
+    }
+
+    // MARK: - Controller liveness and capability regression (issue #833)
+
+    @Test("resolve reports a controller that is offline past the grace window")
+    func resolveOfflineController() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let site = try await self.makeSite(app: app, name: "dc-liveness")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "live-ctl", siteID: siteID)
+            let peerId = try await self.registerAgent(app: app, named: "live-peer", siteID: siteID)
+            let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.db))
+
+            // Healthy to begin with: registration designated the first member.
+            let healthy = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            guard case .controller(let designated) = healthy else {
+                Issue.record("expected .controller, got \(healthy)")
+                return
+            }
+            #expect(designated.id?.uuidString == controllerId)
+
+            // A blip inside the grace window keeps converging: syncs are
+            // level-triggered, so refusing here would be worse than waiting.
+            try await self.backdateHeartbeat(
+                app: app, agentId: controllerId,
+                bySeconds: SiteNetworkAuthority.controllerOfflineGrace / 2)
+            let blip = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            guard case .controller = blip else {
+                Issue.record("a controller inside the grace window must still resolve, got \(blip)")
+                return
+            }
+
+            // Past it, the peer's workloads would park forever.
+            try await self.backdateHeartbeat(
+                app: app, agentId: controllerId, bySeconds: self.wellPastGrace)
+            let gone = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            guard case .controllerUnavailable(_, let offline, let fault) = gone else {
+                Issue.record("expected .controllerUnavailable, got \(gone)")
+                return
+            }
+            #expect(offline.id?.uuidString == controllerId)
+            guard case .offline = fault else {
+                Issue.record("expected an offline fault, got \(fault)")
+                return
+            }
+        }
+    }
+
+    @Test("resolve re-applies the designation bar to a standing controller")
+    func resolveRegressedController() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            for (name, capability, version, expected) in [
+                (
+                    "slirp", NetworkCapability.userMode, WireProtocol.currentVersion,
+                    SiteNetworkAuthority.ControllerFault.noOverlayNetworking
+                ),
+                ("oldbin", NetworkCapability.overlay, 3, .protocolTooOld(3)),
+            ] as [(String, NetworkCapability, Int, SiteNetworkAuthority.ControllerFault)] {
+                let site = try await self.makeSite(app: app, name: "dc-regress-\(name)")
+                let siteID = try #require(site.id)
+                // Designated while healthy, then re-registered with the
+                // regression — the state an agent reaches by coming back on a
+                // different config or a rolled-back binary.
+                let controllerId = try await self.registerAgent(
+                    app: app, named: "regress-ctl-\(name)", siteID: siteID)
+                let peerId = try await self.registerAgent(
+                    app: app, named: "regress-peer-\(name)", siteID: siteID)
+                _ = try await self.registerAgent(
+                    app: app, named: "regress-ctl-\(name)", siteID: siteID,
+                    protocolVersion: version, networkCapability: capability)
+                // Re-validation hands the job to an eligible peer, so pin the
+                // regressed agent back to isolate what `resolve` reports.
+                let reloaded = try #require(try await Site.find(siteID, on: app.db))
+                reloaded.$networkControllerAgent.id = UUID(uuidString: controllerId)
+                try await reloaded.save(on: app.db)
+
+                let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.db))
+                let authority = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+                guard case .controllerUnavailable(_, _, let fault) = authority else {
+                    Issue.record("expected .controllerUnavailable for \(name), got \(authority)")
+                    continue
+                }
+                #expect(fault == expected)
+            }
+        }
+    }
+
+    @Test("An offline controller changes nothing about assembly")
+    func offlineControllerAssemblyUnchanged() async throws {
+        try await withSiteTestApp { app, _, project, _ in
+            // The fix belongs at the precondition and reporting layers: a peer
+            // must keep getting `networks: [], authoritative: false`, because
+            // letting it author topology behind a dead controller's back is the
+            // dual-writer failure the single-author rule exists to prevent.
+            let site = try await self.makeSite(app: app, name: "dc-assembly-offline")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "asm-ctl", siteID: siteID)
+            let peerId = try await self.registerAgent(app: app, named: "asm-peer", siteID: siteID)
+            try await self.placeVM(
+                app: app, project: project, named: "asm-vm", onAgent: peerId,
+                network: try await self.network(app: app, project: project))
+            try await self.backdateHeartbeat(
+                app: app, agentId: controllerId, bySeconds: self.wellPastGrace)
+
+            let peerSync = try await app.desiredStateAssembler.assemble(agentId: peerId)
+            #expect(!peerSync.networksAuthoritative)
+            #expect(peerSync.networks.isEmpty)
+            #expect(peerSync.vms.count == 1)
+
+            // And the controller still gets its authoritative view, so it
+            // converges the moment it comes back.
+            let controllerSync = try await app.desiredStateAssembler.assemble(agentId: controllerId)
+            #expect(controllerSync.networksAuthoritative)
+        }
+    }
+
+    @Test("An offline controller refuses new work on its peers instead of stalling it")
+    func offlineControllerRefusesPeerWork() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "dc-offline-guard")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "guard-ctl", siteID: siteID)
+            let peerId = try await self.registerAgent(app: app, named: "guard-peer", siteID: siteID)
+            try await self.backdateHeartbeat(
+                app: app, agentId: controllerId, bySeconds: self.wellPastGrace)
+
+            // Boot of an already-placed VM on the healthy peer.
+            try await self.placeVM(
+                app: app, project: project, named: "guard-vm", onAgent: peerId,
+                network: try await self.network(app: app, project: project))
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "guard-vm").first())
+            try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("guard-ctl"))
+                #expect(res.body.string.contains("is offline"))
+            }
+
+            // Pinning a network to the site.
+            struct Body: Content {
+                let name: String
+                let subnet: String
+                let projectId: UUID?
+                let siteId: UUID?
+            }
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(
+                        name: "guard-net", subnet: "10.63.0.0/24", projectId: project.id,
+                        siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("guard-ctl"))
+            }
+
+            // Placement of a new VM onto the site.
+            let builder = TestDataBuilder(db: app.db)
+            let pinned = try await builder.createNetwork(
+                name: "guard-pinned-net", project: project, subnet: "10.64.0.0/24",
+                gateway: "10.64.0.1", site: site)
+            let pending = try await builder.createVM(name: "guard-unplaceable", project: project)
+            try await VMNetworkInterface(
+                vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),
+                macAddress: VMNetworkInterface.generateMACAddress()
+            ).save(on: app.db)
+            await #expect(throws: AgentServiceError.self) {
+                try await app.agentService.createVM(vm: pending, db: app.db)
+            }
+
+            // A fresh heartbeat from the controller unblocks all of it.
+            try await self.backdateHeartbeat(app: app, agentId: controllerId, bySeconds: 0)
+            try await app.agentService.createVM(vm: pending, db: app.db)
+            #expect(try await VM.find(pending.id, on: app.db)?.hypervisorId != nil)
+        }
+    }
+
+    @Test("A single-node site still accepts a boot while its own node is down")
+    func offlineSelfControllerIsNotRefused() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            // The workload and its topology author are the same node here, so
+            // the boot is simply waiting on that node to come back — which is
+            // what desired state is for. Refusing would turn every reboot of a
+            // single-node deployment into a wall of 409s.
+            let site = try await self.makeSite(app: app, name: "dc-solo")
+            let siteID = try #require(site.id)
+            let agentId = try await self.registerAgent(app: app, named: "solo-node", siteID: siteID)
+            let designated = try #require(try await Site.find(siteID, on: app.db))
+            #expect(designated.$networkControllerAgent.id?.uuidString == agentId)
+
+            try await self.placeVM(
+                app: app, project: project, named: "solo-vm", onAgent: agentId,
+                network: try await self.network(app: app, project: project))
+            try await self.backdateHeartbeat(
+                app: app, agentId: agentId, bySeconds: self.wellPastGrace)
+
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "solo-vm").first())
+            try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
+    @Test("A controller re-registering unable to author hands the job to an eligible peer")
+    func regressedControllerHandsOverWhenItCan() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let site = try await self.makeSite(app: app, name: "dc-handover")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "handover-ctl", siteID: siteID)
+            let peerId = try await self.registerAgent(
+                app: app, named: "handover-peer", siteID: siteID)
+            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString == controllerId)
+
+            // Comes back in user-mode: it has no OVN service to reconcile with.
+            _ = try await self.registerAgent(
+                app: app, named: "handover-ctl", siteID: siteID, networkCapability: .userMode)
+            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id == nil)
+
+            // The eligible peer claims it on its own next registration, which
+            // is the existing `designateIfUnset` path.
+            _ = try await self.registerAgent(app: app, named: "handover-peer", siteID: siteID)
+            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString == peerId)
+        }
+    }
+
+    @Test("An irreplaceable regressed controller keeps the designation")
+    func regressedControllerKeepsDesignationWithNoPeer() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            // Clearing here would trade one silent failure for another: nothing
+            // could claim the job, and the refusal would stop naming the node
+            // the operator actually has to fix.
+            let site = try await self.makeSite(app: app, name: "dc-nohandover")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "lonely-ctl", siteID: siteID)
+
+            _ = try await self.registerAgent(
+                app: app, named: "lonely-ctl", siteID: siteID, networkCapability: .userMode)
+            #expect(
+                try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString
+                    == controllerId)
+        }
+    }
+
+    @Test("The sites API reports controller health")
+    func siteResponseCarriesControllerHealth() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            let site = try await self.makeSite(app: app, name: "dc-health")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "health-ctl", siteID: siteID)
+            _ = try await self.registerAgent(app: app, named: "health-peer", siteID: siteID)
+
+            func fetchSite() async throws -> SiteResponse {
+                var found: SiteResponse?
+                try await app.test(.GET, "/api/sites/\(siteID.uuidString)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                    found = try res.content.decode(SiteResponse.self)
+                }
+                return try #require(found)
+            }
+
+            let healthy = try await fetchSite()
+            #expect(healthy.networkControllerStatus == .online)
+            #expect(healthy.networkControllerIssue == nil)
+
+            // Status flips as soon as the heartbeat lapses — before the grace
+            // window makes it a refusal — so the outage is visible first.
+            try await self.backdateHeartbeat(app: app, agentId: controllerId, bySeconds: 120)
+            let quiet = try await fetchSite()
+            #expect(quiet.networkControllerStatus == .offline)
+            #expect(quiet.networkControllerIssue == nil)
+
+            try await self.backdateHeartbeat(
+                app: app, agentId: controllerId, bySeconds: self.wellPastGrace)
+            let refusing = try await fetchSite()
+            #expect(refusing.networkControllerStatus == .offline)
+            #expect(refusing.networkControllerIssue?.contains("health-ctl") == true)
         }
     }
 
