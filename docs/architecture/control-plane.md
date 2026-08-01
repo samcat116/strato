@@ -34,7 +34,12 @@ Two targets under `control-plane/Sources/`:
   (`SPIFFE_ENDPOINT_SOCKET`; the Kubernetes topology, where the entry must
   carry `admin = true`).
 
-Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
+Tests are swift-testing, split across four targets by domain —
+`AppIdentityTests`, `AppIAMTests`, `AppResourceTests`, `AppPlatformTests` —
+over a shared `AppTestSupport` fixture library. The split is a build-time
+one: a module's `-emit-module` job is single-threaded and re-runs whenever any
+file in it changes, so one 59k-line target cost ~9.8s on every test edit
+against ~2.4s for the four targets in parallel. Keep them roughly balanced.
 
 ## Boot sequence
 
@@ -349,14 +354,22 @@ what makes the test harness safe.
 
 ## Testing
 
-`Tests/AppTests` runs against Postgres — the engine production uses — both
+The suite runs against Postgres — the engine production uses — both
 locally (any reachable server via `DATABASE_*` env vars) and in CI.
 
-The harness (`TestUtilities.swift`) migrates **once per process into a
-template database, then clones per test** with
-`CREATE DATABASE ... TEMPLATE ...`. `withApp { app in ... }` (from
-`BaseTestCase`) boots via `configure()` against the pre-migrated clone and
-tears down with `shutdownForTesting()`, which drops the clone.
+The harness (`Tests/AppTestSupport/TestUtilities.swift`) migrates **once per
+test process into a template database, then clones per test** with
+`CREATE DATABASE ... TEMPLATE ...`; each of the four test bundles is its own
+process, so each builds its own pid-named template. `withApp { app in ... }`
+boots via `configure()` against the pre-migrated clone and tears down with
+`shutdownForTesting()`, which drops the clone.
+
+The fixtures are `package` rather than `internal` because `AppTestSupport` is
+a separate module: it `@testable import`s `App` and re-exports App's internal
+types at package visibility, which is legal only within one package.
+`BaseTestCase` is the exception — `package` classes cannot be subclassed
+across modules — so it stays in `AppIdentityTests` with the suites that
+inherit from it.
 
 Authorization tests run through the **real** `AuthorizationMiddleware` and
 the real Cedar evaluator against `role_bindings` rows the tests create —

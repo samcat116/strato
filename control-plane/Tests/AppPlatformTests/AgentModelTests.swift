@@ -1,0 +1,489 @@
+import Testing
+import Vapor
+import StratoShared
+import AppTestSupport
+@testable import App
+
+@Suite("Agent Model Tests", .serialized)
+struct AgentModelTests {
+
+    // MARK: - Test Helpers
+
+    func createTestAgentResources(
+        totalCPU: Int = 8,
+        availableCPU: Int = 6,
+        totalMemory: Int64 = 16_000_000_000,
+        availableMemory: Int64 = 12_000_000_000,
+        totalDisk: Int64 = 100_000_000_000,
+        availableDisk: Int64 = 80_000_000_000
+    ) -> AgentResources {
+        return AgentResources(
+            totalCPU: totalCPU,
+            availableCPU: availableCPU,
+            totalMemory: totalMemory,
+            availableMemory: availableMemory,
+            totalDisk: totalDisk,
+            availableDisk: availableDisk
+        )
+    }
+
+    func createTestAgent(
+        name: String = "test-agent",
+        hostname: String = "test-host",
+        version: String = "1.0.0",
+        capabilities: [String] = ["kvm", "ovn"],
+        status: AgentStatus = .online,
+        resources: AgentResources? = nil,
+        architecture: CPUArchitecture? = .x86_64,
+        hypervisors: [HypervisorSupport] = [
+            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+            HypervisorSupport(
+                type: .firecracker,
+                available: false,
+                accelerated: false,
+                unavailabilityReason: "firecracker binary not found",
+                capabilities: .firecracker
+            ),
+        ],
+        networkCapability: NetworkCapability? = .overlay,
+        lastHeartbeat: Date? = Date()
+    ) -> Agent {
+        let agentResources = resources ?? createTestAgentResources()
+        return Agent(
+            name: name,
+            hostname: hostname,
+            version: version,
+            capabilities: capabilities,
+            status: status,
+            resources: agentResources,
+            architecture: architecture,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability,
+            lastHeartbeat: lastHeartbeat
+        )
+    }
+
+    // MARK: - Initialization Tests
+
+    @Test("Agent initializes with correct values")
+    func testAgentInitialization() {
+        let resources = createTestAgentResources()
+        let agent = createTestAgent(resources: resources)
+
+        #expect(agent.name == "test-agent")
+        #expect(agent.hostname == "test-host")
+        #expect(agent.version == "1.0.0")
+        #expect(agent.capabilities == ["kvm", "ovn"])
+        #expect(agent.status == .online)
+        #expect(agent.totalCPU == 8)
+        #expect(agent.availableCPU == 6)
+        #expect(agent.totalMemory == 16_000_000_000)
+        #expect(agent.availableMemory == 12_000_000_000)
+    }
+
+    // MARK: - Update Resources Tests
+
+    @Test("Agent updateResources updates available resources")
+    func testUpdateResources() {
+        let agent = createTestAgent()
+
+        let newResources = createTestAgentResources(
+            availableCPU: 4,
+            availableMemory: 8_000_000_000,
+            availableDisk: 60_000_000_000
+        )
+
+        agent.updateResources(newResources)
+
+        #expect(agent.availableCPU == 4)
+        #expect(agent.availableMemory == 8_000_000_000)
+        #expect(agent.availableDisk == 60_000_000_000)
+    }
+
+    @Test("Agent updateResources updates lastHeartbeat")
+    func testUpdateResourcesUpdatesHeartbeat() {
+        let agent = createTestAgent()
+        let oldHeartbeat = agent.lastHeartbeat
+
+        // Wait a tiny bit to ensure timestamp difference
+        Thread.sleep(forTimeInterval: 0.01)
+
+        let newResources = createTestAgentResources()
+        agent.updateResources(newResources)
+
+        #expect(agent.lastHeartbeat != nil)
+        #expect(agent.lastHeartbeat! > oldHeartbeat!)
+    }
+
+    @Test("Agent resource comparison reports whether mutable capacity changed")
+    func testUpdateAvailableResourcesDetectsChanges() {
+        let agent = createTestAgent()
+        let unchanged = createTestAgentResources()
+
+        #expect(agent.updateAvailableResources(unchanged) == false)
+
+        let changed = createTestAgentResources(availableCPU: agent.availableCPU - 1)
+        #expect(agent.updateAvailableResources(changed) == true)
+        #expect(agent.availableCPU == changed.availableCPU)
+    }
+
+    // MARK: - Online Status Tests
+
+    @Test("Agent isOnline returns true when heartbeat is recent")
+    func testIsOnlineWithRecentHeartbeat() {
+        let agent = createTestAgent(lastHeartbeat: Date())
+
+        #expect(agent.isOnline == true)
+    }
+
+    @Test("Agent isOnline returns false when heartbeat is old")
+    func testIsOnlineWithOldHeartbeat() {
+        let oldDate = Date().addingTimeInterval(-120)  // 2 minutes ago
+        let agent = createTestAgent(lastHeartbeat: oldDate)
+
+        #expect(agent.isOnline == false)
+    }
+
+    @Test("Agent isOnline returns false when no heartbeat")
+    func testIsOnlineWithNoHeartbeat() {
+        let agent = createTestAgent(lastHeartbeat: nil)
+
+        #expect(agent.isOnline == false)
+    }
+
+    @Test("Agent isOnline threshold is 60 seconds")
+    func testIsOnlineThreshold() {
+        // Just under 60 seconds - should be online
+        let justWithin = Date().addingTimeInterval(-59)
+        let agentOnline = createTestAgent(lastHeartbeat: justWithin)
+        #expect(agentOnline.isOnline == true)
+
+        // Just over 60 seconds - should be offline
+        let justOver = Date().addingTimeInterval(-61)
+        let agentOffline = createTestAgent(lastHeartbeat: justOver)
+        #expect(agentOffline.isOnline == false)
+    }
+
+    // MARK: - Update Status Based on Heartbeat Tests
+
+    @Test("Agent updateStatusBasedOnHeartbeat sets online when heartbeat is recent and status is offline")
+    func testUpdateStatusOnlineFromOffline() {
+        let agent = createTestAgent(status: .offline, lastHeartbeat: Date())
+
+        agent.updateStatusBasedOnHeartbeat()
+
+        #expect(agent.status == .online)
+    }
+
+    @Test("Agent updateStatusBasedOnHeartbeat sets offline when heartbeat is old and status is online")
+    func testUpdateStatusOfflineFromOnline() {
+        let oldDate = Date().addingTimeInterval(-120)
+        let agent = createTestAgent(status: .online, lastHeartbeat: oldDate)
+
+        agent.updateStatusBasedOnHeartbeat()
+
+        #expect(agent.status == .offline)
+    }
+
+    @Test("Agent updateStatusBasedOnHeartbeat does not change status when already correct")
+    func testUpdateStatusNoChangeWhenCorrect() {
+        // Online with recent heartbeat
+        let agentOnline = createTestAgent(status: .online, lastHeartbeat: Date())
+        agentOnline.updateStatusBasedOnHeartbeat()
+        #expect(agentOnline.status == .online)
+
+        // Offline with old heartbeat
+        let oldDate = Date().addingTimeInterval(-120)
+        let agentOffline = createTestAgent(status: .offline, lastHeartbeat: oldDate)
+        agentOffline.updateStatusBasedOnHeartbeat()
+        #expect(agentOffline.status == .offline)
+    }
+
+    @Test("Agent updateStatusBasedOnHeartbeat handles connecting status")
+    func testUpdateStatusFromConnecting() {
+        // Connecting with recent heartbeat should become online
+        let agentRecent = createTestAgent(status: .connecting, lastHeartbeat: Date())
+        agentRecent.updateStatusBasedOnHeartbeat()
+        #expect(agentRecent.status == .connecting)  // Does not change from connecting to online
+
+        // Connecting with old heartbeat should become offline
+        let oldDate = Date().addingTimeInterval(-120)
+        let agentOld = createTestAgent(status: .connecting, lastHeartbeat: oldDate)
+        agentOld.updateStatusBasedOnHeartbeat()
+        #expect(agentOld.status == .connecting)  // Does not change from connecting to offline
+    }
+
+    // MARK: - Agent.from(registration:name:) Tests
+
+    @Test("Agent.from creates agent from registration message")
+    func testFromRegistrationMessage() {
+        let resources = createTestAgentResources()
+        let message = AgentRegisterMessage(
+            agentId: "reg-agent",
+            hostname: "reg-host",
+            version: "2.0.0",
+            capabilities: ["kvm", "hvf"],
+            resources: resources
+        )
+
+        let agent = Agent.from(registration: message, name: "reg-agent")
+
+        #expect(agent.name == "reg-agent")
+        #expect(agent.hostname == "reg-host")
+        #expect(agent.version == "2.0.0")
+        #expect(agent.capabilities == ["kvm", "hvf"])
+        #expect(agent.status == AgentStatus.connecting)
+        #expect(agent.totalCPU == 8)
+        #expect(agent.availableCPU == 6)
+        #expect(agent.lastHeartbeat != nil)
+    }
+
+    @Test("Agent.from derives hypervisors from legacy capability strings when no report is sent")
+    func testFromLegacyRegistrationDerivesHypervisorsFromCapabilities() {
+        // Message shaped like one from an agent that predates the structured
+        // report: hypervisor backends only appear as capability strings.
+        let message = AgentRegisterMessage(
+            agentId: "legacy-linux-agent",
+            hostname: "legacy-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "qemu", "kvm", "ovn_networking", "firecracker"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "legacy-linux-agent")
+
+        #expect(agent.architecture == nil)
+        #expect(agent.networkCapability == nil)
+        #expect(agent.hypervisors.count == 2)
+        #expect(agent.hypervisors.contains { $0.type == .qemu && $0.available && !$0.accelerated })
+        #expect(agent.hypervisors.contains { $0.type == .firecracker && $0.available })
+    }
+
+    @Test("Agent.from does not resurrect probe-failed backends from the hypervisorType scalar")
+    func testFromLegacyRegistrationRespectsFailedProbes() {
+        // An agent whose binary probes all failed advertises no hypervisor
+        // capability strings. The configured-default scalar must not put a
+        // backend back — the agent registers but stays unschedulable.
+        let message = AgentRegisterMessage(
+            agentId: "probeless-agent",
+            hostname: "probeless-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "kvm", "user_networking"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "probeless-agent")
+
+        #expect(agent.hypervisors.isEmpty)
+    }
+
+    @Test("Agent.from stores probed capability data from the registration message")
+    func testFromRegistrationStoresCapabilityData() {
+        let hypervisors = [
+            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+            HypervisorSupport(
+                type: .firecracker,
+                available: false,
+                accelerated: false,
+                unavailabilityReason: "/dev/kvm not present",
+                capabilities: .firecracker
+            ),
+        ]
+        let message = AgentRegisterMessage(
+            agentId: "probed-agent",
+            hostname: "probed-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "qemu", "kvm"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu,
+            architecture: .arm64,
+            hypervisors: hypervisors,
+            networkCapability: .overlay
+        )
+
+        let agent = Agent.from(registration: message, name: "probed-agent")
+
+        #expect(agent.architecture == "arm64")
+        #expect(agent.networkCapability == "overlay")
+        #expect(agent.hypervisors == hypervisors)
+    }
+
+    @Test("Agent.from stores reported host info; nil when the agent doesn't report it")
+    func testFromRegistrationStoresHostInfo() {
+        let hostInfo = HostInfo(
+            osName: "Ubuntu 24.04.1 LTS",
+            kernelVersion: "6.8.0-45-generic",
+            cpuModel: "AMD EPYC 7763",
+            cpuVendor: "AuthenticAMD",
+            physicalCoreCount: 32,
+            logicalCoreCount: 64,
+            totalMemoryBytes: 137_438_953_472,
+            machineModel: "PowerEdge R6525",
+            bootTime: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let message = AgentRegisterMessage(
+            agentId: "host-info-agent",
+            hostname: "hi-host",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: createTestAgentResources(),
+            hostInfo: hostInfo
+        )
+
+        let agent = Agent.from(registration: message, name: "host-info-agent")
+        #expect(agent.hostInfo == hostInfo)
+
+        let legacyMessage = AgentRegisterMessage(
+            agentId: "legacy-agent",
+            hostname: "legacy-host",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: createTestAgentResources()
+        )
+        let legacyAgent = Agent.from(registration: legacyMessage, name: "legacy-agent")
+        #expect(legacyAgent.hostInfo == nil)
+    }
+
+    @Test("Agent.from sets status to connecting by default")
+    func testFromRegistrationSetsConnectingStatus() {
+        let resources = createTestAgentResources()
+        let message = AgentRegisterMessage(
+            agentId: "reg-agent",
+            hostname: "reg-host",
+            version: "2.0.0",
+            capabilities: [],
+            resources: resources
+        )
+
+        let agent = Agent.from(registration: message, name: "reg-agent")
+
+        #expect(agent.status == AgentStatus.connecting)
+    }
+
+    @Test("Agent.from sets recent lastHeartbeat")
+    func testFromRegistrationSetsRecentHeartbeat() {
+        let resources = createTestAgentResources()
+        let message = AgentRegisterMessage(
+            agentId: "reg-agent",
+            hostname: "reg-host",
+            version: "2.0.0",
+            capabilities: [],
+            resources: resources
+        )
+
+        let agent = Agent.from(registration: message, name: "reg-agent")
+
+        #expect(agent.lastHeartbeat != nil)
+
+        // Should be very recent (within last second)
+        let timeDifference = abs(Date().timeIntervalSince(agent.lastHeartbeat!))
+        #expect(timeDifference < 1.0)
+    }
+
+    // MARK: - AgentResponse DTO Tests
+
+    @Test("AgentResponse initializes from Agent")
+    func testAgentResponseInitialization() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let agent = createTestAgent()
+        try await agent.save(on: app.db)
+
+        let response = try AgentResponse(from: agent)
+
+        #expect(response.id == agent.id)
+        #expect(response.name == "test-agent")
+        #expect(response.hostname == "test-host")
+        #expect(response.version == "1.0.0")
+        #expect(response.capabilities == ["kvm", "ovn"])
+        #expect(response.status == .online)
+        #expect(response.resources.totalCPU == 8)
+        #expect(response.isOnline == true)
+        #expect(response.architecture == .x86_64)
+        #expect(response.networkCapability == .overlay)
+        #expect(response.hypervisors.count == 2)
+        #expect(response.hypervisors.first?.type == .qemu)
+        #expect(response.hypervisors.first?.available == true)
+        #expect(response.hypervisors.last?.type == .firecracker)
+        #expect(response.hypervisors.last?.available == false)
+        #expect(response.hypervisors.last?.unavailabilityReason == "firecracker binary not found")
+
+        // Read back from the database to verify the JSON-stored hypervisor list round-trips
+        let fetched = try #require(try await Agent.find(agent.id, on: app.db))
+        #expect(fetched.hypervisors == agent.hypervisors)
+        #expect(fetched.architecture == "x86_64")
+        #expect(fetched.networkCapability == "overlay")
+
+        try await app.shutdownForTesting()
+    }
+
+    @Test("AgentResponse throws when agent has no ID")
+    func testAgentResponseThrowsWithoutID() {
+        let agent = createTestAgent()
+        // Don't save, so no ID is set
+
+        #expect(throws: Error.self) {
+            try AgentResponse(from: agent)
+        }
+    }
+
+    @Test("AgentResponse derives heartbeat status without mutating the agent")
+    func testAgentResponseDerivesHeartbeatStatusWithoutMutation() throws {
+        let freshOffline = createTestAgent(
+            name: "fresh-offline", status: .offline, lastHeartbeat: Date())
+        let staleOnline = createTestAgent(
+            name: "stale-online", status: .online,
+            lastHeartbeat: Date().addingTimeInterval(-120))
+        freshOffline.id = UUID()
+        staleOnline.id = UUID()
+
+        #expect(try AgentResponse(from: freshOffline).status == .online)
+        #expect(try AgentResponse(from: staleOnline).status == .offline)
+        #expect(freshOffline.status == .offline)
+        #expect(staleOnline.status == .online)
+    }
+
+    // MARK: - AgentVersionTarget
+
+    @Test("A dev target normalizes to nil, everything else passes through")
+    func testTargetVersionNormalization() {
+        #expect(AgentVersionTarget.normalize("dev") == nil)
+        #expect(AgentVersionTarget.normalize("v1.2.3") == "v1.2.3")
+        #expect(AgentVersionTarget.normalize("main") == "main")
+    }
+
+    @Test("updateAvailable flags any agent version that differs from the target")
+    func testUpdateAvailableComparison() {
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "v1.2.2", target: "v1.2.3"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "1.0.0", target: "v1.2.3"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "dev", target: "v1.2.3"))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "v1.2.3", target: "v1.2.3"))
+    }
+
+    @Test("Aliases of the same build never flag an update")
+    func testUpdateAvailableAliasNormalization() {
+        // Release tag: agents bake the v-prefixed ref, Helm feeds the bare
+        // semver image tag back as the control plane's version.
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "v1.2.3", target: "1.2.3"))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "1.2.3", target: "v1.2.3"))
+        // Main branch: images are baked as "main" but published as main-<sha>.
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "main", target: "main-abc123def"))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "main-abc123def", target: "main-0123456789"))
+        // Non-aliases that merely resemble the alias shapes still compare.
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "main-branch", target: "main"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "vela", target: "ela"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "v1.2.2", target: "1.2.3"))
+    }
+
+    @Test("updateAvailable is never flagged without a meaningful target")
+    func testUpdateAvailableWithoutTarget() {
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "1.0.0", target: nil))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "dev", target: nil))
+    }
+
+}

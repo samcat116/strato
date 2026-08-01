@@ -60,7 +60,7 @@ IPs, log queries, users and authentication, API keys, organizations, folders and
 groups, projects and members, quotas, agents, sites, workload identity, IAM and
 audit, and the identity-provider surfaces (OIDC, SCIM, and Shared Signals).
 
-A CI route-drift test (`AppTests/OpenAPISpecDriftTests`) boots the app and
+A CI route-drift test (`AppPlatformTests/OpenAPISpecDriftTests`) boots the app and
 enforces both directions: no registered route may go undocumented, and no
 operation may describe a route that does not exist. There is no quarantine list
 — adding a route without documenting it fails the build.
