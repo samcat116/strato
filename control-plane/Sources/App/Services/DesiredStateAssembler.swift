@@ -662,7 +662,8 @@ struct DesiredStateAssembler {
                         portRangeMin: rule.portRangeMin,
                         portRangeMax: rule.portRangeMax,
                         remoteCIDR: rule.remoteCIDR,
-                        remoteGroupId: rule.$remoteGroup.id
+                        remoteGroupId: rule.$remoteGroup.id,
+                        log: rule.log
                     )
                 }
                 .sorted { $0.id.uuidString < $1.id.uuidString }

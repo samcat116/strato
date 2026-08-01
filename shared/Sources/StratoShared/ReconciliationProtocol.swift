@@ -292,6 +292,11 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
     /// Security-group peer: matches the addresses of the referenced group's
     /// member ports via its auto-generated address set.
     public let remoteGroupId: UUID?
+    /// Whether the ACL should log the packets it matches (wire v23). Nil — an
+    /// older control plane — means "off": logging is observability, so the
+    /// safe reading of silence is the quiet one, and enforcement is identical
+    /// either way. The synthesized `Codable` decodes a missing key to nil.
+    public let log: Bool?
 
     public init(
         id: UUID,
@@ -301,7 +306,8 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
         portRangeMin: Int? = nil,
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
-        remoteGroupId: UUID? = nil
+        remoteGroupId: UUID? = nil,
+        log: Bool? = nil
     ) {
         self.id = id
         self.direction = direction
@@ -311,6 +317,7 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
         self.portRangeMax = portRangeMax
         self.remoteCIDR = remoteCIDR
         self.remoteGroupId = remoteGroupId
+        self.log = log
     }
 }
 

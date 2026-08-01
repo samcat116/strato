@@ -416,6 +416,12 @@ struct NetworkInterfaceResponse: Content {
     let mtu: Int?
     let deviceName: String
     let orderIndex: Int
+    /// The security groups filtering this NIC (STR-34), sorted to match the
+    /// order agents receive in the spec. Deliberately **nil when the relation
+    /// wasn't eager-loaded**, unlike the `.value ?? []` treatment of the
+    /// address lists: an empty array here reads as "this NIC is in no group",
+    /// a security claim a forgotten `.with(...)` must not be able to make.
+    let securityGroupIds: [UUID]?
 
     init(from nic: VMNetworkInterface) {
         self.id = nic.id
@@ -433,6 +439,9 @@ struct NetworkInterfaceResponse: Content {
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
         self.orderIndex = nic.orderIndex
+        self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
+            memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
+        }
     }
 }
 
@@ -484,10 +493,19 @@ struct VMDetailResponse: Content {
     let balloonTarget: Int64?
     let balloonTargetFormatted: String?
     let guestMemoryBalloonActualBytes: Int64?
+    /// Whether this VM's attached security groups are actually being enforced
+    /// (STR-34). False means a realizing agent — the host, or its site's
+    /// network controller — registered with a protocol older than the
+    /// security-group version, so it decodes the sync and ignores the fields:
+    /// the API would otherwise show filtering that no ACL applies. Nil means
+    /// the VM is unplaced, so there is no realizer to judge yet. Computed by
+    /// `SecurityGroupService.enforcementByVM` from the same realizer lookup
+    /// that gates attach/detach, so the two can never disagree.
+    let securityGroupsEnforced: Bool?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from vm: VM) {
+    init(from vm: VM, securityGroupsEnforced: Bool? = nil) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
@@ -508,6 +526,7 @@ struct VMDetailResponse: Content {
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map(NetworkInterfaceResponse.init)
+        self.securityGroupsEnforced = securityGroupsEnforced
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled

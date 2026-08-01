@@ -108,7 +108,12 @@ A sandbox is described by `SandboxSpec`
   assembly omits the `NetworkSpec`
   (`SandboxSpecBuilder.guestNetworkingSupported`). The interface row and its
   IPAM allocation are still created at sandbox create, so the address is
-  reserved and stable for when guest networking lands.
+  reserved and stable for when guest networking lands. **Security groups**
+  (STR-34) sit in the same holding pattern: the NIC joins the project's
+  default group — or the groups named in `securityGroupIds` — through
+  `sandbox_interface_security_groups`, and attach/detach accept a `sandboxId`,
+  but with no `NetworkSpec` on the wire nothing enforces them. See
+  `docs/architecture/networking.md`.
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, and v1 has no attachable storage.
 

@@ -95,4 +95,21 @@ struct SecurityGroupProtocolTests {
         #expect(WireProtocol.supportsSecurityGroups(20))
         #expect(WireProtocol.supportsSecurityGroups(WireProtocol.securityGroupsMinimumVersion))
     }
+
+    @Test("A rule's log flag round-trips, and its absence decodes to nil")
+    func ruleLogFlag() throws {
+        let logged = DesiredSecurityGroupRule(
+            id: UUID(), direction: "ingress", ethertype: "ipv4", log: true)
+        let data = try WireProtocol.makeEncoder().encode(logged)
+        #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data).log == true)
+
+        // A rule from a pre-v23 control plane has no key at all. Nil is "off",
+        // not a third state: the ACL still enforces, it just isn't logged.
+        let legacy = """
+            {"id":"\(UUID().uuidString)","direction":"ingress","ethertype":"ipv4"}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredSecurityGroupRule.self, from: Data(legacy.utf8))
+        #expect(decoded.log == nil)
+    }
 }

@@ -57,13 +57,35 @@ public struct ACLSpec: Equatable, Sendable {
     /// "allow-related" for stateful rule allows, "allow" for infra carve-outs,
     /// "drop" for the default deny.
     public let action: String
+    /// Whether OVN should log every packet this ACL matches (STR-34). Off for
+    /// everything except rules whose control-plane row asked for it.
+    public let log: Bool
+    /// Log severity, meaningful only alongside `log`. OVN defaults an unset
+    /// severity to "info"; we set it explicitly so the emitted line is
+    /// deterministic rather than dependent on the OVN version's default.
+    public let severity: String?
+    /// The ACL's OVN `name`, which is what identifies the rule in the log
+    /// line. Only set for logged ACLs — an unlogged one has nothing to name.
+    public let name: String?
     public let externalIDs: [String: String]
 
-    public init(direction: String, priority: Int, match: String, action: String, externalIDs: [String: String]) {
+    public init(
+        direction: String,
+        priority: Int,
+        match: String,
+        action: String,
+        log: Bool = false,
+        severity: String? = nil,
+        name: String? = nil,
+        externalIDs: [String: String]
+    ) {
         self.direction = direction
         self.priority = priority
         self.match = match
         self.action = action
+        self.log = log
+        self.severity = severity
+        self.name = name
         self.externalIDs = externalIDs
     }
 }
@@ -79,17 +101,30 @@ public enum SecurityGroupACLBuilder {
 
     /// Bumped when the drop-group ACL set below changes shape, so existing
     /// deployments replace it on upgrade (the generation mechanism reused).
-    public static let dropGroupRevision: Int64 = 1
+    /// 2: MLD carve-outs (STR-34).
+    public static let dropGroupRevision: Int64 = 2
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
     /// match syntax, a newly expressible rule shape — so upgraded agents
     /// rewrite every group's ACLs even though the control-plane generations
     /// didn't move. Without it, a builder fix would sit unapplied until some
     /// unrelated rule edit happened to bump each group.
-    public static let aclSchemaRevision: Int64 = 1
+    /// 2: per-rule `log`/`severity`/`name` columns (STR-34).
+    public static let aclSchemaRevision: Int64 = 2
+
+    /// Severity for logged ACLs. Not an API surface: the control plane's rule
+    /// carries a boolean, and every logged rule lands at the same level.
+    static let logSeverity = "info"
 
     static let managedKey = "strato-managed"
     static let managedValue = "true"
+
+    /// The OVN `name` of the ACL built from a rule, which is the identifier
+    /// that appears in its log line. Hyphen-free hex keeps it short (36 of
+    /// OVN's 63 allowed characters) and matches the port-group convention.
+    public static func aclName(ruleId: UUID) -> String {
+        "sgr_" + ruleId.uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+    }
 
     /// The ACL for one security-group rule, or nil for a rule the builder
     /// cannot express (unknown direction/ethertype/protocol from a newer
@@ -153,22 +188,37 @@ public enum SecurityGroupACLBuilder {
             return nil
         }
 
+        // Logging is opt-in per rule (STR-34). Nil from a control plane that
+        // predates the field reads as off, same as an explicit false.
+        let logged = rule.log ?? false
         return ACLSpec(
             direction: rule.direction == "ingress" ? "to-lport" : "from-lport",
             priority: allowPriority,
             match: clauses.joined(separator: " && "),
             action: "allow-related",
+            log: logged,
+            severity: logged ? logSeverity : nil,
+            name: logged ? aclName(ruleId: rule.id) : nil,
             externalIDs: [
                 managedKey: managedValue,
                 "strato-rule-id": rule.id.uuidString.lowercased(),
             ])
     }
 
+    /// Multicast Listener Discovery, spelled as explicit ICMPv6 types rather
+    /// than OVN's `mldv1`/`mldv2` predicates: the type form parses on every
+    /// OVN version we support, and the set is small enough to be obvious.
+    /// 130 Query, 131 v1 Report, 132 Done, 143 v2 Report.
+    static let mldMatch =
+        "icmp6 && (icmp6.type == 130 || icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143)"
+
     /// The drop group's ACL set: default-deny both directions for all IP
     /// traffic (ARP is not `ip`, so address resolution keeps working), with
-    /// carve-outs for DHCP and IPv6 neighbor discovery / router
-    /// advertisements — without which a default-denied guest could never even
-    /// acquire its address or default route.
+    /// carve-outs for DHCP, IPv6 neighbor discovery / router advertisements,
+    /// and MLD — without which a default-denied guest could never even
+    /// acquire its address or default route, and IPv6 multicast (which
+    /// depends on listener reports reaching the querier) would silently stop
+    /// working the moment a NIC joined a security group.
     public static func dropGroupACLs() -> [ACLSpec] {
         let pg = OVNNaming.dropPortGroupName
         let ids = [managedKey: managedValue]
@@ -199,6 +249,17 @@ public enum SecurityGroupACLBuilder {
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
                 match: "outport == @\(pg) && (nd || nd_rs || nd_ra)", action: "allow",
+                externalIDs: ids),
+            // MLD both ways: a guest sends reports and Done messages, and
+            // receives the querier's periodic queries. Dropping either half
+            // makes the querier time the guest's groups out.
+            ACLSpec(
+                direction: "from-lport", priority: allowPriority,
+                match: "inport == @\(pg) && \(mldMatch)", action: "allow",
+                externalIDs: ids),
+            ACLSpec(
+                direction: "to-lport", priority: allowPriority,
+                match: "outport == @\(pg) && \(mldMatch)", action: "allow",
                 externalIDs: ids),
             // The default deny that makes membership meaningful.
             ACLSpec(
@@ -300,7 +361,8 @@ public enum SecurityGroupReconciler {
                     acls.append(
                         ACLSpec(
                             direction: acl.direction, priority: acl.priority, match: acl.match,
-                            action: acl.action, externalIDs: ids))
+                            action: acl.action, log: acl.log, severity: acl.severity, name: acl.name,
+                            externalIDs: ids))
                 } else {
                     unexpressed.append(rule.id)
                 }

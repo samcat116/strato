@@ -158,4 +158,182 @@ enum SecurityGroupService {
             .all()
         return memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
     }
+
+    /// Validates the security groups a workload create asked for and returns
+    /// them deduplicated, order preserved. Empty in means empty out — the
+    /// caller substitutes the project default inside its create transaction,
+    /// where `ensureDefaultGroup` belongs.
+    ///
+    /// Deliberately no agent-version gate: workload create must work on a
+    /// pre-security-group fleet, where sync assembly simply omits the fields
+    /// (documented mixed-fleet rollout semantics).
+    static func resolveRequestedGroupIDs(
+        _ requested: [UUID]?, projectID: UUID, on db: Database
+    ) async throws -> [UUID] {
+        let unique: [UUID] = (requested ?? []).reduce(into: []) { unique, groupId in
+            if !unique.contains(groupId) { unique.append(groupId) }
+        }
+        guard unique.count <= SecurityGroup.maxGroupsPerNIC else {
+            throw Abort(
+                .badRequest,
+                reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
+        }
+        for groupId in unique {
+            // Scoped to the project, exactly like the NIC's network
+            // (`LogicalNetworkService.resolveForWorkloadCreate`), and reported
+            // the same way: *not found here*. Nothing authorizes the caller
+            // against the named group, so a distinct "belongs to another
+            // project" answer would confirm that an opaque id names a group
+            // somewhere in the fleet — the disclosure the containment guard is
+            // placed behind an authorization check to avoid everywhere it does
+            // fire (issue #777).
+            let group = try await SecurityGroup.query(on: db)
+                .filter(\.$id == groupId)
+                .filter(\.$project.$id == projectID)
+                .first()
+            guard group != nil else {
+                throw Abort(.notFound, reason: "Security group \(groupId) not found in this project")
+            }
+        }
+        return unique
+    }
+
+    // MARK: - Attachments
+
+    /// How many NICs attach each of `groupIds`, summed across the VM and
+    /// sandbox join tables (STR-34). Two queries for the whole page, never a
+    /// COUNT per group; groups with no attachments are absent from the result.
+    ///
+    /// Both tables must be counted everywhere, and it is easy to count only
+    /// one: an undercount would let the API report a group as unattached and
+    /// then hand the caller a bare FK violation when they try to delete it.
+    static func attachmentCounts(forGroups groupIds: [UUID], on db: Database) async throws -> [UUID: Int] {
+        guard !groupIds.isEmpty else { return [:] }
+        var counts: [UUID: Int] = [:]
+        for membership in try await VMInterfaceSecurityGroup.query(on: db)
+            .filter(\.$securityGroup.$id ~~ groupIds)
+            .all()
+        {
+            counts[membership.$securityGroup.id, default: 0] += 1
+        }
+        for membership in try await SandboxInterfaceSecurityGroup.query(on: db)
+            .filter(\.$securityGroup.$id ~~ groupIds)
+            .all()
+        {
+            counts[membership.$securityGroup.id, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// How many NICs attach one group, across both join tables.
+    static func attachmentCount(forGroup groupId: UUID, on db: Database) async throws -> Int {
+        let vmCount = try await VMInterfaceSecurityGroup.query(on: db)
+            .filter(\.$securityGroup.$id == groupId)
+            .count()
+        let sandboxCount = try await SandboxInterfaceSecurityGroup.query(on: db)
+            .filter(\.$securityGroup.$id == groupId)
+            .count()
+        return vmCount + sandboxCount
+    }
+
+    // MARK: - Enforcement
+
+    /// What would actually realize a VM's security groups — the single source
+    /// for both the attach/detach gate and the API's `securityGroupsEnforced`
+    /// indicator (STR-34), so the two can never disagree about what a
+    /// mixed-version or half-broken fleet is doing.
+    enum Realization {
+        /// Unplaced: nothing realizes the VM yet, so there is nothing to judge.
+        case unplaced
+        /// Nothing would author the site's port groups and ACLs at all — no
+        /// designated network controller, or one that cannot author topology
+        /// right now (issue #833). Carries the 409 a synchronous path throws.
+        case unauthored(Abort)
+        /// The agents that must understand security groups for the VM's groups
+        /// to filter anything: the host (which binds its port's group
+        /// membership) and, when the site designates a different one, the
+        /// network controller (which authors the ACLs).
+        case realizers([Agent])
+    }
+
+    static func realization(for vm: VM, on db: Database) async throws -> Realization {
+        guard let hypervisorId = vm.hypervisorId,
+            let agentUUID = UUID(uuidString: hypervisorId),
+            let host = try await Agent.find(agentUUID, on: db)
+        else { return .unplaced }
+        return try await realization(host: host, on: db)
+    }
+
+    /// The host-keyed half, so the batch path can resolve once per distinct
+    /// agent instead of once per VM.
+    ///
+    /// Resolving through `SiteNetworkAuthority` rather than reading the site's
+    /// controller column keeps this in step with assembly, which notably keeps
+    /// a *pre-v4 host* on legacy per-node scoping: such a host authors its own
+    /// ACLs and the site controller realizes nothing for it, so
+    /// `.selfAuthored` correctly leaves it as the sole realizer.
+    static func realization(host: Agent, on db: Database) async throws -> Realization {
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
+        if let refusal = SiteNetworkAuthority.refusal(
+            authority, host: host, consequence: "the group's ACLs would be realized nowhere")
+        {
+            return .unauthored(refusal)
+        }
+        var realizers = [host]
+        if case .controller(let controller) = authority, controller.id != host.id {
+            realizers.append(controller)
+        }
+        return .realizers(realizers)
+    }
+
+    /// Whether one VM's security groups are enforced, or nil when it is
+    /// unplaced (unknown — not "unenforced"). An unauthored site is `false`:
+    /// the groups are attached and nothing will ever write their ACLs.
+    static func enforcement(for vm: VM, on db: Database) async throws -> Bool? {
+        enforcement(of: try await realization(for: vm, on: db))
+    }
+
+    private static func enforcement(of realization: Realization) -> Bool? {
+        switch realization {
+        case .unplaced: return nil
+        case .unauthored: return false
+        case .realizers(let agents):
+            return agents.allSatisfy { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) }
+        }
+    }
+
+    /// Whether each VM's security groups are enforced, keyed by VM id. A VM is
+    /// absent from the result when it is unplaced (the caller reports nil).
+    ///
+    /// Resolved once per *distinct host* rather than once per VM: a page of
+    /// VMs clusters onto a handful of agents, so this stays proportional to
+    /// the fleet rather than the page.
+    static func enforcementByVM(_ vms: [VM], on db: Database) async throws -> [UUID: Bool] {
+        let hostIDsByVM: [UUID: UUID] = vms.reduce(into: [:]) { map, vm in
+            guard let vmID = vm.id,
+                let hypervisorId = vm.hypervisorId,
+                let hostID = UUID(uuidString: hypervisorId)
+            else { return }
+            map[vmID] = hostID
+        }
+        guard !hostIDsByVM.isEmpty else { return [:] }
+
+        let hosts = try await Agent.query(on: db)
+            .filter(\.$id ~~ Array(Set(hostIDsByVM.values)))
+            .all()
+        var enforcedByHost: [UUID: Bool] = [:]
+        for host in hosts {
+            guard let hostID = host.id else { continue }
+            enforcedByHost[hostID] = enforcement(of: try await realization(host: host, on: db))
+        }
+
+        var result: [UUID: Bool] = [:]
+        for (vmID, hostID) in hostIDsByVM {
+            // A hypervisorId naming an agent row that no longer exists reads as
+            // unplaced: better "unknown" than a claim in either direction.
+            guard let enforced = enforcedByHost[hostID] else { continue }
+            result[vmID] = enforced
+        }
+        return result
+    }
 }

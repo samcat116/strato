@@ -290,7 +290,20 @@ public enum WireProtocol {
     /// registration capability rather than the version alone — a v22 agent on
     /// a host with no QEMU backend understands the messages but can never
     /// realize them.
-    public static let currentVersion = 22
+    ///
+    /// Version 23: per-rule security-group ACL logging (STR-34). Adds
+    /// `DesiredSecurityGroupRule.log`, which the agent maps onto the OVN ACL's
+    /// `log`/`severity`/`name` columns. Additive and nil-tolerant in both
+    /// directions, and — unlike v20's fields, which this rides alongside —
+    /// there is deliberately **no gate**. v20 needed one because the API would
+    /// have claimed filtering that no ACL enforced; a `log` flag claims only
+    /// that packets get logged. A pre-v23 agent builds the identical
+    /// enforcing ACL and merely omits the log line, so the failure mode is a
+    /// missing diagnostic rather than open traffic, and refusing the rule
+    /// mutation would cost more than the missing logs. In the other direction
+    /// a nil from an older control plane reads as "off", which is what every
+    /// rule written before this version meant.
+    public static let currentVersion = 23
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
