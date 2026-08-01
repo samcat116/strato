@@ -103,7 +103,7 @@ struct SecurityGroupProtocolTests {
         let data = try WireProtocol.makeEncoder().encode(logged)
         #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data).log == true)
 
-        // A rule from a pre-v23 control plane has no key at all. Nil is "off",
+        // A rule from a pre-v24 control plane has no key at all. Nil is "off",
         // not a third state: the ACL still enforces, it just isn't logged.
         let legacy = """
             {"id":"\(UUID().uuidString)","direction":"ingress","ethertype":"ipv4"}

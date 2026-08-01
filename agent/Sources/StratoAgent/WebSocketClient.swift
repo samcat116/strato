@@ -347,7 +347,23 @@ actor WebSocketClient {
             throw WebSocketClientError.encodingError("Failed to convert message to UTF-8")
         }
 
-        logger.debug("Message payload", metadata: ["payload": .string(jsonString)])
+        // Streaming frames carry a base64 payload and are logged by size only.
+        // A graphics console (issue #566) reads up to 64 KiB at a time and
+        // sends continuously while the screen changes; dumping each body would
+        // write ~88 KiB per frame, thousands of times a second, into the
+        // journal — enough to take the host down by itself. The same reasoning
+        // has always applied to exec output, just at a survivable rate.
+        switch message.type {
+        case .consoleData, .sandboxExecInput, .sandboxExecOutput:
+            logger.debug(
+                "Message payload",
+                metadata: [
+                    "type": .string(message.type.rawValue),
+                    "byteCount": .stringConvertible(data.count),
+                ])
+        default:
+            logger.debug("Message payload", metadata: ["payload": .string(jsonString)])
+        }
 
         // Send as text frame
         try await ws.send(jsonString)

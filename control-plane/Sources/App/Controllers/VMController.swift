@@ -232,6 +232,12 @@ struct VMController: RouteCollection {
             // behavior — and both are what Windows 11 / Server 2025 require.
             let secureBoot: Bool?
             let tpm: Bool?
+            // Graphics console (issue #566): whether the guest boots with a
+            // display device whose framebuffer the web UI can attach to.
+            // Defaults false — headless, today's behavior. Fixed at create,
+            // because the display device lives in the hypervisor process's
+            // argument vector.
+            let graphicsConsole: Bool?
             // Security groups for the VM's NIC. Omitted (or empty) means the
             // project's default group — every NIC must belong to at least one
             // group.
@@ -381,7 +387,8 @@ struct VMController: RouteCollection {
             maxCpu: maxCpuValue,
             maxMemory: maxMemoryValue,
             secureBoot: createRequest.secureBoot ?? false,
-            tpmEnabled: createRequest.tpm ?? false
+            tpmEnabled: createRequest.tpm ?? false,
+            graphicsConsole: createRequest.graphicsConsole ?? false
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -431,6 +438,17 @@ struct VMController: RouteCollection {
             throw Abort(
                 .badRequest,
                 reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
+        }
+
+        // Firecracker emulates no display device at all — it boots a kernel
+        // directly and its only console is a serial port. Same reasoning as
+        // Secure Boot above: returning 202 for a VM whose Display tab could
+        // never work is worse than refusing (issue #566).
+        if vm.graphicsConsole, vm.hypervisorType == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'graphicsConsole' is not supported for firecracker VMs "
+                    + "(no emulated display device); use the qemu hypervisor")
         }
 
         let userID = try user.requireID()

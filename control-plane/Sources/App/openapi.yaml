@@ -69,6 +69,13 @@ info:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
+    - `POST /api/vms/{vmID}/console/vnc` + `GET
+      /api/vms/{vmID}/console/vnc/{sessionID}/attach` — VM graphics console
+      (WebSocket attach). The POST mints a single-use session and returns
+      `{ sessionId, websocketPath, expiresAt }`; the attach relays RFB as
+      binary frames after one `{"type":"ready"}` text frame. Listed here with
+      its WebSocket half because the two are one exchange — the POST exists
+      only to give the upgrade's pre-flight failures real status codes.
     - `POST /api/sandboxes/{sandboxID}/exec` + `GET
       /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — sandbox exec
       (WebSocket attach).
@@ -8537,6 +8544,16 @@ components:
             `tpmCapable` (swtpm installed) are eligible; rejected for
             firecracker. Windows 11 and Server 2025 require this together with
             `secureBoot`.
+        graphicsConsole:
+          type: boolean
+          default: false
+          description: >-
+            Give the guest a display device and a VNC server, so its
+            framebuffer can be driven from the web UI — what a graphical OS
+            installer needs. Requires a QEMU VM placed on an agent new enough
+            to realize it; rejected for firecracker, which emulates no display
+            device. Fixed at creation: the display lives in the hypervisor
+            process's arguments, so an existing VM cannot gain or lose one.
         securityGroupIds:
           type: array
           items:
@@ -8638,6 +8655,11 @@ components:
         tpmEnabled:
           type: boolean
           description: Whether the guest has an emulated TPM 2.0.
+        graphicsConsole:
+          type: boolean
+          description: >-
+            Whether the guest has a display device whose framebuffer the web UI
+            can attach to. Fixed at creation.
         securityGroupsEnforced:
           type: boolean
           description: >-

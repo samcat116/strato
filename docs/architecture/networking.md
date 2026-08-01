@@ -208,7 +208,7 @@ that **multi-PoP anycast is a genuine CDN build**, not a single-edge feature.
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
 on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
-(v23 added per-rule ACL logging).
+(v24 added per-rule ACL logging).
 
 ### Model (control plane)
 
@@ -268,8 +268,8 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   `SiteNetworkAuthority`) so they cannot disagree. Per-NIC membership is on
   the same response (`NetworkInterface.securityGroupIds`), absent rather than
   empty when the server didn't load it.
-- Per-rule `log` (v23) is additive with **no gate**, unlike v20's fields: a
-  pre-v23 agent builds the identical enforcing ACL and only omits the log
+- Per-rule `log` (v24) is additive with **no gate**, unlike v20's fields: a
+  pre-v24 agent builds the identical enforcing ACL and only omits the log
   line, so the failure mode is a missing diagnostic, not open traffic.
 
 ### Enforcement (agent)

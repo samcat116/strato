@@ -5181,6 +5181,11 @@ export interface components {
              * @default false
              */
             tpm: boolean;
+            /**
+             * @description Give the guest a display device and a VNC server, so its framebuffer can be driven from the web UI — what a graphical OS installer needs. Requires a QEMU VM placed on an agent new enough to realize it; rejected for firecracker, which emulates no display device. Fixed at creation: the display lives in the hypervisor process's arguments, so an existing VM cannot gain or lose one.
+             * @default false
+             */
+            graphicsConsole: boolean;
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
         };
@@ -5229,6 +5234,8 @@ export interface components {
             secureBoot?: boolean;
             /** @description Whether the guest has an emulated TPM 2.0. */
             tpmEnabled?: boolean;
+            /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
+            graphicsConsole?: boolean;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
             /** Format: date-time */

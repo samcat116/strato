@@ -45,3 +45,30 @@ public enum ConsoleMode: String, Codable, CaseIterable, Sendable {
     case socket = "Socket"
     case null = "Null"
 }
+
+/// Whether the guest gets a framebuffer, and over which protocol (issue #566).
+///
+/// Deliberately a separate axis from `ConsoleMode` rather than a case on it: a
+/// graphics console does not replace the serial/virtio-console pair, it joins
+/// them, and `ConsoleMode` decodes strictly (see `EnumDecodingTests`) so a new
+/// case there would be a breaking change for no gain.
+///
+/// Decoding is strict for the same reason `DesiredVMStatus` is: a value this
+/// build does not recognize must not silently degrade to "no display" on a VM
+/// the API describes as having one. A future protocol (SPICE) arrives with its
+/// own wire-version bump and gate, not by being tolerated here.
+public enum GraphicsMode: String, Codable, CaseIterable, Sendable {
+    /// Headless — no display device, no framebuffer server. Today's behavior.
+    ///
+    /// Spelled `headless` rather than `none` deliberately. `graphics` is an
+    /// Optional, and `spec.console?.graphics == .none` would compile against
+    /// `Optional.none` — reading as "has a graphics mode of headless" while
+    /// actually testing "the field is absent". The raw value stays `"None"`,
+    /// so this is a source-level rename with no wire change.
+    case headless = "None"
+    /// A VNC server on a Unix socket in the VM's directory, relayed to the
+    /// browser by the agent. There is no RFB password: the socket's file mode
+    /// and the control plane's `view_console` authorization are the security
+    /// boundary, exactly as for the QMP and serial sockets beside it.
+    case vnc = "Vnc"
+}

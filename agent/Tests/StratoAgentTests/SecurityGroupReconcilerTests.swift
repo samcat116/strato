@@ -139,7 +139,7 @@ struct SecurityGroupReconcilerTests {
         #expect(acl.name!.count <= 63)
     }
 
-    @Test("An unlogged rule — explicit false or a pre-v23 nil — sets no log columns")
+    @Test("An unlogged rule — explicit false or a pre-v24 nil — sets no log columns")
     func unloggedRule() {
         for value: Bool? in [nil, false] {
             let acl = SecurityGroupACLBuilder.acl(for: rule(log: value), portGroup: pg)!

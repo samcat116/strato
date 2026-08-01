@@ -705,6 +705,11 @@ public func configure(_ app: Application) async throws {
     // (a routing identity and an ownerless row).
     app.migrations.add(ScopeFloatingIPPoolNamesToOwners())
 
+    // Graphics console (issue #566): per-VM intent to boot with a display
+    // device, so the framebuffer can be relayed to the web UI. Defaults false,
+    // so every existing VM stays headless with an unchanged QEMU command line.
+    app.migrations.add(AddGraphicsConsoleToVM())
+
     // Security-group follow-ups (STR-34): per-rule OVN ACL logging, and
     // sandbox NIC membership (bookkeeping only — sandbox NICs are still off
     // the wire, see `SandboxInterfaceSecurityGroup`). The join must follow

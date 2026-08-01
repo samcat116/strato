@@ -188,6 +188,18 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "tpm_enabled")
     var tpmEnabled: Bool
 
+    // Graphics console (issue #566): whether the guest boots with a display
+    // device and a VNC server for the web UI to attach to. Like the machine
+    // profile above, the control plane records only the intent — the agent
+    // picks the display device and owns the socket.
+    //
+    // Fixed at create, because the display device lives in the QEMU process's
+    // argument vector: a VM cannot gain or lose a display without being
+    // recreated, and a stop/start respawns from the arguments it was created
+    // with.
+    @Field(key: "graphics_console")
+    var graphicsConsole: Bool
+
     // Console configuration
     @Enum(key: "console_mode")
     var consoleMode: ConsoleMode
@@ -230,7 +242,8 @@ final class VM: Model, @unchecked Sendable {
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         secureBoot: Bool = false,
-        tpmEnabled: Bool = false
+        tpmEnabled: Bool = false,
+        graphicsConsole: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -255,6 +268,7 @@ final class VM: Model, @unchecked Sendable {
         self.serialMode = serialMode
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
+        self.graphicsConsole = graphicsConsole
     }
 }
 
@@ -472,6 +486,9 @@ struct VMDetailResponse: Content {
     /// Boot and whether it has an emulated TPM 2.0.
     let secureBoot: Bool
     let tpmEnabled: Bool
+    /// Graphics console (issue #566): whether the guest has a display device
+    /// whose framebuffer the web UI can attach to. Fixed at create.
+    let graphicsConsole: Bool
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -530,6 +547,7 @@ struct VMDetailResponse: Content {
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
+        self.graphicsConsole = vm.graphicsConsole
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

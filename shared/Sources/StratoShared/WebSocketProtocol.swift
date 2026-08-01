@@ -654,24 +654,47 @@ public enum CodableValue: Codable, Sendable {
 
 // MARK: - Console Operation Messages
 
+/// Which of a VM's consoles a session attaches to (issue #566).
+///
+/// Only `console_connect` carries this — once a session exists both sides key
+/// it by `sessionId`, and the bytes in either direction are opaque, so
+/// `console_data` and `console_disconnect` stay stream-agnostic.
+public enum ConsoleStream: String, Codable, Sendable {
+    /// The text console: the serial socket, falling back to virtio-console.
+    case serial = "Serial"
+    /// The framebuffer: the VM's VNC socket, relayed as opaque RFB bytes.
+    case vnc = "Vnc"
+}
+
 public struct ConsoleConnectMessage: WebSocketMessage {
     public var type: MessageType { .consoleConnect }
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
     public let sessionId: String
+    /// Which console to attach. Nil from control planes that predate the
+    /// graphics console; read it through `effectiveStream`. Optional so the
+    /// synthesized encoder omits the key for a serial connect, leaving the
+    /// frame a pre-#566 agent sees byte-identical to today's.
+    public let stream: ConsoleStream?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         vmId: String,
-        sessionId: String
+        sessionId: String,
+        stream: ConsoleStream? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.vmId = vmId
         self.sessionId = sessionId
+        self.stream = stream
     }
+
+    /// The console to attach, defaulting to the text console — which is the
+    /// only one that existed when the field was absent.
+    public var effectiveStream: ConsoleStream { stream ?? .serial }
 }
 
 public struct ConsoleDisconnectMessage: WebSocketMessage {

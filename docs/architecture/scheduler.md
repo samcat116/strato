@@ -127,6 +127,7 @@ struct VMPlacementRequirements {
     let requiresSandboxRuntime: Bool      // Sandbox workload (issue #415)
     let requiresSecureBoot: Bool          // UEFI Secure Boot (issue #565)
     let requiresVTPM: Bool                // Emulated TPM 2.0 (issue #565)
+    let requiresGraphicsConsole: Bool     // VNC framebuffer (issue #566)
 }
 ```
 
@@ -167,6 +168,14 @@ differently than requested:
   Secure Boot or without a TPM, and Windows setup refuses to install with
   nothing in the API to explain why. Refusing placement surfaces the missing
   prerequisite at create time instead.
+- **Graphics console**: A VM asking for a display only places on an agent that
+  registered with a wire protocol carrying `ConsoleSpec.graphics` (v23+). Same
+  silent-failure reasoning as the machine profile — a pre-v23 agent boots the
+  guest headless while the API reports a display, and the Display tab shows
+  nothing. Unlike the vTPM this is a *one*-signal constraint: candidates are
+  already restricted to QEMU-capable agents, and a QEMU built `--disable-vnc`
+  fails the create loudly rather than degrading, so there is no host capability
+  left to advertise.
 
 ## Agent Selection Process
 
@@ -178,6 +187,7 @@ differently than requested:
    - Agent must advertise the sandbox runtime (sandbox placements only)
    - Agent must speak v17+ (Secure Boot or TPM placements) and advertise
      `tpmCapable` (TPM placements)
+   - Agent must speak v23+ (graphics console placements)
    - Agent host architecture must match the guest architecture (when specified)
    - Agent must satisfy the VM's network capability requirements
    - Available CPU ≥ VM CPU requirement
@@ -225,6 +235,7 @@ The scheduler throws specific errors for different failure scenarios:
 - **`networkCapabilityUnsatisfied`**: No eligible agent supports the required VM-to-VM networking
 - **`machineProfileUnsatisfied`**: No eligible agent is new enough (wire v17+) to realize Secure Boot or a TPM
 - **`vtpmUnsatisfied`**: No eligible agent has swtpm installed to back the requested TPM 2.0
+- **`graphicsConsoleUnsatisfied`**: No eligible agent is new enough (wire v23+) to realize a graphics console
 - **`insufficientResources`**: Agents exist but none have enough resources
 - **`invalidStrategy`**: Specified strategy name is not recognized
 - **`agentServiceUnavailable`**: AgentService not properly initialized
