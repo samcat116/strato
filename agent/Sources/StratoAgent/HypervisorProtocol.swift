@@ -4,8 +4,13 @@ import StratoAgentCore
 import StratoShared
 
 /// Console access points a hypervisor exposes for a VM.
-/// A backend may offer a serial socket, a virtio-console socket, both, or neither.
-/// Consumers should try `serialSocketPath` first and fall back to `consoleSocketPath`.
+/// A backend may offer a serial socket, a virtio-console socket, a VNC socket,
+/// any combination, or none.
+///
+/// The text and graphics consoles are independent, not ranked: for text,
+/// consumers try `serialSocketPath` first and fall back to `consoleSocketPath`;
+/// `vncSocketPath` is only ever used for a graphics session and has no
+/// fallback, since serial bytes are not an RFB stream (issue #566).
 public struct ConsoleEndpoint: Sendable {
     /// Unix socket path for the VM's serial console, if available
     public let serialSocketPath: String?
@@ -13,14 +18,21 @@ public struct ConsoleEndpoint: Sendable {
     /// Unix socket path for the VM's virtio-console, if available
     public let consoleSocketPath: String?
 
-    public init(serialSocketPath: String?, consoleSocketPath: String?) {
+    /// Unix socket path for the VM's VNC server, present only when the VM was
+    /// spawned with a graphics console. Absent means the guest is headless —
+    /// which is not recoverable without recreating it, since the display device
+    /// is fixed in the QEMU process's arguments.
+    public let vncSocketPath: String?
+
+    public init(serialSocketPath: String?, consoleSocketPath: String?, vncSocketPath: String? = nil) {
         self.serialSocketPath = serialSocketPath
         self.consoleSocketPath = consoleSocketPath
+        self.vncSocketPath = vncSocketPath
     }
 
-    /// True when neither socket is available
+    /// True when no socket at all is available
     public var isEmpty: Bool {
-        serialSocketPath == nil && consoleSocketPath == nil
+        serialSocketPath == nil && consoleSocketPath == nil && vncSocketPath == nil
     }
 }
 

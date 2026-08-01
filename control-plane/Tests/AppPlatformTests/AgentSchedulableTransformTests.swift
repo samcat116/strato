@@ -143,4 +143,35 @@ struct AgentSchedulableTransformTests {
         #expect(byName["version-only"]?.supportsMachineProfile == true)
         #expect(byName["capable-old"]?.supportsMachineProfile == false)
     }
+
+    /// The graphics console is the one-signal case (issue #566): there is no
+    /// host capability to advertise, because every candidate is already
+    /// QEMU-capable and a QEMU without VNC fails the create loudly instead of
+    /// degrading. So it tracks the protocol version alone — including the
+    /// unknown-version row, which has proven nothing and must stay ineligible.
+    @Test("Graphics console support tracks the wire protocol version alone")
+    func testGraphicsConsoleSupport() throws {
+        let oldProtocol = makeAgent(id: UUID(), name: "old")
+        oldProtocol.wireProtocolVersion = WireProtocol.graphicsConsoleMinimumVersion - 1
+
+        let current = makeAgent(id: UUID(), name: "current")
+        current.wireProtocolVersion = WireProtocol.currentVersion
+
+        let exactly = makeAgent(id: UUID(), name: "exactly")
+        exactly.wireProtocolVersion = WireProtocol.graphicsConsoleMinimumVersion
+
+        let unknownVersion = makeAgent(id: UUID(), name: "unknown-version")
+        unknownVersion.wireProtocolVersion = nil
+
+        let result = AgentService.schedulableAgents(
+            from: [oldProtocol, current, exactly, unknownVersion],
+            runningVMCounts: [:]
+        )
+        let byName = Dictionary(uniqueKeysWithValues: result.map { ($0.name, $0) })
+
+        #expect(byName["old"]?.supportsGraphicsConsole == false)
+        #expect(byName["current"]?.supportsGraphicsConsole == true)
+        #expect(byName["exactly"]?.supportsGraphicsConsole == true)
+        #expect(byName["unknown-version"]?.supportsGraphicsConsole == false)
+    }
 }

@@ -33,6 +33,7 @@ export default defineConfig({
       {
         text: 'Guides',
         items: [
+          { text: 'Graphics Console', link: '/guide/graphics-console' },
           { text: 'Windows Guests', link: '/guide/windows-guests' }
         ]
       },

@@ -111,10 +111,15 @@ actor MockHypervisorService: HypervisorService {
     }
 
     func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
-        guard vms[vmId] != nil else { return nil }
+        guard let vm = vms[vmId] else { return nil }
         return ConsoleEndpoint(
             serialSocketPath: "/var/run/strato/vm-\(vmId)-serial.sock",
-            consoleSocketPath: "/var/run/strato/vm-\(vmId)-console.sock"
+            consoleSocketPath: "/var/run/strato/vm-\(vmId)-console.sock",
+            // Only when the spec asked for one, so simulation mode reproduces
+            // the real refusal for a headless VM rather than always offering a
+            // display.
+            vncSocketPath: vm.spec.console?.effectiveGraphics == .vnc
+                ? "/var/run/strato/vm-\(vmId)-vnc.sock" : nil
         )
     }
 

@@ -78,6 +78,9 @@ func routes(_ app: Application) throws {
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 
+    // VM graphics console: mint + attach for the VNC relay (issue #566)
+    try app.register(collection: VNCWebSocketController())
+
     // Sandbox exec attach WebSocket (issue #423)
     try app.register(collection: SandboxExecWebSocketController())
 

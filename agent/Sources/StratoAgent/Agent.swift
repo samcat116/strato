@@ -662,6 +662,10 @@ actor Agent {
             await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
         }
 
+        await consoleSocketManager?.setOnConsoleClosed { [weak self] vmId, sessionId, reason in
+            await self?.sendConsoleDisconnected(vmId: vmId, sessionId: sessionId, reason: reason)
+        }
+
         // Initialize SPIFFE/mTLS. A SPIRE-issued X.509 SVID is the agent's only
         // means of authenticating to the control plane, so it is mandatory:
         // missing config or a failed issuance is fatal, never a fallback.
@@ -2478,19 +2482,45 @@ extension Agent {
 
     // MARK: - Console Message Handlers
 
+    /// Report a console that could not be opened, both ways.
+    ///
+    /// The correlated `ErrorMessage` is for logs and protocol symmetry, but it
+    /// cannot reach the browser: console connects are sent fire-and-forget, so
+    /// the control plane has no pending request to match a `requestId` against
+    /// and drops it. `ConsoleDisconnectedMessage` is a stream event keyed by
+    /// `sessionId`, which does route — and is what stops the tab waiting on a
+    /// console that is never going to open.
+    private func failConsoleConnect(_ message: ConsoleConnectMessage, reason: String) async {
+        await sendError(for: message.requestId, error: reason)
+        await sendConsoleDisconnected(vmId: message.vmId, sessionId: message.sessionId, reason: reason)
+    }
+
+    /// Tell the control plane a console session is over, and why, so it can
+    /// close the browser's socket instead of leaving it attached to nothing.
+    private func sendConsoleDisconnected(vmId: String, sessionId: String, reason: String) async {
+        do {
+            try await websocketClient?.sendMessage(
+                ConsoleDisconnectedMessage(vmId: vmId, sessionId: sessionId, reason: reason))
+        } catch {
+            logger.error("Failed to send console disconnected message: \(error)")
+        }
+    }
+
     private func handleConsoleConnect(_ message: ConsoleConnectMessage) async {
+        let stream = message.effectiveStream
         logger.info(
             "Console connect request received",
             metadata: [
                 "vmId": .string(message.vmId),
                 "sessionId": .string(message.sessionId),
                 "requestId": .string(message.requestId),
+                "stream": .string(stream.rawValue),
             ])
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             logger.error(
                 "Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await failConsoleConnect(message, reason: "Hypervisor service not available for VM")
             return
         }
 
@@ -2506,75 +2536,97 @@ extension Agent {
                     "vmId": .string(message.vmId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendError(
-                for: message.requestId,
-                error: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
+            await failConsoleConnect(
+                message,
+                reason: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
             return
         }
 
-        let serialPath = endpoint?.serialSocketPath
-        let consolePath = endpoint?.consoleSocketPath
-
-        guard serialPath != nil || consolePath != nil else {
-            logger.error(
-                "No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
-            await sendError(for: message.requestId, error: "Console socket not found for VM \(message.vmId)")
-            return
+        // The text console has two candidate sockets and tries them in order;
+        // the graphics console has exactly one and no fallback, because serial
+        // bytes are not an RFB stream — handing them to noVNC would hang its
+        // handshake instead of reporting anything (issue #566).
+        let candidatePaths: [String]
+        switch stream {
+        case .serial:
+            candidatePaths = [endpoint?.serialSocketPath, endpoint?.consoleSocketPath].compactMap { $0 }
+            guard !candidatePaths.isEmpty else {
+                logger.error(
+                    "No console socket found (tried serial and virtio-console)",
+                    metadata: ["vmId": .string(message.vmId)])
+                await failConsoleConnect(message, reason: "Console socket not found for VM \(message.vmId)")
+                return
+            }
+        case .vnc:
+            guard let vncPath = endpoint?.vncSocketPath else {
+                logger.error("No VNC socket found", metadata: ["vmId": .string(message.vmId)])
+                // The display device is fixed in the QEMU process's arguments,
+                // so this is not something a restart fixes — say so rather than
+                // leaving the operator to guess.
+                await failConsoleConnect(
+                    message,
+                    reason: "VM \(message.vmId) has no graphics console: it was created without a display. "
+                        + "Recreate the VM with the display enabled.")
+                return
+            }
+            candidatePaths = [vncPath]
         }
 
         guard let consoleManager = consoleSocketManager else {
             logger.error("Console manager not available")
-            await sendError(for: message.requestId, error: "Console manager not available")
+            await failConsoleConnect(message, reason: "Console manager not available")
             return
         }
 
-        // Clean up any existing sessions for this VM to prevent stale data routing
-        let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmId)
-        if !existingSessions.isEmpty {
-            logger.info(
-                "Cleaning up existing console sessions for VM",
-                metadata: [
-                    "vmId": .string(message.vmId),
-                    "sessionCount": .stringConvertible(existingSessions.count),
-                ])
-            await consoleManager.disconnectAllForVM(vmId: message.vmId)
+        // Clean up existing sessions on *this* stream to prevent stale data
+        // routing. Scoped by stream so opening the graphics console does not
+        // tear down a serial session on the same VM, or the reverse.
+        //
+        // Not done for VNC at all: QEMU multiplexes RFB clients on one socket,
+        // so two viewers of the same framebuffer is a supported case rather
+        // than a stale one.
+        if stream != .vnc {
+            let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmId, stream: stream)
+            if !existingSessions.isEmpty {
+                logger.info(
+                    "Cleaning up existing console sessions for VM",
+                    metadata: [
+                        "vmId": .string(message.vmId),
+                        "stream": .string(stream.rawValue),
+                        "sessionCount": .stringConvertible(existingSessions.count),
+                    ])
+                await consoleManager.disconnectAllForVM(vmId: message.vmId, stream: stream)
+            }
         }
 
         var connectedPath: String?
         var lastError: Error?
 
-        if let serialPath = serialPath {
+        for candidatePath in candidatePaths {
             do {
                 try await consoleManager.connect(
-                    vmId: message.vmId, sessionId: message.sessionId, socketPath: serialPath)
-                connectedPath = serialPath
-                logger.debug("Connected to serial console socket", metadata: ["socketPath": .string(serialPath)])
+                    vmId: message.vmId, sessionId: message.sessionId, stream: stream, socketPath: candidatePath)
+                connectedPath = candidatePath
+                logger.debug(
+                    "Connected to console socket",
+                    metadata: ["stream": .string(stream.rawValue), "socketPath": .string(candidatePath)])
+                break
             } catch {
                 lastError = error
                 logger.warning(
-                    "Failed to connect to serial socket, will try virtio-console",
+                    "Failed to connect to console socket",
                     metadata: [
                         "vmId": .string(message.vmId),
                         "sessionId": .string(message.sessionId),
+                        "socketPath": .string(candidatePath),
                         "error": .string(error.localizedDescription),
                     ])
             }
         }
 
-        if connectedPath == nil, let consolePath = consolePath {
-            do {
-                try await consoleManager.connect(
-                    vmId: message.vmId, sessionId: message.sessionId, socketPath: consolePath)
-                connectedPath = consolePath
-                logger.debug("Connected to virtio-console socket", metadata: ["socketPath": .string(consolePath)])
-            } catch {
-                lastError = error
-            }
-        }
-
         guard connectedPath != nil else {
             let errorMessage = "Failed to connect to console: \(lastError?.localizedDescription ?? "unknown error")"
-            await sendError(for: message.requestId, error: errorMessage)
+            await failConsoleConnect(message, reason: errorMessage)
             logger.error(
                 "Failed to connect to console",
                 metadata: [

@@ -52,33 +52,36 @@ struct ConsoleWebSocketController: RouteCollection {
             // the concurrent executor, not the socket's event loop — trips
             // `EventLoop.preconditionInEventLoop` and kills the whole process.
             // Register them via an explicit hop to the socket's event loop.
-            ws.eventLoop.execute {
-                // Set up message handlers for user input
-                ws.onBinary { ws, buffer in
-                    // User is typing - send to agent
-                    let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
-                    let data = Data(bytes)
-
-                    Task {
-                        do {
-                            try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
-                        } catch {
-                            req.logger.error("Failed to route console input to agent: \(error)")
-                        }
+            // Input reaches the agent through one serial pump: the frame
+            // handlers yield synchronously, preserving WebSocket arrival order,
+            // and a single task relays them one at a time. A Task per frame —
+            // what this did before — lets the scheduler transpose rapid input,
+            // scrambling a paste or a held key. The graphics console shares the
+            // discipline, where the same reordering is unrecoverable rather
+            // than merely wrong (issue #566).
+            let (inputs, inputContinuation) = AsyncStream.makeStream(of: Data.self)
+            Task {
+                for await data in inputs {
+                    do {
+                        try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
+                    } catch {
+                        req.logger.error("Failed to route console input to agent: \(error)")
                     }
                 }
+            }
 
-                ws.onText { ws, text in
+            ws.eventLoop.execute {
+                // Set up message handlers for user input
+                ws.onBinary { _, buffer in
+                    // User is typing - send to agent
+                    let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
+                    inputContinuation.yield(Data(bytes))
+                }
+
+                ws.onText { _, text in
                     // User input as text - convert to data and send to agent
                     guard let data = text.data(using: .utf8) else { return }
-
-                    Task {
-                        do {
-                            try await req.consoleSessionManager.routeToAgent(sessionId: sessionId, data: data)
-                        } catch {
-                            req.logger.error("Failed to route console input to agent: \(error)")
-                        }
-                    }
+                    inputContinuation.yield(data)
                 }
             }
 
@@ -100,7 +103,9 @@ struct ConsoleWebSocketController: RouteCollection {
                         ])
                 }
 
-                // Notify agent to disconnect console before removing session
+                // Stop accepting input, then notify the agent to disconnect the
+                // console before removing the session.
+                inputContinuation.finish()
                 Task {
                     defer {
                         req.consoleSessionManager.removeSession(sessionId: sessionId)

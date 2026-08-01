@@ -61,6 +61,12 @@ struct SchedulableAgent: Sendable {
     /// only this — no host binary, just a firmware set the agent resolves — so
     /// it is tracked separately from `supportsVTPM`.
     let supportsMachineProfile: Bool
+    /// Whether this agent realizes `ConsoleSpec.graphics` (issue #566): it
+    /// speaks a wire protocol that carries the field. Unlike `supportsVTPM`
+    /// this needs no second signal — every candidate here is already
+    /// QEMU-capable, and a QEMU built without VNC fails the create loudly
+    /// rather than booting a guest whose display silently does not exist.
+    let supportsGraphicsConsole: Bool
 
     init(
         id: String,
@@ -80,7 +86,8 @@ struct SchedulableAgent: Sendable {
         wireProtocolVersion: Int? = nil,
         supportsSandboxWorkloads: Bool = false,
         supportsVTPM: Bool = false,
-        supportsMachineProfile: Bool = false
+        supportsMachineProfile: Bool = false,
+        supportsGraphicsConsole: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -100,6 +107,7 @@ struct SchedulableAgent: Sendable {
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
         self.supportsVTPM = supportsVTPM
         self.supportsMachineProfile = supportsMachineProfile
+        self.supportsGraphicsConsole = supportsGraphicsConsole
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -155,7 +163,8 @@ struct SchedulableAgent: Sendable {
             wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsVTPM: supportsVTPM,
-            supportsMachineProfile: supportsMachineProfile
+            supportsMachineProfile: supportsMachineProfile,
+            supportsGraphicsConsole: supportsGraphicsConsole
         )
     }
 }
@@ -196,6 +205,11 @@ struct VMPlacementRequirements: Sendable {
     /// resolve a signed firmware set (or fail the create loudly if its host
     /// has none).
     let requiresSecureBoot: Bool
+    /// Whether the VM asks for a graphics console (issue #566). Hard
+    /// constraint on the wire protocol: a pre-v23 agent decodes the spec,
+    /// ignores the field, and boots the guest headless while the API reports a
+    /// display — the same silent degradation the machine profile is gated on.
+    let requiresGraphicsConsole: Bool
 
     init(
         cpu: Int,
@@ -207,7 +221,8 @@ struct VMPlacementRequirements: Sendable {
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
         requiresVTPM: Bool = false,
-        requiresSecureBoot: Bool = false
+        requiresSecureBoot: Bool = false,
+        requiresGraphicsConsole: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -219,6 +234,7 @@ struct VMPlacementRequirements: Sendable {
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresVTPM = requiresVTPM
         self.requiresSecureBoot = requiresSecureBoot
+        self.requiresGraphicsConsole = requiresGraphicsConsole
     }
 }
 
@@ -232,6 +248,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
     case machineProfileUnsatisfied(eligibleAgents: Int)
+    case graphicsConsoleUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -267,6 +284,10 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .machineProfileUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent is new enough to realize Secure Boot or a TPM (\(eligibleAgents) agent(s) "
+                + "checked) — upgrade the agents on your hypervisor nodes"
+        case .graphicsConsoleUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent is new enough to realize a graphics console (\(eligibleAgents) agent(s) "
                 + "checked) — upgrade the agents on your hypervisor nodes"
         case .siteUnsatisfied(let requiredSiteID):
             return
@@ -336,7 +357,8 @@ final class SchedulerService: @unchecked Sendable {
             architecture: architecture,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
-            requiresSecureBoot: vm.secureBoot
+            requiresSecureBoot: vm.secureBoot,
+            requiresGraphicsConsole: vm.graphicsConsole
         )
     }
 
@@ -571,6 +593,18 @@ final class SchedulerService: @unchecked Sendable {
                 throw SchedulerError.vtpmUnsatisfied(eligibleAgents: machineCapable.count)
             }
             machineCapable = tpmCapable
+        }
+
+        // The graphics console rides `ConsoleSpec.graphics`, which only a v23+
+        // agent acts on. Same categorical, silent-failure shape as the machine
+        // profile above — the guest just boots headless — so placement is
+        // refused rather than degraded (issue #566).
+        if requirements.requiresGraphicsConsole {
+            let graphicsCapable = machineCapable.filter { $0.supportsGraphicsConsole }
+            guard !graphicsCapable.isEmpty else {
+                throw SchedulerError.graphicsConsoleUnsatisfied(eligibleAgents: machineCapable.count)
+            }
+            machineCapable = graphicsCapable
         }
 
         // An agent with unknown architecture cannot prove it satisfies an
