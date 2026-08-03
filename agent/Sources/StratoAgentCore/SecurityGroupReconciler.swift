@@ -101,8 +101,9 @@ public enum SecurityGroupACLBuilder {
 
     /// Bumped when the drop-group ACL set below changes shape, so existing
     /// deployments replace it on upgrade (the generation mechanism reused).
-    /// 2: MLD carve-outs (STR-34).
-    public static let dropGroupRevision: Int64 = 2
+    /// 2: MLD carve-outs (STR-34). 3: MLD split by direction so guests cannot
+    /// originate Queries.
+    public static let dropGroupRevision: Int64 = 3
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
     /// match syntax, a newly expressible rule shape — so upgraded agents
@@ -208,9 +209,25 @@ public enum SecurityGroupACLBuilder {
     /// Multicast Listener Discovery, spelled as explicit ICMPv6 types rather
     /// than OVN's `mldv1`/`mldv2` predicates: the type form parses on every
     /// OVN version we support, and the set is small enough to be obvious.
-    /// 130 Query, 131 v1 Report, 132 Done, 143 v2 Report.
-    static let mldMatch =
-        "icmp6 && (icmp6.type == 130 || icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143)"
+    ///
+    /// **Deliberately asymmetric.** Type 130 is the Multicast Listener Query,
+    /// which only a router or the elected querier originates; 131/132/143 are
+    /// the listener-originated v1 Report, Done, and v2 Report. Letting a guest
+    /// *send* 130 would let any member of the site-wide drop group win querier
+    /// election (lowest source link-local address wins) and then simply stop
+    /// querying, timing out every other guest's multicast state — the IPv6
+    /// twin of IGMP querier spoofing, and `pg_strato_drop` spans every project
+    /// in the site, so it would cross tenancy boundaries. Guests therefore
+    /// send reports and receive queries, which is all listener discovery
+    /// actually requires of them.
+    static let mldListenerTypes = "icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143"
+    static let mldQueryType = "icmp6.type == 130"
+
+    /// What a member port may originate: reports and dones, never queries.
+    static let mldEgressMatch = "icmp6 && (\(mldListenerTypes))"
+    /// What a member port may receive: the querier's queries, plus other
+    /// members' reports (harmless, and snooping switches forward them).
+    static let mldIngressMatch = "icmp6 && (\(mldQueryType) || \(mldListenerTypes))"
 
     /// The drop group's ACL set: default-deny both directions for all IP
     /// traffic (ARP is not `ip`, so address resolution keeps working), with
@@ -250,16 +267,18 @@ public enum SecurityGroupACLBuilder {
                 direction: "to-lport", priority: allowPriority,
                 match: "outport == @\(pg) && (nd || nd_rs || nd_ra)", action: "allow",
                 externalIDs: ids),
-            // MLD both ways: a guest sends reports and Done messages, and
-            // receives the querier's periodic queries. Dropping either half
-            // makes the querier time the guest's groups out.
+            // MLD both ways, but not the same types each way: a guest sends
+            // reports and Done messages and receives queries. Dropping either
+            // half makes the querier time the guest's groups out; allowing
+            // guests to *send* queries would let one hijack the election (see
+            // `mldEgressMatch`).
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,
-                match: "inport == @\(pg) && \(mldMatch)", action: "allow",
+                match: "inport == @\(pg) && \(mldEgressMatch)", action: "allow",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
-                match: "outport == @\(pg) && \(mldMatch)", action: "allow",
+                match: "outport == @\(pg) && \(mldIngressMatch)", action: "allow",
                 externalIDs: ids),
             // The default deny that makes membership meaningful.
             ACLSpec(

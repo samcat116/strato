@@ -284,8 +284,13 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   provides the default deny: both-direction `ip` drops at priority 1001 (ARP
   is not `ip`, so address resolution survives) plus DHCPv4/v6, IPv6
   ND/RS/RA, and MLD carve-outs at 1002. MLD is spelled as explicit
-  `icmp6.type` values (130/131/132/143) rather than OVN's `mldv1`/`mldv2`
-  predicates, so the match parses on every OVN version we support.
+  `icmp6.type` values rather than OVN's `mldv1`/`mldv2` predicates, so the
+  match parses on every OVN version we support — and it is **asymmetric**: a
+  member port may send listener Reports and Dones (131/132/143) but only
+  *receive* Queries (130). Letting guests originate Queries would let any
+  member win MLD querier election on the shared segment and then stop
+  querying, timing out every other guest's multicast state; `pg_strato_drop`
+  spans the whole site, so that would cross project boundaries.
 - A rule with `log` set maps onto the ACL's `log`/`severity`/`name` columns
   (`severity` pinned to `info`, `name` derived from the rule id so a log line
   names what emitted it). The drop group's own ACLs are never logged — that

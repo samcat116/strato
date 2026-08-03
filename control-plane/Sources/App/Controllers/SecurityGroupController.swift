@@ -368,25 +368,38 @@ struct SecurityGroupController: RouteCollection {
             try await Self.assertRealizersSupportSecurityGroups(for: vm, on: req.db)
         }
 
-        let existing = try await target.attachedGroupIDs(on: req.db)
-        if existing.contains(groupId) {
-            return .noContent
-        }
-        guard existing.count < SecurityGroup.maxGroupsPerNIC else {
-            throw Abort(
-                .forbidden,
-                reason: "Interface already has \(SecurityGroup.maxGroupsPerNIC) security groups attached")
-        }
-
+        // Read-guard-write under one transaction and one per-NIC lock, so the
+        // cap is enforced against a set that cannot move underneath it (see
+        // `SecurityGroupService.lockMembership`).
+        let changed: Bool
         do {
-            try await target.attach(groupID: groupId, on: req.db)
+            changed = try await req.db.transaction { db -> Bool in
+                try await SecurityGroupService.lockMembership(interfaceID: target.interfaceID, on: db)
+                let existing = try await target.attachedGroupIDs(on: db)
+                if existing.contains(groupId) { return false }
+                guard existing.count < SecurityGroup.maxGroupsPerNIC else {
+                    throw Abort(
+                        .forbidden,
+                        reason: "Interface already has \(SecurityGroup.maxGroupsPerNIC) security groups attached")
+                }
+                try await target.attach(groupID: groupId, on: db)
+                return true
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            // Concurrent duplicate attach: the unique pair index makes it a
-            // no-op rather than an error.
+            // Backstop only: the lock above already serializes duplicates, and
+            // a non-Postgres database (where the advisory lock is a no-op)
+            // still lands on the unique pair index. Either way a duplicate
+            // attach is a no-op, not an error.
             return .noContent
         }
+        guard changed else { return .noContent }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        // Only on a real change, and only for VMs: a sandbox NIC's spec never
+        // reaches an agent, so syncing the fleet for one would be a guaranteed
+        // no-op (see `SandboxInterfaceSecurityGroup`).
+        if case .vm = target.workload {
+            await req.application.agentService.syncDesiredStateToAllAgents()
+        }
 
         req.logger.info(
             "Security group attached",
@@ -407,21 +420,33 @@ struct SecurityGroupController: RouteCollection {
 
         let target = try await resolveTargetNIC(req: req, request: request, group: group)
 
-        let attached = try await target.attachedGroupIDs(on: req.db)
-        guard attached.contains(groupId) else {
-            return .noContent
+        // One transaction and one per-NIC lock around read-guard-delete: two
+        // concurrent detaches of a NIC's last two groups would otherwise both
+        // observe two and both proceed, emptying the set. That state never
+        // heals — see `SecurityGroupService.lockMembership`.
+        let changed = try await req.db.transaction { db -> Bool in
+            try await SecurityGroupService.lockMembership(interfaceID: target.interfaceID, on: db)
+            let attached = try await target.attachedGroupIDs(on: db)
+            guard attached.contains(groupId) else { return false }
+            // The >=1-group invariant: a NIC with no groups is not "unfiltered"
+            // but *unmanaged* — the spec omits the field, the agent reads that
+            // as no opinion, and the port keeps its existing OVN membership
+            // while the API reports an empty list.
+            guard attached.count > 1 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "An interface must keep at least one security group; attach another before detaching this one"
+                )
+            }
+            try await target.detach(groupID: groupId, on: db)
+            return true
         }
-        // The ≥1-group invariant: a NIC without any group would silently fall
-        // out of the drop group and go unfiltered.
-        guard attached.count > 1 else {
-            throw Abort(
-                .conflict,
-                reason: "An interface must keep at least one security group; attach another before detaching this one"
-            )
-        }
+        guard changed else { return .noContent }
 
-        try await target.detach(groupID: groupId, on: req.db)
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        if case .vm = target.workload {
+            await req.application.agentService.syncDesiredStateToAllAgents()
+        }
 
         req.logger.info(
             "Security group detached",

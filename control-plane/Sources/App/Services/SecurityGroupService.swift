@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -178,49 +179,106 @@ enum SecurityGroupService {
                 .badRequest,
                 reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
         }
-        for groupId in unique {
-            // Scoped to the project, exactly like the NIC's network
-            // (`LogicalNetworkService.resolveForWorkloadCreate`), and reported
-            // the same way: *not found here*. Nothing authorizes the caller
-            // against the named group, so a distinct "belongs to another
-            // project" answer would confirm that an opaque id names a group
-            // somewhere in the fleet — the disclosure the containment guard is
-            // placed behind an authorization check to avoid everywhere it does
-            // fire (issue #777).
-            let group = try await SecurityGroup.query(on: db)
-                .filter(\.$id == groupId)
+        guard !unique.isEmpty else { return unique }
+
+        // Scoped to the project, exactly like the NIC's network
+        // (`LogicalNetworkService.resolveForWorkloadCreate`), and reported the
+        // same way: *not found here*. Nothing authorizes the caller against the
+        // named group, so a distinct "belongs to another project" answer would
+        // confirm that an opaque id names a group somewhere in the fleet — the
+        // disclosure the containment guard is placed behind an authorization
+        // check to avoid everywhere it does fire (issue #777).
+        //
+        // One query for the set, then a difference, rather than a lookup per
+        // id: the cap bounds it either way, but the error still names the
+        // specific id that was missing.
+        let found = Set(
+            try await SecurityGroup.query(on: db)
+                .filter(\.$id ~~ unique)
                 .filter(\.$project.$id == projectID)
-                .first()
-            guard group != nil else {
-                throw Abort(.notFound, reason: "Security group \(groupId) not found in this project")
-            }
+                .all()
+                .compactMap(\.id))
+        if let missing = unique.first(where: { !found.contains($0) }) {
+            throw Abort(.notFound, reason: "Security group \(missing) not found in this project")
         }
         return unique
+    }
+
+    // MARK: - Membership serialization
+
+    /// Serializes a NIC's membership mutations for the duration of the
+    /// enclosing transaction, so attach/detach enforce their invariants
+    /// against a set that cannot move underneath them.
+    ///
+    /// Without it, detach is a read-guard-delete on three separate
+    /// statements: two concurrent detaches of a NIC's last two groups both
+    /// read `count == 2`, both pass the >=1-group guard, and the NIC lands on
+    /// zero memberships. That state is **not self-healing**, which is what
+    /// makes it worth a lock rather than a retry —
+    /// `DesiredStateAssembler.nicSecurityGroupMemberships` builds its map by
+    /// appending rows, so a NIC with none is *absent* from it, the spec
+    /// carries `securityGroupIds: nil`, and the agent reads nil as "no
+    /// opinion" and leaves the port's OVN membership exactly as it was. The
+    /// port would keep filtering by groups the control plane no longer
+    /// records, forever, while the API reported an empty list. The attach
+    /// path takes the same lock so the per-NIC cap is enforced against the
+    /// same stable set.
+    ///
+    /// `pg_advisory_xact_lock` for the same reasons as `IPAMService`: it is
+    /// held to the end of the transaction and serializes across replicas,
+    /// which no unique index can do here (the invariant is a *count*, not a
+    /// duplicate). Keyed on the interface id, with a prefix so VM and sandbox
+    /// NICs cannot collide in the shared lock space.
+    static func lockMembership(interfaceID: UUID, on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        try await sql.raw(
+            "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sgmember:\(interfaceID.uuidString)")))"
+        ).run()
     }
 
     // MARK: - Attachments
 
     /// How many NICs attach each of `groupIds`, summed across the VM and
-    /// sandbox join tables (STR-34). Two queries for the whole page, never a
-    /// COUNT per group; groups with no attachments are absent from the result.
+    /// sandbox join tables (STR-34). Two grouped counts for the whole page,
+    /// never a COUNT per group; groups with no attachments are absent from the
+    /// result.
+    ///
+    /// Aggregated in SQL rather than by fetching the rows and counting them in
+    /// memory: a group attached to a few thousand NICs would otherwise make
+    /// the security-groups list endpoint allocate proportionally to attachment
+    /// count, for a number it only needs to display.
     ///
     /// Both tables must be counted everywhere, and it is easy to count only
     /// one: an undercount would let the API report a group as unattached and
     /// then hand the caller a bare FK violation when they try to delete it.
     static func attachmentCounts(forGroups groupIds: [UUID], on db: Database) async throws -> [UUID: Int] {
         guard !groupIds.isEmpty else { return [:] }
-        var counts: [UUID: Int] = [:]
-        for membership in try await VMInterfaceSecurityGroup.query(on: db)
-            .filter(\.$securityGroup.$id ~~ groupIds)
-            .all()
-        {
-            counts[membership.$securityGroup.id, default: 0] += 1
+        guard let sql = db as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Attachment counts require an SQL database")
         }
-        for membership in try await SandboxInterfaceSecurityGroup.query(on: db)
-            .filter(\.$securityGroup.$id ~~ groupIds)
-            .all()
-        {
-            counts[membership.$securityGroup.id, default: 0] += 1
+
+        struct CountRow: Decodable {
+            let securityGroupID: UUID
+            let total: Int
+
+            enum CodingKeys: String, CodingKey {
+                case securityGroupID = "security_group_id"
+                case total
+            }
+        }
+
+        var counts: [UUID: Int] = [:]
+        for table in ["vm_interface_security_groups", "sandbox_interface_security_groups"] {
+            let rows = try await sql.select()
+                .column("security_group_id")
+                .column(SQLFunction("COUNT", args: SQLLiteral.all), as: "total")
+                .from(table)
+                .where("security_group_id", .in, SQLBind.group(groupIds))
+                .groupBy("security_group_id")
+                .all(decoding: CountRow.self)
+            for row in rows {
+                counts[row.securityGroupID, default: 0] += row.total
+            }
         }
         return counts
     }
@@ -273,7 +331,15 @@ enum SecurityGroupService {
     /// ACLs and the site controller realizes nothing for it, so
     /// `.selfAuthored` correctly leaves it as the sole realizer.
     static func realization(host: Agent, on db: Database) async throws -> Realization {
-        let authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
+        realization(host: host, authority: try await SiteNetworkAuthority.resolve(forAgent: host, on: db))
+    }
+
+    /// The pure half, given an already-resolved authority. Split out so the
+    /// batch path can share one site's authority across its hosts: the
+    /// authority is site-derived, but the *answer* is not — `refusal` excuses
+    /// a host that is itself the unusable controller, and the version check
+    /// reads the host's own registration.
+    static func realization(host: Agent, authority: SiteNetworkAuthority.Authority) -> Realization {
         if let refusal = SiteNetworkAuthority.refusal(
             authority, host: host, consequence: "the group's ACLs would be realized nowhere")
         {
@@ -305,9 +371,12 @@ enum SecurityGroupService {
     /// Whether each VM's security groups are enforced, keyed by VM id. A VM is
     /// absent from the result when it is unplaced (the caller reports nil).
     ///
-    /// Resolved once per *distinct host* rather than once per VM: a page of
-    /// VMs clusters onto a handful of agents, so this stays proportional to
-    /// the fleet rather than the page.
+    /// Resolved once per distinct host, and — since
+    /// `SiteNetworkAuthority.resolve` is a `Site` lookup plus a controller
+    /// `Agent` lookup — once per distinct *site*. Hosts cluster onto sites far
+    /// more tightly than VMs cluster onto hosts, so without the site memo every
+    /// peer in a site refetches the same two rows: a page spanning 50 hosts
+    /// across 3 sites costs ~6 queries instead of ~100.
     static func enforcementByVM(_ vms: [VM], on db: Database) async throws -> [UUID: Bool] {
         let hostIDsByVM: [UUID: UUID] = vms.reduce(into: [:]) { map, vm in
             guard let vmID = vm.id,
@@ -322,9 +391,23 @@ enum SecurityGroupService {
             .filter(\.$id ~~ Array(Set(hostIDsByVM.values)))
             .all()
         var enforcedByHost: [UUID: Bool] = [:]
+        var authorityBySite: [UUID: SiteNetworkAuthority.Authority] = [:]
         for host in hosts {
             guard let hostID = host.id else { continue }
-            enforcedByHost[hostID] = enforcement(of: try await realization(host: host, on: db))
+            let authority: SiteNetworkAuthority.Authority
+            if let siteID = host.$site.id, let cached = authorityBySite[siteID] {
+                authority = cached
+            } else {
+                authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
+                // Cache only site-derived answers. `.selfAuthored` is a
+                // property of the agent — a site-less host, or a pre-v4 one
+                // writing its own NB — and sharing it with a site's other
+                // hosts would claim they author their own topology too.
+                if let siteID = host.$site.id, !authority.isSelfAuthored {
+                    authorityBySite[siteID] = authority
+                }
+            }
+            enforcedByHost[hostID] = enforcement(of: realization(host: host, authority: authority))
         }
 
         var result: [UUID: Bool] = [:]

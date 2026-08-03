@@ -1060,6 +1060,120 @@ final class SecurityGroupControllerTests {
         }
     }
 
+    /// The >=1-group invariant guards a *count*, which no unique index can
+    /// hold: without serializing read-guard-delete, two detaches of a NIC's
+    /// last two groups each read two, each pass, and the NIC lands on zero.
+    /// That state never heals — the assembler omits an empty NIC from its map
+    /// entirely, so the spec says `nil`, the agent reads "no opinion", and the
+    /// port keeps filtering by groups the control plane no longer records.
+    @Test("Concurrent detaches cannot empty a NIC's security groups")
+    func concurrentDetachKeepsOneGroup() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+
+            // Two groups on one NIC: exactly one detach may win.
+            let first = try await self.createGroup(app: app, project: project, token: token, name: "race-a")
+            let second = try await self.createGroup(app: app, project: project, token: token, name: "race-b")
+            for group in [first, second] {
+                try await VMInterfaceSecurityGroup(
+                    interfaceID: nic.requireID(), securityGroupID: group.id
+                ).save(on: app.db)
+            }
+
+            let vmID = try vm.requireID()
+            let interfaceID = try nic.requireID()
+            let statuses = try await withThrowingTaskGroup(of: HTTPStatus.self) { group in
+                for target in [first.id, second.id] {
+                    group.addTask {
+                        var status = HTTPStatus.internalServerError
+                        try await app.test(.POST, "/api/security-groups/\(target)/detach") { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            try req.content.encode(
+                                AttachSecurityGroupRequest(vmId: vmID, interfaceId: interfaceID))
+                        } afterResponse: { res in
+                            status = res.status
+                        }
+                        return status
+                    }
+                }
+                var collected: [HTTPStatus] = []
+                for try await status in group { collected.append(status) }
+                return collected
+            }
+
+            #expect(statuses.filter { $0 == .noContent }.count == 1)
+            #expect(statuses.filter { $0 == .conflict }.count == 1)
+
+            let remaining = try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == interfaceID)
+                .count()
+            #expect(remaining == 1)
+        }
+    }
+
+    /// The per-NIC cap has the same read-guard-write shape as detach, and the
+    /// same lock covers it.
+    @Test("Concurrent attaches cannot exceed the per-NIC group cap")
+    func concurrentAttachRespectsCap() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: project.id!, on: app.db)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: nic.requireID(), securityGroupID: try defaultGroup.requireID()
+            ).save(on: app.db)
+
+            // One seat left under the cap, contested by three attaches.
+            var contenders: [UUID] = []
+            for index in 0..<(SecurityGroup.maxGroupsPerNIC - 1) {
+                let filler = try await self.createGroup(
+                    app: app, project: project, token: token, name: "cap-filler-\(index)")
+                if index < SecurityGroup.maxGroupsPerNIC - 2 {
+                    try await VMInterfaceSecurityGroup(
+                        interfaceID: nic.requireID(), securityGroupID: filler.id
+                    ).save(on: app.db)
+                } else {
+                    contenders.append(filler.id)
+                }
+            }
+            for index in 0..<2 {
+                let extra = try await self.createGroup(
+                    app: app, project: project, token: token, name: "cap-racer-\(index)")
+                contenders.append(extra.id)
+            }
+
+            let vmID = try vm.requireID()
+            let interfaceID = try nic.requireID()
+            _ = try await withThrowingTaskGroup(of: HTTPStatus.self) { group in
+                for target in contenders {
+                    group.addTask {
+                        var status = HTTPStatus.internalServerError
+                        try await app.test(.POST, "/api/security-groups/\(target)/attach") { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            try req.content.encode(
+                                AttachSecurityGroupRequest(vmId: vmID, interfaceId: interfaceID))
+                        } afterResponse: { res in
+                            status = res.status
+                        }
+                        return status
+                    }
+                }
+                var collected: [HTTPStatus] = []
+                for try await status in group { collected.append(status) }
+                return collected
+            }
+
+            let total = try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == interfaceID)
+                .count()
+            #expect(total == SecurityGroup.maxGroupsPerNIC)
+        }
+    }
+
     @Test("Attach/detach refuses a request naming neither workload or both")
     func attachTargetMustBeExactlyOne() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, token in

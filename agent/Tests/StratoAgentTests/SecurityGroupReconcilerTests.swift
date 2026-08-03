@@ -188,12 +188,22 @@ struct SecurityGroupReconcilerTests {
             allows.contains { $0.match == "inport == @\(pgDrop) && (nd || nd_rs || nd_ra)" })
         #expect(
             allows.contains { $0.match == "outport == @\(pgDrop) && (nd || nd_rs || nd_ra)" })
-        // MLD both directions (STR-34): v1 query/report/done and the v2 report.
-        // Written as explicit icmp6 types, not OVN's mldv1/mldv2 predicates.
-        let mld =
-            "icmp6 && (icmp6.type == 130 || icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143)"
-        #expect(allows.contains { $0.match == "inport == @\(pgDrop) && \(mld)" })
-        #expect(allows.contains { $0.match == "outport == @\(pgDrop) && \(mld)" })
+        // MLD (STR-34), deliberately asymmetric: a guest may send listener
+        // reports and dones but never a Query (type 130), which only the
+        // querier originates — otherwise any member of the site-wide drop
+        // group could win querier election and then stop querying, timing out
+        // every other guest's multicast state. Written as explicit icmp6
+        // types, not OVN's mldv1/mldv2 predicates.
+        let listener = "icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143"
+        #expect(allows.contains { $0.match == "inport == @\(pgDrop) && icmp6 && (\(listener))" })
+        #expect(
+            allows.contains {
+                $0.match == "outport == @\(pgDrop) && icmp6 && (icmp6.type == 130 || \(listener))"
+            })
+        // The egress carve-out must not admit type 130 under any spelling.
+        let egressMLD = allows.first { $0.direction == "from-lport" && $0.match.contains("icmp6.type == 131") }
+        #expect(egressMLD != nil)
+        #expect(egressMLD?.match.contains("icmp6.type == 130") == false)
         #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
         // Infra carve-outs are never logged: they would drown the log in
         // per-guest DHCP and multicast chatter nobody asked to see.

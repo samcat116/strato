@@ -72,15 +72,18 @@ function NicSecurityGroupNames({
     return <span className="text-muted-foreground">—</span>;
   }
   if (nic.securityGroupIds.length === 0) {
-    // The server holds every NIC to ≥1 group, so this is an anomaly worth
-    // showing rather than a blank cell: no group means no drop group either,
-    // which means the NIC is unfiltered.
+    // The server holds every NIC to >=1 group, so this is an anomaly worth
+    // showing rather than a blank cell. It does *not* mean unfiltered: a NIC
+    // with no groups is unmanaged — the sync omits the field, the agent reads
+    // that as "no opinion", and the port keeps whatever OVN membership it
+    // already had. Saying "unfiltered" would send debugging the wrong way.
     return (
       <Badge
         variant="secondary"
         className="font-normal text-amber-700 dark:text-amber-400"
+        title="No groups recorded. The port keeps its existing dataplane membership until a group is attached."
       >
-        unfiltered
+        no groups
       </Badge>
     );
   }

@@ -460,7 +460,9 @@ function SecurityGroupRules({
               <p className="text-xs text-muted-foreground">
                 Records every flow this rule admits in the hypervisor&apos;s
                 firewall log. Useful while debugging a rule; expensive to leave
-                on for busy traffic.
+                on for busy traffic. The rule is enforced either way, but hosts
+                running an agent older than the logging protocol emit no log
+                line — if nothing appears, check the agent&apos;s version.
               </p>
             </div>
           </div>
