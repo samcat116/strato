@@ -28,6 +28,12 @@ final class SandboxNetworkInterface: Model, @unchecked Sendable {
     @Children(for: \.$interface)
     var addresses: [SandboxInterfaceAddress]
 
+    /// This NIC's security-group memberships (STR-34). Bookkeeping only for
+    /// now — see `SandboxInterfaceSecurityGroup`. Requires eager loading with
+    /// `.with(\.$securityGroupMemberships)`.
+    @Children(for: \.$interface)
+    var securityGroupMemberships: [SandboxInterfaceSecurityGroup]
+
     @OptionalField(key: "mtu")
     var mtu: Int?
 

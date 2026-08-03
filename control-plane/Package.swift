@@ -136,17 +136,77 @@ let package = Package(
                 .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
             ]
         ),
+        // Fixtures shared by every test target: the Postgres template-clone
+        // harness, `withApp`, and TestDataBuilder. A plain library target
+        // rather than a test target, because a test target cannot be a
+        // dependency of another one. It `@testable import`s App and re-exports
+        // App's internal types at `package` visibility — legal because both
+        // targets are in this package, and the reason the helpers are `package`
+        // rather than `internal`.
+        //
+        // BaseTestCase deliberately did NOT move here: `package` classes cannot
+        // be subclassed across module boundaries (that needs `open`, which its
+        // stored properties of App-internal types rule out), so it lives in
+        // AppIdentityTests alongside the suites that inherit from it.
+        .target(
+            name: "AppTestSupport",
+            dependencies: [
+                .target(name: "App"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+            ],
+            path: "Tests/AppTestSupport",
+            swiftSettings: testSwiftSettings
+        ),
+        // The suite is split across four targets rather than one, because a
+        // module's `-emit-module` job is single-threaded and re-runs whenever
+        // any file in it changes: at 59k lines in one target it cost ~9.8s on
+        // every test edit, which was the floor of the whole edit/test loop.
+        // Four ~15k-line targets emit-module in parallel at ~2.4s each. Keep
+        // them roughly balanced when adding suites; the split is by domain so
+        // there is an obvious home for a new file.
         .testTarget(
-            name: "AppTests",
+            name: "AppIdentityTests",
             dependencies: [
                 .target(name: "App"),
                 .target(name: "SPIREServerAPI"),
+                .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+            ],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "AppIAMTests",
+            dependencies: [
+                .target(name: "App"),
+                .target(name: "AppTestSupport"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+            ],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "AppResourceTests",
+            dependencies: [
+                .target(name: "App"),
+                .target(name: "AppTestSupport"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+            ],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "AppPlatformTests",
+            dependencies: [
+                .target(name: "App"),
+                .target(name: "AppTestSupport"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             swiftSettings: testSwiftSettings
         ),

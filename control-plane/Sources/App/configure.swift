@@ -710,6 +710,14 @@ public func configure(_ app: Application) async throws {
     // so every existing VM stays headless with an unchanged QEMU command line.
     app.migrations.add(AddGraphicsConsoleToVM())
 
+    // Security-group follow-ups (STR-34): per-rule OVN ACL logging, and
+    // sandbox NIC membership (bookkeeping only — sandbox NICs are still off
+    // the wire, see `SandboxInterfaceSecurityGroup`). The join must follow
+    // `RekeyInterfacesToLogicalNetworkID`, which rewrites the sandbox NIC
+    // table it references.
+    app.migrations.add(AddLogToSecurityGroupRules())
+    app.migrations.add(CreateSandboxInterfaceSecurityGroups())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
