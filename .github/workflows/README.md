@@ -1,15 +1,38 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift compile and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+
+## No Swift tests run automatically (read this first)
+
+**CI does not run `swift test` anywhere on a push or a pull request.** PR
+validation is a *compile check*: it builds each package without
+`--build-tests`, so the test targets are not even type-checked. This was a
+deliberate trade — the project has no customers or deployments yet, and the
+control-plane suite alone was 342s of an 8-minute PR run.
+
+Consequences worth internalizing:
+- Running the suite before you merge is a human responsibility. See `CLAUDE.md`
+  and `docs/development/local-development.md`.
+- A test file that stops compiling will merge green.
+- `Full Test Suite (manual)` (`main-tests.yaml`) is the escape hatch: dispatch
+  it from the Actions tab or with `gh workflow run main-tests.yaml --ref
+  <branch>` to run everything on the ARC runners.
+
+Two non-Swift test gates do still run on PRs, because both are cheap and
+hosted: the Helm chart lint/template/security jobs (`helm-test.yml`, on
+`helm/**`) and the Rust `cargo fmt`/`test`/`clippy` gate for the sandbox guest
+init (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
 ## Workflows
 
 ### PR Validation (`build.yaml`)
-Runs on pull requests to validate code quality:
-- Frontend lint & build (GitHub-hosted)
-- Swift package building and testing — shared, control plane, and agent
-  (`swift-runners-strato` ARC scale set)
-- Docker image build checks, gated on Dockerfile changes (GitHub-hosted)
+Runs on pull requests. Compile and lint only — no tests:
+- Swift format lint, OpenAPI spec lint, frontend lint & build (GitHub-hosted)
+- Swift compile check — agent, CLI, generated API client, control plane
+  (`swift-runners-strato` ARC scale set). `shared/` and `SwiftFirecracker/`
+  have no standalone step: both are path dependencies the agent and control
+  plane already compile.
+- Frontend Docker image build check, gated on `control-plane/web/Dockerfile`
 
 A `changes` job (via `dorny/paths-filter`) detects which parts of the repo
 changed and gates each job with `if:`, so docs-only PRs skip the Swift build,
@@ -18,8 +41,21 @@ frontend-only PRs skip Swift, etc. Because the jobs are skipped via `if:`
 check and remains safe to use as a required status check. In-progress runs are
 cancelled when a new commit is pushed to the same PR.
 
+The control-plane and agent Docker image checks used to run here too. They
+compiled Swift from source in-image with no usable cache (up to an hour), and
+`main-build.yaml` rebuilds both images on every push to main — so Dockerfile
+breakage still surfaces, just post-merge.
+
+### Full Test Suite (`main-tests.yaml`)
+`workflow_dispatch` only — nothing triggers it automatically, so it costs
+nothing until someone starts it. Runs the full Swift suite for every package
+(shared, agent, CLI, API client, SwiftFirecracker) plus the control-plane suite
+against a throwaway Postgres 15 container with cvc5 installed, all on the ARC
+scale set.
+
 ### Main Branch Build (`main-build.yaml`)
-Builds release binaries and Docker images when code is pushed to the main branch:
+Builds release binaries and Docker images when code is pushed to the main branch
+(no tests):
 - Swift release binary builds
 - Docker image builds
 
@@ -52,7 +88,8 @@ builds, and GitHub-hosted runners for everything lightweight.
 
 ### ARC Runner Scale Set: `swift-runners-strato` (x64)
 Used for:
-- PR validation — Swift build & test (build.yaml)
+- PR validation — Swift compile check (build.yaml)
+- The manually dispatched full test suite (main-tests.yaml)
 - Main branch x64 Swift release binaries (main-build.yaml)
 - Release x64 Swift image binaries (release.yaml — the jemalloc-linked binaries
   the container images copy in; the static-stdlib release-asset tarballs still
@@ -78,19 +115,26 @@ Requirements for the scale set's runner image / pods:
   REST tarball download)
 - Passwordless `sudo` for the runner user (main-build installs libjemalloc-dev
   and unzip at job time; stock in `ghcr.io/actions/actions-runner`)
-- Docker available to jobs (dind mode) — the PR control-plane job runs a
-  Postgres **service container**, published to the pod on `127.0.0.1:5432`
-- Optional but recommended: a persistent volume backing `RUNNER_TOOL_CACHE`.
-  Swift build state lives in `$RUNNER_TOOL_CACHE/strato-swift-build` (via
-  `swift build --scratch-path`); without the volume every job builds cold.
-  Each PR job wipes its own scratch subdirectory automatically past ~10GB
-  (never the shared root — concurrent sibling jobs may be building in it); it
-  is always safe to delete manually — the next run just rebuilds cold.
+- Docker available to jobs (dind mode) — `main-tests.yaml`'s control-plane job
+  starts a Postgres container (via plain `docker run`, not `services:`),
+  published to the pod on `127.0.0.1:5432`
+- A persistent hostPath pool of build-scratch slots, provisioned by the homelab
+  `github_runner` role and surfaced to jobs as `RUNNER_BUILD_SCRATCH_ROOT` /
+  `RUNNER_BUILD_SCRATCH_SLOTS`; `.github/scripts/claim-build-scratch.sh` flocks
+  one slot per job and exports it as `--scratch-path`.
+  Without it every job builds cold — the claim script degrades to a pod-local
+  directory rather than failing. Each job wipes only the scratch subdirectories
+  inside the slot it claimed, automatically past ~10GB (never the shared root —
+  concurrent sibling jobs hold other slots on the same volume); slots are always
+  safe to delete manually, the next run just rebuilds cold.
+- A `/cache/swiftpm` hostPath for the shared SwiftPM cache (`ghr_swiftpm_cache_*`).
+  Optional: jobs probe it and fall back to a pod-local cold directory when it is
+  absent, because SwiftPM will not create a missing cache root itself.
 
 When bumping the Swift toolchain, rebuild the runner image with the new
 toolchain and update the remaining `swift:x.y.z-noble` container tags
 (the main-build and release arm64 Swift legs) together with the Dockerfiles and
-the `vapor/swiftly-action` pins (swift-format lint, macOS job).
+the `vapor/swiftly-action` pin in the swift-format lint job.
 
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:
@@ -107,7 +151,8 @@ Requirements:
 
 ### GitHub-Hosted Runners
 Used for:
-- PR validation — frontend lint/build (`ubuntu-latest`)
+- PR validation — swift-format lint, frontend lint/build, OpenAPI lint, the
+  frontend image build check (`ubuntu-latest`)
 - All Helm chart tests (`ubuntu-latest`)
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)

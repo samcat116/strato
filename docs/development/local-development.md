@@ -83,13 +83,21 @@ IAM_SYMCC_SOLVER_PATH=~/.local/bin/cvc5 swift test --package-path control-plane
 ```
 
 The script downloads the pinned, checksum-verified cvc5 1.3.1 build for your
-platform; `cvc5` anywhere on `PATH` works too. CI installs it, so these suites
-always run there — if you skip them locally, they still gate the PR. The
-shipped control-plane image carries the solver, because binding writes fail
-closed without one.
+platform; `cvc5` anywhere on `PATH` works too. Without it those suites skip
+themselves silently, so if you don't install it nothing covers them — CI won't
+catch it for you either (see below). The shipped control-plane image carries the
+solver, because binding writes fail closed without one.
 
-CI runs the same control-plane suite against a PostgreSQL service container,
-so local and CI runs exercise identical code paths.
+::: warning CI does not run tests
+PR validation is a compile check only: it builds each package without
+`--build-tests`, so the test targets are not even type-checked, and no workflow
+runs `swift test` on a push to `main`. Your local run is the only run — do a
+full `swift test` for every package you touched before opening a PR.
+
+The one exception is on demand: `gh workflow run main-tests.yaml --ref <branch>`
+dispatches the full suite (all packages, plus the control plane against a
+throwaway Postgres with cvc5) on the CI runners.
+:::
 
 ## Frontend
 

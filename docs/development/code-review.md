@@ -393,15 +393,18 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
    before declaring it done.
 2. `swift format --in-place --recursive <changed dirs>`.
 3. Full test suite for every package you touched, plus
-   `bun run lint && bun run build` if the frontend changed.
+   `bun run lint && bun run build` if the frontend changed. **This step is not
+   optional and CI will not do it for you** — PR validation is a compile check
+   that doesn't even build the test targets, and nothing runs `swift test` on
+   `main`. A green PR says "it compiles", nothing more.
 4. Spec changed? Regenerate `openapi.ts` and commit it.
 5. Architecture changed? Update `docs/architecture/`, `CONTEXT.md`, or an ADR
    in the same PR.
 6. Re-read your own diff as a reviewer. Most review comments are ones the
    author would have caught on a second pass.
 
-If CI fails in a way your diff can't explain, check the two known false
-alarms before debugging source: the Vapor `ServeCommand did not shutdown
-before deinit` teardown race in the control-plane test step (rerun the failed
-jobs), and stale build caches in the runner's persistent `RUNNER_TOOL_CACHE`
-producing missing-symbol errors (reproduce locally first).
+If CI fails in a way your diff can't explain, suspect a stale build cache in the
+runner's persistent scratch-slot pool producing missing-symbol errors — rerun
+the failed jobs and reproduce locally before debugging source. Locally, the
+control-plane suite has one known false alarm of its own: the Vapor
+`ServeCommand did not shutdown before deinit` teardown race.

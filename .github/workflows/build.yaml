@@ -1,5 +1,11 @@
 name: PR Validation
 
+# PRs are a COMPILE CHECK ONLY — nothing here runs `swift test`, and the test
+# targets are not even built (no `--build-tests`). The project has no customers
+# and no deployments yet, so PR turnaround was traded for that safety
+# deliberately: the control-plane suite alone was 342s of a 530s job, and its
+# test targets dominated the remaining compile. Running the suite before you
+# merge is a human responsibility now — see CLAUDE.md.
 on:
   pull_request:
     branches:
@@ -33,9 +39,6 @@ jobs:
       api_client: ${{ steps.filter.outputs.api_client }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       workflow: ${{ steps.filter.outputs.workflow }}
-      code: ${{ steps.filter.outputs.code }}
-      docker_cp: ${{ steps.filter.outputs.docker_cp }}
-      docker_agent: ${{ steps.filter.outputs.docker_agent }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
     steps:
       - uses: dorny/paths-filter@v3
@@ -45,9 +48,9 @@ jobs:
           # that filter's patterns, which is what makes the `!` exclusions
           # actually take effect. (With the default `some`, a file matching any
           # single positive pattern matches the filter and negations are
-          # ignored — so `!control-plane/web/**` and the docs exclusions below
-          # would be no-ops.) OR across directories is therefore expressed in
-          # each job's `if:` rather than inside a single filter.
+          # ignored — so `!control-plane/web/**` would be a no-op.) OR across
+          # directories is therefore expressed in each job's `if:` rather than
+          # inside a single filter.
           predicate-quantifier: "every"
           filters: |
             web:
@@ -69,18 +72,8 @@ jobs:
               - 'SwiftFirecracker/**'
             workflow:
               - '.github/workflows/build.yaml'
-            docker_cp:
-              - 'control-plane/Dockerfile'
-            docker_agent:
-              - 'agent/Dockerfile'
             docker_web:
               - 'control-plane/web/Dockerfile'
-            code:
-              - '**'
-              - '!docs/**'
-              - '!**/*.md'
-              - '!**/*.mdx'
-              - '!LICENSE'
 
   swift-format:
     name: Swift Format Lint
@@ -89,7 +82,7 @@ jobs:
     # firecracker-only changes don't trigger this job.
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
-    # Swift runner pool free for the heavy build+test job. `swift format`
+    # Swift runner pool free for the heavy compile jobs. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
     runs-on: ubuntu-latest
     steps:
@@ -116,7 +109,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight Bun job — runs on GitHub-hosted runners to keep the
-    # Swift runner pool free for the heavy build+test job.
+    # Swift runner pool free for the heavy compile jobs.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -170,8 +163,7 @@ jobs:
       - name: Lint OpenAPI document
         run: bunx @redocly/cli@1 lint control-plane/Sources/App/openapi.yaml
 
-  # The Swift test jobs below run concurrently on the ARC scale set — the
-  # wall-clock win that used to be impossible when everything shared one job.
+  # The two Swift compile jobs below run concurrently on the ARC scale set.
   # Each claims its own slot from a persistent pool of warm build trees (see
   # the comment on the claim step) so two jobs never write the same tree.
   #
@@ -186,41 +178,36 @@ jobs:
   # still not an option on ARC pods ($USER is unset, so it sources
   # /home//.local/.../env.sh) — a toolchain bump means rebuilding the runner
   # image together with the Dockerfiles.
-  test:
-    name: Build and Test Swift Packages
+  build-swift-packages:
+    name: Build Swift Packages
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    # Backstop for a hung build/test: the default 360-minute timeout would pin
-    # a scarce runner-pool slot for six hours. Warm runs finish in ~15 minutes,
-    # cold rebuilds in ~30.
+    # Backstop for a hung build: the default 360-minute timeout would pin a
+    # scarce runner-pool slot for six hours.
     timeout-minutes: 60
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Build state lives in a scratch dir under RUNNER_TOOL_CACHE instead of
+      # Build state lives in a scratch dir on a persistent hostPath instead of
       # actions/cache: the GitHub cache never helped here — PR-scoped saves
       # are unreadable by sibling PRs and nothing on main saves the key, so
       # every run paid a ~5 minute 1.4GB upload for a restore that always
-      # missed.
+      # missed. A pod-local dir under RUNNER_TOOL_CACHE was no better:
+      # /home/runner/_work is an emptyDir and every job gets a fresh pod, so it
+      # started empty every time.
       #
-      # That scratch dir was never actually warm, though: /home/runner/_work is
-      # an emptyDir in the runner pod spec and every job gets a fresh pod, so
-      # RUNNER_TOOL_CACHE starts empty. Measured over the runs on 2026-07-21,
-      # every single one created all 61 dependency working copies and compiled
-      # ~3,500 files — fully cold, always.
-      #
-      # The build tree now lives on a persistent hostPath instead, claimed by
-      # the "Claim build scratch slot" step below and exported as
-      # BUILD_SCRATCH_ROOT. A single shared tree would not work — SwiftPM locks
-      # a scratch directory exclusively, so concurrent jobs would serialize —
-      # so the homelab role provisions a POOL of interchangeable slots and each
-      # job flocks one for its duration. The pool is sized above the number of
-      # runner pods the scheduler admits, so a job never waits; if every slot
-      # is somehow busy the claim degrades to the old pod-local cold path
-      # rather than queueing. Never assume BUILD_SCRATCH_ROOT is warm or even
-      # shared: it is whichever of those two the claim step resolved to.
+      # The build tree is claimed by the "Claim build scratch slot" step below
+      # and exported as BUILD_SCRATCH_ROOT. A single shared tree would not work
+      # — SwiftPM locks a scratch directory exclusively, so concurrent jobs
+      # would serialize — so the homelab role provisions a POOL of
+      # interchangeable slots and each job flocks one for its duration. The pool
+      # is sized above the number of runner pods the scheduler admits, so a job
+      # never waits; if every slot is somehow busy the claim degrades to the old
+      # pod-local cold path rather than queueing. Never assume
+      # BUILD_SCRATCH_ROOT is warm or even shared: it is whichever of those two
+      # the claim step resolved to.
       #
       # The SwiftPM shared cache (git mirrors, compiled manifests, binary
       # artifacts) lives on a hostPath — /cache/swiftpm — mounted into every
@@ -238,19 +225,10 @@ jobs:
       # while a scratch tree takes an exclusive lock and so has to be claimed
       # one job at a time.
       #
-      # The dominant cost was never the cache, though. Two runs the same evening
-      # did identical cold work: 29870517360 took 5.2 minutes total, 29873252059
-      # took 30.7. Every phase scaled together (fetch 71s → 456s,
-      # graph-load/plugin-build/planning 57s → 648s, compile 185s → 734s) —
-      # a starved pod, not a missing cache. The runner pods had no CPU limit, so
-      # the scheduler packed ~7 of them onto 16 cores while each ran an
-      # unconstrained parallel build. They now request and cap 4 CPU each, which
-      # is why the builds below pass a matching `-j 4`: SwiftPM sizes its own
-      # parallelism from the host's core count, not the cgroup quota, so without
-      # it a pod spawns 16 compile jobs inside a 4-core budget and thrashes.
-      # (`swift test --parallel` has no equivalent knob — swift-testing sizes its
-      # executor from activeProcessorCount — but the test phase is DB-bound
-      # rather than CPU-bound, so it matters much less.)
+      # Runner pods request and cap 4 CPU each, which is why the builds below
+      # pass a matching `-j 4`: SwiftPM sizes its own parallelism from the
+      # host's core count, not the cgroup quota, so without it a pod spawns 16
+      # compile jobs inside a 4-core budget and thrashes.
       #
       # Each job prunes only the scratch dirs inside the slot it claimed —
       # sibling jobs hold other slots on the same volume, so wiping anything
@@ -276,9 +254,13 @@ jobs:
       - name: Claim build scratch slot
         run: bash .github/scripts/claim-build-scratch.sh packages
 
+      # The shared/ and firecracker/ dirs are orphaned — those packages no
+      # longer build standalone (the agent build compiles both). Remove any a
+      # previous run left behind in this slot, then prune what is still live.
       - name: Prune build scratch dirs if oversized
         run: |
-          for scratch in "$BUILD_SCRATCH_ROOT/shared" "$BUILD_SCRATCH_ROOT/agent" "$BUILD_SCRATCH_ROOT/cli" "$BUILD_SCRATCH_ROOT/api-client"; do
+          rm -rf "$BUILD_SCRATCH_ROOT/shared" "$BUILD_SCRATCH_ROOT/firecracker"
+          for scratch in "$BUILD_SCRATCH_ROOT/agent" "$BUILD_SCRATCH_ROOT/cli" "$BUILD_SCRATCH_ROOT/api-client"; do
             if [ -d "$scratch" ]; then
               size_kb=$(du -sk "$scratch" | cut -f1)
               if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -292,7 +274,7 @@ jobs:
       # SwiftPM will not create a missing cache root itself — an unwritable
       # /cache/swiftpm makes every `swift build` fail with "invalid access" — so
       # when the homelab-provisioned mount is absent we fall back to a pod-local
-      # (cold) directory instead. Written to $GITHUB_ENV so the build/test steps
+      # (cold) directory instead. Written to $GITHUB_ENV so the build steps
       # below pick it up.
       - name: Resolve SwiftPM shared cache path
         run: |
@@ -307,76 +289,35 @@ jobs:
             echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
           fi
 
-      # Each package's steps are gated on the paths that affect it: the job as a
+      # There is no standalone shared/ or SwiftFirecracker/ build step: both are
+      # `.package(path:)` dependencies of the agent (and shared/ of the control
+      # plane too), so this step already compiles every one of their targets
+      # that anything consumes. They only ever built separately so their test
+      # targets had somewhere to run, and nothing runs tests here now.
+      #
+      # Each package's step is gated on the paths that affect it: the job as a
       # whole also runs for spec-only changes (which rebuild the API client), and
-      # those should not pay for a shared/agent build.
-      - name: Build Shared Package
-        id: build-shared
-        if: ${{ needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' }}
-        working-directory: shared
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/shared" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      - name: Test Shared Package
-        if: ${{ !cancelled() && steps.build-shared.outcome == 'success' }}
-        working-directory: shared
-        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/shared" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
+      # those should not pay for an agent build.
+      #
+      # `!cancelled()` rather than plain `if:` so a broken package still lets the
+      # others report — one red step should not hide the state of the rest.
       - name: Build Agent
-        # Run even if the shared tests failed — agent coverage should
-        # always report on PRs that touch it.
-        id: build-agent
-        if: ${{ !cancelled() && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
+        if: ${{ needs.changes.outputs.shared == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' }}
         working-directory: agent
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/agent" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      - name: Test Agent
-        if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
-        working-directory: agent
-        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/agent" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/agent" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       - name: Build CLI
-        # Same always-report policy as the agent: CLI coverage runs even when
-        # an earlier package's tests failed.
-        id: build-cli
         if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/cli" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      - name: Test CLI
-        if: ${{ !cancelled() && steps.build-cli.outcome == 'success' }}
-        working-directory: cli
-        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/cli" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/cli" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # The generated API client (issue #583). Its openapi.yaml is a symlink to
       # the control plane's, so a spec change that breaks generation fails here
       # rather than in a downstream consumer.
       - name: Build Swift API Client
-        id: build-api-client
         if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: clients/swift
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/api-client" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      - name: Test Swift API Client
-        if: ${{ !cancelled() && steps.build-api-client.outcome == 'success' }}
-        working-directory: clients/swift
-        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/api-client" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      # The vendored Firecracker wrapper. The `firecracker` filter already
-      # gated the agent build above, but that only compiles this package as a
-      # *library* — its own test target was never built, so the suite had no
-      # Linux coverage at all on the one platform Firecracker runs on. A test
-      # that compiled on Darwin and not on Glibc (SHUT_RDWR imports as Int
-      # there, Int32 here) reached main green because of exactly that gap.
-      - name: Build SwiftFirecracker
-        id: build-firecracker
-        if: ${{ !cancelled() && (needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true') }}
-        working-directory: SwiftFirecracker
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/firecracker" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      - name: Test SwiftFirecracker
-        if: ${{ !cancelled() && steps.build-firecracker.outcome == 'success' }}
-        working-directory: SwiftFirecracker
-        run: swift test --skip-build --parallel --scratch-path "$BUILD_SCRATCH_ROOT/firecracker" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/api-client" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # The flock holder is a detached process, so the lock would also be
       # released when the ephemeral pod exits. Release it explicitly anyway:
@@ -386,25 +327,15 @@ jobs:
         if: always()
         run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
 
-  # Control-plane build + test against Postgres — the engine production uses,
-  # validating migrations and Postgres-specific SQL (issue #195). The suite
-  # used to also run a second leg on SQLite, but nothing used the SQLite
-  # backend (local runs are Postgres too now) and the leg took 4-8 minutes to
-  # the Postgres leg's ~1 (file-backed SQLite fsyncs on overlayfs vs a
-  # durability-off tmpfs Postgres), so it was removed along with the backend.
-  test-control-plane:
-    name: Test Control Plane
+  # Control-plane compile check. No Postgres, no cvc5, no test run: the suite
+  # that needed them does not run on PRs anymore.
+  build-control-plane:
+    name: Build Control Plane
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    # Backstop for a hung build/test (see the test job above).
+    # Backstop for a hung build (see the packages job above).
     timeout-minutes: 60
-    # Postgres is deliberately NOT a `services:` container. Service containers
-    # are pulled and started in `Initialize containers`, before checkout — ~90s
-    # (42s pull into the empty dind image store, 30s create/start, 15s of
-    # health polling) charged up front even though nothing connects until the
-    # test step ~20 minutes later. Starting it ourselves in the background
-    # right after checkout overlaps all of that with the Swift build.
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -432,43 +363,7 @@ jobs:
             fi
           fi
 
-      # Kick off the pull+boot and move on: the build below takes ~20 minutes,
-      # so by the time "Wait for Postgres" runs the server has long been up.
-      # nohup + & detaches it from this step's shell; the runner does not reap
-      # background processes between steps. Published on the pod loopback (the
-      # dind daemon shares the runner pod's network namespace), matching the
-      # DATABASE_HOST/PORT the test step passes.
-      #
-      # The test databases are schema-only (no seed data), so the in-RAM data
-      # dir costs negligible memory against the 8Gi pod while removing the
-      # overlay-FS copy cost of each CREATE DATABASE ... TEMPLATE clone.
-      - name: Start Postgres
-        run: |
-          nohup bash -c '
-            docker rm -f strato-ci-postgres >/dev/null 2>&1 || true
-            docker pull postgres:15
-            docker run -d --name strato-ci-postgres \
-              -p 5432:5432 \
-              --tmpfs /var/lib/postgresql/data:rw \
-              -e POSTGRES_DB=strato_test \
-              -e POSTGRES_USER=strato \
-              -e POSTGRES_PASSWORD=strato_password \
-              postgres:15
-          ' > "$RUNNER_TEMP/postgres-start.log" 2>&1 &
-
-      # The write-time guardrail check and the role-nesting subsumption proof
-      # (#484) skip themselves without a solver, which would leave them
-      # silently covering nothing.
-      # Into the workspace rather than /usr/local/bin: the ARC runner pod's
-      # user has no reliable sudo, and the tests take the path from the
-      # environment anyway.
-      - name: Install cvc5
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          ./scripts/install-cvc5.sh "$RUNNER_TEMP/bin"
-          echo "IAM_SYMCC_SOLVER_PATH=$RUNNER_TEMP/bin/cvc5" >> "$GITHUB_ENV"
-
-      # See the identical step in the `test` job: probe the shared cache mount
+      # See the identical step in the packages job: probe the shared cache mount
       # and fall back to a pod-local (cold) directory when it is absent, so a
       # missing /cache/swiftpm degrades instead of failing the build.
       - name: Resolve SwiftPM shared cache path
@@ -485,227 +380,23 @@ jobs:
           fi
 
       - name: Build Control Plane
-        id: build-cp
         working-directory: control-plane
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/control-plane" --build-tests -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/control-plane" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
-      # Normally a no-op: the background start above had the whole build to
-      # finish. The generous budget only matters when the registry is slow —
-      # one pull took 6.5 minutes on 2026-07-21.
-      - name: Wait for Postgres
-        run: |
-          for _ in $(seq 1 300); do
-            if docker exec strato-ci-postgres pg_isready -U strato -d strato_test >/dev/null 2>&1; then
-              echo "postgres is ready"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "postgres did not become ready; start log:"
-          cat "$RUNNER_TEMP/postgres-start.log" || true
-          docker logs strato-ci-postgres 2>&1 | tail -50 || true
-          exit 1
-
-      - name: Test Control Plane
-        working-directory: control-plane
-        env:
-          # This Postgres is the throwaway container started above and dies with
-          # the runner pod, so the harness may disable durability
-          # (fsync/synchronous_commit/full_page_writes) for faster clones. Never
-          # set this against a persistent cluster — the tuning is cluster-wide.
-          STRATO_TEST_DISPOSABLE_POSTGRES: "1"
-          # The container publishes 5432 to the runner pod. 127.0.0.1 rather
-          # than localhost: docker publishes on IPv4, and localhost can resolve
-          # to ::1 first.
-          DATABASE_HOST: 127.0.0.1
-          DATABASE_PORT: 5432
-          DATABASE_NAME: strato_test
-          DATABASE_USERNAME: strato
-          DATABASE_PASSWORD: strato_password
-        # Fully parallel: each test app runs on a 2-loop event-loop group
-        # (1 pooled connection per loop), and per-test database clones are
-        # minted through one serialized admin connection — see
-        # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
-        # stays far under Postgres's default max_connections=100. This
-        # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
-
-      # Surface the exact failing test (and its message) as a JUnit report,
-      # since the raw job log is dominated by per-request debug output.
-      - name: Upload control-plane test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: control-plane-test-results
-          path: control-plane/test-results*.xml
-          if-no-files-found: warn
-
-      # The runner pod (and its dind sidecar) is ephemeral, so this is belt and
-      # braces against a reused runner leaving a stale container on :5432.
-      - name: Stop Postgres
-        if: always()
-        run: docker rm -f strato-ci-postgres || true
-
-      # Same reasoning as Stop Postgres: the detached flock holder dies with
-      # the pod, but a leaked one would park a pool slot on a 24h sleep.
+      # The detached flock holder dies with the pod, but a leaked one would park
+      # a pool slot on a 24h sleep.
       - name: Release build scratch slot
         if: always()
         run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
 
-  test-agent-macos:
-    name: Build & Test Agent (macOS)
-    needs: changes
-    # macOS coverage for the agent (the self-hosted `test` job builds it on
-    # Linux only). This job builds and tests the full agent — exercising the
-    # macOS-specific virtualization (HVF) / user-mode networking code — on a
-    # macOS runner.
-    #
-    # The toolchain install + verify below are gating (a broken macOS toolchain
-    # setup should fail this job). The actual Build/Test steps are best-effort
-    # (continue-on-error at the step level), so their failure surfaces as a
-    # visible warning but does not fail the job or block merges.
-    #
-    # Why best-effort: the macOS agent graph transitively pulls the Darwin-only
-    # NIOTransportServices → NIOEmbedded, and that swift-nio code does not
-    # compile under the pinned 6.3.2 toolchain on macOS ("inQueueKey is not
-    # concurrency-safe because DispatchSpecificKey is not Sendable"). SwiftPM
-    # builds NIOEmbedded for any agent target on macOS, so there is currently no
-    # green agent build/test here. It compiles cleanly on Swift 6.4, which is
-    # not yet published as a standalone swift.org toolchain. Linux never builds
-    # NIOEmbedded, so its full agent build/test (added in #284) is unaffected.
-    # Drop the step-level continue-on-error once the toolchain pin (or the
-    # swift-nio version) moves past this.
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: macos-14
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install QEMU build dependencies
-        # QEMUKit (via SwiftQEMU) links glib-2.0 and resolves it through
-        # pkg-config; both are needed to compile the StratoAgent executable.
-        run: brew install glib pkg-config
-
-      # This cache is branch-scoped, so it lands once per active branch — the
-      # same 0.51GB key was resident 7 times over (3.6GB) at one point. That is
-      # fine against the public repo's 10GB budget, but it is the first thing to
-      # drop if the budget ever gets tight again (this job is gated on
-      # agent/shared/firecracker changes, so cold builds here are rare).
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            agent/.build
-            shared/.build
-          key: macos-agent-swift-${{ hashFiles('agent/Package.resolved', 'shared/Package.resolved') }}
-          restore-keys: |
-            macos-agent-swift-
-
-      # Install the toolchain by dropping the swift.org release .pkg directly.
-      # vapor/swiftly-action's macOS path runs a Linux-only (apt/dnf/yum)
-      # dependency installer and aborts; and `swiftly install` itself currently
-      # crashes (Abort trap: 6) on the macOS runner. A direct .pkg install
-      # avoids both and pins the same toolchain the Linux jobs use. Selecting it
-      # via TOOLCHAINS (rather than PATH) lets xcrun resolve the macOS SDK.
-      - name: Install Swift 6.3.2 toolchain
-        run: |
-          set -euxo pipefail
-          pkg="$RUNNER_TEMP/swift-6.3.2-osx.pkg"
-          curl -fsSL "https://download.swift.org/swift-6.3.2-release/xcode/swift-6.3.2-RELEASE/swift-6.3.2-RELEASE-osx.pkg" -o "$pkg"
-          sudo installer -pkg "$pkg" -target /
-          toolchain="$(ls -d /Library/Developer/Toolchains/swift-6.3.2-RELEASE.xctoolchain 2>/dev/null || ls -dt /Library/Developer/Toolchains/*.xctoolchain | head -1)"
-          echo "TOOLCHAINS=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$toolchain/Info.plist")" >> "$GITHUB_ENV"
-
-      - name: Verify Swift toolchain
-        run: swift --version
-
-      # Gating guard against Package.resolved drift on macOS. The manifest is
-      # platform-agnostic (Linux-only products are gated with `.when(platforms:)`
-      # rather than `#if os(Linux)`), so resolving on macOS must produce the exact
-      # same pins as Linux. If this diff is non-empty, someone reintroduced host-
-      # conditional dependency declarations and macOS would drop pins (e.g.
-      # swift-ovn) from Package.resolved.
-      - name: Check Package.resolved does not drift on macOS
-        working-directory: agent
-        run: |
-          swift package resolve
-          git diff --exit-code Package.resolved
-
-      - name: Build Agent
-        working-directory: agent
-        continue-on-error: true
-        run: swift build --build-tests
-
-      - name: Test Agent
-        working-directory: agent
-        continue-on-error: true
-        run: swift test --skip-build --parallel
-
-  # Dockerfile changes were previously only exercised on main / at release
-  # time, so image breakage surfaced post-merge. These jobs build (never
-  # push) the affected image on hosted runners; they are rare because they
-  # are gated on the Dockerfile paths themselves. `cache-to` is deliberately
-  # omitted everywhere: PR-scoped buildkit caches are unreadable by sibling
-  # PRs and would only thrash the 10GB repo cache quota. `cache-from` is only
-  # set where main-build actually saves a cache — since it dropped the
-  # control-plane/agent gha caches (kept only frontend-*), the two Swift
-  # image checks run cold.
-  docker-control-plane:
-    name: Docker Build Check (Control Plane)
-    needs: changes
-    if: needs.changes.outputs.docker_cp == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: ubuntu-latest
-    # No prebuilt artifacts on PRs, so the image compiles Swift from source.
-    timeout-minutes: 60
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # The Dockerfile unconditionally COPYs ./artifacts; with no prebuilt
-      # binaries on PRs it must exist (empty), same as main-build's
-      # "Prepare build context" step.
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
-
-      - name: Build Control Plane Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./control-plane/Dockerfile
-          push: false
-          platforms: linux/amd64
-
-  docker-agent:
-    name: Docker Build Check (Agent)
-    needs: changes
-    if: needs.changes.outputs.docker_agent == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: ubuntu-latest
-    # No prebuilt artifacts on PRs, so the image compiles Swift from source.
-    timeout-minutes: 60
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # The Dockerfile unconditionally COPYs ./artifacts; with no prebuilt
-      # binaries on PRs it must exist (empty), same as main-build's
-      # "Prepare build context" step.
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
-
-      - name: Build Agent Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./agent/Dockerfile
-          push: false
-          platforms: linux/amd64
-
+  # The only image still checked on PRs. The control-plane and agent image
+  # checks were dropped: they compile Swift from source in-image (up to an hour
+  # with no usable cache), and main-build's build-image-digests rebuilds both on
+  # every push to main anyway, so Dockerfile breakage still surfaces — just
+  # post-merge. This one stays because it compiles no Swift, caps at 20 minutes,
+  # reads a warm GHCR cache, and only fires on its own Dockerfile.
+  # `cache-to` is deliberately omitted: PR-scoped buildkit caches are unreadable
+  # by sibling PRs and would only thrash the 10GB repo cache quota.
   docker-web:
     name: Docker Build Check (Frontend)
     needs: changes
