@@ -204,7 +204,6 @@ let package = Package(
             name: "AppPlatformTests",
             dependencies: [
                 .target(name: "App"),
-                .target(name: "SPIREServerAPI"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),

@@ -529,19 +529,22 @@ jobs:
         # stays far under Postgres's default max_connections=100. This
         # used to be forced to --no-parallel and took ~8 minutes.
         #
-        # One invocation covering all four test bundles, NOT one per bundle.
-        # `--filter <target>\.` looks like it would scope a run to one bundle,
+        # One invocation covering all four test targets, NOT one per target.
+        # `--filter <target>\.` looks like it would scope a run to one target,
         # but swift-testing treats the filter as a regex over test IDs and it
         # silently drops tests: filtering to AppIAMTests ran 396 of its 408
         # cases (and `--list-tests` with the same filter reports none at all).
-        # The whole-suite invocation is the only form that provably runs
-        # everything, so the exit status here covers all 1,866 cases.
+        # The whole-suite invocation is the only form that provably runs every
+        # case in all four targets, which is what this step's exit status
+        # covers.
         #
-        # Caveat of that choice: SwiftPM hands every bundle the same
-        # `--xunit-output` path, so each overwrites the last and the uploaded
-        # report below covers only the bundle that ran last. Pass/fail is
-        # unaffected — a failure in any bundle fails this step — but reading
-        # *which* test broke may mean the job log rather than the artifact.
+        # On Linux — the platform this job runs on — SwiftPM links all four
+        # test targets into one `stratoPackageTests.xctest`, so this is a
+        # single process writing a single `--xunit-output` report covering
+        # every target, and one migrated template database for the whole run.
+        # (macOS builds a separate bundle per target, so a local run costs one
+        # template build each; the parallel `-emit-module` win the split is
+        # for holds on both.)
         run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
