@@ -135,6 +135,8 @@ struct VMController: RouteCollection {
                 $0.with(\.$observedAddresses)
                 // The response reports each NIC's network by name as well as id.
                 $0.with(\.$logicalNetwork)
+                // …and which security groups filter it (STR-34).
+                $0.with(\.$securityGroupMemberships)
             }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
@@ -152,9 +154,13 @@ struct VMController: RouteCollection {
         let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
         let readable = try await req.canFilter("vm:read", on: nodes)
 
+        // Batched for the same reason the authorization decision is: a
+        // per-row realizer walk would be three queries per VM.
+        let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
+
         return allVMs.compactMap { vm in
             guard let id = vm.id, readable.contains(IAMNode(type: .virtualMachine, id: id)) else { return nil }
-            return VMDetailResponse(from: vm)
+            return VMDetailResponse(from: vm, securityGroupsEnforced: enforcement[id])
         }
     }
 
@@ -179,9 +185,13 @@ struct VMController: RouteCollection {
             try await interface.$observedAddresses.load(on: req.db)
             // The response reports the NIC's network by name as well as id.
             try await interface.$logicalNetwork.load(on: req.db)
+            // …and which security groups filter it (STR-34).
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
 
-        return VMDetailResponse(from: vm)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
     }
 
     func create(req: Request) async throws -> Response {
@@ -284,35 +294,8 @@ struct VMController: RouteCollection {
         // Resolve the NIC's security groups. Explicit ids must exist, belong
         // to this project, and fit the per-NIC cap; omitted (or empty) means
         // the project's default group, ensured inside the create transaction.
-        // No agent-version gate here: VM create must work on a pre-security-
-        // group fleet, where assembly simply omits the fields (documented
-        // mixed-fleet rollout semantics).
-        let requestedSecurityGroupIds: [UUID] = (createRequest.securityGroupIds ?? [])
-            .reduce(into: []) { unique, groupId in
-                if !unique.contains(groupId) { unique.append(groupId) }
-            }
-        if requestedSecurityGroupIds.count > SecurityGroup.maxGroupsPerNIC {
-            throw Abort(
-                .badRequest,
-                reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
-        }
-        for groupId in requestedSecurityGroupIds {
-            // Scoped to the project, exactly like the NIC's network a few lines
-            // below (`LogicalNetworkService.resolveForWorkloadCreate`), and
-            // reported the same way: *not found here*. Nothing authorizes the
-            // caller against the named group, so a distinct "belongs to another
-            // project" answer would confirm that an opaque id names a group
-            // somewhere in the fleet — the disclosure the containment guard is
-            // placed behind an authorization check to avoid everywhere it does
-            // fire (issue #777).
-            let group = try await SecurityGroup.query(on: req.db)
-                .filter(\.$id == groupId)
-                .filter(\.$project.$id == projectId)
-                .first()
-            guard group != nil else {
-                throw Abort(.notFound, reason: "Security group \(groupId) not found in this project")
-            }
-        }
+        let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
+            createRequest.securityGroupIds, projectID: projectId, on: req.db)
 
         // Create the VM instance from the image.
         // Pre-compute values to avoid complex expression
@@ -904,8 +887,12 @@ struct VMController: RouteCollection {
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return try await VMDetailResponse(from: vm).encodeResponse(for: req)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db)
+        ).encodeResponse(for: req)
     }
 
     func delete(req: Request) async throws -> Response {
@@ -1022,8 +1009,11 @@ struct VMController: RouteCollection {
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return VMDetailResponse(from: vm)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
     }
 
     func start(req: Request) async throws -> Response {

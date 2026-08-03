@@ -46,6 +46,15 @@ enum SiteNetworkAuthority {
         /// this node back, or designate a replacement), which is why this is
         /// its own case rather than folded into `.unassigned`.
         case controllerUnavailable(site: Site, controller: Agent, fault: ControllerFault)
+
+        /// Whether this answer is a property of the *agent* rather than of its
+        /// site. The three other cases are derived from the site alone, so a
+        /// caller resolving many agents may share them between peers of one
+        /// site; `.selfAuthored` must never be shared that way.
+        var isSelfAuthored: Bool {
+            if case .selfAuthored = self { return true }
+            return false
+        }
     }
 
     /// Why a standing designation cannot author topology.

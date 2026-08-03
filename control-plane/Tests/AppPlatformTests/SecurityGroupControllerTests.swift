@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -99,6 +100,23 @@ final class SecurityGroupControllerTests {
             try await vm.save(on: app.db)
         }
         return (vm, nic)
+    }
+
+    /// A project sandbox with one NIC, mirroring `createVMWithNIC`. Never
+    /// placed: sandbox NICs are off the wire, so no agent version applies.
+    private func createSandboxWithNIC(
+        app: Application, project: Project
+    ) async throws -> (Sandbox, SandboxNetworkInterface) {
+        let builder = TestDataBuilder(db: app.db)
+        let sandbox = try await builder.createSandbox(
+            name: "sg-sbx-\(UUID().uuidString.prefix(8))", project: project)
+        let network = try await builder.createNetwork(
+            name: "sg-sbx-net-\(UUID().uuidString.prefix(8))", project: project)
+        let nic = SandboxNetworkInterface(
+            sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+            macAddress: VMNetworkInterface.generateMACAddress())
+        try await nic.save(on: app.db)
+        return (sandbox, nic)
     }
 
     // MARK: - Default group
@@ -496,6 +514,13 @@ final class SecurityGroupControllerTests {
                 #expect(res.body.string.contains("sg-offline-ctl"))
             }
 
+            // The same condition reads out of the API as unenforced (STR-34):
+            // the gate and the indicator resolve through one code path, so a
+            // group already attached before the controller went bad cannot be
+            // reported as filtering.
+            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.db) == false)
+            #expect(try await SecurityGroupService.enforcementByVM([vm], on: app.db)[vm.id!] == false)
+
             // A heartbeat from the controller unblocks the same attach.
             controller.lastHeartbeat = Date()
             try await controller.save(on: app.db)
@@ -505,6 +530,7 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
+            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.db) == true)
         }
     }
 
@@ -834,4 +860,468 @@ final class SecurityGroupControllerTests {
             #expect(oldMessage.vms.first?.spec.networks.first?.securityGroupIds == nil)
         }
     }
+
+    // MARK: - Per-NIC membership and enforcement in the API (STR-34)
+
+    @Test("VM detail lists each NIC's groups and whether its host enforces them")
+    func vmDetailMembershipAndEnforcement() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: project.id!, on: app.db)
+
+            // Unplaced: enforcement is unknown, not "no".
+            let (unplaced, unplacedNIC) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, protocolVersion: nil)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: unplacedNIC.id!, securityGroupID: try defaultGroup.requireID()
+            ).save(on: app.db)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: unplacedNIC.id!, securityGroupID: web.id
+            ).save(on: app.db)
+
+            try await app.test(.GET, "/api/vms/\(unplaced.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(detail.securityGroupsEnforced == nil)
+                let ids = try #require(detail.networkInterfaces.first?.securityGroupIds)
+                // Sorted by uuid string, matching the order agents receive.
+                #expect(Set(ids) == [try defaultGroup.requireID(), web.id])
+                #expect(ids == ids.sorted { $0.uuidString < $1.uuidString })
+            }
+
+            // On a pre-v20 host the API must say the groups aren't enforced.
+            let (stale, staleNIC) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: staleNIC.id!, securityGroupID: web.id
+            ).save(on: app.db)
+            try await app.test(.GET, "/api/vms/\(stale.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(detail.securityGroupsEnforced == false)
+                #expect(detail.networkInterfaces.first?.securityGroupIds == [web.id])
+            }
+
+            let (current, currentNIC) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: currentNIC.id!, securityGroupID: web.id
+            ).save(on: app.db)
+            try await app.test(.GET, "/api/vms/\(current.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(detail.securityGroupsEnforced == true)
+            }
+
+            // The list endpoint answers identically, batched.
+            try await app.test(.GET, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let page = try res.content.decode(PagedResponse<VMDetailResponse>.self).items
+                let byID = Dictionary(uniqueKeysWithValues: page.compactMap { vm in vm.id.map { ($0, vm) } })
+                #expect(byID[unplaced.id!]?.securityGroupsEnforced == nil)
+                #expect(byID[stale.id!]?.securityGroupsEnforced == false)
+                #expect(byID[current.id!]?.securityGroupsEnforced == true)
+                #expect(byID[current.id!]?.networkInterfaces.first?.securityGroupIds == [web.id])
+            }
+        }
+    }
+
+    // MARK: - Per-rule ACL logging (STR-34)
+
+    @Test("A rule's log flag survives create, the response, and desired-state assembly")
+    func ruleLoggingRoundTrip() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
+
+            var logged: SecurityGroupRuleResponse?
+            try await app.test(.POST, "/api/security-groups/\(web.id)/rules") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSecurityGroupRuleRequest(
+                        direction: .ingress, ethertype: .ipv4, protocolName: "tcp",
+                        portRangeMin: 443, portRangeMax: 443, log: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                logged = try res.content.decode(SecurityGroupRuleResponse.self)
+            }
+            #expect(try #require(logged).log)
+
+            // Omitting the field means off, not null: the column is required.
+            var quiet: SecurityGroupRuleResponse?
+            try await app.test(.POST, "/api/security-groups/\(web.id)/rules") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSecurityGroupRuleRequest(direction: .egress, ethertype: .ipv4))
+            } afterResponse: { res in
+                quiet = try res.content.decode(SecurityGroupRuleResponse.self)
+            }
+            #expect(!(try #require(quiet).log))
+
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: nic.id!, securityGroupID: web.id
+            ).save(on: app.db)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
+            let rules = try #require(message.securityGroups?.first { $0.id == web.id }?.rules)
+            #expect(rules.first { $0.id == logged!.id }?.log == true)
+            #expect(rules.first { $0.id == quiet!.id }?.log == false)
+        }
+    }
+
+    // MARK: - Sandbox NIC membership (STR-34)
+
+    @Test("Sandbox NICs attach and detach groups under the same caps and invariants")
+    func sandboxAttachDetachLifecycle() async throws {
+        try await withSecurityGroupTestApp { app, _, _, project, token in
+            let (sandbox, nic) = try await self.createSandboxWithNIC(app: app, project: project)
+            let first = try await self.createGroup(app: app, project: project, token: token, name: "sbx-a")
+            let second = try await self.createGroup(app: app, project: project, token: token, name: "sbx-b")
+
+            // No agent-version gate on this path: an unplaced sandbox — and a
+            // placed one — attaches regardless, since nothing realizes it.
+            try await app.test(.POST, "/api/security-groups/\(first.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(sandboxId: try sandbox.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            // Idempotent.
+            try await app.test(.POST, "/api/security-groups/\(first.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(sandboxId: try sandbox.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // The ≥1-group invariant holds for sandboxes too.
+            try await app.test(.POST, "/api/security-groups/\(first.id)/detach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(sandboxId: try sandbox.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            try await app.test(.POST, "/api/security-groups/\(second.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(sandboxId: try sandbox.requireID(), interfaceId: nic.id))
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // Attachment counts and the delete guard span both join tables:
+            // counting only VM NICs would report this group as unattached and
+            // then hand the caller a bare FK violation.
+            try await app.test(.GET, "/api/security-groups/\(first.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let group = try res.content.decode(SecurityGroupResponse.self)
+                #expect(group.attachmentCount == 1)
+            }
+            try await app.test(.DELETE, "/api/security-groups/\(first.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // With a second group present the first detaches.
+            try await app.test(.POST, "/api/security-groups/\(first.id)/detach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(sandboxId: try sandbox.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            let remaining = try await SandboxInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == nic.id!)
+                .all()
+            #expect(remaining.map { $0.$securityGroup.id } == [second.id])
+
+            // Sandbox membership stays off the wire: the NIC has no spec at all.
+            try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let detail = try res.content.decode(SandboxDetailResponse.self)
+                #expect(detail.securityGroupIds == [second.id])
+            }
+        }
+    }
+
+    /// The >=1-group invariant guards a *count*, which no unique index can
+    /// hold: without serializing read-guard-delete, two detaches of a NIC's
+    /// last two groups each read two, each pass, and the NIC lands on zero.
+    /// That state never heals — the assembler omits an empty NIC from its map
+    /// entirely, so the spec says `nil`, the agent reads "no opinion", and the
+    /// port keeps filtering by groups the control plane no longer records.
+    @Test("Concurrent detaches cannot empty a NIC's security groups")
+    func concurrentDetachKeepsOneGroup() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+
+            // Two groups on one NIC: exactly one detach may win.
+            let first = try await self.createGroup(app: app, project: project, token: token, name: "race-a")
+            let second = try await self.createGroup(app: app, project: project, token: token, name: "race-b")
+            for group in [first, second] {
+                try await VMInterfaceSecurityGroup(
+                    interfaceID: nic.requireID(), securityGroupID: group.id
+                ).save(on: app.db)
+            }
+
+            let vmID = try vm.requireID()
+            let interfaceID = try nic.requireID()
+            let statuses = try await withThrowingTaskGroup(of: HTTPStatus.self) { group in
+                for target in [first.id, second.id] {
+                    group.addTask {
+                        var status = HTTPStatus.internalServerError
+                        try await app.test(.POST, "/api/security-groups/\(target)/detach") { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            try req.content.encode(
+                                AttachSecurityGroupRequest(vmId: vmID, interfaceId: interfaceID))
+                        } afterResponse: { res in
+                            status = res.status
+                        }
+                        return status
+                    }
+                }
+                var collected: [HTTPStatus] = []
+                for try await status in group { collected.append(status) }
+                return collected
+            }
+
+            #expect(statuses.filter { $0 == .noContent }.count == 1)
+            #expect(statuses.filter { $0 == .conflict }.count == 1)
+
+            let remaining = try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == interfaceID)
+                .count()
+            #expect(remaining == 1)
+        }
+    }
+
+    /// The per-NIC cap has the same read-guard-write shape as detach, and the
+    /// same lock covers it.
+    @Test("Concurrent attaches cannot exceed the per-NIC group cap")
+    func concurrentAttachRespectsCap() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let (vm, nic) = try await self.createVMWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: project.id!, on: app.db)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: nic.requireID(), securityGroupID: try defaultGroup.requireID()
+            ).save(on: app.db)
+
+            // One seat left under the cap, contested by three attaches.
+            var contenders: [UUID] = []
+            for index in 0..<(SecurityGroup.maxGroupsPerNIC - 1) {
+                let filler = try await self.createGroup(
+                    app: app, project: project, token: token, name: "cap-filler-\(index)")
+                if index < SecurityGroup.maxGroupsPerNIC - 2 {
+                    try await VMInterfaceSecurityGroup(
+                        interfaceID: nic.requireID(), securityGroupID: filler.id
+                    ).save(on: app.db)
+                } else {
+                    contenders.append(filler.id)
+                }
+            }
+            for index in 0..<2 {
+                let extra = try await self.createGroup(
+                    app: app, project: project, token: token, name: "cap-racer-\(index)")
+                contenders.append(extra.id)
+            }
+
+            let vmID = try vm.requireID()
+            let interfaceID = try nic.requireID()
+            _ = try await withThrowingTaskGroup(of: HTTPStatus.self) { group in
+                for target in contenders {
+                    group.addTask {
+                        var status = HTTPStatus.internalServerError
+                        try await app.test(.POST, "/api/security-groups/\(target)/attach") { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            try req.content.encode(
+                                AttachSecurityGroupRequest(vmId: vmID, interfaceId: interfaceID))
+                        } afterResponse: { res in
+                            status = res.status
+                        }
+                        return status
+                    }
+                }
+                var collected: [HTTPStatus] = []
+                for try await status in group { collected.append(status) }
+                return collected
+            }
+
+            let total = try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == interfaceID)
+                .count()
+            #expect(total == SecurityGroup.maxGroupsPerNIC)
+        }
+    }
+
+    @Test("Attach/detach refuses a request naming neither workload or both")
+    func attachTargetMustBeExactlyOne() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let group = try await self.createGroup(app: app, project: project, token: token, name: "either")
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, protocolVersion: nil)
+            let (sandbox, _) = try await self.createSandboxWithNIC(app: app, project: project)
+
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachSecurityGroupRequest())
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachSecurityGroupRequest(vmId: vm.id!, sandboxId: try sandbox.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("CreateSandboxInterfaceSecurityGroups backfills pre-existing sandbox NICs")
+    func sandboxMembershipBackfill() async throws {
+        try await withSecurityGroupTestApp { app, _, _, project, _ in
+            // A sandbox NIC written the way the pre-STR-34 create path did:
+            // no memberships at all.
+            let (_, nic) = try await self.createSandboxWithNIC(app: app, project: project)
+            #expect(
+                try await SandboxInterfaceSecurityGroup.query(on: app.db)
+                    .filter(\.$interface.$id == nic.requireID())
+                    .count() == 0)
+
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: project.id!, on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await CreateSandboxInterfaceSecurityGroups.backfillDefaultGroups(on: sql)
+
+            let joined = try await SandboxInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == nic.requireID())
+                .all()
+            #expect(joined.map { $0.$securityGroup.id } == [try defaultGroup.requireID()])
+
+            // Idempotent, and it never displaces a NIC's existing groups.
+            try await CreateSandboxInterfaceSecurityGroups.backfillDefaultGroups(on: sql)
+            #expect(
+                try await SandboxInterfaceSecurityGroup.query(on: app.db)
+                    .filter(\.$interface.$id == nic.requireID())
+                    .count() == 1)
+        }
+    }
+
+    @Test("Sandbox create attaches the project default, or exactly the groups asked for")
+    func sandboxCreateAttachesGroups() async throws {
+        try await withSecurityGroupTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "sbx-create-net", project: project)
+            let explicit = try await self.createGroup(
+                app: app, project: project, token: token, name: "sbx-explicit")
+
+            func groupIDs(ofSandbox id: UUID) async throws -> [UUID] {
+                let nics = try await SandboxNetworkInterface.query(on: app.db)
+                    .filter(\.$sandbox.$id == id)
+                    .all()
+                guard let nic = nics.first else { return [] }
+                return try await SandboxInterfaceSecurityGroup.query(on: app.db)
+                    .filter(\.$interface.$id == nic.requireID())
+                    .all()
+                    .map { $0.$securityGroup.id }
+            }
+
+            var defaulted: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "sbx-default-groups",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                    "networkId": try network.requireID().uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                defaulted = try res.content.decode(OperationResponse.self)
+            }
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: project.id!, on: app.db)
+            #expect(
+                try await groupIDs(ofSandbox: try #require(defaulted).resourceId) == [
+                    try defaultGroup.requireID()
+                ])
+
+            var chosen: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    SandboxCreateWithGroups(
+                        name: "sbx-explicit-groups",
+                        image: "ghcr.io/acme/worker:v3",
+                        projectId: project.id!,
+                        networkId: try network.requireID(),
+                        securityGroupIds: [explicit.id]))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                chosen = try res.content.decode(OperationResponse.self)
+            }
+            #expect(try await groupIDs(ofSandbox: try #require(chosen).resourceId) == [explicit.id])
+
+            // Naming groups with no network has nothing to attach them to.
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    SandboxCreateWithGroups(
+                        name: "sbx-no-network",
+                        image: "ghcr.io/acme/worker:v3",
+                        projectId: project.id!,
+                        networkId: nil,
+                        securityGroupIds: [explicit.id]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // A sandbox with no network gets no NIC and so no memberships.
+            var networkless: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "sbx-networkless",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                networkless = try res.content.decode(OperationResponse.self)
+            }
+            #expect(try await groupIDs(ofSandbox: try #require(networkless).resourceId).isEmpty)
+        }
+    }
+}
+
+/// The sandbox create body is declared inside the controller's handler, so the
+/// tests carry their own encodable mirror of the fields they exercise.
+private struct SandboxCreateWithGroups: Content {
+    let name: String
+    let image: String
+    let projectId: UUID
+    let networkId: UUID?
+    let securityGroupIds: [UUID]
 }

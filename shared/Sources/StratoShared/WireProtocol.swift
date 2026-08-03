@@ -324,7 +324,20 @@ public enum WireProtocol {
     /// sync for that agent and stop it converging on everything, not just the
     /// VM that carried it. The version gate is what keeps that unreachable, and
     /// any future mode must ship with its own bump for exactly this reason.
-    public static let currentVersion = 23
+    ///
+    /// Version 24: per-rule security-group ACL logging (STR-34). Adds
+    /// `DesiredSecurityGroupRule.log`, which the agent maps onto the OVN ACL's
+    /// `log`/`severity`/`name` columns. Additive and nil-tolerant in both
+    /// directions, and — unlike v20's fields, which this rides alongside —
+    /// there is deliberately **no gate**. v20 needed one because the API would
+    /// have claimed filtering that no ACL enforced; a `log` flag claims only
+    /// that packets get logged. A pre-v24 agent builds the identical
+    /// enforcing ACL and merely omits the log line, so the failure mode is a
+    /// missing diagnostic rather than open traffic, and refusing the rule
+    /// mutation would cost more than the missing logs. In the other direction
+    /// a nil from an older control plane reads as "off", which is what every
+    /// rule written before this version meant.
+    public static let currentVersion = 24
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

@@ -8660,6 +8660,16 @@ components:
           description: >-
             Whether the guest has a display device whose framebuffer the web UI
             can attach to. Fixed at creation.
+        securityGroupsEnforced:
+          type: boolean
+          description: >-
+            Whether this VM's attached security groups are actually being
+            enforced. False means a realizing agent — the host, or its site's
+            network controller — registered with a protocol too old for
+            security groups, or the site has no usable network controller to
+            author the ACLs at all; either way the attached groups filter
+            nothing until an operator fixes it. Absent means the VM is
+            unplaced, so there is no realizer to judge yet.
         createdAt:
           type: string
           format: date-time
@@ -8701,6 +8711,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InterfaceAddress"
+        observedAddresses:
+          type: array
+          description: >-
+            Addresses the guest actually configured, as reported by the guest
+            agent — distinct from the allocated `addresses`. Empty until a
+            guest agent reports them.
+          items:
+            $ref: "#/components/schemas/ObservedInterfaceAddress"
         mtu:
           type: integer
         deviceName:
@@ -8708,6 +8726,15 @@ components:
           description: Stable device name (e.g. net0).
         orderIndex:
           type: integer
+        securityGroupIds:
+          type: array
+          description: >-
+            The security groups filtering this NIC. Absent — as opposed to an
+            empty array — means the server did not load membership for this
+            response, never that the NIC is in no group.
+          items:
+            type: string
+            format: uuid
     InterfaceAddress:
       type: object
       required: [family, address, prefixLength]
@@ -8721,6 +8748,20 @@ components:
           type: integer
         gateway:
           type: string
+    ObservedInterfaceAddress:
+      type: object
+      description: >-
+        An address the guest reported on this NIC. No gateway: the guest
+        reports what it configured, not how it routes.
+      required: [family, address]
+      properties:
+        family:
+          type: string
+          enum: [ipv4, ipv6]
+        address:
+          type: string
+        prefixLength:
+          type: integer
 
     CreateSandboxRequest:
       type: object
@@ -8773,6 +8814,16 @@ components:
             NIC, since sandbox guest networking is not implemented yet.
         networkName:
           type: string
+        securityGroupIds:
+          type: array
+          description: >-
+            Security groups for the sandbox's NIC. Omitting them attaches the
+            project's default group; supplying them without a network is a
+            400, since there would be no NIC to attach them to. Recorded but
+            not yet enforced.
+          items:
+            type: string
+            format: uuid
     UpdateSandboxRequest:
       type: object
       properties:
@@ -8838,6 +8889,16 @@ components:
           $ref: "#/components/schemas/SandboxStatus"
         exitCode:
           type: integer
+        securityGroupIds:
+          type: array
+          description: >-
+            The security groups attached to the sandbox's NIC (flat: a sandbox
+            has at most one). Absent when the sandbox has no NIC. Recorded but
+            **not enforced** — sandbox NICs are still omitted from the agent
+            sync entirely.
+          items:
+            type: string
+            format: uuid
         createdAt:
           type: string
           format: date-time
@@ -9638,6 +9699,12 @@ components:
           description: >-
             Security-group peer — matches the referenced group's current
             member addresses.
+        log:
+          type: boolean
+          description: >-
+            Whether the realized OVN ACL logs the packets it matches. Off by
+            default; set at rule creation and changed by delete + recreate,
+            like every other field of a rule.
         description:
           type: string
         createdAt:
@@ -9714,19 +9781,30 @@ components:
         remoteGroupId:
           type: string
           format: uuid
+        log:
+          type: boolean
+          description: Log the packets this rule matches. Defaults to false.
         description:
           type: string
     AttachSecurityGroupRequest:
       type: object
-      required: [vmId]
+      description: >-
+        Names exactly one workload — `vmId` or `sandboxId` — optionally
+        narrowed to one of its NICs. Naming neither or both is a 400.
       properties:
         vmId:
           type: string
           format: uuid
+        sandboxId:
+          type: string
+          format: uuid
+          description: >-
+            Sandbox memberships are recorded but not yet enforced: sandbox
+            NICs are still omitted from the agent sync entirely.
         interfaceId:
           type: string
           format: uuid
-          description: The VM NIC; defaults to the VM's first interface.
+          description: The NIC; defaults to the workload's first interface.
     DNSRecordType:
       type: string
       description: >-

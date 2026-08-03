@@ -21,17 +21,20 @@ struct SecurityGroupReconcilerTests {
         portRangeMin: Int? = nil,
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
-        remoteGroupId: UUID? = nil
+        remoteGroupId: UUID? = nil,
+        log: Bool? = nil,
+        id: UUID = UUID()
     ) -> DesiredSecurityGroupRule {
         DesiredSecurityGroupRule(
-            id: UUID(),
+            id: id,
             direction: direction,
             ethertype: ethertype,
             protocolName: protocolName,
             portRangeMin: portRangeMin,
             portRangeMax: portRangeMax,
             remoteCIDR: remoteCIDR,
-            remoteGroupId: remoteGroupId)
+            remoteGroupId: remoteGroupId,
+            log: log)
     }
 
     // MARK: - Naming
@@ -124,9 +127,43 @@ struct SecurityGroupReconcilerTests {
         #expect(acl.externalIDs["strato-rule-id"] != nil)
     }
 
+    // MARK: - Logging
+
+    @Test("A logged rule sets log, severity, and a name identifying the rule")
+    func loggedRule() {
+        let acl = SecurityGroupACLBuilder.acl(for: rule(log: true, id: groupId), portGroup: pg)!
+        #expect(acl.log)
+        #expect(acl.severity == "info")
+        #expect(acl.name == "sgr_aaaaaaaabbbbccccddddeeeeffff0001")
+        // OVN caps ACL names at 63 characters.
+        #expect(acl.name!.count <= 63)
+    }
+
+    @Test("An unlogged rule — explicit false or a pre-v24 nil — sets no log columns")
+    func unloggedRule() {
+        for value: Bool? in [nil, false] {
+            let acl = SecurityGroupACLBuilder.acl(for: rule(log: value), portGroup: pg)!
+            #expect(!acl.log)
+            #expect(acl.severity == nil)
+            #expect(acl.name == nil)
+        }
+    }
+
+    @Test("Plan preserves a rule's log columns while stamping the group id")
+    func planPreservesLogging() {
+        let group = DesiredSecurityGroup(
+            id: groupId, generation: 1, rules: [rule(log: true, id: groupId)])
+        let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [group])
+        let acl = plans[1].acls[0]
+        #expect(acl.log)
+        #expect(acl.severity == "info")
+        #expect(acl.name == "sgr_aaaaaaaabbbbccccddddeeeeffff0001")
+        #expect(acl.externalIDs["strato-sg-id"] == groupId.uuidString.lowercased())
+    }
+
     // MARK: - Drop group
 
-    @Test("Drop group denies IP both ways below the allows, with DHCP and ND carve-outs")
+    @Test("Drop group denies IP both ways below the allows, with DHCP, ND, and MLD carve-outs")
     func dropGroupShape() {
         let acls = SecurityGroupACLBuilder.dropGroupACLs()
         let pgDrop = OVNNaming.dropPortGroupName
@@ -151,7 +188,36 @@ struct SecurityGroupReconcilerTests {
             allows.contains { $0.match == "inport == @\(pgDrop) && (nd || nd_rs || nd_ra)" })
         #expect(
             allows.contains { $0.match == "outport == @\(pgDrop) && (nd || nd_rs || nd_ra)" })
+        // MLD (STR-34), deliberately asymmetric: a guest may send listener
+        // reports and dones but never a Query (type 130), which only the
+        // querier originates — otherwise any member of the site-wide drop
+        // group could win querier election and then stop querying, timing out
+        // every other guest's multicast state. Written as explicit icmp6
+        // types, not OVN's mldv1/mldv2 predicates.
+        let listener = "icmp6.type == 131 || icmp6.type == 132 || icmp6.type == 143"
+        #expect(allows.contains { $0.match == "inport == @\(pgDrop) && icmp6 && (\(listener))" })
+        #expect(
+            allows.contains {
+                $0.match == "outport == @\(pgDrop) && icmp6 && (icmp6.type == 130 || \(listener))"
+            })
+        // The egress carve-out must not admit type 130 under any spelling.
+        let egressMLD = allows.first { $0.direction == "from-lport" && $0.match.contains("icmp6.type == 131") }
+        #expect(egressMLD != nil)
+        #expect(egressMLD?.match.contains("icmp6.type == 130") == false)
         #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
+        // Infra carve-outs are never logged: they would drown the log in
+        // per-guest DHCP and multicast chatter nobody asked to see.
+        #expect(acls.allSatisfy { !$0.log })
+    }
+
+    @Test("Bumping the drop-group revision forces existing deployments to rewrite it")
+    func dropGroupRevisionForcesRewrite() {
+        // A deployment still carrying revision 1 (pre-MLD) must be rewritten.
+        #expect(
+            SecurityGroupReconciler.needsACLRewrite(
+                planned: SecurityGroupACLBuilder.dropGroupRevision, observed: 1,
+                observedBuilderRevision: SecurityGroupACLBuilder.aclSchemaRevision))
+        #expect(SecurityGroupACLBuilder.dropGroupRevision > 1)
     }
 
     // MARK: - Plan and teardown
