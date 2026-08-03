@@ -13,7 +13,13 @@ control-plane suite alone was 342s of an 8-minute PR run.
 Consequences worth internalizing:
 - Running the suite before you merge is a human responsibility. See `CLAUDE.md`
   and `docs/development/local-development.md`.
-- A test file that stops compiling will merge green.
+- A test file that stops compiling will merge green. Building with
+  `--build-tests` but not running the suite would close exactly that gap for a
+  fraction of the test run's cost, and is the obvious dial to turn if this ever
+  bites: the measured 342s was the `swift test` invocation, and dropping the
+  test-target compile on top of it is what took the control-plane job from 179s
+  to ~65s. It is off because both halves were wanted, not because the middle
+  setting doesn't work.
 - `Full Test Suite (manual)` (`main-tests.yaml`) is the escape hatch: dispatch
   it from the Actions tab or with `gh workflow run main-tests.yaml --ref
   <branch>` to run everything on the ARC runners.
@@ -32,6 +38,11 @@ Runs on pull requests. Compile and lint only — no tests:
   (`swift-runners-strato` ARC scale set). `shared/` and `SwiftFirecracker/`
   have no standalone step: both are path dependencies the agent and control
   plane already compile.
+- `Package.resolved` macOS drift check (`macos-14`, ~90s, compiles nothing) —
+  the one gating step of the deleted macOS agent job. The manifest gates
+  Linux-only products with `.when(platforms:)` rather than `#if os(Linux)`, so
+  resolving on macOS must produce identical pins; Linux cannot catch a
+  regression here by construction.
 - Frontend Docker image build check, gated on `control-plane/web/Dockerfile`
 
 A `changes` job (via `dorny/paths-filter`) detects which parts of the repo
@@ -41,17 +52,36 @@ frontend-only PRs skip Swift, etc. Because the jobs are skipped via `if:`
 check and remains safe to use as a required status check. In-progress runs are
 cancelled when a new commit is pushed to the same PR.
 
-The control-plane and agent Docker image checks used to run here too. They
-compiled Swift from source in-image with no usable cache (up to an hour), and
-`main-build.yaml` rebuilds both images on every push to main — so Dockerfile
-breakage still surfaces, just post-merge.
+#### The Swift Dockerfiles' source path is not covered here — or anywhere on push
+
+Both Swift Dockerfiles branch on a build-arg: with `PREBUILT_ARTIFACTS` unset
+they compile Swift in-image (`control-plane/Dockerfile:12,34,49,76`;
+`agent/Dockerfile:13,43,57,76`), and with it set they copy a prebuilt binary.
+The deleted control-plane/agent image checks passed no build-arg, so they
+exercised the **source** branch — which is why they cost an hour. Every
+remaining image build (`main-build.yaml`, `release.yaml`) passes
+`PREBUILT_ARTIFACTS`, so it takes the **other** branch.
+
+So a break in the in-image `swift build -c release`, either apt-dependency
+`RUN` block, or the `--show-bin-path` copy surfaces in no push- or PR-triggered
+workflow at all. That path is live — `deploy/compose/docker-compose.yml`
+documents commenting out `image:` and uncommenting `build:` to run from source.
+Its only coverage is the opt-in `docker_source_build` input on
+`main-tests.yaml`; tick it after touching either Dockerfile.
 
 ### Full Test Suite (`main-tests.yaml`)
 `workflow_dispatch` only — nothing triggers it automatically, so it costs
 nothing until someone starts it. Runs the full Swift suite for every package
 (shared, agent, CLI, API client, SwiftFirecracker) plus the control-plane suite
 against a throwaway Postgres 15 container with cvc5 installed, all on the ARC
-scale set.
+scale set. It claims its own scratch-slot pools (`packages-tests`,
+`control-plane-tests`) rather than sharing build.yaml's: these jobs build with
+`--build-tests` and the compile jobs without, so a shared slot would have each
+churning the other's incremental state.
+
+One input, `docker_source_build` (default off): builds the control-plane and
+agent images from source, the only coverage the Dockerfiles' compile-in-image
+path has. Adds ~40–60 minutes, so the default dispatch stays fast.
 
 ### Main Branch Build (`main-build.yaml`)
 Builds release binaries and Docker images when code is pushed to the main branch
@@ -152,7 +182,9 @@ Requirements:
 ### GitHub-Hosted Runners
 Used for:
 - PR validation — swift-format lint, frontend lint/build, OpenAPI lint, the
-  frontend image build check (`ubuntu-latest`)
+  frontend image build check (`ubuntu-latest`); the `Package.resolved` macOS
+  drift check (`macos-14`)
+- The opt-in Docker source build in `main-tests.yaml` (`ubuntu-latest`)
 - All Helm chart tests (`ubuntu-latest`)
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)

@@ -9,11 +9,24 @@ name: Full Test Suite (manual)
 # main-tests.yaml --ref <branch>`).
 #
 # Run it before a risky merge, after a dependency bump, or when you want a
-# second opinion on a local failure. Everything here is a verbatim copy of the
-# test jobs build.yaml used to run, minus the paths-filter gating — a manual run
-# always exercises every package.
+# second opinion on a local failure. The two Swift jobs are a verbatim copy of
+# the test jobs build.yaml used to run, minus the paths-filter gating — a manual
+# run always exercises every package.
+#
+# The third job covers something no workflow runs any more (see
+# `docker_source_build` below) and is opt-in because it costs ~40-60 minutes
+# against the Swift suite's ~10, so the default dispatch stays fast.
 on:
   workflow_dispatch:
+    inputs:
+      docker_source_build:
+        description: >-
+          Also build the control-plane and agent images from source
+          (PREBUILT_ARTIFACTS unset). THE ONLY PLACE THAT PATH IS EXERCISED —
+          tick it after touching either Dockerfile, their apt blocks, or the
+          release `swift build` invocation. Adds ~40-60 min.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,8 +51,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # `packages-tests`, not build.yaml's `packages` pool. Pool directories are
+      # created on demand (see claim-build-scratch.sh), so this needs no runner
+      # change — and it has to be separate for two reasons. The compile jobs
+      # build without `--build-tests` and these build with it, so sharing a slot
+      # would have each run churning the other's incremental state in both
+      # directions; and build.yaml's prune deletes the `shared`/`firecracker`
+      # subdirectories outright, which are exactly the trees this job builds.
       - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh packages
+        run: bash .github/scripts/claim-build-scratch.sh packages-tests
 
       - name: Prune build scratch dirs if oversized
         run: |
@@ -155,8 +175,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Own pool, separate from build.yaml's `control-plane` — see the claim
+      # step in test-packages for why the compile jobs and the test jobs must
+      # not share slots.
       - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh control-plane
+        run: bash .github/scripts/claim-build-scratch.sh control-plane-tests
 
       - name: Prune build scratch dir if oversized
         run: |
@@ -257,8 +280,26 @@ jobs:
         # Fully parallel: each test app runs on a 2-loop event-loop group
         # (1 pooled connection per loop), and per-test database clones are
         # minted through one serialized admin connection — see
-        # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
-        # stays far under Postgres's default max_connections=100.
+        # control-plane/Tests/AppTestSupport/TestUtilities.swift — so the suite
+        # stays far under Postgres's default max_connections=100. This
+        # used to be forced to --no-parallel and took ~8 minutes.
+        #
+        # One invocation covering all four test targets, NOT one per target.
+        # `--filter <target>\.` looks like it would scope a run to one target,
+        # but swift-testing treats the filter as a regex over test IDs and it
+        # silently drops tests: filtering to AppIAMTests ran 396 of its 408
+        # cases (and `--list-tests` with the same filter reports none at all).
+        # The whole-suite invocation is the only form that provably runs every
+        # case in all four targets, which is what this step's exit status
+        # covers.
+        #
+        # On Linux — the platform this job runs on — SwiftPM links all four
+        # test targets into one `stratoPackageTests.xctest`, so this is a
+        # single process writing a single `--xunit-output` report covering
+        # every target, and one migrated template database for the whole run.
+        # (macOS builds a separate bundle per target, so a local run costs one
+        # template build each; the parallel `-emit-module` win the split is
+        # for holds on both.)
         run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
@@ -280,3 +321,47 @@ jobs:
       - name: Release build scratch slot
         if: always()
         run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
+
+  # The Swift Dockerfiles' build-from-source path — the branch taken when
+  # PREBUILT_ARTIFACTS is unset (control-plane/Dockerfile:12,34,49,76;
+  # agent/Dockerfile:13,43,57,76). Nothing else in CI reaches it: main-build
+  # and release both pass PREBUILT_ARTIFACTS and take the copy-a-binary branch
+  # instead, and the PR image checks that did exercise it were deleted for
+  # costing an hour apiece. The path is live, not vestigial —
+  # deploy/compose/docker-compose.yml documents commenting out `image:` and
+  # uncommenting `build:` to run the stack from source.
+  #
+  # Opt-in (see the workflow input): a routine "run the tests" dispatch should
+  # not turn into an hour. Both images build in parallel, so the job's wall
+  # clock is one image, not two.
+  docker-source-build:
+    name: Docker Source Build (${{ matrix.image }})
+    if: inputs.docker_source_build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: control-plane, file: ./control-plane/Dockerfile }
+          - { image: agent, file: ./agent/Dockerfile }
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile unconditionally COPYs ./artifacts, so it must exist even
+      # when empty. Leaving PREBUILT_ARTIFACTS unset is the whole point: that is
+      # what selects the compile-from-source branch.
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
+
+      - name: Build ${{ matrix.image }} image from source
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: false
+          platforms: linux/amd64

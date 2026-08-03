@@ -39,6 +39,7 @@ jobs:
       api_client: ${{ steps.filter.outputs.api_client }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
     steps:
       - uses: dorny/paths-filter@v3
@@ -72,6 +73,15 @@ jobs:
               - 'SwiftFirecracker/**'
             workflow:
               - '.github/workflows/build.yaml'
+            # A separate filter, not another pattern under `workflow`: with
+            # `predicate-quantifier: every` a file would have to match BOTH
+            # patterns to match the filter, so adding this there would make
+            # `workflow` unmatchable rather than broader. The two scripts are
+            # load-bearing for the Swift jobs — swift-build.sh wraps every
+            # build and claim-build-scratch.sh decides whether it is warm — so
+            # they gate the same jobs `workflow` does.
+            ci_scripts:
+              - '.github/scripts/**'
             docker_web:
               - 'control-plane/web/Dockerfile'
 
@@ -181,7 +191,7 @@ jobs:
   build-swift-packages:
     name: Build Swift Packages
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.ci_scripts == 'true'
     runs-on: swift-runners-strato
     # Backstop for a hung build: the default 360-minute timeout would pin a
     # scarce runner-pool slot for six hours.
@@ -332,7 +342,7 @@ jobs:
   build-control-plane:
     name: Build Control Plane
     needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.ci_scripts == 'true'
     runs-on: swift-runners-strato
     # Backstop for a hung build (see the packages job above).
     timeout-minutes: 60
@@ -388,6 +398,57 @@ jobs:
       - name: Release build scratch slot
         if: always()
         run: kill "$BUILD_SCRATCH_HOLDER_PID" 2>/dev/null || true
+
+  # The one thing the deleted macOS agent job was actually gating. Everything
+  # else in that job (the QEMU brew deps, the .build cache, the agent build and
+  # test) was `continue-on-error` and could not fail — NIOEmbedded, which the
+  # Darwin-only NIOTransportServices pulls in, does not compile under the pinned
+  # 6.3.2 on macOS. This step was the exception, and it guards an invariant
+  # Linux cannot see: the manifest gates Linux-only products with
+  # `.when(platforms:)` rather than `#if os(Linux)`, so resolving on macOS must
+  # produce byte-identical pins. If someone reintroduces a host-conditional
+  # dependency declaration, macOS silently drops pins (swift-ovn, say) from
+  # Package.resolved and only this diff notices.
+  #
+  # It compiles nothing — checkout, toolchain, resolve, diff — and lands in
+  # ~90s, of which the toolchain .pkg is 60. That is roughly the length of the
+  # Swift compile jobs it runs beside, so it costs no wall clock on the PRs it
+  # runs for, and it is gated to the packages whose resolution it covers.
+  macos-resolved-drift:
+    name: Package.resolved macOS Drift Check
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Install the toolchain by dropping the swift.org release .pkg directly.
+      # vapor/swiftly-action's macOS path runs a Linux-only (apt/dnf/yum)
+      # dependency installer and aborts; and `swiftly install` itself currently
+      # crashes (Abort trap: 6) on the macOS runner. A direct .pkg install
+      # avoids both and pins the same toolchain the Linux jobs use. Selecting it
+      # via TOOLCHAINS (rather than PATH) lets xcrun resolve the macOS SDK.
+      # The pin is not incidental: Package.swift declares
+      # swift-tools-version:6.2, so the runner's stock Xcode Swift may be too
+      # old to even parse the manifest.
+      - name: Install Swift 6.3.2 toolchain
+        run: |
+          set -euxo pipefail
+          pkg="$RUNNER_TEMP/swift-6.3.2-osx.pkg"
+          curl -fsSL "https://download.swift.org/swift-6.3.2-release/xcode/swift-6.3.2-RELEASE/swift-6.3.2-RELEASE-osx.pkg" -o "$pkg"
+          sudo installer -pkg "$pkg" -target /
+          toolchain="$(ls -d /Library/Developer/Toolchains/swift-6.3.2-RELEASE.xctoolchain 2>/dev/null || ls -dt /Library/Developer/Toolchains/*.xctoolchain | head -1)"
+          echo "TOOLCHAINS=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$toolchain/Info.plist")" >> "$GITHUB_ENV"
+
+      - name: Check Package.resolved does not drift on macOS
+        working-directory: agent
+        run: |
+          swift --version
+          swift package resolve
+          git diff --exit-code Package.resolved \
+            || { echo "::error::agent/Package.resolved differs when resolved on macOS — someone reintroduced a host-conditional dependency declaration"; exit 1; }
 
   # The only image still checked on PRs. The control-plane and agent image
   # checks were dropped: they compile Swift from source in-image (up to an hour
