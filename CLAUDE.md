@@ -23,14 +23,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Independent Swift packages: `control-plane/`, `agent/`, `shared/`, `cli/`, `clients/swift/` (plus vendored `SwiftFirecracker/`). Each builds and tests separately:
 
 - `swift build --package-path <pkg>` / `swift test --package-path <pkg>`
-- `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating; run the full suite once before creating or updating a PR
+- `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating
 - Tests use swift-testing (`@Test`/`#expect`), not XCTest
+
+**CI does not run tests.** PR validation is a compile check only — it builds each package without `--build-tests`, so test targets are not even type-checked, and nothing on `main` runs them either. Running the full suite for every package you touched, before creating or updating a PR, is on you. The `Full Test Suite (manual)` workflow (`gh workflow run main-tests.yaml --ref <branch>`) runs everything on the CI runners if you want a second opinion.
 
 Build & test notes:
 - Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
 - Control-plane tests run against Postgres everywhere (the SQLite backend was removed). They expect a reachable server via `DATABASE_*` env vars — defaults `localhost:5432`, user `strato`, password `strato_password`, database `strato_test`; `docs/development/local-development.md` has a `docker run` one-liner matching the defaults. The harness clones a migrated template database per test, so parallel worktrees can share one server.
-- Known CI flake: the "Test Control Plane (Postgres)" step of the Test Control Plane job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
-- Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
+- Known flake in the control-plane suite: it can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure matches that signature and doesn't reproduce on a rerun, it's the race, not your diff.
+- Swift CI (the PR compile check and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
 ### Formatting and linting (CI-enforced)
 
