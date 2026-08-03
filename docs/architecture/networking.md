@@ -207,7 +207,8 @@ that **multi-PoP anycast is a genuine CDN build**, not a single-edge feature.
 ## Security groups
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
-on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
+on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
+(v24 added per-rule ACL logging).
 
 ### Model (control plane)
 
@@ -215,9 +216,11 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   **`SecurityGroupRule`** rows are immutable (edit = delete + recreate) and
   carry direction (`ingress`/`egress`), ethertype (`ipv4`/`ipv6`), optional
   protocol (`tcp`/`udp`/`icmp`) with a destination port range (ICMP: type and
-  code), and a peer that is a CIDR **or a reference to another security
-  group** in the same project. Every rule mutation bumps the group's
-  `generation` (the `LogicalNetwork.generation` replay-safety pattern).
+  code), a peer that is a CIDR **or a reference to another security
+  group** in the same project, and an optional `log` flag that turns on OVN
+  ACL logging for the flows the rule admits. Every rule mutation bumps the
+  group's `generation` (the `LogicalNetwork.generation` replay-safety
+  pattern).
 - **Mandatory default group**: every project has an auto-created, undeletable,
   un-renamable `default` group (rules editable) seeded with AWS semantics —
   allow all ingress from the group itself, allow all egress. Every VM NIC
@@ -229,8 +232,19 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   traffic — deleting that rule is how an operator opts a project into real
   ingress filtering.
 - Groups referenced by another group's rules, attached groups, and the default
-  group refuse deletion (409, schema-backstopped). Sandbox NICs do not
-  participate yet (their specs carry a nil group list = unmanaged).
+  group refuse deletion (409, schema-backstopped) — attachment counts span
+  both join tables, so a group held only by a sandbox NIC is just as
+  undeletable.
+- **Sandbox NICs carry membership but no enforcement.**
+  `sandbox_interface_security_groups` mirrors the VM join, sandbox create
+  attaches the project default, and attach/detach take a `sandboxId` — but
+  sandbox guest networking is still off
+  (`SandboxSpecBuilder.guestNetworkingSupported`), so a sandbox NIC's
+  `NetworkSpec` never reaches an agent and these rows filter nothing. They
+  exist so the model and the ≥1-group invariant are already right when guest
+  networking lands. The agent-version gate is deliberately *not* applied to
+  the sandbox path: with nothing on the wire, no agent version could change
+  what an attachment achieves.
 
 ### Wire and rollout
 
@@ -244,6 +258,19 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   keeps legacy traffic flowing during a mixed-version rollout. The control
   plane refuses attach/detach for VMs placed on pre-v20 agents and omits both
   fields from their syncs (`WireProtocol.supportsSecurityGroups`).
+- **The API says when filtering is inert.** `VMDetail.securityGroupsEnforced`
+  is false when a realizing agent — the host, or its site's network
+  controller — registered pre-v20, *or* when nothing would author the site's
+  ACLs at all (no controller, or an unusable one), so neither a mixed-version
+  fleet nor a broken site can quietly show attached groups that no ACL
+  applies; nil means the VM is unplaced. It and the attach/detach gate share
+  one resolution (`SecurityGroupService.realization`, itself resolved through
+  `SiteNetworkAuthority`) so they cannot disagree. Per-NIC membership is on
+  the same response (`NetworkInterface.securityGroupIds`), absent rather than
+  empty when the server didn't load it.
+- Per-rule `log` (v24) is additive with **no gate**, unlike v20's fields: a
+  pre-v24 agent builds the identical enforcing ACL and only omits the log
+  line, so the failure mode is a missing diagnostic, not open traffic.
 
 ### Enforcement (agent)
 
@@ -255,8 +282,22 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   (`agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift`).
 - The site-singleton **`pg_strato_drop`** group holds every managed port and
   provides the default deny: both-direction `ip` drops at priority 1001 (ARP
-  is not `ip`, so address resolution survives) plus DHCPv4/v6 and IPv6
-  ND/RS/RA carve-outs at 1002.
+  is not `ip`, so address resolution survives) plus DHCPv4/v6, IPv6
+  ND/RS/RA, and MLD carve-outs at 1002. MLD is spelled as explicit
+  `icmp6.type` values rather than OVN's `mldv1`/`mldv2` predicates, so the
+  match parses on every OVN version we support — and it is **asymmetric**: a
+  member port may send listener Reports and Dones (131/132/143) but only
+  *receive* Queries (130). Letting guests originate Queries would let any
+  member win MLD querier election on the shared segment and then stop
+  querying, timing out every other guest's multicast state; `pg_strato_drop`
+  spans the whole site, so that would cross project boundaries.
+- A rule with `log` set maps onto the ACL's `log`/`severity`/`name` columns
+  (`severity` pinned to `info`, `name` derived from the rule id so a log line
+  names what emitted it). The drop group's own ACLs are never logged — that
+  would drown the log in per-guest DHCP and multicast chatter.
+- Two revision counters force rewrites on upgrade without waiting for a rule
+  edit: `dropGroupRevision` when the drop group's ACL set changes shape, and
+  `aclSchemaRevision` when the builder's ACL *construction* changes.
 - **Ownership follows the topology-authority split**: port groups and ACLs are
   authored only by the site's network-controller agent (generation-stamped
   full replace of a group's ACL set; teardown = observed managed groups −
@@ -272,11 +313,12 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
 ### Known limitations / follow-ups
 
 - Group-reference peers match only addresses OVN knows from LSP `addresses`.
-- Network-level stateless ACLs (NACLs, switch-attached), sandbox NIC
-  participation, MLD allowance in the drop group, and per-rule logging/stats
-  (OVN ACL `log`) are follow-ups.
-- Dataplane verification on real multi-node hardware is pending (same status
-  as geneve/FIP verification above).
+- Sandbox NIC membership is recorded but not enforced, pending sandbox guest
+  networking (see the model section above).
+- Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
+  are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
+  rule has no rate limit.
+- There is no UI for security groups on sandboxes; membership is API-only.
 
 ## OVN dynamic routing (native, 25.03+)
 

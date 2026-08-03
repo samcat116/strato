@@ -110,6 +110,10 @@ export function useAttachSecurityGroup() {
     }) => securityGroupsApi.attach(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["security-groups"] });
+      // Membership lives on the workload's NIC too, so the VM/sandbox views
+      // would otherwise keep showing the pre-attach set.
+      queryClient.invalidateQueries({ queryKey: ["vms"] });
+      queryClient.invalidateQueries({ queryKey: ["sandboxes"] });
     },
   });
 }
@@ -127,6 +131,8 @@ export function useDetachSecurityGroup() {
     }) => securityGroupsApi.detach(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["security-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["vms"] });
+      queryClient.invalidateQueries({ queryKey: ["sandboxes"] });
     },
   });
 }

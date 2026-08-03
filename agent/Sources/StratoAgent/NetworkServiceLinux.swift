@@ -2079,6 +2079,11 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     direction: acl.direction,
                     match: acl.match,
                     action: acl.action,
+                    // Per-rule logging (STR-34). `name` is what identifies the
+                    // rule in the emitted line, so it rides with `log`.
+                    log: acl.log,
+                    severity: acl.severity,
+                    name: acl.name,
                     external_ids: acl.externalIDs),
                 onPortGroup: plan.name)
         }

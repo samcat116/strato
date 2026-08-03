@@ -129,6 +129,12 @@ export interface VMNetworkInterface {
   mtu?: number;
   deviceName: string;
   orderIndex: number;
+  /**
+   * The security groups filtering this NIC. `undefined` means the server did
+   * not report membership (an older control plane), never that the NIC is in
+   * no group — an empty array is what says that.
+   */
+  securityGroupIds?: string[];
 }
 
 export interface VM {
@@ -158,6 +164,14 @@ export interface VM {
    */
   secureBoot?: boolean;
   tpmEnabled?: boolean;
+  /**
+   * Whether the VM's attached security groups are actually enforced. `false`
+   * means a realizing agent is too old for security groups, or its site has no
+   * usable network controller to author the ACLs — either way the groups the
+   * UI shows filter nothing. `undefined` means the VM is unplaced (or the
+   * control plane predates the field) — unknown, not "no".
+   */
+  securityGroupsEnforced?: boolean;
   /**
    * Graphics console (backend issue #566): whether the guest has a display
    * device whose framebuffer the Display tab can attach to. Fixed at creation
@@ -1076,6 +1090,12 @@ export interface Sandbox {
   status: SandboxStatus;
   /** Exit code of a workload that ran to completion (`status === "Exited"`). */
   exitCode?: number | null;
+  /**
+   * Security groups on the sandbox's NIC (flat: a sandbox has at most one).
+   * Absent when the sandbox has no NIC. Recorded but not yet enforced —
+   * sandbox NICs are still omitted from the agent sync entirely.
+   */
+  securityGroupIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1684,6 +1704,8 @@ export interface SecurityGroupRule {
   /** At most one of remoteCIDR/remoteGroupId; both absent means "any peer". */
   remoteCIDR?: string;
   remoteGroupId?: string;
+  /** Whether the realized OVN ACL logs the packets this rule matches. */
+  log?: boolean;
   description?: string;
   createdAt?: string;
 }
@@ -1722,12 +1744,20 @@ export interface CreateSecurityGroupRuleRequest {
   portRangeMax?: number;
   remoteCIDR?: string;
   remoteGroupId?: string;
+  /** Log the packets this rule matches. Defaults to false. */
+  log?: boolean;
   description?: string;
 }
 
+/**
+ * Names exactly one workload — `vmId` or `sandboxId` — optionally narrowed to
+ * one of its NICs. Naming neither or both is rejected with a 400.
+ */
 export interface AttachSecurityGroupRequest {
-  vmId: string;
-  /** The VM NIC to attach to; defaults to the VM's first interface. */
+  vmId?: string;
+  /** Sandbox memberships are recorded but not yet enforced. */
+  sandboxId?: string;
+  /** The NIC to attach to; defaults to the workload's first interface. */
   interfaceId?: string;
 }
 

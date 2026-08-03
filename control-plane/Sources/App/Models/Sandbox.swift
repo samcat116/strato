@@ -318,6 +318,15 @@ struct SandboxDetailResponse: Content {
     let cpuTemplate: String?
     let status: SandboxStatus
     let exitCode: Int?
+    /// The security groups attached to the sandbox's NIC (STR-34), flat
+    /// because v1 gives a sandbox at most one interface. Nil when the NIC
+    /// relation wasn't eager-loaded *or* the sandbox has no NIC at all —
+    /// which are the same thing to a caller, since neither can be filtered.
+    ///
+    /// Read-only bookkeeping for now: sandbox NICs are still omitted from the
+    /// wire, so these groups enforce nothing. See
+    /// `SandboxInterfaceSecurityGroup`.
+    let securityGroupIds: [UUID]?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -341,6 +350,11 @@ struct SandboxDetailResponse: Content {
         self.cpuTemplate = sandbox.cpuTemplate
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode
+        self.securityGroupIds = sandbox.$networkInterfaces.value?
+            .first?
+            .$securityGroupMemberships.value?
+            .map { $0.$securityGroup.id }
+            .sorted { $0.uuidString < $1.uuidString }
         self.createdAt = sandbox.createdAt
         self.updatedAt = sandbox.updatedAt
     }

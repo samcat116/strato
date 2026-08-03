@@ -120,6 +120,8 @@ struct CreateSecurityGroupRuleRequest: Content {
     /// At most one of `remoteCIDR`/`remoteGroupId`; both nil means "any".
     let remoteCIDR: String?
     let remoteGroupId: UUID?
+    /// Log the packets this rule matches (STR-34). Omitted means off.
+    let log: Bool?
     let description: String?
 
     init(
@@ -130,6 +132,7 @@ struct CreateSecurityGroupRuleRequest: Content {
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
         remoteGroupId: UUID? = nil,
+        log: Bool? = nil,
         description: String? = nil
     ) {
         self.direction = direction
@@ -139,18 +142,47 @@ struct CreateSecurityGroupRuleRequest: Content {
         self.portRangeMax = portRangeMax
         self.remoteCIDR = remoteCIDR
         self.remoteGroupId = remoteGroupId
+        self.log = log
         self.description = description
     }
 }
 
+/// The attach/detach target: exactly one of `vmId` / `sandboxId`, optionally
+/// narrowed to a specific NIC. Both ids are optional on the wire so the
+/// sandbox arm (STR-34) could be added without breaking clients that send
+/// `vmId`; `requireTarget()` is what actually enforces exactly-one, so no
+/// handler has to re-derive the rule.
 struct AttachSecurityGroupRequest: Content {
-    let vmId: UUID
-    /// The VM NIC to attach to; defaults to the VM's first interface.
+    let vmId: UUID?
+    /// The sandbox to attach to. Sandbox memberships are bookkeeping only for
+    /// now — see `SandboxInterfaceSecurityGroup`.
+    let sandboxId: UUID?
+    /// The NIC to attach to; defaults to the workload's first interface.
     let interfaceId: UUID?
 
-    init(vmId: UUID, interfaceId: UUID? = nil) {
+    init(vmId: UUID? = nil, sandboxId: UUID? = nil, interfaceId: UUID? = nil) {
         self.vmId = vmId
+        self.sandboxId = sandboxId
         self.interfaceId = interfaceId
+    }
+
+    enum Target {
+        case vm(UUID)
+        case sandbox(UUID)
+    }
+
+    /// Resolves the workload the request names, refusing both "neither" and
+    /// "both" — a request naming two workloads has no defensible reading, and
+    /// silently preferring one would attach the group to the wrong thing.
+    func requireTarget() throws -> Target {
+        switch (vmId, sandboxId) {
+        case (let vmId?, nil): return .vm(vmId)
+        case (nil, let sandboxId?): return .sandbox(sandboxId)
+        case (nil, nil):
+            throw Abort(.badRequest, reason: "Name the target workload with either vmId or sandboxId")
+        case (_?, _?):
+            throw Abort(.badRequest, reason: "Name either vmId or sandboxId, not both")
+        }
     }
 }
 
@@ -163,6 +195,8 @@ struct SecurityGroupRuleResponse: Content {
     let portRangeMax: Int?
     let remoteCIDR: String?
     let remoteGroupId: UUID?
+    /// Whether the realized OVN ACL logs matching packets (STR-34).
+    let log: Bool
     let description: String?
     let createdAt: Date?
 
@@ -175,6 +209,7 @@ struct SecurityGroupRuleResponse: Content {
         self.portRangeMax = rule.portRangeMax
         self.remoteCIDR = rule.remoteCIDR
         self.remoteGroupId = rule.$remoteGroup.id
+        self.log = rule.log
         self.description = rule.ruleDescription
         self.createdAt = rule.createdAt
     }

@@ -5236,6 +5236,8 @@ export interface components {
             tpmEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
+            /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
+            securityGroupsEnforced?: boolean;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5258,10 +5260,14 @@ export interface components {
             network?: string;
             macAddress: string;
             addresses: components["schemas"]["InterfaceAddress"][];
+            /** @description Addresses the guest actually configured, as reported by the guest agent — distinct from the allocated `addresses`. Empty until a guest agent reports them. */
+            observedAddresses?: components["schemas"]["ObservedInterfaceAddress"][];
             mtu?: number;
             /** @description Stable device name (e.g. net0). */
             deviceName: string;
             orderIndex: number;
+            /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
+            securityGroupIds?: string[];
         };
         InterfaceAddress: {
             /** @enum {string} */
@@ -5269,6 +5275,13 @@ export interface components {
             address: string;
             prefixLength: number;
             gateway?: string;
+        };
+        /** @description An address the guest reported on this NIC. No gateway: the guest reports what it configured, not how it routes. */
+        ObservedInterfaceAddress: {
+            /** @enum {string} */
+            family: "ipv4" | "ipv6";
+            address: string;
+            prefixLength?: number;
         };
         CreateSandboxRequest: {
             name: string;
@@ -5301,6 +5314,8 @@ export interface components {
              */
             networkId?: string;
             networkName?: string;
+            /** @description Security groups for the sandbox's NIC. Omitting them attaches the project's default group; supplying them without a network is a 400, since there would be no NIC to attach them to. Recorded but not yet enforced. */
+            securityGroupIds?: string[];
         };
         UpdateSandboxRequest: {
             name?: string;
@@ -5332,6 +5347,8 @@ export interface components {
             restoredFromSnapshotId?: string;
             status: components["schemas"]["SandboxStatus"];
             exitCode?: number;
+            /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Recorded but **not enforced** — sandbox NICs are still omitted from the agent sync entirely. */
+            securityGroupIds?: string[];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5784,6 +5801,8 @@ export interface components {
              * @description Security-group peer — matches the referenced group's current member addresses.
              */
             remoteGroupId?: string;
+            /** @description Whether the realized OVN ACL logs the packets it matches. Off by default; set at rule creation and changed by delete + recreate, like every other field of a rule. */
+            log?: boolean;
             description?: string;
             /** Format: date-time */
             createdAt?: string;
@@ -5828,14 +5847,22 @@ export interface components {
             remoteCIDR?: string;
             /** Format: uuid */
             remoteGroupId?: string;
+            /** @description Log the packets this rule matches. Defaults to false. */
+            log?: boolean;
             description?: string;
         };
+        /** @description Names exactly one workload — `vmId` or `sandboxId` — optionally narrowed to one of its NICs. Naming neither or both is a 400. */
         AttachSecurityGroupRequest: {
             /** Format: uuid */
-            vmId: string;
+            vmId?: string;
             /**
              * Format: uuid
-             * @description The VM NIC; defaults to the VM's first interface.
+             * @description Sandbox memberships are recorded but not yet enforced: sandbox NICs are still omitted from the agent sync entirely.
+             */
+            sandboxId?: string;
+            /**
+             * Format: uuid
+             * @description The NIC; defaults to the workload's first interface.
              */
             interfaceId?: string;
         };

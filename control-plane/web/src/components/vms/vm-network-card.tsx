@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Shield } from "lucide-react";
+import { AlertTriangle, Shield } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -28,7 +30,12 @@ import {
   useSecurityGroups,
 } from "@/lib/hooks/use-security-groups";
 import { toast } from "sonner";
-import type { SecurityGroup, VM, VMNetworkInterface } from "@/types/api";
+import {
+  MAX_SECURITY_GROUPS_PER_NIC,
+  type SecurityGroup,
+  type VM,
+  type VMNetworkInterface,
+} from "@/types/api";
 
 /** All addresses of a NIC as `address/prefix`. */
 function nicAddresses(nic: VMNetworkInterface): string[] {
@@ -50,11 +57,56 @@ function nicGateways(nic: VMNetworkInterface): string[] {
 }
 
 /**
- * Attach/detach a security group on one NIC. The API doesn't expose which
- * groups a NIC currently attaches (only per-group attachment counts), so the
- * menu deliberately offers both actions for every group rather than
- * pretending to know membership; the server rejects no-op or invalid
- * combinations with a clear error.
+ * The names of the groups filtering a NIC. An id with no matching group in the
+ * project list is shown as the raw id rather than dropped — better a puzzling
+ * id than a NIC that looks less filtered than it is.
+ */
+function NicSecurityGroupNames({
+  nic,
+  groups,
+}: {
+  nic: VMNetworkInterface;
+  groups: SecurityGroup[];
+}) {
+  if (!nic.securityGroupIds) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (nic.securityGroupIds.length === 0) {
+    // The server holds every NIC to >=1 group, so this is an anomaly worth
+    // showing rather than a blank cell. It does *not* mean unfiltered: a NIC
+    // with no groups is unmanaged — the sync omits the field, the agent reads
+    // that as "no opinion", and the port keeps whatever OVN membership it
+    // already had. Saying "unfiltered" would send debugging the wrong way.
+    return (
+      <Badge
+        variant="secondary"
+        className="font-normal text-amber-700 dark:text-amber-400"
+        title="No groups recorded. The port keeps its existing dataplane membership until a group is attached."
+      >
+        no groups
+      </Badge>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {nic.securityGroupIds.map((id) => (
+        <Badge key={id} variant="secondary" className="font-normal">
+          {groups.find((group) => group.id === id)?.name ?? id}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Attach/detach a NIC's security groups as one checkbox list: checked groups
+ * are attached, and toggling one attaches or detaches it.
+ *
+ * When the server doesn't report membership (`securityGroupIds` undefined — an
+ * older control plane) the menu falls back to offering attach and detach
+ * separately, since a checkbox list with nothing checked would claim the NIC
+ * is in no group. The server still validates either way; the disabled states
+ * below only spare the user a round trip for refusals we can predict.
  */
 function NicSecurityGroupMenu({
   vm,
@@ -68,6 +120,10 @@ function NicSecurityGroupMenu({
   const attach = useAttachSecurityGroup();
   const detach = useDetachSecurityGroup();
   const busy = attach.isPending || detach.isPending;
+  const attached = nic.securityGroupIds;
+  const atCap = (attached?.length ?? 0) >= MAX_SECURITY_GROUPS_PER_NIC;
+  // The server refuses to empty a NIC's group set, so the last one can't go.
+  const isLastGroup = attached?.length === 1;
 
   const handleAttach = (group: SecurityGroup) => {
     attach.mutate(
@@ -116,32 +172,59 @@ function NicSecurityGroupMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>Security groups</DropdownMenuLabel>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Attach group</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            {groups.map((group) => (
-              <DropdownMenuItem
+        {attached ? (
+          groups.map((group) => {
+            const isAttached = attached.includes(group.id);
+            return (
+              <DropdownMenuCheckboxItem
                 key={group.id}
-                onSelect={() => handleAttach(group)}
+                checked={isAttached}
+                disabled={isAttached ? isLastGroup : atCap}
+                // Radix would otherwise close and reopen focus mid-mutation.
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={() =>
+                  isAttached ? handleDetach(group) : handleAttach(group)
+                }
               >
                 {group.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Detach group</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            {groups.map((group) => (
-              <DropdownMenuItem
-                key={group.id}
-                onSelect={() => handleDetach(group)}
-              >
-                {group.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+              </DropdownMenuCheckboxItem>
+            );
+          })
+        ) : (
+          <>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Attach group</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {groups.map((group) => (
+                  <DropdownMenuItem
+                    key={group.id}
+                    onSelect={() => handleAttach(group)}
+                  >
+                    {group.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Detach group</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {groups.map((group) => (
+                  <DropdownMenuItem
+                    key={group.id}
+                    onSelect={() => handleDetach(group)}
+                  >
+                    {group.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        )}
+        {atCap && attached && (
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">
+            At the {MAX_SECURITY_GROUPS_PER_NIC}-group limit; detach one first.
+          </p>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -177,6 +260,21 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
         )}
       </CardHeader>
       <CardContent>
+        {vm.securityGroupsEnforced === false && (
+          // Not a nicety: without this the UI shows attached groups on a host
+          // that ignores them entirely, which reads as "filtered" when it
+          // isn't. Derived server-side — listing agents is admin-only, so a
+          // project user could never work this out from the agent's version.
+          <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              Security groups are <strong>not enforced</strong> on this VM&apos;s
+              host: the agent realizing it predates security-group support, so
+              the groups below filter nothing. Upgrade the agent to enforce
+              them.
+            </span>
+          </div>
+        )}
         {interfaces.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground">
             No network interfaces.
@@ -207,9 +305,14 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                   MTU
                 </TableHead>
                 {showSecurityGroups && (
-                  <TableHead className="text-muted-foreground font-medium text-right">
-                    Actions
-                  </TableHead>
+                  <>
+                    <TableHead className="text-muted-foreground font-medium">
+                      Security groups
+                    </TableHead>
+                    <TableHead className="text-muted-foreground font-medium text-right">
+                      Actions
+                    </TableHead>
+                  </>
                 )}
               </TableRow>
             </TableHeader>
@@ -253,15 +356,23 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                     {nic.mtu ?? "—"}
                   </TableCell>
                   {showSecurityGroups && (
-                    <TableCell className="text-right">
-                      {nic.id ? (
-                        <NicSecurityGroupMenu
-                          vm={vm}
+                    <>
+                      <TableCell>
+                        <NicSecurityGroupNames
                           nic={nic}
                           groups={securityGroups}
                         />
-                      ) : null}
-                    </TableCell>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {nic.id ? (
+                          <NicSecurityGroupMenu
+                            vm={vm}
+                            nic={nic}
+                            groups={securityGroups}
+                          />
+                        ) : null}
+                      </TableCell>
+                    </>
                   )}
                 </TableRow>
               ))}
