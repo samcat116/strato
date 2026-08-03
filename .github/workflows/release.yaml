@@ -587,19 +587,30 @@ jobs:
             strato-linux-*) STATIC="--static-swift-stdlib" ;;
           esac
 
+          # Each build names its product, matching the other release-mode build
+          # sites (control-plane/Dockerfile, agent/Dockerfile, main-build.yaml,
+          # and the container job above). Without it SwiftPM builds every
+          # non-test target in the root package, including ones that belong to
+          # no product — and control-plane's AppTestSupport is exactly that: a
+          # plain library target holding the test fixtures, which `@testable
+          # import`s App. Testability is only enabled in debug, so an unscoped
+          # release build fails on it with "module 'App' was not compiled for
+          # testing". Nothing else catches this: PR CI only ever builds debug,
+          # and this job runs on tags.
+          #
           # Build control plane
           cd control-plane
-          swift build -c release $STATIC
+          swift build -c release --product App $STATIC
           cd ..
 
           # Build agent
           cd agent
-          swift build -c release $STATIC
+          swift build -c release --product StratoAgent $STATIC
           cd ..
 
           # Build CLI
           cd cli
-          swift build -c release $STATIC
+          swift build -c release --product strato $STATIC
           cd ..
 
       - name: Package binaries
