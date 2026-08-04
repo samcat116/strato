@@ -114,7 +114,7 @@ final class WorkloadTombstoneTests {
                         UnrecognizedWorkload(
                             kind: .vm, workloadId: strayId, observedGeneration: 6, status: "Running")
                     ]))
-            #expect(authorized)
+            #expect(authorized.authorizedTeardown)
 
             let recorded = try await self.claims(for: agentId, on: app)
             #expect(recorded.count == 1)
@@ -151,7 +151,7 @@ final class WorkloadTombstoneTests {
                             kind: .vm, workloadId: try vm.requireID(), observedGeneration: 3,
                             status: "Running")
                     ]))
-            #expect(!authorized)
+            #expect(!authorized.authorizedTeardown)
 
             let recorded = try await self.claims(for: agentId, on: app)
             #expect(recorded.count == 1)
@@ -190,7 +190,7 @@ final class WorkloadTombstoneTests {
                             kind: .vm, workloadId: try vm.requireID(), observedGeneration: 2,
                             status: "Running")
                     ]))
-            #expect(!authorized)
+            #expect(!authorized.authorizedTeardown)
 
             let recorded = try await self.claims(for: newId, on: app)
             #expect(recorded.count == 1)
@@ -290,8 +290,8 @@ final class WorkloadTombstoneTests {
                 self.report(agentId: agentId, unrecognized: [entry]))
             let second = try await app.observedStateApplier.apply(
                 self.report(agentId: agentId, unrecognized: [entry]))
-            #expect(first)
-            #expect(!second)  // no new authorization, so no sync nudge
+            #expect(first.authorizedTeardown)
+            #expect(!second.authorizedTeardown)  // no new authorization, so no sync nudge
 
             let recorded = try await self.claims(for: agentId, on: app)
             #expect(recorded.count == 1)
@@ -362,6 +362,72 @@ final class WorkloadTombstoneTests {
         }
     }
 
+    @Test("Held claims are counted on every report, so the condition stays visible")
+    func heldClaimsAreReportedLevelTriggered() async throws {
+        try await withTombstoneApp { app, builder, org, project, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "ts-agent")
+            let agentId = try agent.requireID().uuidString
+            let vm = try await builder.createVM(name: "held-vm", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let entry = UnrecognizedWorkload(
+                kind: .vm, workloadId: try vm.requireID(), observedGeneration: 1, status: "Running")
+
+            // The withheld-teardown *counter* only fires at the transition, so
+            // the count has to come back on every report or an operator who
+            // wasn't watching that minute has no way to ask "is this still
+            // happening" — including after a control-plane restart.
+            let first = try await app.observedStateApplier.apply(
+                self.report(agentId: agentId, unrecognized: [entry]))
+            #expect(first.heldByReason[AgentWorkloadClaim.heldRowPresentReason] == 1)
+            let second = try await app.observedStateApplier.apply(
+                self.report(agentId: agentId, unrecognized: [entry]))
+            #expect(second.heldByReason[AgentWorkloadClaim.heldRowPresentReason] == 1)
+            #expect(second.heldByReason[AgentWorkloadClaim.heldOtherAgentBucket] == 0)
+
+            // And it falls back to zero rather than going stale once the
+            // condition clears.
+            let cleared = try await app.observedStateApplier.apply(self.report(agentId: agentId))
+            #expect(cleared.heldByReason[AgentWorkloadClaim.heldRowPresentReason] == 0)
+        }
+    }
+
+    @Test("A refusal repeated on heartbeats updates the row without re-logging")
+    func teardownRefusalIsDedupedPerSync() async throws {
+        try await withTombstoneApp { app, _, org, _, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "ts-agent")
+            let agentId = try agent.requireID().uuidString
+
+            // The same refusal rides on every report while the agent's guard
+            // stands, so the row must track it without the log and counter
+            // firing per heartbeat.
+            let syncId = UUID().uuidString
+            let refusal = ObservedTeardownRefusal(
+                syncId: syncId, requestedTeardowns: 9, presentWorkloads: 9, reason: "guard tripped")
+            for _ in 0..<3 {
+                await app.agentService.applyObservedStateReport(
+                    try MessageEnvelope(
+                        message: self.report(agentId: agentId, teardownRefusal: refusal)),
+                    fromAgentKey: agent.identity.key)
+            }
+            var row = try #require(await Agent.find(agent.id, on: app.db))
+            #expect(row.teardownRefusalReason == "guard tripped")
+            let firstRefusedAt = try #require(row.teardownRefusedAt)
+
+            // A genuinely new refused sync is a new event and does move the
+            // timestamp.
+            let next = ObservedTeardownRefusal(
+                syncId: UUID().uuidString, requestedTeardowns: 9, presentWorkloads: 9,
+                reason: "guard tripped again")
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: self.report(agentId: agentId, teardownRefusal: next)),
+                fromAgentKey: agent.identity.key)
+            row = try #require(await Agent.find(agent.id, on: app.db))
+            #expect(row.teardownRefusalReason == "guard tripped again")
+            #expect(row.teardownRefusedAt ?? .distantPast >= firstRefusedAt)
+        }
+    }
+
     // MARK: - Adoption (phase 3)
 
     @Test("Adoption re-points exactly the workloads the agent proves it holds")
@@ -400,7 +466,7 @@ final class WorkloadTombstoneTests {
                     #expect(res.status == .ok)
                     let body = try res.content.decode(AgentController.AdoptWorkloadsResponse.self)
                     #expect(body.adoptedVMs == 1)
-                    #expect(body.skipped == 1)
+                    #expect(body.skippedUnclaimed == 1)
                 })
 
             #expect(try await VM.find(held.id, on: app.db)?.hypervisorId == newId)
@@ -410,6 +476,181 @@ final class WorkloadTombstoneTests {
             #expect(try await self.claims(for: newId, on: app).isEmpty)
             let sync = try await app.desiredStateAssembler.assemble(agentId: newId)
             #expect(sync.vms.map(\.vmId) == [try held.requireID()])
+        }
+    }
+
+    @Test("Adoption moves everything volume dispatch reads, not just hypervisorId")
+    func adoptionRepointsVolumePlacement() async throws {
+        try await withTombstoneApp { app, builder, org, project, token in
+            let oldAgent = try await self.makeAgent(app: app, org: org, name: "ts-old")
+            let newAgent = try await self.makeAgent(app: app, org: org, name: "ts-new")
+            let oldId = try oldAgent.requireID().uuidString
+            let newId = try newAgent.requireID().uuidString
+            let user = try #require(
+                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+
+            let vm = try await builder.createVM(name: "held-vm", project: project)
+            vm.hypervisorId = oldId
+            try await vm.save(on: app.db)
+
+            // An attached volume, and a detached one — both live on the same
+            // physical host as the VM, and both are dispatched through the
+            // replica row rather than `hypervisorId`.
+            let attached = Volume(
+                name: "attached-vol", description: "", projectID: try project.requireID(),
+                size: 1 << 30, createdByID: try user.requireID())
+            attached.hypervisorId = oldId
+            attached.attachedAgentId = oldId
+            attached.$vm.id = try vm.requireID()
+            try await attached.save(on: app.db)
+            try await VolumeReplica(
+                volumeID: try attached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
+            ).create(on: app.db)
+
+            let detached = Volume(
+                name: "detached-vol", description: "", projectID: try project.requireID(),
+                size: 1 << 30, createdByID: try user.requireID())
+            detached.hypervisorId = oldId
+            try await detached.save(on: app.db)
+            try await VolumeReplica(
+                volumeID: try detached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
+            ).create(on: app.db)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: newId,
+                    unrecognized: [
+                        UnrecognizedWorkload(
+                            kind: .vm, workloadId: try vm.requireID(), observedGeneration: 1,
+                            status: "Running")
+                    ]))
+
+            try await app.test(
+                .POST, "/api/agents/\(newId)/actions/adopt-workloads",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["fromAgentId": oldId])
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    let body = try res.content.decode(AgentController.AdoptWorkloadsResponse.self)
+                    #expect(body.adoptedVolumes == 2)
+                })
+
+            // `VolumeService.placement(of:)` consults the replica row first, so
+            // this is the assertion that actually proves an operation on these
+            // disks would reach the adopting host.
+            let replicaAgents = try await VolumeReplica.query(on: app.db)
+                .all()
+                .map(\.agentId)
+            #expect(Set(replicaAgents) == [newId])
+
+            let reloadedAttached = try #require(await Volume.find(attached.id, on: app.db))
+            #expect(reloadedAttached.hypervisorId == newId)
+            #expect(reloadedAttached.attachedAgentId == newId)
+            #expect(try await Volume.find(detached.id, on: app.db)?.hypervisorId == newId)
+        }
+    }
+
+    @Test("A volume attached to a VM that stayed behind does not move")
+    func adoptionLeavesUnclaimedVMsVolumes() async throws {
+        try await withTombstoneApp { app, builder, org, project, token in
+            let oldAgent = try await self.makeAgent(app: app, org: org, name: "ts-old")
+            let newAgent = try await self.makeAgent(app: app, org: org, name: "ts-new")
+            let oldId = try oldAgent.requireID().uuidString
+            let newId = try newAgent.requireID().uuidString
+            let user = try #require(
+                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+
+            let held = try await builder.createVM(name: "held-vm", project: project)
+            held.hypervisorId = oldId
+            try await held.save(on: app.db)
+            let stayed = try await builder.createVM(name: "stayed-vm", project: project)
+            stayed.hypervisorId = oldId
+            try await stayed.save(on: app.db)
+
+            let stayedVolume = Volume(
+                name: "stayed-vol", description: "", projectID: try project.requireID(),
+                size: 1 << 30, createdByID: try user.requireID())
+            stayedVolume.hypervisorId = oldId
+            stayedVolume.$vm.id = try stayed.requireID()
+            try await stayedVolume.save(on: app.db)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: newId,
+                    unrecognized: [
+                        UnrecognizedWorkload(
+                            kind: .vm, workloadId: try held.requireID(), observedGeneration: 1)
+                    ]))
+
+            try await app.test(
+                .POST, "/api/agents/\(newId)/actions/adopt-workloads",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["fromAgentId": oldId])
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    let body = try res.content.decode(AgentController.AdoptWorkloadsResponse.self)
+                    #expect(body.adoptedVolumes == 0)
+                })
+
+            #expect(try await Volume.find(stayedVolume.id, on: app.db)?.hypervisorId == oldId)
+        }
+    }
+
+    @Test("Adoption refuses to cross an organization boundary")
+    func adoptionRefusesCrossOrg() async throws {
+        try await withTombstoneApp { app, builder, org, project, token in
+            let otherOrg = try await builder.createOrganization(name: "Other Tombstone Org")
+            let oldAgent = try await self.makeAgent(app: app, org: otherOrg, name: "ts-foreign")
+            let newAgent = try await self.makeAgent(app: app, org: org, name: "ts-new")
+            let oldId = try oldAgent.requireID().uuidString
+            let newId = try newAgent.requireID().uuidString
+
+            let vm = try await builder.createVM(name: "foreign-vm", project: project)
+            vm.hypervisorId = oldId
+            try await vm.save(on: app.db)
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: newId,
+                    unrecognized: [
+                        UnrecognizedWorkload(
+                            kind: .vm, workloadId: try vm.requireID(), observedGeneration: 1)
+                    ]))
+
+            // The claim evidence bounds *which* workloads may move; it says
+            // nothing about across what boundary.
+            try await app.test(
+                .POST, "/api/agents/\(newId)/actions/adopt-workloads",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["fromAgentId": oldId])
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .conflict)
+                })
+
+            #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == oldId)
+        }
+    }
+
+    @Test("Adoption 404s on an unknown source record")
+    func adoptionRejectsUnknownSource() async throws {
+        try await withTombstoneApp { app, _, org, _, token in
+            let newAgent = try await self.makeAgent(app: app, org: org, name: "ts-new")
+            let newId = try newAgent.requireID().uuidString
+
+            try await app.test(
+                .POST, "/api/agents/\(newId)/actions/adopt-workloads",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["fromAgentId": UUID().uuidString])
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .notFound)
+                })
         }
     }
 

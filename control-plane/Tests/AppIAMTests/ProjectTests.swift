@@ -696,6 +696,10 @@ final class ProjectTests {
             let project = try await builder.createProject(
                 name: "Doomed Project", description: "Has a VM", organization: org)
             let vm = try await builder.createVM(name: "survivor-vm", project: project)
+            // Pointed at the doomed org, so the refusal can be checked to have
+            // happened *before* the delete path clears this.
+            user.currentOrganizationId = try org.requireID()
+            try await user.save(on: app.db)
 
             // `projects.organization_id` cascades, so before STR-98 this
             // deleted the VM row outright — one level further up the same
@@ -704,10 +708,18 @@ final class ProjectTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == HTTPResponseStatus.conflict)
+                // The refusal names what is blocking it: an operator hunting
+                // for the workload across a whole org's projects is the
+                // difference between a usable error and a constraint dump.
+                #expect(res.body.string.contains("Doomed Project"))
             }
 
             #expect(try await VM.find(vm.id, on: app.db) != nil)
             #expect(try await Organization.find(org.id, on: app.db) != nil)
+            // The pre-check runs before the user updates, which are not in the
+            // delete's transaction and would otherwise persist through it.
+            let refreshed = try await User.find(user.id, on: app.db)
+            #expect(refreshed?.currentOrganizationId != nil)
         }
     }
 

@@ -281,6 +281,12 @@ future work.
     destroyed or invented.
   Claims retire themselves when the agent stops reporting the workload, or
   when its record comes back before the teardown converges.
+- **Deleting a container of workloads refuses rather than cascading.**
+  `vms.project_id` is `ON DELETE RESTRICT`, so neither `DELETE /api/projects/:id`
+  nor `DELETE /api/organizations/:id` can hard-delete a live VM row by cascade —
+  both pre-check and both map the database's refusal onto a 409. Deleting an
+  organization whose projects still hold VMs or sandboxes used to succeed; it
+  now returns 409 naming the projects that block it.
 
 ## Per-organization trust domains
 

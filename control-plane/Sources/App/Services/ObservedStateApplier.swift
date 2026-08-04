@@ -22,11 +22,26 @@ struct ObservedStateApplier {
         let id: UUID
     }
 
-    /// Apply one report. Returns true when it authorized a teardown the agent
-    /// does not have yet, so the caller can push a fresh sync instead of
-    /// leaving the tombstone to the periodic timer.
+    /// What one report's teardown bookkeeping produced (STR-98), for the
+    /// caller — which holds the agent row this needs to be reported against.
+    struct UnrecognizedOutcome: Sendable {
+        /// A teardown was newly authorized (or its generation advanced), so
+        /// the agent should get a sync now rather than at the next period.
+        var authorizedTeardown = false
+        /// Held claims bucketed by reason, for a gauge recorded on every
+        /// report. Both buckets are always present, including at zero, so the
+        /// series falls back to 0 when the condition clears instead of going
+        /// stale at its last non-zero value.
+        var heldByReason: [String: Int] = [
+            AgentWorkloadClaim.heldRowPresentReason: 0,
+            AgentWorkloadClaim.heldOtherAgentBucket: 0,
+        ]
+    }
+
+    /// Apply one report, returning what the caller should do about the
+    /// workloads the agent holds that no sync accounted for.
     @discardableResult
-    func apply(_ report: ObservedStateReport) async throws -> Bool {
+    func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
         let db = app.db
         let reported = Dictionary(
             report.vms.map { ($0.vmId, $0) },
@@ -38,7 +53,7 @@ struct ObservedStateApplier {
         // here is what authorizes — or permanently withholds — a teardown, and
         // the loud path below reads whether the same report also observed the
         // workload.
-        let authorizedTeardown = try await applyUnrecognizedWorkloads(report, on: db)
+        let unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
 
         let dbVMs = try await VM.query(on: db)
             .filter(\.$hypervisorId == report.agentId)
@@ -170,7 +185,7 @@ struct ObservedStateApplier {
             }
         }
 
-        return authorizedTeardown
+        return unrecognizedOutcome
     }
 
     // MARK: - Unrecognized workloads (STR-98)
@@ -198,7 +213,7 @@ struct ObservedStateApplier {
     private func applyUnrecognizedWorkloads(
         _ report: ObservedStateReport,
         on db: Database
-    ) async throws -> Bool {
+    ) async throws -> UnrecognizedOutcome {
         let existingClaims = try await AgentWorkloadClaim.query(on: db)
             .filter(\.$agentId == report.agentId)
             .all()
@@ -229,10 +244,10 @@ struct ObservedStateApplier {
         // again, so this sync lists it and the agent's own diff would ignore
         // the tombstone anyway; leaving the claim would ship a contradictory
         // "keep this / destroy this" pair on every sync forever.
-        let unreported = Set(
+        let reportedUnrecognized = Set(
             report.unrecognized.map { ResourceKey(kind: $0.kind.resourceKind, id: $0.workloadId) })
         let revivable = claimsByKey.filter {
-            $0.value.disposition == .tombstoned && !unreported.contains($0.key)
+            $0.value.disposition == .tombstoned && !reportedUnrecognized.contains($0.key)
                 && !staleClaims.keys.contains($0.key)
         }
         if !revivable.isEmpty {
@@ -256,20 +271,36 @@ struct ObservedStateApplier {
             }
         }
 
-        for (key, claim) in staleClaims {
-            try await claim.delete(on: db)
-            claimsByKey.removeValue(forKey: key)
-            app.logger.info(
-                "Agent no longer holds a workload it claimed; claim retired",
-                metadata: [
-                    "agentId": .string(report.agentId),
-                    "resourceKind": .string(key.kind.rawValue),
-                    "resourceId": .string(key.id.uuidString),
-                    "disposition": .string(claim.disposition.rawValue),
-                ])
+        // One delete for the whole set: a database restored from backup makes
+        // a 500-VM host report 500 strays at once, and this runs on every
+        // report, ahead of the reconciliation it precedes.
+        if !staleClaims.isEmpty {
+            try await AgentWorkloadClaim.query(on: db)
+                .filter(\.$id ~~ staleClaims.values.compactMap(\.id))
+                .delete()
+            for (key, claim) in staleClaims {
+                claimsByKey.removeValue(forKey: key)
+                app.logger.info(
+                    "Agent no longer holds a workload it claimed; claim retired",
+                    metadata: [
+                        "agentId": .string(report.agentId),
+                        "resourceKind": .string(key.kind.rawValue),
+                        "resourceId": .string(key.id.uuidString),
+                        "disposition": .string(claim.disposition.rawValue),
+                    ])
+            }
         }
 
-        guard !report.unrecognized.isEmpty else { return false }
+        // Held claims this report doesn't re-decide keep the disposition they
+        // already have; the loop below adds the ones it decides. Counted so
+        // the gauge answers "is this still happening", which the transition
+        // counter cannot.
+        var outcome = UnrecognizedOutcome()
+        for (key, claim) in claimsByKey
+        where claim.disposition == .held && !reportedUnrecognized.contains(key) {
+            outcome.heldByReason[claim.reasonBucket, default: 0] += 1
+        }
+        guard !report.unrecognized.isEmpty else { return outcome }
 
         // One query per kind for the rows behind the reported ids — including
         // rows placed on *other* agents, which is the whole re-point signal.
@@ -290,7 +321,10 @@ struct ObservedStateApplier {
             }
         }
 
-        var authorizedTeardown = false
+        // New claims accumulate for one batched create at the end — see the
+        // stale-delete note above for why this path can't afford a round trip
+        // per workload.
+        var newClaims: [AgentWorkloadClaim] = []
         for entry in report.unrecognized {
             let key = ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId)
             let placement: WorkloadPlacement? =
@@ -312,9 +346,10 @@ struct ObservedStateApplier {
                     tombstoneGeneration: generation,
                     reason: nil,
                     entry: entry,
+                    pendingCreates: &newClaims,
                     on: db)
                 if changed {
-                    authorizedTeardown = true
+                    outcome.authorizedTeardown = true
                     app.logger.notice(
                         "Agent holds a workload with no control-plane record; authorizing teardown",
                         metadata: [
@@ -345,7 +380,12 @@ struct ObservedStateApplier {
                 tombstoneGeneration: nil,
                 reason: reason,
                 entry: entry,
+                pendingCreates: &newClaims,
                 on: db)
+            outcome.heldByReason[
+                onThisAgent
+                    ? AgentWorkloadClaim.heldRowPresentReason
+                    : AgentWorkloadClaim.heldOtherAgentBucket, default: 0] += 1
             if existing?.disposition != .held || existing?.reason != reason {
                 app.logger.error(
                     onThisAgent
@@ -359,10 +399,15 @@ struct ObservedStateApplier {
                         "observedStatus": .string(entry.status ?? "unknown"),
                     ])
                 Telemetry.workloadTeardownWithheld(
-                    reason: onThisAgent ? "row_present_here" : "row_on_other_agent")
+                    reason: onThisAgent
+                        ? AgentWorkloadClaim.heldRowPresentReason
+                        : AgentWorkloadClaim.heldOtherAgentBucket)
             }
         }
-        return authorizedTeardown
+        if !newClaims.isEmpty {
+            try await newClaims.create(on: db)
+        }
+        return outcome
     }
 
     /// Where a workload row currently says it lives, or nil when the row is
@@ -381,19 +426,21 @@ struct ObservedStateApplier {
         tombstoneGeneration: Int64?,
         reason: String?,
         entry: UnrecognizedWorkload,
+        pendingCreates: inout [AgentWorkloadClaim],
         on db: Database
     ) async throws {
         guard let claim = existing else {
-            try await AgentWorkloadClaim(
-                agentId: agentId,
-                resourceKind: key.kind,
-                resourceID: key.id,
-                disposition: disposition,
-                tombstoneGeneration: tombstoneGeneration,
-                reason: reason,
-                observedGeneration: entry.observedGeneration,
-                observedStatus: entry.status
-            ).save(on: db)
+            pendingCreates.append(
+                AgentWorkloadClaim(
+                    agentId: agentId,
+                    resourceKind: key.kind,
+                    resourceID: key.id,
+                    disposition: disposition,
+                    tombstoneGeneration: tombstoneGeneration,
+                    reason: reason,
+                    observedGeneration: entry.observedGeneration,
+                    observedStatus: entry.status
+                ))
             return
         }
         guard

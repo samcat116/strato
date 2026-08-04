@@ -596,8 +596,12 @@ export interface HeldWorkload {
 export interface AdoptWorkloadsResult {
   adoptedVMs: number;
   adoptedSandboxes: number;
+  // Includes detached volumes on the source record — their data is on the
+  // adopting host too.
   adoptedVolumes: number;
-  skipped: number;
+  // Workloads on the source record this agent doesn't report holding. Not
+  // necessarily stranded: one running on a genuinely different host counts here.
+  skippedUnclaimed: number;
 }
 
 // Result of POST /api/agents/:id/actions/update — the agent has verified and

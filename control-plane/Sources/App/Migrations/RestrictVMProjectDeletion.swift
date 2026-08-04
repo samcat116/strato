@@ -31,6 +31,18 @@ struct RestrictVMProjectDeletion: AsyncMigration {
     /// Drop whatever foreign key currently governs `vms.project_id` — Fluent's
     /// generated name is not stable enough to hardcode — and install one with
     /// the given delete action.
+    ///
+    /// Added `NOT VALID` and validated separately. A plain `ADD CONSTRAINT`
+    /// holds ACCESS EXCLUSIVE on `vms` (and a lock on `projects`) while it
+    /// scans every row, and migrations run inside `autoMigrate()` before this
+    /// replica serves traffic — on a large fleet that is a full read/write
+    /// stall on the VM table at every boot that applies it. `NOT VALID`
+    /// enforces the constraint on new and updated rows immediately under a
+    /// brief lock; `VALIDATE CONSTRAINT` then scans under a weaker
+    /// SHARE UPDATE EXCLUSIVE that concurrent reads and writes can hold
+    /// alongside. Existing rows cannot violate it — every `project_id` already
+    /// references a live project — so the split changes nothing but the lock
+    /// profile.
     static func replaceForeignKey(action: String, on sql: any SQLDatabase) async throws {
         let rows = try await sql.raw(
             """
@@ -52,7 +64,11 @@ struct RestrictVMProjectDeletion: AsyncMigration {
             """
             ALTER TABLE vms ADD CONSTRAINT \(unsafeRaw: constraintName)
             FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE \(unsafeRaw: action)
+            NOT VALID
             """
+        ).run()
+        try await sql.raw(
+            "ALTER TABLE vms VALIDATE CONSTRAINT \(unsafeRaw: constraintName)"
         ).run()
     }
 }

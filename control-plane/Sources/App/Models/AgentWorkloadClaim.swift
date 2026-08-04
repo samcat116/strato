@@ -107,6 +107,16 @@ final class AgentWorkloadClaim: Model, @unchecked Sendable {
 
     static let heldRowPresentReason = "row_present_here"
 
+    /// The low-cardinality label for "the record is on some other agent".
+    /// `reason` itself carries that agent's id, which must never become a
+    /// metric dimension.
+    static let heldOtherAgentBucket = "row_on_other_agent"
+
+    /// This claim's reason as a bounded metric dimension.
+    var reasonBucket: String {
+        placedOnAgentId == nil ? Self.heldRowPresentReason : Self.heldOtherAgentBucket
+    }
+
     /// The agent this claim's workload is currently placed on, when the claim
     /// records exactly that situation.
     var placedOnAgentId: String? {

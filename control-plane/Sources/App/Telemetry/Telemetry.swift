@@ -133,6 +133,22 @@ enum Telemetry {
             .increment()
     }
 
+    /// How many workloads an agent is currently holding that the control plane
+    /// refused to authorize tearing down, by reason. Recorded on every report,
+    /// including zero.
+    ///
+    /// The counter above only fires at the transition, so it answers "did this
+    /// start happening" and nothing else: a control plane restarted while the
+    /// condition persists emits nothing at all, and an operator who wasn't
+    /// watching that minute has no signal. This is the level-triggered half —
+    /// alert on it being above zero, not on the counter's rate.
+    static func workloadClaimsHeld(agentName: String, reason: String, count: Int) {
+        Gauge(
+            label: "strato_workload_claims_held",
+            dimensions: [("agent", agentName), ("reason", reason)]
+        ).record(count)
+    }
+
     /// An agent refused a sync's teardowns because the blast-radius guard
     /// tripped.
     static func agentTeardownRefused() {

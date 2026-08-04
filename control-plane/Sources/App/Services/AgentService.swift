@@ -146,6 +146,13 @@ actor AgentService {
     private var cleanDesiredStateRevisions: [String: UInt64] = [:]
     private var periodicDesiredStateSyncTask: Task<Void, Never>?
 
+    /// The last refused sync this replica has logged per agent (STR-98).
+    /// A refusal rides on every observed report until the agent's guard
+    /// clears, so without this one stuck refusal would log and count on every
+    /// heartbeat instead of once per refused sync. Replica-local: after a
+    /// restart the first report re-logs, which is the right side to err on.
+    private var reportedTeardownRefusalSyncIds: [String: String] = [:]
+
     /// Keep periodic fan-out bounded so a large replica does not stampede the
     /// database while still allowing unrelated agents to make progress.
     private static let desiredStateSyncConcurrency = 4
@@ -1956,9 +1963,7 @@ actor AgentService {
             agentChanged = true
             agent.lastHeartbeat = Date()
         }
-        let previousRefusalReason = agent.teardownRefusalReason
-        applyReportedTeardownRefusal(report.teardownRefusal, to: agent)
-        if agent.teardownRefusalReason != previousRefusalReason || report.teardownRefusal != nil {
+        if applyReportedTeardownRefusal(report.teardownRefusal, to: agent) {
             agentChanged = true
         }
         if agentChanged {
@@ -1976,10 +1981,18 @@ actor AgentService {
         await refreshAgentLivenessIfNeeded(agentKey: agentKey)
 
         do {
+            let outcome = try await app.observedStateApplier.apply(report)
+            // Level-triggered, and recorded here because this is where the
+            // agent's name is: the withheld-teardown counter only fires at the
+            // transition, so on its own it can't answer whether a host is
+            // still holding workloads the control plane failed to describe.
+            for (reason, count) in outcome.heldByReason {
+                Telemetry.workloadClaimsHeld(agentName: agent.name, reason: reason, count: count)
+            }
             // A newly authorized teardown (STR-98) is worth a sync right away:
             // until the tombstone reaches the agent it keeps holding — and
             // re-reporting — a workload nothing describes.
-            if try await app.observedStateApplier.apply(report) {
+            if outcome.authorizedTeardown {
                 await syncDesiredState(agentId: report.agentId)
             }
         } catch {
@@ -1997,15 +2010,34 @@ actor AgentService {
     /// once. That is a standing condition, not an event: it repeats on every
     /// sync until either the batch shrinks or an operator intervenes, so it
     /// lives on the row where the UI can show it rather than only in a log.
-    private func applyReportedTeardownRefusal(_ refusal: ObservedTeardownRefusal?, to agent: Agent) {
+    ///
+    /// The log line and the counter are deduped on `syncId`, because the
+    /// refusal rides along on *every* observed report — heartbeats included —
+    /// while the agent's guard stands. Logging per report would turn one stuck
+    /// refusal into thousands of `error` lines a day, which is exactly how an
+    /// error level stops meaning anything. Per refused sync is the honest
+    /// count; the row keeps `teardownRefusedAt` fresh either way, so the UI
+    /// still shows the condition as current.
+    /// Returns whether the row actually changed, so a heartbeat carrying a
+    /// refusal it has already recorded costs no write.
+    private func applyReportedTeardownRefusal(
+        _ refusal: ObservedTeardownRefusal?, to agent: Agent
+    ) -> Bool {
         guard let refusal else {
+            reportedTeardownRefusalSyncIds.removeValue(forKey: agent.name)
+            guard agent.teardownRefusalReason != nil || agent.teardownRefusedAt != nil else {
+                return false
+            }
             agent.teardownRefusalReason = nil
             agent.teardownRefusedAt = nil
-            return
+            return true
         }
-        // Log every refusal, not only changes: each one is a sync whose
-        // teardowns did not happen, and the count matters when reconstructing
-        // what an agent did.
+        guard reportedTeardownRefusalSyncIds[agent.name] != refusal.syncId else {
+            // Same refused sync, re-reported on a heartbeat. Already logged,
+            // already counted, already on the row.
+            return agent.teardownRefusalReason != refusal.reason
+        }
+        reportedTeardownRefusalSyncIds[agent.name] = refusal.syncId
         app.logger.error(
             "Agent refused a sync's workload teardowns",
             metadata: [
@@ -2018,6 +2050,7 @@ actor AgentService {
         Telemetry.agentTeardownRefused()
         agent.teardownRefusalReason = refusal.reason
         agent.teardownRefusedAt = Date()
+        return true
     }
 
     /// Folds an agent's self-reported update status (issue #434) into its

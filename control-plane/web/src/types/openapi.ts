@@ -2146,6 +2146,8 @@ export interface paths {
         /**
          * Delete an organization
          * @description Organization admins only. Cascades to the organization's folders and projects and revokes their role bindings. The seeded "Default Organization" cannot be deleted (400).
+         *
+         *     Refuses with 409 when any of those projects still contains a VM or sandbox. This changed with STR-98: the cascade previously hard-deleted those VM rows, leaving guests running on agents with no record of them — and, before the same change, an agent tore such a workload down on the next sync for being unlisted. Delete or move the workloads first.
          */
         delete: operations["deleteOrganization"];
         options?: never;
@@ -3509,7 +3511,7 @@ export interface paths {
          * Adopt workloads from a superseded agent record
          * @description Re-points VMs, sandboxes, and their volumes from `fromAgentId` onto this agent. Only workloads this agent reports holding (see `heldWorkloads`) *and* currently placed on the source record are moved, so the call cannot point a workload at a host that is not running it.
          *
-         *     This finishes a node's re-identification: agent records are keyed by trust domain and name, so re-enrolling a node under a corrected name — or moving it to its organization's trust domain — mints a new record while its workloads stay placed on the old one. Requires `manage` on the agent.
+         *     This finishes a node's re-identification: agent records are keyed by trust domain and name, so re-enrolling a node under a corrected name — or moving it to its organization's trust domain — mints a new record while its workloads stay placed on the old one. Requires `manage` on **both** agents, which must belong to the same organization.
          */
         post: operations["adoptAgentWorkloads"];
         delete?: never;
@@ -7260,9 +7262,10 @@ export interface components {
         AdoptWorkloadsResult: {
             adoptedVMs: number;
             adoptedSandboxes: number;
+            /** @description Volumes re-pointed onto this agent, including detached ones — their data is on this host too. A volume attached to a VM that stayed behind is not moved. */
             adoptedVolumes: number;
-            /** @description Workloads still placed on the source record that this agent does not report holding, so they were left alone. */
-            skipped: number;
+            /** @description Workloads still placed on the source record that this agent does not report holding, so they were left alone. These are not necessarily stranded: a workload running on a genuinely different host counts here too. */
+            skippedUnclaimed: number;
         };
         /**
          * @description Connection state of an agent, derived from its last heartbeat.
@@ -12696,6 +12699,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     switchOrganization: {
@@ -15118,7 +15122,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description This agent does not report holding any workloads placed on the given source record, so there is nothing it can prove it runs. */
+            /** @description This agent does not report holding any workloads placed on the given source record, so there is nothing it can prove it runs — or the two agents belong to different organizations. */
             409: {
                 headers: {
                     [name: string]: unknown;

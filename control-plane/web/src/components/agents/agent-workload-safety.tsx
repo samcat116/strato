@@ -119,7 +119,10 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
                   size="sm"
                   className="border-input shrink-0"
                   onClick={() => runAdoption(sourceAgentId)}
-                  disabled={adopt.isPending}
+                  // Only the row being adopted is disabled: with two source
+                  // records listed, a global disable makes clicking one look
+                  // like it disabled the other.
+                  disabled={adopting === sourceAgentId}
                 >
                   {adopting === sourceAgentId && (
                     <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
