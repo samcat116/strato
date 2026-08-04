@@ -4,11 +4,73 @@ Agents run on Linux hypervisor hosts and execute VMs via QEMU (KVM), with
 Firecracker as an optional second backend. They connect out to the control
 plane over WebSocket — no inbound ports needed on the hypervisor.
 
+Hypervisor nodes run **libvirtd** (`qemu:///system`), which VM management is
+moving onto, and it must be **version 11.5 or newer** — see [Host
+requirements](#host-requirements). Ubuntu 24.04 ships libvirt 10.0.0 and is
+*not* a supported hypervisor host.
+
 Agents authenticate **only** by SPIFFE/SPIRE-issued X.509 SVID over mTLS.
 Every node is enrolled through the control plane, which provisions its
 identity in SPIRE; there is no token or password join, and an unattested
 host cannot connect at all. Enrolling requires the control plane to be
 configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
+
+## Host requirements
+
+| | |
+| --- | --- |
+| OS | Linux with systemd and KVM. Ubuntu 26.04 or another distribution shipping libvirt 11.5+; **Ubuntu 24.04 is not supported** (libvirt 10.0.0) |
+| libvirt | **11.5.0 or newer**, with `qemu:///system` reachable |
+| Packages | `qemu-utils`, `qemu-system-<arch>`, `ovmf`/`qemu-efi-aarch64`, `libvirt-daemon-system`, `libvirt-clients`, `swtpm`, `swtpm-tools`, plus `ovn-host`/`openvswitch-switch` for SDN networking |
+
+The [install script](#one-command-install) installs and configures all of it.
+
+**Why 11.5.** VM checkpoints are internal snapshots of a running domain, and
+libvirt could not take those of a UEFI guest at all before 10.9. 10.10 fixed
+revert and inactive-delete not accounting for the qcow2 NVRAM varstore, and
+11.2–11.3 carry a regression that breaks reverting to an internal snapshot;
+11.5 is the first release clear of all of it. An older libvirt would leave a
+node that looks healthy but fails every checkpoint, so both the installer's
+preflight and the agent's own check the version and say so up front. While the
+VM driver still talks to QEMU directly, those checks report rather than take
+the node out of service.
+
+**libvirt configuration.** The agent owns every path under `/var/lib/strato`,
+and libvirt's QEMU driver would otherwise run QEMU as `libvirt-qemu:kvm` and
+chown each domain's disks to it. The fix is *not* to switch labeling off —
+`security_driver = "none"`, `dynamic_ownership = 0` and `<seclabel
+type='none'/>` also stop libvirt preparing its **own** runtime artifacts (the
+swtpm control socket under `/run/libvirt`) for the QEMU uid, which fails the
+domain start outright. Instead the DAC driver keeps running and its target uid
+becomes the agent's, so relabeling is a no-op on files the agent already owns.
+The installer writes exactly three keys into `/etc/libvirt/qemu.conf`,
+idempotently, leaving the rest of the file alone:
+
+```ini
+user = "root"
+group = "root"
+dynamic_ownership = 1
+```
+
+AppArmor stays **enabled**. If a denial ever appears, fix the profile rather
+than disabling the security driver. Pass `--no-libvirt-config` if this file is
+managed by configuration management, and apply the equivalent yourself.
+
+**Service account.** The agent runs as **root**, and the values above follow
+from that: the default storage, config, and SPIRE paths are root-owned, the
+workload selector the control plane provisions is `unix:uid:0`, and the agent
+manages TAP devices, netlink, and `ovs-vsctl`. Root reaches libvirt's socket
+with no extra grant. To run it unprivileged (see [Privileges](#privileges)),
+set `user`/`group` in `qemu.conf` to that account and add it to the `libvirt`
+and `kvm` groups; the installer does that for you if you change `AGENT_USER`
+at the top of the script.
+
+**Service ordering.** `strato-agent.service` is ordered `After=` and `Wants=`
+the libvirt socket unit — `virtqemud.socket` on a modular install,
+`libvirtd.socket` on a monolithic one, whichever the host has — so a reboot
+cannot race the agent ahead of the daemon it drives VMs through. `Wants`, not
+`Requires`: a libvirt that fails to start should leave the agent up and
+reporting the problem rather than dead alongside it.
 
 ## Enrolling a node
 
@@ -73,11 +135,14 @@ by name, and names are restricted to ASCII letters, digits, `-`, `_`, and
 in a SPIRE deployment since Envoy terminates mTLS in front of it.
 
 On a fresh Linux host with nothing installed, it downloads the `strato-agent`
-and `spire-agent` binaries, installs the host dependencies (QEMU, and OVN/OVS
-for SDN networking), attests the node to SPIRE with the join token, writes
-`/etc/strato/config.toml`, brings up host telemetry, and enables
-`strato-agent.service` so the node survives reboots. It detects the host
-OS/arch, verifies download checksums, and runs a host preflight first.
+and `spire-agent` binaries, installs the host dependencies (QEMU and libvirtd,
+swtpm for guest TPMs, and OVN/OVS for SDN networking), configures
+`/etc/libvirt/qemu.conf` for the agent's account and enables the libvirt socket,
+attests the node to SPIRE with the join token, writes `/etc/strato/config.toml`,
+brings up host telemetry, and enables `strato-agent.service` so the node
+survives reboots. It detects the host OS/arch, verifies download checksums, and
+runs a host preflight — which refuses a libvirt older than 11.5 rather than
+leaving checkpoints to fail later.
 
 Useful flags (`--help` lists them all):
 
@@ -85,6 +150,9 @@ Useful flags (`--help` lists them all):
 - `--version vX.Y.Z` — pin a release instead of `latest`
 - `--no-systemd` — install the binary + deps but don't manage a service
 - `--no-deps` — you manage host packages yourself
+- `--no-libvirt-config` — install libvirt but leave `/etc/libvirt/qemu.conf`
+  to your configuration management (see
+  [Host requirements](#host-requirements) for what it must contain)
 - `--trust-bundle PATH` — pin the SPIRE trust bundle instead of
   trust-on-first-use bootstrap
 - `--no-telemetry` — skip the host telemetry stack
@@ -204,6 +272,13 @@ docker run -d --name strato-agent --restart unless-stopped \
 default, but the root-owned `/var/lib/strato` and `/etc/strato` paths — and
 the default `unix:uid:0` workload selector — need root.
 
+The image has no libvirtd of its own, so a containerized agent drives the
+**host's**: install and configure libvirt on the host as
+[above](#host-requirements) (the install script's `--no-systemd` run does it)
+and mount its socket directory in with `-v /run/libvirt:/run/libvirt`. Without
+that the agent starts and registers, and its preflight reports libvirt as
+unreachable.
+
 The `/var/lib/strato` mount persists both VM disks and the agent's state, so
 `docker restart strato-agent` reconnects with no further setup. With
 `--restart unless-stopped`, a revoked identity exits the container and
@@ -214,14 +289,16 @@ Docker's backoff keeps it from hammering the control plane.
 The [install script](#one-command-install) writes and enables this unit for
 you. Write it by hand only if you installed the binary some other way. The
 agent must not start before `spire-agent`, since its mTLS credential comes
-from the Workload API:
+from the Workload API, nor before libvirtd, which it manages VMs through
+(`virtqemud.socket` on a modular libvirt install, `libvirtd.socket` on a
+monolithic one — use whichever your host has):
 
 ```ini
 # /etc/systemd/system/strato-agent.service
 [Unit]
 Description=Strato Agent
-After=network-online.target spire-agent.service
-Wants=network-online.target
+After=network-online.target spire-agent.service virtqemud.socket
+Wants=network-online.target virtqemud.socket
 Requires=spire-agent.service
 
 [Service]
@@ -330,9 +407,15 @@ for the full list (QEMU paths, storage directories, network mode, SPIFFE/mTLS,
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
-backs guest TPM 2.0 devices). Without them the node stays registered and
+backs guest TPM 2.0 devices — libvirt starts and supervises it per domain, so
+the agent never launches it itself). Without them the node stays registered and
 useful, it simply never receives a placement that requires those features —
 see [Windows Guests](/guide/windows-guests).
+
+`ovmf` also installs QEMU's firmware descriptors under
+`/usr/share/qemu/firmware`, which is what lets libvirt autoselect a UEFI
+CODE/VARS pair. Their absence is advisory: VMs then boot with the firmware
+paths configured explicitly (`firmware_code_path` and friends).
 
 ## mTLS (SPIFFE/SPIRE)
 

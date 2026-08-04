@@ -1026,7 +1026,7 @@ actor Agent {
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
         } else {
-            let preflight = runHostPreflight()
+            let preflight = runHostPreflight(libvirt: await probeLibvirt())
             swtpmAvailable = preflight.swtpmAvailable
             logHostPreflight(preflight)
             let probed = preflight.gate(
@@ -1385,14 +1385,30 @@ actor Agent {
 
     // MARK: - Host preflight
 
+    /// Probes libvirtd, whose reachability and version the preflight checks.
+    /// Linux-only: libvirt's QEMU driver is, and the whole point of the probe is
+    /// the daemon a hypervisor node manages VMs through.
+    ///
+    /// Spawns a subprocess, hence async and separate from `runHostPreflight` —
+    /// the same split `HypervisorProbe.firecrackerVersion` uses.
+    private func probeLibvirt() async -> LibvirtProbe.Status? {
+        #if os(Linux)
+        return await LibvirtProbe.probe()
+        #else
+        return nil
+        #endif
+    }
+
     /// Runs the host-readiness checks against this agent's resolved
     /// configuration. Called at every registration (initial and reconnect) so
     /// the reported capabilities always reflect the host as it is now.
-    private func runHostPreflight() -> HostPreflight.Report {
+    private func runHostPreflight(libvirt: LibvirtProbe.Status? = nil) -> HostPreflight.Report {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
         #else
         let firecrackerSocketDirectory: String? = nil
+        let qemuFirmwareDescriptorPath: String? = nil
         #endif
 
         // Mirror QEMUService's firmware resolution so the preflight reports
@@ -1417,6 +1433,8 @@ actor Agent {
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
                 swtpmBinaryPath: swtpmBinaryPath,
+                qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
+                libvirt: libvirt,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
