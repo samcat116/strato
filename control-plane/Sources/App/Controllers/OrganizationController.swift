@@ -286,7 +286,20 @@ struct OrganizationController: RouteCollection {
         // schema. That makes this a policy-set change, so it runs inside
         // `withPolicySetChange` and bumps the version when roles actually went.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            try await organization.delete(on: db)
+            // Projects cascade away with the organization, and VM rows used to
+            // cascade away with them — hard-deleted by the database, with no
+            // `.absent`, no operation, and no audit, leaving running guests
+            // their agents could only learn about as an absence. `project_id`
+            // is RESTRICT now (STR-98), so the database refuses instead;
+            // translate that into an answer a caller can act on.
+            do {
+                try await organization.delete(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot delete organization: its projects still contain VMs or sandboxes. "
+                        + "Delete or move those workloads first.")
+            }
             // The trust domain row deliberately outlives the organization: it
             // is the instruction to destroy the org's CA, and the reconciler
             // has to be able to read it after the org is gone. Mark it for

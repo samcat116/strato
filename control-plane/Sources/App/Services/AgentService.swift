@@ -310,6 +310,20 @@ actor AgentService {
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
         }
 
+        // An agent below the tombstone protocol still reads omission from a
+        // sync as "destroy" (STR-98), and no control-plane behavior can change
+        // that. Say so at registration so a half-upgraded fleet's remaining
+        // exposure is visible rather than implicit in a version number.
+        if !WireProtocol.supportsWorkloadTombstones(protocolVersion) {
+            app.logger.notice(
+                "Agent predates tombstone-confirmed teardown; a sync that under-lists this host would still destroy its workloads",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "protocolVersion": .stringConvertible(protocolVersion),
+                    "requiredVersion": .stringConvertible(WireProtocol.workloadTombstoneMinimumVersion),
+                ])
+        }
+
         let db = app.db
         var organizationScope = organizationScope
         var siteID = siteID
@@ -1942,6 +1956,11 @@ actor AgentService {
             agentChanged = true
             agent.lastHeartbeat = Date()
         }
+        let previousRefusalReason = agent.teardownRefusalReason
+        applyReportedTeardownRefusal(report.teardownRefusal, to: agent)
+        if agent.teardownRefusalReason != previousRefusalReason || report.teardownRefusal != nil {
+            agentChanged = true
+        }
         if agentChanged {
             do {
                 try await agent.save(on: app.db)
@@ -1957,12 +1976,48 @@ actor AgentService {
         await refreshAgentLivenessIfNeeded(agentKey: agentKey)
 
         do {
-            try await app.observedStateApplier.apply(report)
+            // A newly authorized teardown (STR-98) is worth a sync right away:
+            // until the tombstone reaches the agent it keeps holding — and
+            // re-reporting — a workload nothing describes.
+            if try await app.observedStateApplier.apply(report) {
+                await syncDesiredState(agentId: report.agentId)
+            }
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
                 metadata: ["agentId": .string(report.agentId)])
         }
+    }
+
+    /// Folds an agent's teardown refusal (STR-98 phase 2) into its row,
+    /// mutating the in-memory model for the caller's save.
+    ///
+    /// A refusal means the agent declined to converge teardowns a sync
+    /// authorized because they would have taken out too much of the host at
+    /// once. That is a standing condition, not an event: it repeats on every
+    /// sync until either the batch shrinks or an operator intervenes, so it
+    /// lives on the row where the UI can show it rather than only in a log.
+    private func applyReportedTeardownRefusal(_ refusal: ObservedTeardownRefusal?, to agent: Agent) {
+        guard let refusal else {
+            agent.teardownRefusalReason = nil
+            agent.teardownRefusedAt = nil
+            return
+        }
+        // Log every refusal, not only changes: each one is a sync whose
+        // teardowns did not happen, and the count matters when reconstructing
+        // what an agent did.
+        app.logger.error(
+            "Agent refused a sync's workload teardowns",
+            metadata: [
+                "agentName": .string(agent.name),
+                "syncId": .string(refusal.syncId),
+                "requestedTeardowns": .stringConvertible(refusal.requestedTeardowns),
+                "presentWorkloads": .stringConvertible(refusal.presentWorkloads),
+                "reason": .string(refusal.reason),
+            ])
+        Telemetry.agentTeardownRefused()
+        agent.teardownRefusalReason = refusal.reason
+        agent.teardownRefusedAt = Date()
     }
 
     /// Folds an agent's self-reported update status (issue #434) into its

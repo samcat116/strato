@@ -109,6 +109,36 @@ enum Telemetry {
         Counter(label: "strato_vm_drift_total").increment()
     }
 
+    // MARK: - Teardown safety (STR-98)
+
+    /// A workload an agent holds was confirmed to have no control-plane row,
+    /// so its teardown was authorized by tombstone. Expected to be near zero:
+    /// ordinary deletes never come through here, because their rows survive
+    /// until the agent confirms absence.
+    static func workloadTombstoned(kind: String) {
+        Counter(label: "strato_workload_tombstones_total", dimensions: [("kind", kind)]).increment()
+    }
+
+    /// An agent reported holding a workload that a sync omitted, and the row
+    /// still exists — so teardown was refused. `reason` is
+    /// `row_present_here` (the sync under-listed an agent's own workloads: an
+    /// assembly or scoping bug) or `row_on_other_agent` (the node is running
+    /// workloads still placed on a superseded agent record).
+    ///
+    /// This counter firing at all means the control plane described a host
+    /// incorrectly. Alert on it: before STR-98 the same condition destroyed
+    /// the workloads instead of counting them.
+    static func workloadTeardownWithheld(reason: String) {
+        Counter(label: "strato_workload_teardowns_withheld_total", dimensions: [("reason", reason)])
+            .increment()
+    }
+
+    /// An agent refused a sync's teardowns because the blast-radius guard
+    /// tripped.
+    static func agentTeardownRefused() {
+        Counter(label: "strato_agent_teardown_refusals_total").increment()
+    }
+
     // MARK: - HTTP request layer
 
     /// RED metrics for the whole API surface, emitted once per request by

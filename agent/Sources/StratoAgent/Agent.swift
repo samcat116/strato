@@ -261,6 +261,9 @@ actor Agent {
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
 
+    // How much of this host one sync's confirmed teardowns may remove (STR-98).
+    private let teardownGuard: TeardownGuard
+
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
@@ -313,7 +316,8 @@ actor Agent {
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
-        spiffeConfig: SPIFFEConfig? = nil
+        spiffeConfig: SPIFFEConfig? = nil,
+        teardownGuard: TeardownGuard = TeardownGuard()
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -347,6 +351,7 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
+        self.teardownGuard = teardownGuard
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
@@ -654,7 +659,8 @@ actor Agent {
         // The reconciler drives desired-state syncs onto the shared per-VM
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
-        reconciler = Reconciler(actuator: self, queue: messageQueue, logger: logger)
+        reconciler = Reconciler(
+            actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard)
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
@@ -1996,8 +2002,8 @@ extension Agent {
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a
                 // control plane older than the sandbox protocol (v5) omits
-                // `sandboxes` (decoded as []), which must NOT be read as
-                // "tear down all sandboxes" under full-list semantics.
+                // `sandboxes` (decoded as []), which must not be mistaken for
+                // an authoritative "this host should have no sandboxes".
                 await reconciler?.apply(
                     message, includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
@@ -3980,7 +3986,12 @@ extension Agent: ReconcileActuator {
             vms: observed,
             sandboxes: await observedSandboxStates(reconciler: reconciler),
             resources: await getAgentResources(),
-            agentUpdateStatus: autoUpdateStatus
+            agentUpdateStatus: autoUpdateStatus,
+            // Workloads this host holds that no sync accounted for (STR-98).
+            // They also appear above — the agent is genuinely running them —
+            // and stay there until the control plane decides what they are.
+            unrecognized: await reconciler.unrecognizedWorkloads(),
+            teardownRefusal: await reconciler.lastTeardownRefusal()
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was

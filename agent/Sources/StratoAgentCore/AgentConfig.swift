@@ -327,6 +327,26 @@ public struct AgentConfig: Codable {
     /// Simulation ("dummy agent") settings. Nil (or disabled) means a normal
     /// agent that drives real hypervisor/network/storage backends.
     public let simulation: SimulationConfig?
+    /// Blast-radius guard (STR-98): the absolute number of confirmed teardowns
+    /// one sync may perform before the percentage half of the guard applies at
+    /// all. Default 3.
+    public let reconcileTeardownMinimum: Int?
+    /// The percentage of this host's present workloads above which a sync's
+    /// confirmed teardowns are refused. Default 25.
+    public let reconcileTeardownPercent: Int?
+    /// Operator override for a deliberate host drain: converge a sync's
+    /// teardowns however large the batch. Default false — a bug or a stale
+    /// control-plane database must not be able to empty a host, while a real
+    /// drain can afford the flag.
+    public let allowBulkTeardown: Bool?
+
+    /// The teardown blast-radius guard this configuration asks for.
+    public var teardownGuard: TeardownGuard {
+        TeardownGuard(
+            minimumWorkloads: reconcileTeardownMinimum ?? TeardownGuard.defaultMinimumWorkloads,
+            percentOfPresent: reconcileTeardownPercent ?? TeardownGuard.defaultPercentOfPresent,
+            allowBulkTeardown: allowBulkTeardown ?? false)
+    }
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -369,6 +389,9 @@ public struct AgentConfig: Codable {
         case ovnUplink = "ovn_uplink"
         case ovnDynamicRouting = "ovn_dynamic_routing"
         case simulation
+        case reconcileTeardownMinimum = "reconcile_teardown_minimum"
+        case reconcileTeardownPercent = "reconcile_teardown_percent"
+        case allowBulkTeardown = "allow_bulk_teardown"
     }
 
     public init(
@@ -411,7 +434,10 @@ public struct AgentConfig: Codable {
         hypervisorType: HypervisorType? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
         ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
-        simulation: SimulationConfig? = nil
+        simulation: SimulationConfig? = nil,
+        reconcileTeardownMinimum: Int? = nil,
+        reconcileTeardownPercent: Int? = nil,
+        allowBulkTeardown: Bool? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -453,6 +479,9 @@ public struct AgentConfig: Codable {
         self.ovnUplink = ovnUplink
         self.ovnDynamicRouting = ovnDynamicRouting
         self.simulation = simulation
+        self.reconcileTeardownMinimum = reconcileTeardownMinimum
+        self.reconcileTeardownPercent = reconcileTeardownPercent
+        self.allowBulkTeardown = allowBulkTeardown
     }
 
     /// The VM image cache budget in bytes (config stores whole GB).
@@ -610,6 +639,14 @@ public struct AgentConfig: Codable {
         let sandboxWarmStart = tomlData.bool("sandbox_warm_start")
         let sandboxWarmCacheMaxSizeGB = try Self.positiveInt(
             tomlData, key: "sandbox_warm_cache_max_size_gb")
+
+        // Teardown blast-radius guard (STR-98). Zero is meaningful for both
+        // numbers — "allow no teardown without the override", and "any batch
+        // past the floor is refused" — so neither goes through `positiveInt`;
+        // a negative value is clamped to 0 by `TeardownGuard`.
+        let reconcileTeardownMinimum = tomlData.int("reconcile_teardown_minimum")
+        let reconcileTeardownPercent = tomlData.int("reconcile_teardown_percent")
+        let allowBulkTeardown = tomlData.bool("allow_bulk_teardown")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -826,7 +863,10 @@ public struct AgentConfig: Codable {
             hypervisorType: hypervisorType,
             ovnUplink: ovnUplink,
             ovnDynamicRouting: ovnDynamicRouting,
-            simulation: simulationConfig
+            simulation: simulationConfig,
+            reconcileTeardownMinimum: reconcileTeardownMinimum,
+            reconcileTeardownPercent: reconcileTeardownPercent,
+            allowBulkTeardown: allowBulkTeardown
         )
     }
 

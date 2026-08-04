@@ -88,6 +88,21 @@ export function usePatchAgent() {
   });
 }
 
+// Finishes a node's re-identification (STR-98): re-points the workloads this
+// agent reports holding off the agent record they are still placed on.
+export function useAdoptAgentWorkloads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, fromAgentId }: { id: string; fromAgentId: string }) =>
+      agentsApi.adoptWorkloads(id, fromAgentId),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents", id] });
+      queryClient.invalidateQueries({ queryKey: ["vms"] });
+    },
+  });
+}
+
 export function useInvalidateAgents() {
   const queryClient = useQueryClient();
   return () => {

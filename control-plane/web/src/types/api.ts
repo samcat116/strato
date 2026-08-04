@@ -569,6 +569,35 @@ export interface Agent {
   updateBlockedReason?: string;
   // Terminal failure that halted the rollout at this agent, if any.
   updateFailureReason?: string;
+  // Why the agent last refused to converge a sync's workload teardowns
+  // (STR-98): removing that many of the host's workloads at once looked more
+  // like a control-plane failure than an intention. Absent in the steady state.
+  teardownRefusalReason?: string;
+  teardownRefusedAt?: string;
+  // Workloads the agent is running that no desired-state sync accounts for and
+  // whose teardown the control plane refused to authorize, because a record
+  // still exists for them. Returned by the single-agent endpoint only.
+  heldWorkloads?: HeldWorkload[];
+}
+
+// One workload an agent holds that the control plane will not authorize
+// tearing down. Most often the node re-enrolled under a new agent record and
+// its workloads are still placed on the old one (`placedOnAgentId`).
+export interface HeldWorkload {
+  kind: "virtual_machine" | "sandbox";
+  id: string;
+  status?: string;
+  reason?: string;
+  placedOnAgentId?: string;
+  firstSeenAt?: string;
+}
+
+// Result of POST /api/agents/:id/actions/adopt-workloads.
+export interface AdoptWorkloadsResult {
+  adoptedVMs: number;
+  adoptedSandboxes: number;
+  adoptedVolumes: number;
+  skipped: number;
 }
 
 // Result of POST /api/agents/:id/actions/update — the agent has verified and

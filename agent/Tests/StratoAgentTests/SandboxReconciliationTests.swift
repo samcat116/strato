@@ -47,9 +47,10 @@ struct SandboxReconciliationTests {
 
     private static func sync(
         vms: [DesiredVMState] = [],
-        sandboxes: [DesiredSandboxState] = []
+        sandboxes: [DesiredSandboxState] = [],
+        tombstones: [DesiredWorkloadTombstone] = []
     ) -> DesiredStateMessage {
-        DesiredStateMessage(vms: vms, sandboxes: sandboxes)
+        DesiredStateMessage(vms: vms, sandboxes: sandboxes, tombstones: tombstones)
     }
 
     /// Actuator double covering both workload kinds, simulating the runtimes
@@ -148,55 +149,88 @@ struct SandboxReconciliationTests {
     @Test("Desired-but-absent sandbox plans create plus boot steps")
     func planCreatesAbsentSandbox() {
         let sandboxId = UUID()
-        let items = Reconciler.planSandboxes(
+        let plan = Reconciler.planSandboxes(
             desired: [Self.desiredSandbox(sandboxId, status: .running)],
             present: [String: SandboxPresence](),
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].kind == .sandbox)
-        #expect(items[0].id == sandboxId.uuidString)
-        #expect(items[0].steps == [.create, .boot])
-        #expect(items[0].desiredSandbox != nil)
-        #expect(items[0].desired == nil)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].kind == .sandbox)
+        #expect(plan.items[0].id == sandboxId.uuidString)
+        #expect(plan.items[0].steps == [.create, .boot])
+        #expect(plan.items[0].desiredSandbox != nil)
+        #expect(plan.items[0].desired == nil)
     }
 
-    @Test("Present-but-undesired sandbox plans deletion (full-list semantics)")
-    func planDeletesUndesiredSandbox() {
-        let sandboxId = UUID().uuidString
-        let items = Reconciler.planSandboxes(
+    @Test("Present-but-unlisted sandbox is held and reported, not deleted")
+    func planHoldsUnlistedSandbox() {
+        let sandboxId = UUID()
+        let plan = Reconciler.planSandboxes(
             desired: [DesiredSandboxState](),
-            present: [sandboxId: SandboxPresence.managed(.running)],
-            lastApplied: [:]
+            present: [sandboxId.uuidString: SandboxPresence.managed(.running)],
+            lastApplied: [sandboxId.uuidString: 7]
         )
-        #expect(items.count == 1)
-        #expect(items[0].kind == .sandbox)
-        #expect(items[0].id == sandboxId)
-        #expect(items[0].steps == [.delete])
-        #expect(items[0].target == nil)
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.count == 1)
+        #expect(plan.unrecognized[0].kind == .sandbox)
+        #expect(plan.unrecognized[0].workloadId == sandboxId)
+        #expect(plan.unrecognized[0].observedGeneration == 7)
+        #expect(plan.unrecognized[0].status == SandboxStatus.running.rawValue)
+    }
+
+    @Test("Tombstoned sandbox is deleted at the tombstone's generation")
+    func planDeletesTombstonedSandbox() {
+        let sandboxId = UUID()
+        let plan = Reconciler.planSandboxes(
+            desired: [DesiredSandboxState](),
+            present: [sandboxId.uuidString: SandboxPresence.managed(.running)],
+            lastApplied: [sandboxId.uuidString: 7],
+            tombstones: [
+                DesiredWorkloadTombstone(kind: .sandbox, workloadId: sandboxId, generation: 8)
+            ]
+        )
+        #expect(plan.unrecognized.isEmpty)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].kind == .sandbox)
+        #expect(plan.items[0].steps == [.delete])
+        #expect(plan.items[0].generation == 8)
+        #expect(plan.items[0].isTombstone)
+    }
+
+    @Test("A VM tombstone never removes a sandbox that happens to share its id")
+    func tombstonesAreKindScoped() {
+        let id = UUID()
+        let plan = Reconciler.planSandboxes(
+            desired: [DesiredSandboxState](),
+            present: [id.uuidString: SandboxPresence.managed(.running)],
+            lastApplied: [:],
+            tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: id, generation: 3)]
+        )
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.count == 1)
     }
 
     @Test("Stale sandbox generation is rejected by the generation guard")
     func planRejectsStaleGeneration() {
         let sandboxId = UUID()
-        let items = Reconciler.planSandboxes(
+        let plan = Reconciler.planSandboxes(
             desired: [Self.desiredSandbox(sandboxId, status: .stopped, generation: 2)],
             present: [sandboxId.uuidString: SandboxPresence.managed(.running)],
             lastApplied: [sandboxId.uuidString: 5]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     @Test("Orphan matching a desired sandbox plans re-adoption")
     func planAdoptsMatchingOrphan() {
         let sandboxId = UUID()
-        let items = Reconciler.planSandboxes(
+        let plan = Reconciler.planSandboxes(
             desired: [Self.desiredSandbox(sandboxId, status: .running)],
             present: [sandboxId.uuidString: SandboxPresence.orphaned],
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps == [.adopt])
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps == [.adopt])
     }
 
     @Test("Exited sandbox satisfies desired-running: generation advances with no steps")
@@ -204,14 +238,14 @@ struct SandboxReconciliationTests {
         // Phase 1 has no restart policy: a one-shot workload that ran to
         // completion must not be relaunched, even by a newer generation.
         let sandboxId = UUID()
-        let items = Reconciler.planSandboxes(
+        let plan = Reconciler.planSandboxes(
             desired: [Self.desiredSandbox(sandboxId, status: .running, generation: 4)],
             present: [sandboxId.uuidString: SandboxPresence.managed(.exited)],
             lastApplied: [sandboxId.uuidString: 3]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps.isEmpty)
-        #expect(items[0].generation == 4)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps.isEmpty)
+        #expect(plan.items[0].generation == 4)
     }
 
     @Test("Status mismatch maps to the sandbox convergence steps (no pause/resume)")
@@ -228,8 +262,13 @@ struct SandboxReconciliationTests {
     @Test("Sandbox lanes are namespaced away from VM lanes")
     func laneKeyNamespacing() {
         let id = UUID().uuidString
-        let vmItem = ReconcileWorkItem(kind: .vm, id: id, generation: 1, steps: [.boot], target: nil)
-        let sandboxItem = ReconcileWorkItem(kind: .sandbox, id: id, generation: 1, steps: [.boot], target: nil)
+        let uuid = UUID(uuidString: id)!
+        let vmItem = ReconcileWorkItem(
+            kind: .vm, id: id, generation: 1, steps: [.boot],
+            target: .tombstone(DesiredWorkloadTombstone(kind: .vm, workloadId: uuid, generation: 1)))
+        let sandboxItem = ReconcileWorkItem(
+            kind: .sandbox, id: id, generation: 1, steps: [.boot],
+            target: .tombstone(DesiredWorkloadTombstone(kind: .sandbox, workloadId: uuid, generation: 1)))
         #expect(vmItem.laneKey == id)
         #expect(sandboxItem.laneKey == "sandbox/" + id)
     }
@@ -260,10 +299,11 @@ struct SandboxReconciliationTests {
 
     @Test("Sandboxes are not reconciled when the sync's sender predates the sandbox protocol")
     func sandboxHalfGatedOnSenderVersion() async {
-        // A pre-sandbox control plane omits `sandboxes` (decoded []); reading
-        // that as authoritative would tear down every present sandbox.
-        let sandboxId = UUID().uuidString
-        let actuator = MockActuator(sandboxPresence: [sandboxId: .managed(.running)])
+        // A pre-sandbox control plane omits `sandboxes` (decoded []). That is
+        // not even reported as unrecognized: the agent has no basis to ask
+        // about a half of the protocol the sender doesn't speak.
+        let sandboxId = UUID()
+        let actuator = MockActuator(sandboxPresence: [sandboxId.uuidString: .managed(.running)])
         let reconciler = makeReconciler(actuator)
 
         await reconciler.apply(Self.sync(), includeSandboxes: false)
@@ -272,13 +312,28 @@ struct SandboxReconciliationTests {
         #expect(performed.isEmpty)
         let presence = await actuator.sandboxPresence
         #expect(presence.count == 1)
+        let heldWithoutSandboxSync = await reconciler.unrecognizedWorkloads()
+        #expect(heldWithoutSandboxSync.isEmpty)
 
-        // The same empty sync from a sandbox-aware control plane IS
-        // authoritative: full-list semantics delete the stray sandbox.
+        // The same empty sync from a sandbox-aware control plane doesn't
+        // delete it either — it reports the sandbox and waits for a verdict.
         await reconciler.apply(Self.sync(), includeSandboxes: true)
         _ = await actuator.waitForReports(1)
         let afterAuthoritative = await actuator.sandboxPresence
-        #expect(afterAuthoritative.isEmpty)
+        #expect(afterAuthoritative.count == 1)
+        let held = await reconciler.unrecognizedWorkloads()
+        #expect(held.map(\.workloadId) == [sandboxId])
+
+        // Only the tombstone removes it.
+        await reconciler.apply(
+            Self.sync(tombstones: [
+                DesiredWorkloadTombstone(kind: .sandbox, workloadId: sandboxId, generation: 1)
+            ]),
+            includeSandboxes: true)
+        // Two more reports: the held set emptying, and the delete finishing.
+        _ = await actuator.waitForReports(3)
+        let afterTombstone = await actuator.sandboxPresence
+        #expect(afterTombstone.isEmpty)
     }
 
     @Test("Orphaned sandbox is re-adopted and then converged toward the desired status")

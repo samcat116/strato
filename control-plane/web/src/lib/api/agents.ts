@@ -2,6 +2,7 @@
 
 import { api } from "./client";
 import type {
+  AdoptWorkloadsResult,
   Agent,
   AgentEnrollment,
   AgentEnrollmentListItem,
@@ -41,6 +42,14 @@ export const agentsApi = {
 
   patch(id: string, data: { autoUpdate?: boolean }): Promise<Agent> {
     return api.patch<Agent>(`/api/agents/${id}`, data);
+  },
+
+  // Moves the workloads this agent is demonstrably running off the agent
+  // record they are still placed on (STR-98).
+  adoptWorkloads(id: string, fromAgentId: string): Promise<AdoptWorkloadsResult> {
+    return api.post<AdoptWorkloadsResult>(`/api/agents/${id}/actions/adopt-workloads`, {
+      fromAgentId,
+    });
   },
 
   // SPIFFE/SPIRE enrollments — the only agent enrollment path.

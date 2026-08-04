@@ -227,7 +227,8 @@ newer change.
 `sandboxes`, `networks`) for the agent, plus `networksAuthoritative` and
 `syncId` for tracing. Semantics:
 
-- Anything omitted from the list should not exist on the agent.
+- Anything omitted from the list should not exist on the agent — but omission
+  is not the *instruction* to remove it. See "Omission is not teardown" below.
 - Identical syncs diff to nothing; the message is safe to drop, replay, or
   reorder (generations guard the reorder case).
 - Backward compatibility is asymmetric by design: when decoding from an older
@@ -238,6 +239,42 @@ newer change.
 
 `ObservedStateReport` is the mirror image: the full observed VM/sandbox sets
 plus current resources, sent level-triggered from the agent.
+
+### Omission is not teardown (STR-98, wire v25)
+
+Until v25, a workload the sync omitted was force-stopped and de-registered.
+That put every workload on a host behind one control-plane `WHERE` clause: a
+database restored from backup, an agent re-enrolled under a new record, or a
+project-delete cascade racing a create all return a *short list* — not an
+error — and the host tore down everything missing from it.
+
+Teardown now needs to be said out loud, in a round trip:
+
+1. The agent **holds** anything it has that a sync doesn't list — running,
+   untouched, adopted into no generation — and reports it in
+   `ObservedStateReport.unrecognized` (kind, id, the generation it last
+   applied, and its observed status).
+2. The control plane decides once per workload and remembers the verdict
+   (`agent_workload_claims`). A record that still exists means the *sync* is
+   wrong, so teardown is refused and logged loudly — permanently, however many
+   times it is reported. Only "no record at all" authorizes one.
+3. Authorized teardowns come back as `DesiredStateMessage.tombstones`
+   (`DesiredWorkloadTombstone`: kind, id, generation). The agent honors a
+   tombstone exactly as it honors an `.absent` desired entry, under the same
+   staleness guard — the generation is minted above whatever the agent
+   reported applying.
+
+Nothing here is gated on a version, in either direction, and for once that is
+the safe choice: the thing an older peer fails to do is *destroy something*. A
+pre-v25 control plane never authorizes a teardown, so a v25 agent leaks a
+stray rather than killing a live workload. A pre-v25 **agent** still destroys
+on omission whatever the control plane does, which is what
+`supportsWorkloadTombstones(_:)` exists to surface — registration logs such
+agents at `notice` so a half-upgraded fleet's remaining exposure is legible.
+
+`ObservedStateReport.teardownRefusal` carries the agent-side blast-radius
+guard's refusal (see `docs/architecture/agent.md`); the control plane records
+it on the agent row and surfaces it in the UI.
 
 ## Shared DTOs
 

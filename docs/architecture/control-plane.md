@@ -94,9 +94,10 @@ The important ones to know when navigating `Services/`:
   which socket carries it stay with `AgentService`.
 - **`ObservedStateApplier`** (`app.observedStateApplier`) — folds an agent's
   `ObservedStateReport` into the database: observed status/generation,
-  operation completion, deletion-by-absence, guest info, reservation release.
-  The connection half (decode, ownership check, agent-row refresh, per-agent
-  ordering) stays with `AgentService`.
+  operation completion, deletion-by-absence, guest info, reservation release,
+  and the teardown verdicts described below. The connection half (decode,
+  ownership check, agent-row refresh, per-agent ordering) stays with
+  `AgentService`.
 - **`CoordinationService`** (actor) — the Valkey layer: agent presence keys,
   socket routing, singleton sweep locks, placement reservations, and
   replica pub/sub (nudges + RPC). See [multi-replica](./multi-replica.md).
@@ -263,6 +264,23 @@ future work.
   send order; `ObservedStateApplier.apply` updates observed
   status/generation, completes satisfied operations, and confirms deletions
   by absence from the report.
+- **Authorizing a teardown** (STR-98). An agent that holds a workload no sync
+  listed reports it rather than destroying it, and the applier decides once,
+  recording the verdict in `agent_workload_claims`:
+  - no record ⇒ `tombstoned`, at a generation above whatever the agent last
+    applied. `DesiredStateAssembler` reads those rows back out as the sync's
+    `tombstones`, so an authorized teardown is the only kind there is.
+  - a record on this agent ⇒ `held`. The *sync* is the bug; teardown is
+    refused permanently, logged at `error`, and counted
+    (`strato_workload_teardowns_withheld_total`).
+  - a record on another agent ⇒ `held` too, tagged with that agent's id. This
+    is the node-re-enrolled case, and it is what
+    `POST /api/agents/:id/actions/adopt-workloads` consumes: it re-points only
+    workloads the target agent both reports holding and the source still
+    owns, so a re-identified node's VMs move without anything being
+    destroyed or invented.
+  Claims retire themselves when the agent stops reporting the workload, or
+  when its record comes back before the teardown converges.
 
 ## Per-organization trust domains
 

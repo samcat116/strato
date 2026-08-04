@@ -645,6 +645,72 @@ final class ProjectTests {
         }
     }
 
+    @Test("The database refuses to cascade a project delete over a live VM (STR-98)")
+    func testProjectDeleteCannotCascadeOverVMs() async throws {
+        try await withProjectTestApp { app, _, testOrganization, _, _ in
+            let project = Project(
+                name: "Racing Project",
+                description: "A VM appears between the check and the delete",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await project.save(on: app.db)
+
+            // `deleteProject` counts VMs and refuses when any exist, but the
+            // count and the delete are not one atomic step and read-committed
+            // Postgres will happily commit a VM created in between. This is
+            // that VM: the endpoint's guard has already passed, and the delete
+            // is about to run. It used to CASCADE — hard-deleting a running
+            // VM's row with no `.absent`, no operation, and no audit — and the
+            // agent then learned of it only as an absence from the next sync,
+            // which meant "destroy". The FK is RESTRICT now, so the delete
+            // fails instead and the VM survives.
+            let vm = VM(
+                name: "Raced VM",
+                description: "Created inside the delete window",
+                image: "test-image",
+                projectID: project.id!,
+                environment: "development",
+                cpu: 2,
+                memory: 2 * 1024 * 1024 * 1024,
+                disk: 10 * 1024 * 1024 * 1024
+            )
+            try await vm.save(on: app.db)
+
+            await #expect(throws: (any Error).self) {
+                try await project.delete(on: app.db)
+            }
+
+            #expect(try await VM.find(vm.id, on: app.db) != nil)
+            #expect(try await Project.find(project.id, on: app.db) != nil)
+        }
+    }
+
+    @Test("Deleting an organization can't cascade its projects' VMs away either (STR-98)")
+    func testOrganizationDeleteCannotCascadeOverVMs() async throws {
+        try await withProjectTestApp { app, user, _, _, authToken in
+            // A fresh org, since the fixture org is the caller's current one.
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Doomed Org")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+            let project = try await builder.createProject(
+                name: "Doomed Project", description: "Has a VM", organization: org)
+            let vm = try await builder.createVM(name: "survivor-vm", project: project)
+
+            // `projects.organization_id` cascades, so before STR-98 this
+            // deleted the VM row outright — one level further up the same
+            // silent-destruction path the project endpoint guards.
+            try await app.test(.DELETE, "/api/organizations/\(try org.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == HTTPResponseStatus.conflict)
+            }
+
+            #expect(try await VM.find(vm.id, on: app.db) != nil)
+            #expect(try await Organization.find(org.id, on: app.db) != nil)
+        }
+    }
+
     // MARK: - Generated-handler wire compatibility (#583)
 
     /// The projects surface is served by handlers generated from `openapi.yaml`
