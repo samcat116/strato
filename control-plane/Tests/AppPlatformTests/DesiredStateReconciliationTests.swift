@@ -560,11 +560,21 @@ final class DesiredStateReconciliationTests {
             let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
             try await operation.save(on: app.db)
 
-            // The creator binding VM creation writes. Bindings have no FK to
-            // the VM, so the confirmed deletion has to drop it (STR-112).
+            // The creator binding VM creation writes, plus a checkpoint whose
+            // row cascades away with the VM. Bindings have no FK to either, so
+            // the confirmed deletion has to drop both (STR-112) — and the
+            // checkpoint's only if the revoke reads it before the delete.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id!, on: app.db)
+            let snapshot = VMSnapshot(
+                name: "checkpoint", vmID: vm.id!, projectID: vm.$project.id,
+                environment: vm.environment, agentId: agentId, createdByID: user.id!)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
 
             // Full-list semantics: the VM is missing from the agent's report.
             let envelope = try self.report(agentId: agentId, vms: [])
@@ -581,6 +591,11 @@ final class DesiredStateReconciliationTests {
                 .filter(\.$nodeID == vm.id!)
                 .count()
             #expect(bindings == 0)
+            let snapshotBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
+                .filter(\.$nodeID == snapshotID)
+                .count()
+            #expect(snapshotBindings == 0)
         }
     }
 

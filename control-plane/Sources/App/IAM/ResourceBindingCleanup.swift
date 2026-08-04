@@ -17,6 +17,18 @@ import Foundation
 /// `vm_snapshots` / `sandbox_snapshots` cascade on their parent's foreign key,
 /// so their bindings are orphaned by the same delete that orphans the parent's.
 enum ResourceBindingCleanup {
+    /// The node types whose rows cascade away with a parent's, keyed by the
+    /// parent. Declared rather than inferred so the tests can hold it against
+    /// the schema: `ResourceBindingCleanupTests` walks the real `ON DELETE
+    /// CASCADE` foreign keys into each parent table and fails if one arrives
+    /// that names an IAM node type absent from here. A new cascading child that
+    /// is a bindable node would otherwise compile, pass, and silently leak —
+    /// the exact failure this type exists to fix.
+    static let cascadingChildren: [IAMNodeType: [IAMNodeType]] = [
+        .virtualMachine: [.vmSnapshot],
+        .sandbox: [.sandboxSnapshot],
+    ]
+
     /// Revoke every binding on a VM node and on the checkpoints that cascade
     /// away with it. Call inside the transaction that removes the VM row, so
     /// bindings and rows can never diverge — and *before* the delete, which
@@ -24,19 +36,17 @@ enum ResourceBindingCleanup {
     static func revokeBindings(forDeletedVM vmID: UUID, on db: any Database) async throws {
         let snapshotIDs = try await VMSnapshot.query(on: db)
             .filter(\.$vm.$id == vmID)
-            .all()
-            .compactMap(\.id)
+            .all(\.$id)
         try await RoleBindingService.revokeAll(nodeType: .vmSnapshot, nodeIDs: snapshotIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .virtualMachine, nodeID: vmID, on: db)
     }
 
     /// Sandbox counterpart: the sandbox node plus the snapshots that cascade
-    /// away with it (issue #428).
+    /// away with it (issue #428). Same read-before-delete ordering requirement.
     static func revokeBindings(forDeletedSandbox sandboxID: UUID, on db: any Database) async throws {
         let snapshotIDs = try await SandboxSnapshot.query(on: db)
             .filter(\.$sandbox.$id == sandboxID)
-            .all()
-            .compactMap(\.id)
+            .all(\.$id)
         try await RoleBindingService.revokeAll(nodeType: .sandboxSnapshot, nodeIDs: snapshotIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .sandbox, nodeID: sandboxID, on: db)
     }

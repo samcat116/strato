@@ -870,6 +870,9 @@ struct SandboxController: RouteCollection {
 
         guard !Task.isCancelled else { return }
         do {
+            // Bindings first, for the same reason the exported objects go
+            // first: the revoke reads the snapshot rows the delete cascades
+            // away (STR-112).
             try await db.transaction { db in
                 try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
                 try await sandbox.delete(on: db)

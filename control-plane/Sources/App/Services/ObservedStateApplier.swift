@@ -739,6 +739,9 @@ struct ObservedStateApplier {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
+            // Bindings first, unlike the delete-then-revoke order the other
+            // controllers use: the revoke reads the VM's checkpoints, whose
+            // rows the delete below cascades away (STR-112).
             try await db.transaction { db in
                 try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
                 try await vm.delete(on: db)
@@ -880,6 +883,8 @@ struct ObservedStateApplier {
             // the sandbox row below (issue #428).
             await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
+            // Bindings first: the revoke reads the sandbox's snapshots, whose
+            // rows the delete below cascades away (STR-112).
             try await db.transaction { db in
                 try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
                 try await sandbox.delete(on: db)

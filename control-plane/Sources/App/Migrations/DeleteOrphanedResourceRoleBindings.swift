@@ -22,41 +22,44 @@ import SQLKit
 struct DeleteOrphanedResourceRoleBindings: AsyncMigration {
     struct UnsupportedDatabase: Error {}
 
-    /// `(node_type, table holding that type's rows)`. Getting a table wrong
-    /// here deletes live bindings, so each pair is the schema name declared on
-    /// the model, not a guess from the type name (`virtual_machine` → `vms`).
-    private static let nodeTables: [(nodeType: IAMNodeType, table: String)] = [
-        (.virtualMachine, "vms"),
-        (.vmSnapshot, "vm_snapshots"),
-        (.sandbox, "sandboxes"),
-        (.sandboxSnapshot, "sandbox_snapshots"),
-        (.image, "images"),
+    /// The types swept. Each one's table comes from `IAMNodeType.table` — the
+    /// schema name declared on the model — rather than being spelled again
+    /// here: naming the wrong table is the one mistake that would delete live
+    /// bindings instead of dead ones.
+    private static let sweptNodeTypes: [IAMNodeType] = [
+        .virtualMachine, .vmSnapshot, .sandbox, .sandboxSnapshot, .image,
     ]
 
     func prepare(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else { throw UnsupportedDatabase() }
 
-        for (nodeType, table) in Self.nodeTables {
-            // `RETURNING id` only so the count can be logged: an operator
-            // reading a surprising number wants to know which type it came
-            // from. The sets are small enough that materializing them is free
-            // next to the anti-join itself.
-            let deleted = try await sql.raw(
-                """
-                DELETE FROM role_bindings
-                WHERE node_type = \(bind: nodeType.rawValue)
-                  AND NOT EXISTS (
-                    SELECT 1 FROM \(raw: table) WHERE \(raw: table).id = role_bindings.node_id
-                  )
-                RETURNING id
-                """
-            ).all()
-            if !deleted.isEmpty {
+        for nodeType in Self.sweptNodeTypes {
+            let table = nodeType.table
+            // Counted in the database rather than by materializing the deleted
+            // rows: an operator reading a surprising number wants to know which
+            // type it came from, but a deployment that has been leaking for
+            // years has an unbounded number of orphans, and this runs at boot
+            // before the replica serves traffic.
+            let removed =
+                try await sql.raw(
+                    """
+                    WITH deleted AS (
+                      DELETE FROM role_bindings
+                      WHERE node_type = \(bind: nodeType.rawValue)
+                        AND NOT EXISTS (
+                          SELECT 1 FROM \(raw: table) WHERE \(raw: table).id = role_bindings.node_id
+                        )
+                      RETURNING 1
+                    )
+                    SELECT count(*) AS removed FROM deleted
+                    """
+                ).first(decodingColumn: "removed", as: Int.self) ?? 0
+            if removed > 0 {
                 database.logger.info(
                     "Removed orphaned role bindings",
                     metadata: [
                         "node_type": .string(nodeType.rawValue),
-                        "count": .stringConvertible(deleted.count),
+                        "count": .stringConvertible(removed),
                     ])
             }
         }

@@ -1235,12 +1235,21 @@ final class SandboxTests {
                 sandboxID: sandbox.id!, userID: user.id!, kind: .delete)
             try await operation.save(on: app.db)
 
-            // The creator binding sandbox creation writes: bindings have no FK
-            // to the sandbox, so the confirmed deletion has to drop it
-            // (STR-112).
+            // The creator binding sandbox creation writes, plus a snapshot
+            // whose row cascades away with the sandbox: bindings have no FK to
+            // either, so the confirmed deletion has to drop both (STR-112) —
+            // and the snapshot's only if the revoke reads it before the delete.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .sandbox, nodeID: sandbox.id!, createdBy: user.id!, on: app.db)
+            let snapshot = SandboxSnapshot(
+                name: "snap", sandboxID: sandbox.id!, projectID: sandbox.$project.id,
+                environment: sandbox.environment, agentId: agentId, createdByID: user.id!)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
@@ -1255,6 +1264,11 @@ final class SandboxTests {
                 .filter(\.$nodeID == sandbox.id!)
                 .count()
             #expect(bindings == 0)
+            let snapshotBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
+                .filter(\.$nodeID == snapshotID)
+                .count()
+            #expect(snapshotBindings == 0)
         }
     }
 
