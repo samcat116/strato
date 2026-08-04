@@ -35,6 +35,7 @@ public enum HostPreflight {
         case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
         case ipTool = "ip"
+        case tcTool = "tc"
         case ovsVsctlTool = "ovs-vsctl"
         case ovnAppctlTool = "ovn-appctl"
         case storageFreeSpace = "storage_free_space"
@@ -264,6 +265,15 @@ public enum HostPreflight {
                 checkTool(
                     "ip", kind: .ipTool, searchPath: inputs.searchPath,
                     hint: "install iproute2; the agent needs it to manage TAP devices"))
+            // Advisory: only *networked sandboxes* need `tc` (it installs the
+            // redirects splicing a jailed VMM's TAP to its veth). VMs and
+            // network-free sandboxes are unaffected, so a host without it is
+            // degraded, not broken.
+            checks.append(
+                checkTool(
+                    "tc", kind: .tcTool, severity: .advisory, searchPath: inputs.searchPath,
+                    hint: "install iproute2; without `tc` the agent cannot attach a NIC into a jailed "
+                        + "sandbox's network namespace"))
             checks.append(
                 checkTool(
                     "ovs-vsctl", kind: .ovsVsctlTool, searchPath: inputs.searchPath,

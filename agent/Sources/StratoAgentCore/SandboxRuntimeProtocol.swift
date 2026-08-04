@@ -191,12 +191,12 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     /// (never started, or already ended). The Agent answers with
     /// `sandboxExecClosed` so the control plane tears its side down.
     case execSessionNotFound(String)
-    /// The sandbox requested a NIC, but v1 has no in-guest networking: the guest
-    /// init does not bring up `eth0`/DHCP and the guest kernel has no IP
-    /// autoconfiguration, so a TAP would leave the workload with an
-    /// unconfigured interface while the sandbox reported running. Permanent
-    /// until guest-side networking lands (a guest-image change).
-    case networkingUnsupported
+    /// The sandbox requested a NIC this host or this code path cannot realize —
+    /// an unjailed agent (a sandbox NIC lives in the jail's network namespace),
+    /// or a snapshot restore, whose captured device set has no network interface
+    /// to remap onto. Permanent: only a host/config change, or new agent code,
+    /// can satisfy it. The reason says which (issue STR-100).
+    case networkingUnsupported(String)
     /// Setting up the jailer barrier (issue #425) failed host-side — chroot
     /// staging, ownership, or the network namespace. Transient: these are
     /// filesystem/tooling operations a retry can succeed at once the host
@@ -247,8 +247,8 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             return "sandbox adoption target gone: \(reason)"
         case .execSessionNotFound(let sessionId):
             return "exec session not found: \(sessionId)"
-        case .networkingUnsupported:
-            return "networked sandboxes are not supported yet (the guest image has no in-guest networking)"
+        case .networkingUnsupported(let reason):
+            return "this sandbox's NIC cannot be realized: \(reason)"
         case .jailSetupFailed(let reason):
             return "sandbox jail setup failed: \(reason)"
         case .jailerRequiredUnavailable(let reason):

@@ -72,6 +72,27 @@ struct SandboxJailTests {
         #expect(p.netnsPath == "/var/run/netns/strato-sbx-abc-123")
     }
 
+    @Test("the NIC placement carries the jail's namespace and uid (issue STR-100)")
+    func nicPlacementDerivation() {
+        // The attachment path needs exactly these three facts, and each must
+        // match what the jailer itself is given — the TAP is created in that
+        // namespace and chowned to that uid, and Firecracker opens it after the
+        // jailer has setuid'd.
+        let p = plan("abc-123")
+        let placement = NICPlacement.sandboxNetns(
+            netnsName: p.netnsName, ownerUID: p.uid, ownerGID: p.gid)
+        #expect(placement.netnsName == "strato-sbx-abc-123")
+        #expect(NICPlacement.virtualMachine.netnsName == nil)
+
+        guard case .sandboxNetns(_, let uid, let gid) = placement else {
+            Issue.record("expected a sandbox placement")
+            return
+        }
+        #expect(uid == p.uid)
+        #expect(gid == p.gid)
+        #expect(uid != 0)
+    }
+
     @Test("the exec file basename keys the layout, not its directory")
     func execFileBasename() {
         let p = SandboxJailPlan(
@@ -141,6 +162,26 @@ struct SandboxJailerResolverTests {
         #expect(
             SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { $0 == "/sbin/ip" }) == "/sbin/ip")
         #expect(SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { _ in false }) == nil)
+    }
+
+    @Test("the resolved tc path is the first executable candidate")
+    func tcBinaryResolution() {
+        #expect(
+            SandboxJailerResolver.resolveTCBinaryPath(isExecutable: { $0 == "/sbin/tc" }) == "/sbin/tc")
+        #expect(SandboxJailerResolver.resolveTCBinaryPath(isExecutable: { _ in false }) == nil)
+    }
+
+    @Test("a host without tc still jails — only networked sandboxes need it")
+    func missingTCDoesNotBlockJailing() {
+        // `tc` installs the redirects splicing a jailed VMM's TAP to its veth
+        // (issue STR-100). Losing that must cost NICs, not the whole barrier.
+        let noTC: (String) -> Bool = {
+            $0 != "/usr/sbin/tc" && $0 != "/sbin/tc" && $0 != "/usr/bin/tc" && $0 != "/bin/tc"
+        }
+        #expect(
+            SandboxJailerResolver.resolve(
+                mode: .required, jailerBinaryPath: "/usr/local/bin/jailer",
+                isRoot: true, isExecutable: noTC) == .jailed)
     }
 
     @Test("a host without iproute2 cannot jail — netns creation would fail every create")

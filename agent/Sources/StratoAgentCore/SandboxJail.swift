@@ -38,16 +38,25 @@ public struct SandboxJailerConfig: Sendable, Equatable {
     /// `.jailed`; only namespace *creation* needs the binary (teardown is
     /// direct umount+unlink and works regardless).
     public let ipBinaryPath: String?
+    /// Absolute path of the iproute2 `tc` binary, resolved the same way and for
+    /// the same reason as `ipBinaryPath`. Only *networked* sandboxes need it (it
+    /// installs the redirects splicing the jail's TAP to its veth), so a host
+    /// without it still runs sandboxes — it just refuses NICs.
+    public let tcBinaryPath: String?
 
     /// Size of the per-sandbox uid/gid range. Fixed: 2^16 ids starting at
     /// `uidBase`.
     public static let uidCount: UInt32 = 65536
 
-    public init(jailerBinaryPath: String, chrootBaseDir: String, uidBase: UInt32, ipBinaryPath: String? = nil) {
+    public init(
+        jailerBinaryPath: String, chrootBaseDir: String, uidBase: UInt32, ipBinaryPath: String? = nil,
+        tcBinaryPath: String? = nil
+    ) {
         self.jailerBinaryPath = jailerBinaryPath
         self.chrootBaseDir = chrootBaseDir
         self.uidBase = uidBase
         self.ipBinaryPath = ipBinaryPath
+        self.tcBinaryPath = tcBinaryPath
     }
 }
 
@@ -75,6 +84,17 @@ public enum SandboxJailerResolver {
     /// service manager's `PATH` agreeing with this probe.
     public static func resolveIPBinaryPath(isExecutable: (String) -> Bool) -> String? {
         ipBinaryCandidates.first(where: isExecutable)
+    }
+
+    /// Where the iproute2 `tc` binary is looked for. Deliberately *not* a
+    /// jailing prerequisite: only a networked sandbox needs `tc`, so a host
+    /// without it should still run sandboxes rather than lose the barrier.
+    public static let tcBinaryCandidates = ["/usr/sbin/tc", "/sbin/tc", "/usr/bin/tc", "/bin/tc"]
+
+    /// The `tc` binary the netns attachment will invoke, or nil when the host
+    /// has none — in which case networked sandboxes are refused with a reason.
+    public static func resolveTCBinaryPath(isExecutable: (String) -> Bool) -> String? {
+        tcBinaryCandidates.first(where: isExecutable)
     }
 
     public static func resolve(

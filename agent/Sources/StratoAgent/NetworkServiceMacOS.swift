@@ -33,7 +33,13 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     // MARK: - VM Network Lifecycle
 
-    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
+    /// `placement` is accepted for protocol conformance and ignored: user-mode
+    /// SLIRP creates nothing on the host, so there is no device to put in a
+    /// namespace. macOS has no jailed sandboxes either — the Firecracker runtime
+    /// is Linux-only — so the sandbox placement never reaches here.
+    func createVMNetwork(
+        vmId: String, nicIndex: Int, config: VMNetworkConfig, placement: NICPlacement
+    ) async throws -> VMNetworkInfo {
         logger.info(
             "Creating VM network with user-mode networking",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
@@ -65,7 +71,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         return networkInfo
     }
 
-    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
+    func detachVMFromNetwork(vmId: String, nicIndex: Int, placement: NICPlacement) async throws {
         logger.info(
             "Detaching VM from user-mode network",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])

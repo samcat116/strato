@@ -11,13 +11,20 @@ protocol NetworkServiceProtocol: Sendable {
     func disconnect() async
 
     // VM Network Lifecycle
-    /// Realizes one NIC for a VM on this host. `nicIndex` is the NIC's position
-    /// in the VM's interface list; it namespaces host-side resources (TAP device,
-    /// logical switch port) so multi-NIC VMs don't collide.
-    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo
+    /// Realizes one NIC for a workload on this host. `nicIndex` is the NIC's
+    /// position in the workload's interface list; it namespaces host-side
+    /// resources (TAP device, logical switch port) so multi-NIC VMs don't
+    /// collide. `placement` decides *where* the device is realized and what OVN
+    /// calls the port — a jailed sandbox's VMM cannot see the host namespace, so
+    /// its NIC takes a different path (issue STR-100).
+    func createVMNetwork(
+        vmId: String, nicIndex: Int, config: VMNetworkConfig, placement: NICPlacement
+    ) async throws -> VMNetworkInfo
     /// Tears down the host-side resources of one NIC. Must be idempotent: it is
     /// called on delete and on create-failure rollback, possibly after a crash.
-    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws
+    /// `placement` must match the one the NIC was created with, so teardown
+    /// looks for the right devices and port name.
+    func detachVMFromNetwork(vmId: String, nicIndex: Int, placement: NICPlacement) async throws
 
     // Network Topology Management
     //
@@ -46,9 +53,20 @@ protocol NetworkServiceProtocol: Sendable {
 }
 
 extension NetworkServiceProtocol {
+    /// Realizes a VM NIC — the overwhelmingly common case, and the only shape
+    /// that existed before sandbox NICs.
+    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
+        try await createVMNetwork(vmId: vmId, nicIndex: nicIndex, config: config, placement: .virtualMachine)
+    }
+
     /// Detaches a VM's first NIC (the only one pre-multi-NIC agents created).
     func detachVMFromNetwork(vmId: String) async throws {
-        try await detachVMFromNetwork(vmId: vmId, nicIndex: 0)
+        try await detachVMFromNetwork(vmId: vmId, nicIndex: 0, placement: .virtualMachine)
+    }
+
+    /// Detaches a VM NIC by index.
+    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
+        try await detachVMFromNetwork(vmId: vmId, nicIndex: nicIndex, placement: .virtualMachine)
     }
 
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
@@ -95,12 +113,18 @@ struct VMNetworkConfig: Sendable {
     /// planes without security groups, and sandbox NICs) — the port joins no
     /// groups at all.
     let securityGroupIds: [UUID]?
+    /// MTU to apply to every host-side device this NIC creates, so the host path
+    /// and the guest are told the same number. Nil leaves the kernel default.
+    /// (Before issue STR-100 this stopped at `ResolvedNetworkAttachment` and only
+    /// ever reached the guest's cloud-init, so host devices kept 1500 even on a
+    /// network whose MTU had been lowered for an encapsulated uplink.)
+    let mtu: Int?
 
     init(
         networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
-        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil
+        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil
     ) {
         self.networkName = networkName
         self.networkId = networkId
@@ -117,6 +141,7 @@ struct VMNetworkConfig: Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.securityGroupIds = securityGroupIds
+        self.mtu = mtu
     }
 }
 

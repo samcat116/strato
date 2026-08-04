@@ -49,6 +49,10 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         var spec: SandboxSpec
         var status: SandboxStatus
         var exitCode: Int?
+        /// The NICs the orchestrator realized before the runtime was called.
+        /// Recorded rather than ignored so a test can assert what the runtime
+        /// was handed (issue STR-100).
+        var networkAttachments: [ResolvedNetworkAttachment] = []
         /// Monotonic per-sandbox line counter, so emitted log lines are
         /// distinguishable and survive suspend/resume like the real follow's
         /// seq checkpoint.
@@ -117,20 +121,30 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         registryCredential: RegistryCredential?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
-        // Faithful to the real runtime: v1 sandboxes have no in-guest
-        // networking, and quietly accepting a NIC here would let simulation
-        // validate a config that fails on real hardware.
-        guard spec.network == nil, networkAttachments.isEmpty else {
-            throw SandboxRuntimeError.networkingUnsupported
+        // Faithful to the real runtime: a snapshot's captured device set has no
+        // network interface and cannot grow one on load (STR-104). Accepting it
+        // here would let simulation validate a config that fails on real
+        // hardware.
+        if spec.restoreFrom != nil, spec.network != nil {
+            throw SandboxRuntimeError.networkingUnsupported(
+                "restoring a networked sandbox needs the snapshot's network device remapped on load, "
+                    + "which this agent cannot do yet (STR-104)")
         }
         logger.info("Creating mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
         if var existing = sandboxes[sandboxId] {
             // Replayed create: refresh the spec, never regress the status.
             existing.spec = spec
+            existing.networkAttachments = networkAttachments
             sandboxes[sandboxId] = existing
             return
         }
-        sandboxes[sandboxId] = MockSandbox(spec: spec, status: .stopped)
+        sandboxes[sandboxId] = MockSandbox(
+            spec: spec, status: .stopped, networkAttachments: networkAttachments)
+    }
+
+    /// The NICs `createSandbox` was handed for a sandbox, for tests.
+    public func networkAttachments(sandboxId: String) -> [ResolvedNetworkAttachment] {
+        sandboxes[sandboxId]?.networkAttachments ?? []
     }
 
     public func bootSandbox(sandboxId: String) async throws {
