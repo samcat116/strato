@@ -30,7 +30,10 @@ public enum HostPreflight {
         case firecrackerSocketDirectory = "firecracker_socket_dir"
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
+        case qemuFirmwareDescriptors = "qemu_firmware_descriptors"
         case swtpmBinary = "swtpm"
+        case libvirtConnection = "libvirtd"
+        case libvirtVersion = "libvirt_version"
         case ovnDatabaseSocket = "ovn_nb_socket"
         case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
@@ -48,6 +51,13 @@ public enum HostPreflight {
         /// Worth a loud log with remediation, but does not gate placement
         /// (e.g. missing UEFI firmware only affects disk-boot VMs).
         case advisory
+        /// A dependency this build does not use yet: worth stating once per
+        /// registration so an operator can get ahead of it, but not a problem
+        /// with the host as it stands, so it is logged at info rather than
+        /// warning. Every node in every fleet would otherwise report libvirt
+        /// missing on every reconnect for a requirement that isn't one until
+        /// issue #902.
+        case informational
     }
 
     public struct Check: Sendable, Equatable {
@@ -86,6 +96,20 @@ public enum HostPreflight {
         /// (issue #565); its absence is advisory, since only VMs that ask for
         /// a vTPM are affected.
         public var swtpmBinaryPath: String?
+        /// Directory holding QEMU's firmware descriptors
+        /// (`/usr/share/qemu/firmware/*.json`), which is what lets libvirt
+        /// autoselect UEFI firmware from `<os firmware='efi'>`. nil skips the
+        /// check on platforms that have no such directory.
+        public var qemuFirmwareDescriptorPath: String?
+        /// What `LibvirtProbe` found, or nil on a platform where libvirt cannot
+        /// exist (non-Linux), which skips both libvirt checks entirely.
+        public var libvirt: LibvirtProbe.Status?
+        /// The oldest libvirt this agent will drive.
+        public var minimumLibvirtVersion: LibvirtProbe.Version
+        /// Whether this agent actually manages VMs through libvirt, which is
+        /// what makes the libvirt checks gating rather than advisory. See
+        /// `LibvirtProbe.driverBuilt`.
+        public var libvirtRequired: Bool
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
         public var ovnMode: Bool
@@ -112,6 +136,10 @@ public enum HostPreflight {
             firecrackerSocketDirectory: String? = nil,
             firmwarePath: String? = nil,
             swtpmBinaryPath: String? = nil,
+            qemuFirmwareDescriptorPath: String? = nil,
+            libvirt: LibvirtProbe.Status? = nil,
+            minimumLibvirtVersion: LibvirtProbe.Version = LibvirtProbe.minimumVersion,
+            libvirtRequired: Bool = LibvirtProbe.driverBuilt,
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovnNBTLSFilePaths: [String] = [],
@@ -127,6 +155,10 @@ public enum HostPreflight {
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
             self.firmwarePath = firmwarePath
             self.swtpmBinaryPath = swtpmBinaryPath
+            self.qemuFirmwareDescriptorPath = qemuFirmwareDescriptorPath
+            self.libvirt = libvirt
+            self.minimumLibvirtVersion = minimumLibvirtVersion
+            self.libvirtRequired = libvirtRequired
             self.ovnMode = ovnMode
             self.ovnNBConnection = ovnNBConnection
             self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
@@ -178,6 +210,22 @@ public enum HostPreflight {
         /// reports as `AgentRegisterMessage.tpmCapable` (issue #565).
         public var swtpmAvailable: Bool {
             check(.swtpmBinary)?.passed ?? false
+        }
+
+        /// Whether this host's libvirt is usable: reachable at
+        /// `qemu:///system` and new enough. True when the libvirt checks were
+        /// skipped, so callers that don't yet require libvirt are unaffected —
+        /// ask `check(.libvirtConnection)` when the distinction matters.
+        public var libvirtReady: Bool {
+            !failed(.libvirtConnection) && !failed(.libvirtVersion)
+        }
+
+        /// Why libvirt is unusable, for capability-gating messages.
+        public var libvirtFailureDetail: String? {
+            for kind in [CheckKind.libvirtConnection, .libvirtVersion] {
+                if let check = check(kind), !check.passed { return check.detail }
+            }
+            return nil
         }
 
         /// Whether the OVN-specific host dependencies (database sockets and
@@ -242,6 +290,15 @@ public enum HostPreflight {
         checks.append(checkQemuImg(inputs.qemuImgPath))
         checks.append(checkFirmware(inputs.firmwarePath))
         checks.append(checkSwtpm(inputs.swtpmBinaryPath))
+        if let descriptorPath = inputs.qemuFirmwareDescriptorPath {
+            checks.append(checkFirmwareDescriptors(descriptorPath))
+        }
+        if let libvirt = inputs.libvirt {
+            checks.append(
+                contentsOf: checkLibvirt(
+                    libvirt, minimumVersion: inputs.minimumLibvirtVersion,
+                    severity: inputs.libvirtRequired ? .gating : .informational))
+        }
 
         if inputs.ovnMode {
             if inputs.ovnNBConnection.hasPrefix("unix:") {
@@ -374,6 +431,99 @@ public enum HostPreflight {
         return .pass(.swtpmBinary, severity: .advisory)
     }
 
+    /// QEMU's firmware descriptors are what libvirt reads to autoselect a
+    /// CODE/VARS pair for `<os firmware='efi'>`. Advisory: without them libvirt
+    /// cannot autoselect, and the agent has to name firmware paths explicitly
+    /// (which `FirmwareResolver` can already do), so a host missing them still
+    /// boots VMs.
+    static func checkFirmwareDescriptors(_ directory: String) -> Check {
+        let descriptors =
+            (try? FileManager.default.contentsOfDirectory(atPath: directory))?
+            .filter { $0.hasSuffix(".json") } ?? []
+        guard !descriptors.isEmpty else {
+            return .fail(
+                .qemuFirmwareDescriptors, severity: .advisory,
+                "no QEMU firmware descriptors (*.json) in \(directory) — libvirt cannot autoselect UEFI "
+                    + "firmware, so VMs boot with the explicitly configured firmware paths instead. "
+                    + "Install EDK2 firmware (Debian/Ubuntu: `apt install ovmf qemu-efi-aarch64`).")
+        }
+        return .pass(.qemuFirmwareDescriptors, severity: .advisory)
+    }
+
+    /// libvirtd reachability and its version floor.
+    ///
+    /// `severity` follows `LibvirtProbe.driverBuilt`: gating once the agent
+    /// really manages VMs through libvirt — a host that cannot reach
+    /// `qemu:///system`, or runs a libvirt too old to snapshot UEFI guests,
+    /// cannot then serve the VM operations it is asked for — and merely
+    /// informational until then, so hosts running today's direct-QEMU driver
+    /// hear about the coming requirement without being declared broken.
+    /// `gate(_:)` starts consuming `libvirtReady` with the driver (issue #902).
+    ///
+    /// The wording follows the same split: while the dependency is unused, each
+    /// message says so rather than reading as a live fault.
+    static func checkLibvirt(
+        _ status: LibvirtProbe.Status, minimumVersion: LibvirtProbe.Version, severity: Severity
+    ) -> [Check] {
+        // Prefix, not a whole second set of strings: the remediation is
+        // identical either way, only its urgency changes.
+        let lede =
+            severity == .gating
+            ? "" : "libvirt will be required for VM management (issue #902), and is not usable here yet: "
+
+        switch status {
+        case .clientMissing:
+            return [
+                .fail(
+                    .libvirtConnection, severity: severity,
+                    lede
+                        + "libvirt is not installed on this host (no `virsh` on PATH) — the agent manages VMs "
+                        + "through libvirtd. Install it (Debian/Ubuntu: "
+                        + "`apt install libvirt-daemon-system libvirt-clients`) and start "
+                        + "virtqemud.socket (or libvirtd.socket on a monolithic install); re-running "
+                        + "deploy/agent/install.sh does both.")
+            ]
+        case .unreachable(let detail):
+            return [
+                .fail(
+                    .libvirtConnection, severity: severity,
+                    lede + "cannot connect to \(LibvirtProbe.systemURI): \(detail). Start the daemon "
+                        + "(`systemctl start virtqemud.socket`, or libvirtd.socket on a monolithic "
+                        + "install); if it is running, the agent's account needs access to its socket — "
+                        + "run the agent as root, or add its user to the `libvirt` group.")
+            ]
+        case .unrecognizedOutput(let detail):
+            // The daemon replied, so nothing about starting it or socket
+            // permissions applies. This is the state a mis-parsed (e.g.
+            // localized) or unexpectedly-shaped virsh lands in.
+            return [
+                .fail(
+                    .libvirtConnection, severity: severity,
+                    lede + "connected to \(LibvirtProbe.systemURI), but could not read the daemon version "
+                        + "from `virsh version --daemon` — it printed \"\(detail)\". The version floor "
+                        + "cannot be checked without it: confirm `virsh -c \(LibvirtProbe.systemURI) "
+                        + "version --daemon` prints a `Running against daemon:` line, and that virsh and "
+                        + "the daemon come from the same libvirt build.")
+            ]
+        case .reachable(let version):
+            let connection = Check.pass(.libvirtConnection, severity: severity)
+            guard version >= minimumVersion else {
+                return [
+                    connection,
+                    .fail(
+                        .libvirtVersion, severity: severity,
+                        lede
+                            + "libvirt \(version) is older than the required \(minimumVersion) — VM checkpoints "
+                            + "need internal snapshots of UEFI guests, which libvirt supports only from "
+                            + "10.9 and reliably only from 11.5. Ubuntu 24.04 ships 10.0.0 and is not a "
+                            + "supported hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another "
+                            + "distribution shipping \(minimumVersion) or newer."),
+                ]
+            }
+            return [connection, .pass(.libvirtVersion, severity: severity)]
+        }
+    }
+
     /// All PEM files configured for the ssl: NB endpoint must exist.
     static func checkTLSFiles(_ paths: [String]) -> Check {
         let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
@@ -399,14 +549,19 @@ public enum HostPreflight {
     static func checkTool(
         _ tool: String, kind: CheckKind, severity: Severity = .gating, searchPath: String, hint: String
     ) -> Check {
-        let fileManager = FileManager.default
-        let found = searchPath.split(separator: ":").contains { directory in
-            fileManager.isExecutableFile(atPath: "\(directory)/\(tool)")
-        }
-        guard found else {
+        guard locateTool(tool, searchPath: searchPath) != nil else {
             return .fail(kind, severity: severity, "`\(tool)` not found on PATH — \(hint)")
         }
         return .pass(kind, severity: severity)
+    }
+
+    /// First executable named `tool` on `searchPath`, or nil.
+    public static func locateTool(_ tool: String, searchPath: String) -> String? {
+        for directory in searchPath.split(separator: ":") {
+            let candidate = "\(directory)/\(tool)"
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
     }
 
     static func checkFreeSpace(_ path: String, minimum: Int64) -> Check {

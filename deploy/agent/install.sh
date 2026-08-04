@@ -2,9 +2,9 @@
 # strato-agent install.sh — one-command hypervisor node install.
 #
 # Downloads the strato-agent and spire-agent binaries, installs the host
-# dependencies the agent needs (QEMU, and OVN/OVS for SDN networking), attests
-# this node to SPIRE, writes the agent config, and starts everything under
-# systemd. Designed to be curled and piped:
+# dependencies the agent needs (QEMU and libvirtd, and OVN/OVS for SDN
+# networking), attests this node to SPIRE, writes the agent config, and starts
+# everything under systemd. Designed to be curled and piped:
 #
 #   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
 #     | sudo bash -s -- \
@@ -52,6 +52,9 @@
 #   --network-mode MODE      ovn | user — which deps to install/require (default: ovn)
 #   --strato-agent-bin PATH  Use an existing binary instead of downloading one
 #   --no-deps                Do not install host packages (still checks them)
+#   --no-libvirt-config      Install libvirt but leave /etc/libvirt/qemu.conf
+#                            alone (for hosts whose config is managed by
+#                            configuration management)
 #   --no-systemd             Do not install/enable systemd units
 #   --skip-preflight         Skip the host dependency summary
 #   --sandbox-guest          Also install the sandbox guest base image (kernel +
@@ -87,6 +90,23 @@ INSTALL_DEPS=1
 USE_SYSTEMD=1
 RUN_PREFLIGHT=1
 INSTALL_SANDBOX_GUEST=0
+CONFIGURE_LIBVIRT=1
+
+# The account strato-agent.service runs as, and therefore the uid libvirt must
+# hand VM disks and sockets to (see configure_libvirt_conf below). Root: the default
+# storage/config/SPIRE paths are root-owned, the SPIRE workload selector the
+# control plane provisions is `unix:uid:0`, and the agent manages TAP devices,
+# netlink and ovs-vsctl. Running unprivileged is a supported but manual
+# configuration (docs/deployment/agents.md#privileges); this variable is the one
+# place that assumption is written down.
+AGENT_USER="root"
+
+# Hypervisor nodes need libvirt >= 11.5: internal snapshots of UEFI VMs (how
+# checkpoint/restore works) arrived in 10.9, and 11.2-11.3 carry a revert
+# regression fixed in 11.5. Ubuntu 24.04 ships 10.0.0 and is therefore not a
+# supported hypervisor host; 26.04 ships 12.0.0.
+LIBVIRT_MIN_VERSION="11.5.0"
+LIBVIRT_QEMU_CONF=/etc/libvirt/qemu.conf
 
 # SPIRE / telemetry. Versions are pinned for reproducible installs: SPIRE
 # matches the compose spire-server image (deploy/compose/spiffe/Dockerfile);
@@ -130,6 +150,7 @@ while [ $# -gt 0 ]; do
     --network-mode)     NETWORK_MODE="$2"; shift 2 ;;
     --strato-agent-bin) STRATO_AGENT_BIN="$2"; shift 2 ;;
     --no-deps)          INSTALL_DEPS=0; shift ;;
+    --no-libvirt-config) CONFIGURE_LIBVIRT=0; shift ;;
     --no-systemd)       USE_SYSTEMD=0; shift ;;
     --skip-preflight)   RUN_PREFLIGHT=0; shift ;;
     --sandbox-guest)    INSTALL_SANDBOX_GUEST=1; shift ;;
@@ -421,6 +442,12 @@ apt_packages() {
   # Base: disk tooling (qemu-img), the qemu-system for this arch, UEFI firmware
   # for disk-image boot, glib (QEMUKit links it), and socat.
   local pkgs=(qemu-utils "$qemu_system" "$firmware" libglib2.0-0 socat ca-certificates)
+  # libvirtd is the second daemon the agent drives VMs through: the daemon
+  # itself plus virsh, which both this script's preflight and the agent's use
+  # to prove qemu:///system is reachable and new enough. swtpm backs guest
+  # TPM 2.0 devices — libvirt starts and supervises it per domain, so it must
+  # be on the host even though the agent never launches it itself.
+  pkgs+=(libvirt-daemon-system libvirt-clients swtpm swtpm-tools)
   if [ "$NETWORK_MODE" = "ovn" ]; then
     pkgs+=(ovn-host ovn-common openvswitch-switch openvswitch-common)
   fi
@@ -445,6 +472,217 @@ install_deps() {
 }
 
 install_deps
+
+# --- libvirt configuration ---------------------------------------------------
+# The agent drives VMs through libvirtd at qemu:///system, and the architecture
+# invariant is that the *agent* owns every path under /var/lib/strato. libvirt's
+# qemu driver disagrees by default: it runs QEMU as libvirt-qemu:kvm and chowns
+# each domain's disks to that uid on start.
+#
+# The fix is not to switch labeling off. `security_driver = "none"`,
+# `dynamic_ownership = 0` and `<seclabel type='none'/>` are global off-switches
+# that also stop libvirt preparing its *own* runtime artifacts — the swtpm
+# control socket under /run/libvirt — for the QEMU uid, which fails the domain
+# start outright (validated in issue #899). Instead leave the DAC driver running
+# and point it at the agent's own account: relabeling is then a no-op on files
+# the agent already owns, and libvirt still manages swtpm and NVRAM correctly.
+#
+# AppArmor stays enabled for the same reason it does everywhere else — a denial
+# is a profile to fix, not a driver to disable.
+
+LIBVIRT_SOCKET_UNIT=""
+LIBVIRT_SERVICE_UNIT=""
+
+# Modular libvirt (virtqemud) vs monolithic (libvirtd): which one answers
+# qemu:///system varies by distro release, and both sets of units can be
+# installed at once. An enabled unit is the authoritative answer; failing that
+# prefer the modular daemon, which is what upstream ships going forward.
+detect_libvirt_units() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local unit
+  for unit in virtqemud.socket libvirtd.socket; do
+    if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+      LIBVIRT_SOCKET_UNIT="$unit"
+      LIBVIRT_SERVICE_UNIT="${unit%.socket}.service"
+      return 0
+    fi
+  done
+  for unit in virtqemud.socket libvirtd.socket; do
+    if systemctl cat "$unit" >/dev/null 2>&1; then
+      LIBVIRT_SOCKET_UNIT="$unit"
+      LIBVIRT_SERVICE_UNIT="${unit%.socket}.service"
+      return 0
+    fi
+  done
+}
+
+# set_qemu_conf_key <key> <literal value> — rewrite or append one qemu.conf
+# assignment, touching nothing else. Returns 0 if the file changed, 1 if the key
+# already held this value (so callers can skip the daemon restart).
+#
+# Only uncommented assignments are matched: libvirt ships the whole file as
+# commented-out keys documenting their defaults, and those lines are reference
+# material an operator reads — they must survive re-runs untouched.
+#
+# Duplicate assignments are collapsed to one, and the *last* occurrence decides
+# whether the file already agrees with us. libvirt's parser lets the last
+# assignment win, so a file carrying two `user =` lines would otherwise be read
+# as already-correct from the first while libvirt ran with the second — a silent
+# no-op in exactly the hand-edited case this function exists to fix. Collapsing
+# rather than rewriting each in place is what makes a second run a no-op.
+#
+# awk with the value passed through ENVIRON rather than sed, for the same reason
+# set_spiffe_key does it below: the value is data, never a replacement pattern.
+set_qemu_conf_key() {
+  local key="$1" value="$2"
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$LIBVIRT_QEMU_CONF"; then
+    local current occurrences
+    current="$(sed -n \
+      "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*\$/\1/p" \
+      "$LIBVIRT_QEMU_CONF" | tail -1)"
+    occurrences="$(grep -cE "^[[:space:]]*${key}[[:space:]]*=" "$LIBVIRT_QEMU_CONF")"
+    # Already right *and* stated once: nothing to do. Collapsing duplicates is
+    # worth a rewrite even when the effective value matches.
+    if [ "$current" = "$value" ] && [ "$occurrences" -eq 1 ]; then
+      return 1
+    fi
+    log "Setting ${key} = ${value} in $LIBVIRT_QEMU_CONF (was ${current})"
+    # cp -p first so the redirect below truncates a file that already carries the
+    # original's mode and ownership: qemu.conf is 0600 root on Debian/Ubuntu and
+    # can hold VNC/SPICE passwords and TLS material, and a bare `> tmp` would
+    # create it 0644 under the ambient umask — both exposing it in /etc/libvirt
+    # while it exists and widening the real file once moved into place.
+    cp -p "$LIBVIRT_QEMU_CONF" "$LIBVIRT_QEMU_CONF.tmp"
+    # Our assignment lands at the first match's position; any further ones are
+    # dropped, leaving exactly one so the next run sees nothing to do.
+    QEMU_CONF_KEY="$key" QEMU_CONF_VALUE="$value" awk '
+      BEGIN { key = ENVIRON["QEMU_CONF_KEY"]; value = ENVIRON["QEMU_CONF_VALUE"] }
+      $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+        if (!written) { print key " = " value; written = 1 }
+        next
+      }
+      { print }
+    ' "$LIBVIRT_QEMU_CONF" > "$LIBVIRT_QEMU_CONF.tmp" \
+      && mv "$LIBVIRT_QEMU_CONF.tmp" "$LIBVIRT_QEMU_CONF"
+    return 0
+  fi
+  if ! grep -q '^# --- strato-agent (managed' "$LIBVIRT_QEMU_CONF"; then
+    cat >> "$LIBVIRT_QEMU_CONF" << 'EOF'
+
+# --- strato-agent (managed by deploy/agent/install.sh) -----------------------
+# Run QEMU as the account strato-agent runs as, so libvirt's dynamic ownership
+# is a no-op on the VM tree the agent owns (/var/lib/strato/vms/<uuid>/) while
+# libvirt keeps preparing its own swtpm/NVRAM artifacts for that same uid.
+# dynamic_ownership stays 1 (the default): switching it off breaks the latter.
+# Do not add security_driver = "none" — AppArmor is expected to stay enabled.
+EOF
+  fi
+  log "Adding ${key} = ${value} to $LIBVIRT_QEMU_CONF"
+  printf '%s = %s\n' "$key" "$value" >> "$LIBVIRT_QEMU_CONF"
+}
+
+# Writes the three qemu.conf keys we own. Sets LIBVIRT_CONF_CHANGED=1 when the
+# file was modified, so only a real change restarts the daemon. This is the one
+# piece --no-libvirt-config skips; everything else below runs regardless, because
+# a host whose qemu.conf is managed elsewhere still needs its socket enabled and
+# its agent account able to reach it.
+LIBVIRT_CONF_CHANGED=0
+
+configure_libvirt_conf() {
+  if [ "$CONFIGURE_LIBVIRT" -eq 0 ]; then
+    log "Leaving $LIBVIRT_QEMU_CONF alone (--no-libvirt-config); ensure it sets user/group = \"$AGENT_USER\" and dynamic_ownership = 1"
+    return 0
+  fi
+  if [ ! -f "$LIBVIRT_QEMU_CONF" ]; then
+    warn "$LIBVIRT_QEMU_CONF not found; is libvirt installed? Install libvirt-daemon-system and re-run, or configure it yourself (user/group = \"$AGENT_USER\")"
+    return 0
+  fi
+
+  if set_qemu_conf_key user "\"$AGENT_USER\""; then LIBVIRT_CONF_CHANGED=1; fi
+  if set_qemu_conf_key group "\"$AGENT_USER\""; then LIBVIRT_CONF_CHANGED=1; fi
+  # Explicit rather than left to the default, so a host where someone disabled
+  # it (the natural-looking fix for the ownership problem, and the wrong one)
+  # is corrected on the next run.
+  if set_qemu_conf_key dynamic_ownership 1; then LIBVIRT_CONF_CHANGED=1; fi
+
+  # swtpm_user/swtpm_group are deliberately left at the distro default (tss):
+  # libvirt creates the vTPM state under its own /var/lib/libvirt/swtpm, not the
+  # agent-owned tree, and the spike confirmed the agent only ever needs to reach
+  # the control socket. If the domain XML ends up placing TPM state under
+  # /var/lib/strato (issue #902), these two keys have to follow user/group.
+}
+
+# The agent connects to qemu:///system as itself. root needs no help; any other
+# account needs the libvirt group for the socket and kvm for acceleration. Not
+# governed by --no-libvirt-config: group membership is host state, not this
+# file's content, and an agent that cannot open the socket never starts a VM.
+grant_libvirt_access() {
+  [ "$AGENT_USER" != "root" ] || return 0
+  local group
+  for group in libvirt kvm; do
+    if getent group "$group" >/dev/null 2>&1; then
+      usermod -aG "$group" "$AGENT_USER" \
+        || warn "could not add $AGENT_USER to the $group group; the agent may not be able to reach qemu:///system"
+    fi
+  done
+}
+
+# libvirt's own `default` NAT network is not something Strato uses — the agent
+# does its own IPAM and TAP management — and on a hypervisor node it is an
+# unrequested virbr0, a dnsmasq bound to :53 on it, and a set of NAT rules
+# sitting next to OVS. Turn off its autostart, and tear it down now when doing so
+# cannot disturb a guest.
+disable_libvirt_default_network() {
+  command -v virsh >/dev/null 2>&1 || return 0
+  LC_ALL=C virsh -c qemu:///system net-info default >/dev/null 2>&1 || return 0
+
+  if LC_ALL=C virsh -c qemu:///system net-info default 2>/dev/null | grep -q '^Autostart:.*yes'; then
+    log "Disabling autostart of libvirt's 'default' NAT network (Strato does not use libvirt networking)"
+    LC_ALL=C virsh -c qemu:///system net-autostart --disable default >/dev/null 2>&1 \
+      || warn "could not disable autostart of libvirt's 'default' network; do it by hand with 'virsh net-autostart --disable default'"
+  fi
+
+  # Only destroy it when no domain is running: on a fresh node there are none,
+  # and on a host that predates this script a running guest may be using virbr0.
+  # Being wrong here disconnects someone's VM, so leave it to the operator.
+  local running
+  running="$(LC_ALL=C virsh -c qemu:///system list --state-running --name 2>/dev/null | tr -d '[:space:]')"
+  if [ -n "$running" ]; then
+    warn "libvirt's 'default' network is still active and this host has running domains; leaving it up. Once they are gone: virsh net-destroy default"
+    return 0
+  fi
+  if LC_ALL=C virsh -c qemu:///system net-info default 2>/dev/null | grep -q '^Active:.*yes'; then
+    log "Tearing down libvirt's 'default' NAT network (virbr0 + dnsmasq)"
+    LC_ALL=C virsh -c qemu:///system net-destroy default >/dev/null 2>&1 \
+      || warn "could not destroy libvirt's 'default' network; do it by hand with 'virsh net-destroy default'"
+  fi
+}
+
+enable_libvirt_socket() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  detect_libvirt_units
+  if [ -z "$LIBVIRT_SOCKET_UNIT" ]; then
+    warn "no virtqemud.socket or libvirtd.socket unit found; start libvirtd yourself so qemu:///system is reachable"
+    return 0
+  fi
+  log "Enabling $LIBVIRT_SOCKET_UNIT"
+  systemctl enable --now "$LIBVIRT_SOCKET_UNIT" \
+    || warn "could not enable $LIBVIRT_SOCKET_UNIT; qemu:///system may be unreachable"
+  if [ "$LIBVIRT_CONF_CHANGED" -eq 1 ]; then
+    # try-restart, not restart: a socket-activated daemon that hasn't been
+    # triggered yet will pick the new config up when it starts, and there is no
+    # reason to start it early. Restarting a running libvirtd does not disturb
+    # VMs — it reconnects to the QEMU processes it left running.
+    log "Restarting $LIBVIRT_SERVICE_UNIT to apply $LIBVIRT_QEMU_CONF"
+    systemctl try-restart "$LIBVIRT_SERVICE_UNIT" \
+      || warn "could not restart $LIBVIRT_SERVICE_UNIT; restart it by hand so the new $LIBVIRT_QEMU_CONF takes effect"
+  fi
+}
+
+configure_libvirt_conf
+grant_libvirt_access
+enable_libvirt_socket
+disable_libvirt_default_network
 
 install_spire_agent
 if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
@@ -473,6 +711,43 @@ check_present() {
 # check_kvm — /dev/kvm must exist and be read/writable for hardware accel.
 check_kvm() { [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; }
 
+# version_ge <have> <want> — dotted numeric comparison (11.5 >= 11.5.0).
+version_ge() {
+  case "$1$2" in
+    *[!0-9.]*|"") return 1 ;;
+  esac
+  local i have want h w
+  IFS=. read -r -a have <<< "$1"
+  IFS=. read -r -a want <<< "$2"
+  for i in 0 1 2; do
+    h="${have[i]:-0}"
+    w="${want[i]:-0}"
+    [ "$h" -gt "$w" ] && return 0
+    [ "$h" -lt "$w" ] && return 1
+  done
+  return 0
+}
+
+# The version qemu:///system reports, which doubles as the reachability probe:
+# virsh has to connect to the daemon to answer. Empty when virsh is missing or
+# the connection failed.
+#
+# LC_ALL=C is load-bearing: virsh prints "Running against daemon:" through
+# gettext, so on a host whose locale has a libvirt catalog installed the marker
+# comes back translated and this reports a healthy daemon as unreachable. sudo
+# keeps LANG/LC_* via env_keep, so the installer inherits the operator's locale.
+LIBVIRT_VERSION=""
+check_libvirtd() {
+  command -v virsh >/dev/null 2>&1 || return 1
+  LIBVIRT_VERSION="$(LC_ALL=C virsh -c qemu:///system version --daemon 2>/dev/null \
+    | sed -n 's/^Running against daemon:[[:space:]]*\([0-9.]*\).*/\1/p' | head -1)"
+  [ -n "$LIBVIRT_VERSION" ]
+}
+
+# Firmware descriptors are what make <os firmware='efi'> autoselection work; the
+# agent falls back to explicit firmware paths without them.
+check_firmware_descriptors() { compgen -G "/usr/share/qemu/firmware/*.json"; }
+
 preflight() {
   [ "$RUN_PREFLIGHT" -eq 1 ] || return 0
   PREFLIGHT_OK=1
@@ -481,6 +756,25 @@ preflight() {
   if [ "$OS" = "linux" ]; then
     check_present "/dev/kvm (hardware acceleration)" \
       "no KVM — hardware acceleration off; VMs fall back to slow emulation" check_kvm
+    check_present "swtpm" \
+      "install swtpm swtpm-tools; without it this host cannot run VMs with a TPM 2.0 (Windows 11/Server 2025)" \
+      command -v swtpm
+    check_present "libvirtd (qemu:///system)" \
+      "install libvirt-daemon-system libvirt-clients and start ${LIBVIRT_SOCKET_UNIT:-libvirtd.socket}; the agent manages VMs through libvirtd" \
+      check_libvirtd
+    # Reported separately from presence: the message has to name the version
+    # found, and an old-but-running libvirt is a different problem from a
+    # missing one — it needs a newer distro, not a package install.
+    if [ -n "$LIBVIRT_VERSION" ] && ! version_ge "$LIBVIRT_VERSION" "$LIBVIRT_MIN_VERSION"; then
+      echo "    [MISS] libvirt >= ${LIBVIRT_MIN_VERSION} (found ${LIBVIRT_VERSION}) — VM checkpoints need internal"
+      echo "           snapshots of UEFI guests, which libvirt only supports from 10.9 and only"
+      echo "           reliably from ${LIBVIRT_MIN_VERSION}. Ubuntu 24.04 ships 10.0.0 and is not a supported"
+      echo "           hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another distro at ${LIBVIRT_MIN_VERSION}+."
+      PREFLIGHT_OK=0
+    fi
+    check_present "QEMU firmware descriptors (/usr/share/qemu/firmware)" \
+      "install ovmf/qemu-efi-aarch64; without the JSON descriptors libvirt cannot autoselect UEFI firmware" \
+      check_firmware_descriptors
   fi
   if [ "$NETWORK_MODE" = "ovn" ] && [ "$OS" = "linux" ]; then
     check_present "ip (iproute2)"    "install iproute2"           command -v ip
@@ -509,12 +803,22 @@ install_unit() {
   # must not start without it.
   local unit_deps="network-online.target spire-agent.service"
   local unit_requires="Requires=spire-agent.service"
+  local unit_wants="network-online.target"
+  # libvirtd is ordered but not required: a node reboot must not race the agent
+  # ahead of the daemon it manages VMs through, while a libvirt that fails to
+  # start should leave the agent up and complaining (its preflight names the
+  # problem) rather than dead with it.
+  [ -n "$LIBVIRT_SOCKET_UNIT" ] || detect_libvirt_units
+  if [ -n "$LIBVIRT_SOCKET_UNIT" ]; then
+    unit_deps="$unit_deps $LIBVIRT_SOCKET_UNIT"
+    unit_wants="$unit_wants $LIBVIRT_SOCKET_UNIT"
+  fi
   cat > "$UNIT_FILE" << EOF
 [Unit]
 Description=Strato Agent
 Documentation=https://github.com/${REPO}/blob/main/docs/deployment/agents.md
 After=${unit_deps}
-Wants=network-online.target
+Wants=${unit_wants}
 ${unit_requires}
 
 [Service]

@@ -38,6 +38,7 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       api_client: ${{ steps.filter.outputs.api_client }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
+      install_script: ${{ steps.filter.outputs.install_script }}
       workflow: ${{ steps.filter.outputs.workflow }}
       ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
@@ -71,6 +72,9 @@ jobs:
               - 'clients/swift/**'
             firecracker:
               - 'SwiftFirecracker/**'
+            # The node install script and its shell-level tests.
+            install_script:
+              - 'deploy/agent/**'
             workflow:
               - '.github/workflows/build.yaml'
             # A separate filter, not another pattern under `workflow`: with
@@ -113,6 +117,29 @@ jobs:
             shared/Sources shared/Tests \
             cli/Sources cli/Tests \
             clients/swift/Sources clients/swift/Tests
+
+  install-script:
+    name: Agent Install Script
+    needs: changes
+    if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.workflow == 'true'
+    # The script provisions hypervisor hosts and edits /etc/libvirt/qemu.conf in
+    # place; its helpers are only reachable by running them, and nothing else in
+    # CI touches shell. Cheap enough to keep honest.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check syntax
+        run: bash -n deploy/agent/install.sh
+
+      - name: Lint with shellcheck
+        # Warnings only: the script predates this job, and style findings should
+        # not gate a node-provisioning fix.
+        run: shellcheck --severity=warning deploy/agent/install.sh deploy/agent/tests/*.sh
+
+      - name: Test install.sh helpers
+        run: bash deploy/agent/tests/install-sh-test.sh
 
   lint-and-build-frontend:
     name: Frontend Lint & Build
