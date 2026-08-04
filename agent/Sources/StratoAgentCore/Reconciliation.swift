@@ -16,6 +16,12 @@ import StratoShared
 // guard, attempt cap, and failure classification are shared between VMs and
 // sandboxes (deliberately not forked — two copies would drift); only the step
 // vocabulary and the actuator routing differ per kind.
+//
+// STR-98 took omission out of the destructive path. A workload present here
+// that a sync does not list is *held* and reported as unrecognized; it is torn
+// down only when the control plane answers with an explicit tombstone (or an
+// ordinary `.absent` entry). A blast-radius guard bounds how much of a host one
+// sync's tombstones may remove.
 
 // MARK: - Observed presence
 
@@ -83,10 +89,16 @@ public enum ReconcileStep: Equatable, Sendable {
     case delete
 }
 
-/// The desired entry driving a work item, tagged by workload kind.
+/// The control-plane instruction driving a work item, tagged by workload kind.
+///
+/// Every item has one: there is no "the control plane said nothing about this"
+/// case. Teardown of a workload no row describes arrives as an explicit
+/// `.tombstone` (STR-98), not as an absence.
 public enum ReconcileTarget: Sendable {
     case vm(DesiredVMState)
     case sandbox(DesiredSandboxState)
+    /// Confirmed teardown of a workload the control plane has no row for.
+    case tombstone(DesiredWorkloadTombstone)
 }
 
 /// The planned convergence for one workload out of one sync.
@@ -94,14 +106,12 @@ public struct ReconcileWorkItem: Sendable {
     public let kind: WorkloadKind
     /// Canonical (uppercase) UUID string, matching the manifest keys.
     public let id: String
-    /// The desired-state generation this item converges toward. 0 for
-    /// workloads the control plane no longer lists (full-list semantics:
-    /// undesired).
+    /// The desired-state generation this item converges toward — a tombstone's
+    /// generation for a confirmed teardown, otherwise the desired entry's.
     public let generation: Int64
     public let steps: [ReconcileStep]
-    /// The desired entry driving this item; nil only for undesired workloads
-    /// (whose single step is `.delete`).
-    public let target: ReconcileTarget?
+    /// What the control plane asked for.
+    public let target: ReconcileTarget
 
     /// The workload id under its historical name from the VM-only reconciler.
     /// VM actuation and the existing tests read this; new kind-aware code
@@ -110,15 +120,23 @@ public struct ReconcileWorkItem: Sendable {
 
     /// The VM desired entry, when this is a VM-kind item driven by one.
     public var desired: DesiredVMState? {
-        if case .vm(let entry)? = target { return entry }
+        if case .vm(let entry) = target { return entry }
         return nil
     }
 
     /// The sandbox desired entry, when this is a sandbox-kind item driven by
     /// one.
     public var desiredSandbox: DesiredSandboxState? {
-        if case .sandbox(let entry)? = target { return entry }
+        if case .sandbox(let entry) = target { return entry }
         return nil
+    }
+
+    /// Whether this item is a confirmed teardown of a workload with no
+    /// control-plane row. These are the only items the blast-radius guard
+    /// counts, and the only ones exempt from the attempt cap.
+    public var isTombstone: Bool {
+        if case .tombstone = target { return true }
+        return false
     }
 
     /// Serial-lane key for this item. VM items share their lane with the
@@ -132,12 +150,80 @@ public struct ReconcileWorkItem: Sendable {
         }
     }
 
-    public init(kind: WorkloadKind, id: String, generation: Int64, steps: [ReconcileStep], target: ReconcileTarget?) {
+    public init(kind: WorkloadKind, id: String, generation: Int64, steps: [ReconcileStep], target: ReconcileTarget) {
         self.kind = kind
         self.id = id
         self.generation = generation
         self.steps = steps
         self.target = target
+    }
+}
+
+// MARK: - Plan output
+
+/// What one sync diffs to: the work to run, plus the workloads this host holds
+/// that the sync did not account for (STR-98).
+///
+/// The second half used to be the first half's `.delete` items. Splitting them
+/// is the whole point: the reconciler converges what the control plane asked
+/// for and *reports* what it did not mention, instead of reading silence as an
+/// instruction.
+public struct ReconcilePlan: Sendable {
+    public var items: [ReconcileWorkItem]
+    public var unrecognized: [UnrecognizedWorkload]
+
+    public init(items: [ReconcileWorkItem] = [], unrecognized: [UnrecognizedWorkload] = []) {
+        self.items = items
+        self.unrecognized = unrecognized
+    }
+}
+
+// MARK: - Blast-radius guard
+
+/// How much of a host one sync may tear down (STR-98 phase 2) — defense in
+/// depth for the tombstone path itself.
+///
+/// A legitimate host drain is a rare, operator-initiated event and can afford
+/// the override flag; a bug or a stale database cannot afford the fleet. The
+/// guard trips only when *both* halves are exceeded, so a small host losing its
+/// two stray workloads is unremarkable while a host losing all forty is not.
+///
+/// Scoped to tombstoned teardowns on purpose. An explicit `.absent` entry is a
+/// per-workload API decision with a `ResourceOperation` row and an audit trail
+/// behind it — capping those would refuse an ordinary "delete these twelve
+/// VMs" and push operators into leaving the override on permanently, which
+/// would disarm the guard for the machine-driven path it exists to bound.
+public struct TeardownGuard: Sendable, Equatable {
+    public static let defaultMinimumWorkloads = 3
+    public static let defaultPercentOfPresent = 25
+
+    /// Absolute floor: this many tombstoned teardowns in one sync are always
+    /// allowed, whatever the percentage says.
+    public let minimumWorkloads: Int
+    /// Percentage of the host's present workloads above which a teardown batch
+    /// is refused.
+    public let percentOfPresent: Int
+    /// Operator override, for a real drain.
+    public let allowBulkTeardown: Bool
+
+    public init(
+        minimumWorkloads: Int = defaultMinimumWorkloads,
+        percentOfPresent: Int = defaultPercentOfPresent,
+        allowBulkTeardown: Bool = false
+    ) {
+        self.minimumWorkloads = max(0, minimumWorkloads)
+        self.percentOfPresent = max(0, percentOfPresent)
+        self.allowBulkTeardown = allowBulkTeardown
+    }
+
+    /// Why this batch is refused, or nil to let it through.
+    public func refusal(teardowns: Int, present: Int) -> String? {
+        guard !allowBulkTeardown, teardowns > minimumWorkloads else { return nil }
+        guard teardowns * 100 > present * percentOfPresent else { return nil }
+        return
+            "refusing to tear down \(teardowns) of \(present) workloads on this host in one sync: "
+            + "more than \(minimumWorkloads) and more than \(percentOfPresent)% of what is present. "
+            + "Set allow_bulk_teardown in the agent config to override for a deliberate drain."
     }
 }
 
@@ -216,6 +302,9 @@ protocol ReconcilableDesired: Sendable {
     /// when the observation already satisfies it.
     func convergenceSteps(from observed: ObservedStatus) -> [ReconcileStep]
     var asTarget: ReconcileTarget { get }
+    /// The observed status as a wire-friendly string, for the diagnostic half
+    /// of an `UnrecognizedWorkload` report.
+    static func describe(_ observed: ObservedStatus) -> String
 }
 
 extension DesiredVMState: ReconcilableDesired {
@@ -227,6 +316,7 @@ extension DesiredVMState: ReconcilableDesired {
         Reconciler.statusSteps(desired: desiredStatus, observed: observed)
     }
     var asTarget: ReconcileTarget { .vm(self) }
+    static func describe(_ observed: VMStatus) -> String { observed.rawValue }
 }
 
 extension DesiredSandboxState: ReconcilableDesired {
@@ -238,6 +328,7 @@ extension DesiredSandboxState: ReconcilableDesired {
         Reconciler.sandboxStatusSteps(desired: desiredStatus, observed: observed)
     }
     var asTarget: ReconcileTarget { .sandbox(self) }
+    static func describe(_ observed: SandboxStatus) -> String { observed.rawValue }
 }
 
 // MARK: - Reconciler
@@ -278,6 +369,7 @@ public actor Reconciler {
     private let actuator: any ReconcileActuator
     private let queue: SerialTaskQueue
     private let logger: Logger
+    private let teardownGuard: TeardownGuard
 
     /// Last generation fully applied per workload. Rejects older syncs (the
     /// generation guard) and feeds `observed_generation` in reports.
@@ -290,11 +382,24 @@ public actor Reconciler {
     /// `convergencePhase` in observed reports.
     private var currentPhase: [WorkloadRef: String] = [:]
     private var failures: [WorkloadRef: ConvergenceFailure] = [:]
+    /// Workloads this host holds that the last sync neither listed nor
+    /// tombstoned, re-derived wholesale on every sync and reported to the
+    /// control plane until it decides what they are.
+    private var unrecognized: [UnrecognizedWorkload] = []
+    /// Set while the most recent sync's teardowns were refused by the
+    /// blast-radius guard; cleared by the first sync that passes it.
+    private var teardownRefusal: ObservedTeardownRefusal?
 
-    public init(actuator: any ReconcileActuator, queue: SerialTaskQueue, logger: Logger) {
+    public init(
+        actuator: any ReconcileActuator,
+        queue: SerialTaskQueue,
+        logger: Logger,
+        teardownGuard: TeardownGuard = TeardownGuard()
+    ) {
         self.actuator = actuator
         self.queue = queue
         self.logger = logger
+        self.teardownGuard = teardownGuard
     }
 
     // MARK: Report accessors
@@ -317,6 +422,19 @@ public actor Reconciler {
     /// heartbeats.
     public func failedGeneration(for id: String, kind: WorkloadKind = .vm) -> Int64? {
         failures[WorkloadRef(kind: kind, id: id)]?.generation
+    }
+
+    /// Workloads this host holds that the control plane has not accounted for
+    /// (STR-98), for the observed-state report. The agent keeps running them
+    /// meanwhile; only a tombstone in a later sync removes one.
+    public func unrecognizedWorkloads() -> [UnrecognizedWorkload] {
+        unrecognized
+    }
+
+    /// The blast-radius guard's refusal of the most recent sync's teardowns,
+    /// if it tripped, for the observed-state report.
+    public func lastTeardownRefusal() -> ObservedTeardownRefusal? {
+        teardownRefusal
     }
 
     /// Workloads of `kind` currently converging that may not exist on their
@@ -349,23 +467,38 @@ public actor Reconciler {
     /// quickly — long convergence actions run on the per-workload lanes.
     ///
     /// `includeSandboxes` gates the sandbox half of the sync: a control plane
-    /// older than the sandbox protocol omits `sandboxes` (decoded as `[]`),
-    /// and full-list semantics would read that as "tear down every sandbox".
-    /// The caller passes `WireProtocol.supportsSandboxSync(senderVersion)`.
+    /// older than the sandbox protocol omits `sandboxes` (decoded as `[]`).
+    /// Since STR-98 that is no longer a teardown hazard — an unlisted sandbox
+    /// is held, not destroyed — but it would still report every sandbox on the
+    /// host as unaccounted for, which is false: the sender simply doesn't speak
+    /// that half of the protocol. The caller passes
+    /// `WireProtocol.supportsSandboxSync(senderVersion)`.
     public func apply(_ message: DesiredStateMessage, includeSandboxes: Bool = false) async {
+        let tombstones = message.tombstones ?? []
         let presentVMs = await actuator.observedPresence()
-        var items = Self.plan(
+        var plan = Self.plan(
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
-            presentSizing: await actuator.observedSizing())
+            presentSizing: await actuator.observedSizing(), tombstones: tombstones)
 
         var presentSandboxCount = 0
         if includeSandboxes {
             let presentSandboxes = await actuator.observedSandboxPresence()
             presentSandboxCount = presentSandboxes.count
-            items += Self.planSandboxes(
+            let sandboxPlan = Self.planSandboxes(
                 desired: message.sandboxes, present: presentSandboxes,
-                lastApplied: appliedGenerations(kind: .sandbox))
+                lastApplied: appliedGenerations(kind: .sandbox), tombstones: tombstones)
+            plan.items += sandboxPlan.items
+            plan.unrecognized += sandboxPlan.unrecognized
         }
+
+        // Wholesale replacement, including the sandbox half's absence when the
+        // control plane doesn't speak sandbox sync: the report must describe
+        // what *this* sync failed to account for, never an older one's leftovers.
+        let heldChanged = unrecognized != plan.unrecognized
+        unrecognized = plan.unrecognized
+        var items = plan.items
+        let refusalChanged = applyTeardownGuard(
+            to: &items, syncId: message.syncId, present: presentVMs.count + presentSandboxCount)
 
         logger.debug(
             "Applying desired-state sync",
@@ -375,8 +508,20 @@ public actor Reconciler {
                 "presentVMs": .stringConvertible(presentVMs.count),
                 "desiredSandboxes": .stringConvertible(includeSandboxes ? message.sandboxes.count : 0),
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
+                "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
             ])
+        if !plan.unrecognized.isEmpty {
+            logger.warning(
+                "Holding workloads the control plane did not account for; awaiting its decision",
+                metadata: [
+                    "syncId": .string(message.syncId),
+                    "count": .stringConvertible(plan.unrecognized.count),
+                    "workloadIds": .string(
+                        plan.unrecognized.map { "\($0.kind.rawValue):\($0.workloadId.uuidString)" }
+                            .joined(separator: ",")),
+                ])
+        }
 
         var advancedWithoutWork = false
         for item in items {
@@ -402,9 +547,43 @@ public actor Reconciler {
         // Generations that advanced with no runtime work still need a fresh
         // report, or the control plane would wait a full heartbeat interval to
         // learn `observed_generation` caught up (and to complete operations).
-        if advancedWithoutWork {
+        // Newly held workloads and teardown refusals report immediately for the
+        // same reason: the held set is one half of a round trip the control
+        // plane can only finish once it has seen it.
+        if advancedWithoutWork || heldChanged || refusalChanged {
             await actuator.convergenceDidChange()
         }
+    }
+
+    /// Drop a sync's tombstoned teardowns when they would take out more of the
+    /// host than the guard allows, and record why. Returns whether the recorded
+    /// refusal changed, so `apply` can report it right away.
+    ///
+    /// Everything else in the sync still converges: a guard that also stopped
+    /// boots and creates would turn a suspicious teardown batch into a total
+    /// convergence outage, which is the failure it exists to prevent.
+    private func applyTeardownGuard(
+        to items: inout [ReconcileWorkItem], syncId: String, present: Int
+    ) -> Bool {
+        let teardowns = items.filter(\.isTombstone).count
+        let previous = teardownRefusal
+        guard let reason = teardownGuard.refusal(teardowns: teardowns, present: present) else {
+            teardownRefusal = nil
+            return previous != nil
+        }
+        items.removeAll(where: \.isTombstone)
+        let refusal = ObservedTeardownRefusal(
+            syncId: syncId, requestedTeardowns: teardowns, presentWorkloads: present, reason: reason)
+        teardownRefusal = refusal
+        logger.error(
+            "Refusing this sync's workload teardowns; blast-radius guard tripped",
+            metadata: [
+                "syncId": .string(syncId),
+                "requestedTeardowns": .stringConvertible(teardowns),
+                "presentWorkloads": .stringConvertible(present),
+                "reason": .string(reason),
+            ])
+        return previous != refusal
     }
 
     private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {
@@ -422,12 +601,12 @@ public actor Reconciler {
             // level-triggered timer will pick up any residual drift afterward.
             return false
         }
-        // Undesired-workload deletes (no control-plane row, generation 0) are
-        // exempt from the attempt cap: nothing can ever mint a new generation
-        // for them, so a cap would permanently leak the stray process. They
-        // are level-triggered and cheap, so retrying on every sync is fine.
+        // Tombstoned teardowns are exempt from the attempt cap: the workload
+        // has no control-plane row, so nothing can ever mint a new generation
+        // to re-arm a capped failure and the stray would leak until restart.
+        // They are level-triggered and cheap, so retrying on every sync is fine.
         if let failure = failures[ref],
-            item.target != nil,
+            !item.isTombstone,
             failure.generation == item.generation,
             failure.attempts >= Self.maxAttemptsPerGeneration
         {
@@ -455,9 +634,9 @@ public actor Reconciler {
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
             return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)
-        case nil:
-            // The planner never emits `.adopt` without a desired entry
-            // (undesired workloads plan `.delete` instead).
+        case .tombstone:
+            // The planner never emits `.adopt` for a tombstone (its single
+            // step is `.delete`).
             return []
         }
     }
@@ -628,11 +807,13 @@ public actor Reconciler {
         desired: [DesiredVMState],
         present: [String: VMPresence],
         lastApplied: [String: Int64],
-        presentSizing: [String: VMSizing] = [:]
-    ) -> [ReconcileWorkItem] {
-        var items = planCore(desired: desired, present: present, lastApplied: lastApplied)
-        addResizes(to: &items, desired: desired, present: present, lastApplied: lastApplied, sizing: presentSizing)
-        return items
+        presentSizing: [String: VMSizing] = [:],
+        tombstones: [DesiredWorkloadTombstone] = []
+    ) -> ReconcilePlan {
+        var plan = planCore(desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied)
+        addResizes(
+            to: &plan.items, desired: desired, present: present, lastApplied: lastApplied, sizing: presentSizing)
+        return plan
     }
 
     /// Plans `.resize` for VMs that are already running the status the
@@ -682,9 +863,10 @@ public actor Reconciler {
     public static func planSandboxes(
         desired: [DesiredSandboxState],
         present: [String: SandboxPresence],
-        lastApplied: [String: Int64]
-    ) -> [ReconcileWorkItem] {
-        planCore(desired: desired, present: present, lastApplied: lastApplied)
+        lastApplied: [String: Int64],
+        tombstones: [DesiredWorkloadTombstone] = []
+    ) -> ReconcilePlan {
+        planCore(desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied)
     }
 
     /// The kind-neutral diff. Rules, identical for every workload kind:
@@ -694,18 +876,28 @@ public actor Reconciler {
     ///   generation is still re-planned — that is drift correction: if the
     ///   workload regressed out of band, the same generation converges it
     ///   again.
-    /// * Present workloads missing from the desired set are deleted
-    ///   (full-list semantics: omission means "should not exist here").
+    /// * A present workload the sync tombstones is deleted, at the tombstone's
+    ///   generation and under the same staleness rule as any desired entry.
+    /// * A present workload the sync neither lists nor tombstones is **held**
+    ///   and reported as unrecognized (STR-98). It keeps running: omission is
+    ///   the control plane failing to mention something, which is what a
+    ///   restored database, a re-enrolled agent, or a scoping bug all look
+    ///   like, and none of those is an instruction to destroy a guest.
     /// * Desired-and-satisfied workloads whose generation advanced yield an
     ///   empty-step item so the applied generation still catches up.
     private static func planCore<Desired: ReconcilableDesired>(
         desired: [Desired],
+        tombstones: [DesiredWorkloadTombstone],
         present: [String: WorkloadPresence<Desired.ObservedStatus>],
         lastApplied: [String: Int64]
-    ) -> [ReconcileWorkItem] {
+    ) -> ReconcilePlan {
         var items: [ReconcileWorkItem] = []
         var desiredIds = Set<String>()
         let kind = Desired.workloadKind
+        let tombstonesById = Dictionary(
+            tombstones.lazy.filter { $0.kind == kind }.map { ($0.workloadId.uuidString, $0) },
+            uniquingKeysWith: { first, second in first.generation >= second.generation ? first : second }
+        )
 
         for entry in desired {
             let id = entry.workloadId.uuidString
@@ -746,13 +938,44 @@ public actor Reconciler {
                     kind: kind, id: id, generation: entry.generation, steps: steps, target: entry.asTarget))
         }
 
-        // Full-list semantics: anything on this host the control plane did not
-        // list should not exist here.
-        for (id, _) in present where !desiredIds.contains(id) {
-            items.append(ReconcileWorkItem(kind: kind, id: id, generation: 0, steps: [.delete], target: nil))
+        // Everything on this host the sync did not list: torn down only where
+        // the control plane said so explicitly, held and reported otherwise.
+        var unrecognized: [UnrecognizedWorkload] = []
+        for (id, presence) in present where !desiredIds.contains(id) {
+            let applied = lastApplied[id] ?? 0
+            guard let tombstone = tombstonesById[id] else {
+                // Held. A workload whose id isn't a UUID cannot be named on
+                // the wire, so it can never be reported — and therefore never
+                // authorized for teardown either, which is the safe end of
+                // that trade.
+                guard let workloadId = UUID(uuidString: id) else { continue }
+                let status: String
+                switch presence {
+                case .managed(let observed): status = Desired.describe(observed)
+                case .orphaned: status = "orphaned"
+                }
+                unrecognized.append(
+                    UnrecognizedWorkload(
+                        kind: kind,
+                        workloadId: workloadId,
+                        observedGeneration: applied,
+                        status: status))
+                continue
+            }
+            // Same staleness rule as a desired entry: a replayed tombstone
+            // must not undo a newer sync that re-adopted the workload.
+            guard tombstone.generation >= applied else { continue }
+            items.append(
+                ReconcileWorkItem(
+                    kind: kind, id: id, generation: tombstone.generation, steps: [.delete],
+                    target: .tombstone(tombstone)))
         }
 
-        return items
+        // Tombstones for workloads this host does not have need no work: the
+        // control plane retires them once the agent stops reporting the id.
+
+        return ReconcilePlan(
+            items: items, unrecognized: unrecognized.sorted { $0.workloadId.uuidString < $1.workloadId.uuidString })
     }
 
     /// The steps that take a VM from `observed` to `desired`. Empty when the

@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
+import { AgentWorkloadSafetyCard } from "@/components/agents/agent-workload-safety";
 import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
 import { useAgent, useVMs } from "@/lib/hooks";
 
@@ -245,6 +246,9 @@ export default function AgentDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Workloads held or teardowns refused (STR-98); renders nothing normally */}
+      <AgentWorkloadSafetyCard agent={agent} />
 
       {/* Host hardware / platform / OS details */}
       <AgentHostInfoCard agent={agent} />

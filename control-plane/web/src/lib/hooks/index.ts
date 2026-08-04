@@ -25,6 +25,7 @@ export {
   useRevokeAgentEnrollment,
   useUpdateAgent,
   usePatchAgent,
+  useAdoptAgentWorkloads,
   useInvalidateAgents,
   isAgentsForbidden,
 } from "./use-agents";

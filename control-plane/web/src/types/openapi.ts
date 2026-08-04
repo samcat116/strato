@@ -2146,6 +2146,8 @@ export interface paths {
         /**
          * Delete an organization
          * @description Organization admins only. Cascades to the organization's folders and projects and revokes their role bindings. The seeded "Default Organization" cannot be deleted (400).
+         *
+         *     Refuses with 409 when any of those projects still contains a VM or sandbox. This changed with STR-98: the cascade previously hard-deleted those VM rows, leaving guests running on agents with no record of them — and, before the same change, an agent tore such a workload down on the next sync for being unlisted. Delete or move the workloads first.
          */
         delete: operations["deleteOrganization"];
         options?: never;
@@ -3441,6 +3443,31 @@ export interface paths {
          *     The request body is optional. Supplying `artifactUrl`/`sha256` overrides the release path and is system-admin only, since it installs an arbitrary binary on the host. Requires `manage` on the agent, and system admin while the agent hosts foreign-organization workloads.
          */
         post: operations["updateAgentBinary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agentId}/actions/adopt-workloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt workloads from a superseded agent record
+         * @description Re-points VMs, sandboxes, and their volumes from `fromAgentId` onto this agent. Only workloads this agent reports holding (see `heldWorkloads`) *and* currently placed on the source record are moved, so the call cannot point a workload at a host that is not running it.
+         *
+         *     This finishes a node's re-identification: agent records are keyed by trust domain and name, so re-enrolling a node under a corrected name — or moving it to its organization's trust domain — mints a new record while its workloads stay placed on the old one. Requires `manage` on **both** agents, which must belong to the same organization.
+         */
+        post: operations["adoptAgentWorkloads"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7084,6 +7111,42 @@ export interface components {
             updateBlockedReason?: string | null;
             /** @description Terminal failure that halted the rollout at this agent. */
             updateFailureReason?: string | null;
+            /** @description Why the agent last refused to converge a sync's workload teardowns, because removing that many of the host's workloads at once looked more like a control-plane failure than an intention. Null in the steady state. */
+            teardownRefusalReason?: string | null;
+            /** Format: date-time */
+            teardownRefusedAt?: string | null;
+            /** @description Workloads this agent is running that no desired-state sync accounts for, and whose teardown the control plane refused to authorize because a record still exists for them. A non-empty list means the control plane is describing this host incorrectly — most often that the node re-enrolled under a new agent record while its workloads stayed placed on the old one, in which case `placedOnAgentId` names it and they can be adopted. Returned only by the single-agent endpoint; null in list responses. */
+            heldWorkloads?: components["schemas"]["HeldWorkload"][] | null;
+        };
+        /** @description One workload an agent holds that the control plane will not authorize tearing down. */
+        HeldWorkload: {
+            /** @enum {string} */
+            kind: "virtual_machine" | "sandbox";
+            /** Format: uuid */
+            id: string;
+            /** @description The workload's observed status on the agent. */
+            status?: string | null;
+            /** @description `row_present_here` when the record maps to this very agent (a sync assembly bug), or `row_on_agent:<uuid>` when it is placed on a different agent record. */
+            reason?: string | null;
+            /** @description The agent record the workload is currently placed on, when that differs. */
+            placedOnAgentId?: string | null;
+            /** Format: date-time */
+            firstSeenAt?: string | null;
+        };
+        AdoptWorkloadsRequest: {
+            /**
+             * Format: uuid
+             * @description The agent record whose placements should move to this agent.
+             */
+            fromAgentId: string;
+        };
+        AdoptWorkloadsResult: {
+            adoptedVMs: number;
+            adoptedSandboxes: number;
+            /** @description Volumes re-pointed onto this agent, including detached ones — their data is on this host too. A volume attached to a VM that stayed behind is not moved. */
+            adoptedVolumes: number;
+            /** @description Workloads still placed on the source record that this agent does not report holding, so they were left alone. These are not necessarily stranded: a workload running on a genuinely different host counts here too. */
+            skippedUnclaimed: number;
         };
         /**
          * @description Connection state of an agent, derived from its last heartbeat.
@@ -12517,6 +12580,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     switchOrganization: {
@@ -14840,6 +14904,46 @@ export interface operations {
             };
             /** @description The agent did not reply within the update window. The update may still complete; the agent re-registers with its new version if so. */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adoptAgentWorkloads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptWorkloadsRequest"];
+            };
+        };
+        responses: {
+            /** @description The workloads were re-pointed and both agents were re-synced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptWorkloadsResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description This agent does not report holding any workloads placed on the given source record, so there is nothing it can prove it runs — or the two agents belong to different organizations. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
