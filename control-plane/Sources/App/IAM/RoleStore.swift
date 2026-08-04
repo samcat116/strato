@@ -16,12 +16,6 @@ import Vapor
 /// data and bump nothing.
 enum RoleStore {
 
-    /// The owner types the API accepts. Platform rows are the seeded defaults
-    /// reconciled by `RoleRegistrySync`; nothing creates one over HTTP, and a
-    /// request that asks to is told so rather than having its owner quietly
-    /// coerced.
-    static let creatableOwnerTypes: Set<IAMRoleOwnerType> = [.organization, .project]
-
     // MARK: - Preparing a write
 
     /// The Cedar text and derived action list a write will store.
@@ -165,7 +159,7 @@ enum RoleStore {
         createdBy: UUID?,
         on db: any Database
     ) async throws -> IAMRoleDefinition {
-        guard creatableOwnerTypes.contains(ownerType) else {
+        guard IAMRoleOwnerType.creatable.contains(ownerType) else {
             throw RoleError.uncreatableOwnerType(ownerType.rawValue)
         }
         let role = IAMRoleDefinition(

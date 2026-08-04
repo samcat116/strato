@@ -284,6 +284,29 @@ final class PolicyEndpointTests {
         }
     }
 
+    /// The mirror of `RoleEndpointTests.unknownOwnerIsRejected`. Both APIs run
+    /// the same owner-existence check (`IAMPolicySetOwner.requireExists`), so
+    /// the policy side is asserted too — a shared check that only one caller
+    /// covers is a shared check one refactor away from silently changing here.
+    @Test("A policy owned by an organization that does not exist is a 404")
+    func unknownOwnerIsRejected() async throws {
+        try await withApp { app, fixture in
+            try await app.test(
+                .POST, "/api/iam/policies",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    try req.content.encode(
+                        self.createBody(
+                            name: "orphan", ownerType: .organization, ownerId: UUID(),
+                            cedarText: self.permitText(
+                                user: fixture.user.id!, action: "vm:read", project: fixture.project.id!)))
+                },
+                afterResponse: { res in
+                    #expect(res.status == .notFound)
+                })
+        }
+    }
+
     @Test("Managing policies requires admin over the owner")
     func nonAdminForbidden() async throws {
         try await withApp { app, fixture in
