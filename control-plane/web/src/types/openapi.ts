@@ -2660,52 +2660,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/organizations/{organizationID}/merge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Merge another organization into this one
-         * @description The organization in the path is the merge target. The caller must be an admin of both the target and `sourceOrganizationId`.
-         */
-        post: operations["mergeOrganizations"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/organizations/{organizationID}/bulk-transfer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk-transfer resources between hierarchy nodes
-         * @description Organization admins only. Moves folders, projects, or VMs to new parents. Set `validateOnly` to dry-run the transfers without applying them. Individual failures are reported in `failedTransfers` rather than failing the request.
-         */
-        post: operations["bulkTransferOrganizationResources"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/organizations/{organizationID}/search": {
         parameters: {
             query: {
@@ -6689,79 +6643,6 @@ export interface components {
             id: string;
             name: string;
             type: string;
-        };
-        MergeOrganizationsRequest: {
-            /**
-             * Format: uuid
-             * @description The organization to merge into the one named in the path.
-             */
-            sourceOrganizationId: string;
-            conflictResolution: {
-                /** @enum {string} */
-                ouNameConflicts: "rename" | "merge" | "abort";
-                /** @enum {string} */
-                projectNameConflicts: "rename" | "merge" | "abort";
-                /** @enum {string} */
-                quotaConflicts: "sum" | "max" | "keep_target" | "abort";
-                /** @enum {string} */
-                namingStrategy: "prefix_source" | "suffix_source" | "manual";
-                prefix?: string | null;
-                suffix?: string | null;
-            };
-            preserveQuotas: boolean;
-            mergeUsers: boolean;
-            /** @description Optional new name for the target organization after the merge. */
-            newName?: string | null;
-        };
-        MergeOrganizationsResult: {
-            success: boolean;
-            /** Format: uuid */
-            targetOrganizationId: string;
-            mergedResourceCounts: {
-                organizationalUnits: number;
-                projects: number;
-                vms: number;
-                quotas: number;
-                users: number;
-            };
-            conflicts: {
-                /** @description The conflicting entity kind (`ou_name`, `project_name`, `quota_name`). */
-                type: string;
-                sourceName: string;
-                targetName: string;
-                resolution: string;
-                newName?: string | null;
-            }[];
-            warnings: string[];
-            summary: string;
-        };
-        BulkTransferRequest: {
-            transfers: {
-                /** @enum {string} */
-                resourceType: "ou" | "project" | "vm";
-                /** Format: uuid */
-                resourceId: string;
-                /** @enum {string} */
-                destinationType: "organization" | "ou" | "project";
-                /** Format: uuid */
-                destinationId: string;
-                newName?: string | null;
-            }[];
-            /** @description Validate the transfers without applying them. */
-            validateOnly: boolean;
-        };
-        BulkTransferResult: {
-            success: boolean;
-            transferredCount: number;
-            failedTransfers: {
-                /** Format: uuid */
-                resourceId: string;
-                resourceType: string;
-                reason: string;
-                suggestion?: string | null;
-            }[];
-            warnings: string[];
-            summary: string;
         };
         HierarchyValidationReport: {
             isValid: boolean;
@@ -13553,67 +13434,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-        };
-    };
-    mergeOrganizations: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MergeOrganizationsRequest"];
-            };
-        };
-        responses: {
-            /** @description The merge result, including any conflicts and warnings. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MergeOrganizationsResult"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    bulkTransferOrganizationResources: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkTransferRequest"];
-            };
-        };
-        responses: {
-            /** @description The transfer result. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkTransferResult"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
         };
     };
     searchOrganizationHierarchy: {
