@@ -152,6 +152,78 @@ final class IAMRoleBindingTests {
         }
     }
 
+    // MARK: - Conditions (STR-108)
+
+    @Test("A conditioned binding is refused at write time, not silently accepted")
+    func conditionedBindingRefusedAtWrite() async throws {
+        try await withApp { app in
+            let refused = try await conditionedRoleBindingsAreRefused(on: app.db)
+            #expect(refused)
+
+            // Conditions are not compiled, so the evaluator skips a conditioned
+            // row and it grants nothing. A row that looks like a live grant in
+            // every listing and confers no access is the hazard; the schema
+            // says no rather than letting one be written.
+            let binding = RoleBinding(
+                principalType: .user, principalID: UUID(), role: .editor,
+                nodeType: .project, nodeID: UUID())
+            binding.condition = #"{"mfa": true}"#
+            await #expect(throws: (any Error).self) {
+                try await binding.save(on: app.db)
+            }
+
+            let rows = try await RoleBinding.query(on: app.db).all()
+            #expect(rows.isEmpty)
+        }
+    }
+
+    @Test("The migration removes conditioned rows written before the constraint existed")
+    func migrationClearsPreExistingConditionedBindings() async throws {
+        try await withApp { app in
+            let principal = UUID()
+            let node = UUID()
+            // The row an operator could have inserted by hand against an older
+            // schema, with the constraint restored unvalidated around it.
+            try await insertConditionedRoleBinding(
+                principalType: .user, principalID: principal, role: .editor,
+                nodeType: .project, nodeID: node, condition: "mfa", on: app.db)
+            // An unconditioned binding beside it, to prove the sweep is
+            // targeted rather than a table wipe.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: principal, role: .viewer,
+                nodeType: .project, nodeID: node, createdBy: nil, on: app.db)
+            let stateBefore = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(stateBefore == .notValidated)
+
+            try await RejectConditionedRoleBindings().prepare(on: app.db)
+
+            let rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
+            #expect(rows.map(\.role) == [IAMRole.viewer.seededID.uuidString])
+            // Validated, which Postgres grants only after re-scanning the whole
+            // table — proof the sweep left no conditioned row behind.
+            let stateAfter = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(stateAfter == .validated)
+        }
+    }
+
+    @Test("Reverting the migration gives the column back, for the day conditions are implemented")
+    func migrationRevertRestoresWritability() async throws {
+        try await withApp { app in
+            try await RejectConditionedRoleBindings().revert(on: app.db)
+            let state = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(state == .absent)
+
+            let binding = RoleBinding(
+                principalType: .user, principalID: UUID(), role: .editor,
+                nodeType: .project, nodeID: UUID())
+            binding.condition = "mfa"
+            try await binding.save(on: app.db)
+
+            let stored = try await RoleBinding.find(binding.id, on: app.db)
+            #expect(stored?.condition == "mfa")
+        }
+    }
+
     // MARK: - Backfills
 
     @Test("Mirror backfill maps org admins and project roles; bare members get no binding")

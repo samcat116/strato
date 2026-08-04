@@ -117,10 +117,9 @@ final class WhoCanEvaluatorAgreementTests {
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "cond-agree", email: "cond-agree@example.com")
-            try await RoleBinding(
+            try await insertConditionedRoleBinding(
                 principalType: .user, principalID: user.id!, role: .editor,
-                nodeType: .project, nodeID: tree.project.id!, condition: "mfa"
-            ).save(on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, condition: "mfa", on: app.db)
 
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: user.id!, action: "vm:start",

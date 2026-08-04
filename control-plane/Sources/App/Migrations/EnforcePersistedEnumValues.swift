@@ -29,13 +29,10 @@ struct PersistedEnumConstraint: Sendable, Equatable {
 }
 
 enum PersistedEnumConstraintMigrationError: Error, CustomStringConvertible, Sendable {
-    case unsupportedDatabase(String)
     case invalidValues(table: String, column: String, values: [String])
 
     var description: String {
         switch self {
-        case .unsupportedDatabase(let dialect):
-            return "Cannot enforce persisted enum values on unsupported SQL dialect '\(dialect)'"
         case .invalidValues(let table, let column, let values):
             return
                 "Cannot enforce enum constraint on \(table).\(column); unsupported stored value(s): "
@@ -210,13 +207,7 @@ struct EnforcePersistedEnumValues: AsyncMigration {
     }
 
     private static func sqlDatabase(_ database: Database) throws -> any SQLDatabase {
-        guard let sql = database as? any SQLDatabase else {
-            throw PersistedEnumConstraintMigrationError.unsupportedDatabase("non-SQL")
-        }
-        guard sql.dialect.name == "postgresql" else {
-            throw PersistedEnumConstraintMigrationError.unsupportedDatabase(sql.dialect.name)
-        }
-        return sql
+        try PostgresMigrationSQL.database(database)
     }
 
     /// Columns backed by a native Postgres enum are already constrained by their
@@ -294,14 +285,14 @@ struct EnforcePersistedEnumValues: AsyncMigration {
     }
 
     private static func identifier(_ value: String) -> String {
-        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        PostgresMigrationSQL.identifier(value)
     }
 
     private static func literal(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+        PostgresMigrationSQL.literal(value)
     }
 
     private static func execute(_ statement: String, on sql: any SQLDatabase) async throws {
-        try await sql.raw("\(unsafeRaw: statement)").run()
+        try await PostgresMigrationSQL.execute(statement, on: sql)
     }
 }

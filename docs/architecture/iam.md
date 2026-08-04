@@ -108,7 +108,7 @@ language, one evaluator.
 | **0 — Structure** | Legal parentage, resource types | Us (schema) | Write time → `400` |
 | **1 — Platform policy** | Non-negotiable `forbid`s | Us | Eval; immutable to customers |
 | **2 — Guardrails** | Ceilings on what tier 3 can grant | Org/folder admins | Eval **and** write-time check |
-| **3 — Grants** | Role bindings + conditions | Customers | Eval |
+| **3 — Grants** | Role bindings (+ conditions, not yet implemented) | Customers | Eval |
 
 ## Guardrails (tier 2)
 
@@ -282,7 +282,8 @@ verified rather than assumed.
 
 Customers write role bindings through a template plus a fixed condition
 vocabulary (`mfa`, `ip_range`, `expires_at`, `tags`/`environment`) — never
-free-form Cedar text.
+free-form Cedar text. Of that vocabulary **only `expires_at` is implemented**;
+see "Conditions are not implemented yet" below.
 
 ```
 (principal_type, principal_id, role, node_type, node_id,
@@ -305,7 +306,11 @@ free-form Cedar text.
   written only by the creator-binding path; there is no customer-facing
   endpoint to author or revoke one individually.
 - **Every binding has a nullable `expires_at`.** TTL is a property of the
-  grant primitive.
+  grant primitive, and it is enforced — expiry is applied at *read* time by
+  `QueryBuilder<RoleBinding>.active()`, on every path that *decides* from
+  bindings, rather than by a sweep. The write and sweep paths deliberately do
+  not filter: `grant` must find an expired row to refresh rather than duplicate
+  it, and revoking one must still delete it.
 - Bindings are written in the same database transaction as the resources they
   protect — **and removed in it**. The table carries no foreign key to the node
   it names (an id there may be a resource the database never joins against), so
@@ -316,6 +321,29 @@ free-form Cedar text.
   leaks rows permanently (STR-112). It is also why **node ids are never
   reused**: with UUIDv4 they cannot be, and an orphaned binding on a recycled
   id would silently start granting again.
+
+### Conditions are not implemented yet (STR-108)
+
+The `condition` column exists so the vocabulary above needs no schema change,
+but **nothing compiles a condition into the Cedar `when` clause**. The entity
+slice therefore *skips* any binding carrying one — flattening it as if it were
+unconditional would turn a restricted grant into an open one — so a conditioned
+binding grants nothing at all.
+
+That is fail-closed, and it stays as defence in depth. What was missing was any
+signal at the write boundary: a conditioned row referenced a live role, was
+unexpired, sat on the right node, and was indistinguishable from a working
+grant in every members/bindings listing while conferring no access. So the
+schema now refuses it — `CHECK (condition IS NULL)`, installed by
+`RejectConditionedRoleBindings`, which also deletes any pre-existing
+conditioned row (they granted nothing, so no access changes) and logs the
+count. No API ever exposed the field; direct SQL was the only way in.
+
+Environment- and MFA-shaped restrictions are expressible today, just one tier
+up: a custom role's advanced `cedarText` may carry arbitrary `when` clauses
+(see "Roles are rows"), and guardrails can fence an environment from above.
+Binding-level conditions become real work the day someone compiles them —
+until then the constraint is what keeps the gap from looking like a feature.
 
 ### Roles are global action groups
 
@@ -348,10 +376,13 @@ asymmetry is intentional.) The implication-nesting direction is verified with
 symcc subsumption checks in CI (`RoleNestingSubsumptionTests`, #484); it is
 easy to get backwards.
 
-Today's environment roles (`environment_manager`, deployer, approver) become
-**conditioned bindings** (e.g. `editor` on a project where
-`resource.environment == "staging"`), consistent with
-environment-as-attribute.
+Today's environment roles (`environment_manager`, deployer, approver) are
+expressed as an environment-scoped restriction rather than a role per
+environment, consistent with environment-as-attribute. The intended end state
+is a **conditioned binding** (e.g. `editor` on a project where
+`resource.environment == "staging"`); until conditions are implemented
+(STR-108, above) the same restriction is written as a custom role whose
+advanced `cedarText` carries the `when` clause, bound normally.
 
 ### In-guest execution is never in a default role (#804)
 
@@ -757,7 +788,10 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   `Folder` rename already in the Cedar vocabulary), the per-operation action
   inventory, and the condition vocabulary as the request `Context` (`mfa`,
   `sourceIP`; `expires_at` is enforced when bindings are read, and
-  `environment` matches the resource).
+  `environment` matches the resource). The `Context` shape is declared;
+  nothing populates the ambient half yet, which is why binding conditions are
+  unimplemented (STR-108) — a role's or guardrail's own `when` clause is what
+  carries a condition today.
 - **Roles are nested action groups, lower-inside-higher**: `vm:read` is a
   member of `role:viewer`, and `role:viewer` of `role:operator`, up the chain
   — so `action in Action::"role:admin"` transitively reaches everything while
@@ -773,7 +807,9 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   bindings along the ancestor chain into `context.grants` (per-role user and
   group sets); the static role policies test membership in those sets. This is
   what keeps grant/revoke free of cache invalidation. Conditioned bindings are
-  skipped and counted, never flattened — flattening one would widen it.
+  skipped and counted, never flattened — flattening one would widen it. Since
+  STR-108 the schema refuses to store one, so the count stays zero and the skip
+  is defence in depth against a row written against an older schema.
 - **Guardrails compile to `forbid` policies** (`GuardrailRendering`), one
   per row, id `guardrail-<row id>` so a denial names its ceiling. The attach
   node becomes `resource in <node>` over the chain's parent edges;
