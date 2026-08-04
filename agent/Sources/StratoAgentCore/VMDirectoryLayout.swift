@@ -11,10 +11,12 @@ import Foundation
 /// have owners: the VNC socket is `QEMUGraphicsDevice.socketPath(vmDirectory:)`
 /// and the swtpm control socket is `SwtpmSupervisor.socketPath(vmDirectory:)`.
 ///
-/// `QEMUService` still carries its own copies of these literals. They are left
-/// in place so the libvirt work stays additive; the `LibvirtService` issue
-/// deletes them along with the QEMU driver. `VMDirectoryLayoutTests` pins the
-/// filenames so the two copies cannot drift apart silently.
+/// `QEMUService` still carries its own inline copies of these literals. They
+/// are left in place so the libvirt work stays additive; the `LibvirtService`
+/// issue deletes them along with the QEMU driver. Until then the two sides are
+/// only held together by review — `DomainXMLBuilderTests.vmDirectoryLayout`
+/// pins what this type returns, so a rename here has to be deliberate, but it
+/// cannot see the QEMU side and a rename there would still pass.
 public enum VMDirectoryLayout {
 
     /// virtio console (`hvc0`) socket — the stream `ConsoleSocketManager`

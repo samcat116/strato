@@ -92,6 +92,13 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
     case unsupportedNetworkAttachment(network: String)
     /// A domain name libvirt cannot hold.
     case invalidDomainName(String)
+    /// A vCPU count libvirt will not accept. Nothing normalizes `VMSpec`, so a
+    /// zero reaches here as `<vcpu>0</vcpu>` and fails the define with an error
+    /// naming the element rather than the spec that produced it.
+    case invalidCPUCount(Int)
+    /// Likewise for a memory size of zero, which libvirt rejects with "Memory
+    /// size must be specified via <memory> or in the <numa> configuration".
+    case invalidMemorySize(Int64)
 
     public var description: String {
         switch self {
@@ -101,6 +108,10 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
                 + "only tap attachments can be realized as a libvirt domain interface"
         case .invalidDomainName(let name):
             return "'\(name)' is not a usable libvirt domain name (it must be non-empty and contain no '/')"
+        case .invalidCPUCount(let cpus):
+            return "a domain needs at least one vCPU; the spec asked for \(cpus)"
+        case .invalidMemorySize(let bytes):
+            return "a domain needs a non-zero memory size; the spec asked for \(bytes) bytes"
         }
     }
 }
@@ -160,6 +171,12 @@ public enum DomainXMLBuilder {
     public static func build(_ input: DomainXMLInput) throws -> String {
         guard !input.vmId.isEmpty, !input.vmId.contains("/") else {
             throw DomainXMLBuilderError.invalidDomainName(input.vmId)
+        }
+        guard input.spec.cpus > 0 else {
+            throw DomainXMLBuilderError.invalidCPUCount(input.spec.cpus)
+        }
+        guard input.spec.memoryBytes > 0 else {
+            throw DomainXMLBuilderError.invalidMemorySize(input.spec.memoryBytes)
         }
 
         let spec = input.spec
@@ -397,11 +414,12 @@ public enum DomainXMLBuilder {
         // expressed an order. Mixing per-device `<boot order>` with `<os><boot
         // dev>` is rejected by libvirt, and emitting neither is faithful: the
         // QEMU path passes no `-boot` and lets firmware choose.
+        let bootOrders = derivedBootOrders(input.disks)
         for (index, disk) in input.disks.enumerated() {
             devices.append(
                 diskNode(
                     path: disk.path, format: disk.format.rawValue, index: index,
-                    readonly: disk.readonly, bootOrder: disk.bootOrder))
+                    readonly: disk.readonly, bootOrder: bootOrders[index]))
         }
         if let isoPath = input.cloudInitISOPath {
             // A read-only virtio *disk*, not a cdrom, matching the QEMU path's
@@ -529,6 +547,32 @@ public enum DomainXMLBuilder {
         }
 
         return devices
+    }
+
+    /// The `<boot order>` for each disk, or nil where none should be emitted.
+    ///
+    /// The stored value is used only as a flag — *this disk was given an order*
+    /// — and never copied through, because nothing keeps it valid for libvirt.
+    /// libvirt types the attribute as `positiveInteger` and rejects a repeated
+    /// one ("boot order '1' used for more than one device"), while Strato's is
+    /// an unvalidated `Int?` documented as "lower = higher priority" whose
+    /// first value is naturally 0: `MigrateVMDisksToVolumes` writes exactly
+    /// that on every migrated boot volume, so existing databases already hold
+    /// a value libvirt refuses.
+    ///
+    /// Numbering positionally instead is not a guess. `VMSpecBuilder`
+    /// sorts volumes by boot order before they go on the wire, and the spec
+    /// says as much of the field ("volumes are sent pre-sorted, this is
+    /// informational") — so the sequence is the order, and a dense `1...N` over
+    /// it is both faithful and always valid. Same reasoning as
+    /// `targetDeviceName(index:)` declining to trust `VolumeSpec.deviceName`.
+    static func derivedBootOrders(_ disks: [ResolvedDisk]) -> [Int?] {
+        var next = 0
+        return disks.map { disk in
+            guard disk.bootOrder != nil else { return nil }
+            next += 1
+            return next
+        }
     }
 
     private static func diskNode(

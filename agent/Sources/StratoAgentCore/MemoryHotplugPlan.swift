@@ -3,11 +3,19 @@ import StratoShared
 
 /// The virtio-mem sizing a resizable VM is realized with (issue #568).
 ///
-/// Lifted out of `QEMUService` so the domain builder and the QEMU command line
-/// compute the same numbers, and so the arithmetic is testable: the QEMU copy
-/// reads `#if arch`, which makes only the host's own branch assertable, while
-/// this one takes the architecture as a parameter the way `QEMUGraphicsDevice`
-/// does.
+/// Modelled on `QEMUService`'s private `alignedHotplugMemory` /
+/// `virtioMemBlockBytes`, which stay where they are until the QEMU driver is
+/// removed — so for now this is a second copy of the arithmetic, and the two
+/// are held together by review rather than by a shared call site. What it adds
+/// is testability: the QEMU copy reads `#if arch`, so only the host's own
+/// branch is assertable, while this one takes the architecture as a parameter
+/// the way `QEMUGraphicsDevice` does.
+///
+/// It also takes the *guest* architecture where the QEMU copy reads the
+/// *host's*. That is a deliberate correction rather than a slip: the block size
+/// follows the page size of the guest, and the two only coincide because
+/// acceleration is same-architecture. They part company under cross-architecture
+/// TCG, where the guest is the one that has to be right.
 public enum MemoryHotplugPlan {
 
     /// virtio-mem plugs memory in fixed-size blocks: the memory backend and

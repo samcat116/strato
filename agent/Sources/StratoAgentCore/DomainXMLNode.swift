@@ -30,8 +30,11 @@ struct DomainXMLNode: Equatable {
     /// Ordered, never a `Dictionary` — see the type's note on determinism.
     private(set) var attributes: [DomainXMLAttribute]
     private(set) var children: [DomainXMLNode]
-    /// Character data. Mutually exclusive with `children` by construction: an
-    /// element in this document is either a leaf with text or a container.
+    /// Character data. Mutually exclusive with `children`: an element in this
+    /// document is either a leaf with text or a container, and `render` has no
+    /// mixed-content form. Asserted at both mutation points rather than left as
+    /// a convention, since the failure would otherwise be a silently dropped
+    /// value.
     private(set) var text: String?
 
     /// Builds an element. Attributes whose value is nil are dropped, so a
@@ -49,12 +52,15 @@ struct DomainXMLNode: Equatable {
         }
         self.children = children
         self.text = text
+        assert(text == nil || children.isEmpty, "<\(name)> would drop its text: mixed content is not rendered")
     }
 
     /// Appends a child, ignoring nil. Lets a conditional *element* stay as flat
     /// as a conditional attribute: `devices.append(tpm ? tpmNode : nil)`.
     mutating func append(_ child: DomainXMLNode?) {
-        if let child { children.append(child) }
+        guard let child else { return }
+        assert(text == nil, "<\(name)> would drop its text: mixed content is not rendered")
+        children.append(child)
     }
 
     /// Renders the element and its descendants.

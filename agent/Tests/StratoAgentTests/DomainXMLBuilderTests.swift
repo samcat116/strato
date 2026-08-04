@@ -134,8 +134,10 @@ struct DomainXMLBuilderTests {
                         initramfs: "/var/lib/strato/images/initrd.img",
                         cmdline: "root=/dev/vda1 ro console=ttyS0,115200")),
                 disks: [
-                    ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 1),
-                    ResolvedDisk(path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, bootOrder: 2),
+                    // Stored 0-based, as `MigrateVMDisksToVolumes` writes it;
+                    // the golden shows the 1-based renumbering libvirt needs.
+                    ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 0),
+                    ResolvedDisk(path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, bootOrder: 1),
                     ResolvedDisk(
                         path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true),
                 ],
@@ -264,6 +266,47 @@ struct DomainXMLBuilderTests {
         #expect(onDisk == Set(Self.scenarios.map(\.name)))
     }
 
+    // MARK: - Validation against libvirt itself
+
+    private static let virtXMLValidatePath: String? = {
+        let searchPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return searchPath.components(separatedBy: ":")
+            .map { ($0 as NSString).appendingPathComponent("virt-xml-validate") }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }()
+
+    /// Keeps the goldens honest against the schema rather than only against
+    /// this builder, on any machine that has libvirt installed — a dev box, or
+    /// the manual `Full Test Suite` workflow. It is skipped rather than failed
+    /// where the tool is absent, which includes CI: PR validation is a compile
+    /// check that never runs tests at all.
+    ///
+    /// This is the check that would have caught `<boot order='0'/>`, which the
+    /// schema rejects outright.
+    @Test(
+        "goldens validate against libvirt's own schema",
+        .enabled(if: virtXMLValidatePath != nil, "virt-xml-validate is not installed"),
+        arguments: scenarios)
+    func validatesAgainstLibvirtSchema(_ scenario: Scenario) throws {
+        let tool = try #require(Self.virtXMLValidatePath)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = [Self.goldenURL(scenario.name).path, "domain"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        try process.run()
+        // Read before waiting: a full pipe buffer would otherwise deadlock the
+        // child against a parent that never drains it.
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+
+        #expect(
+            process.terminationStatus == 0,
+            "\(scenario.name) failed libvirt's schema:\n\(output)")
+    }
+
     // MARK: - Properties no golden can assert
 
     /// A golden records whatever the builder produced, including a document no
@@ -320,6 +363,41 @@ struct DomainXMLBuilderTests {
         #expect(throws: DomainXMLBuilderError.invalidDomainName(name)) {
             try DomainXMLBuilder.build(input)
         }
+    }
+
+    /// Nothing normalizes a decoded `VMSpec`, and both of these reach libvirt
+    /// as an error naming the element rather than the spec behind it.
+    @Test("sizing libvirt would reject is refused with its own name")
+    func invalidSizingThrows() throws {
+        #expect(throws: DomainXMLBuilderError.invalidCPUCount(0)) {
+            try DomainXMLBuilder.build(Self.input(spec: Self.spec(cpus: 0)))
+        }
+        #expect(throws: DomainXMLBuilderError.invalidMemorySize(0)) {
+            try DomainXMLBuilder.build(Self.input(spec: Self.spec(memoryBytes: 0)))
+        }
+    }
+
+    /// libvirt types the attribute as `positiveInteger` and rejects a repeat
+    /// ("boot order '1' used for more than one device"), while Strato stores an
+    /// unvalidated `Int?` whose first value is 0 — which is what
+    /// `MigrateVMDisksToVolumes` has already written to every migrated boot
+    /// volume. The stored number is a flag; the position is the order.
+    @Test("boot order is renumbered from position, never copied through")
+    func bootOrderIsDerived() throws {
+        func orders(_ stored: [Int?]) -> [Int?] {
+            DomainXMLBuilder.derivedBootOrders(
+                stored.map { ResolvedDisk(path: "/d.qcow2", format: .qcow2, bootOrder: $0) })
+        }
+        // Strato's 0-based values become libvirt's 1-based ones.
+        #expect(orders([0, 1, 2]) == [1, 2, 3])
+        // Duplicates and negatives, both reachable through the volume API,
+        // still come out unique and positive.
+        #expect(orders([0, 0, 0]) == [1, 2, 3])
+        #expect(orders([-1, 5]) == [1, 2])
+        // Disks with no stated order get no boot element, and do not consume a
+        // number that would leave a gap.
+        #expect(orders([nil, 3, nil, 7]) == [nil, 1, nil, 2])
+        #expect(orders([nil, nil]) == [nil, nil])
     }
 
     /// Secure Boot's `secure='yes'` marks the varstore pflash SMM-only, and ARM

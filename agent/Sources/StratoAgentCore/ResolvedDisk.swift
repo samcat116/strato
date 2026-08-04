@@ -17,6 +17,10 @@ public struct ResolvedDisk: Sendable, Equatable {
     /// set one. Nil on every disk means no boot element is emitted at all and
     /// firmware picks — which is what the QEMU command line does today, since
     /// it passes no `-boot`.
+    ///
+    /// Treat the value as a flag rather than an index: nothing in Strato keeps
+    /// it in the range libvirt accepts, so consumers derive their own ordering
+    /// from the sequence (see `DomainXMLBuilder.derivedBootOrders`).
     public let bootOrder: Int?
 
     public init(path: String, format: DiskFormat, readonly: Bool = false, bootOrder: Int? = nil) {
