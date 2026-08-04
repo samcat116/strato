@@ -307,8 +307,10 @@ see "Conditions are not implemented yet" below.
   endpoint to author or revoke one individually.
 - **Every binding has a nullable `expires_at`.** TTL is a property of the
   grant primitive, and it is enforced — expiry is applied at *read* time by
-  `QueryBuilder<RoleBinding>.active()`, on every path that reads bindings,
-  rather than by a sweep.
+  `QueryBuilder<RoleBinding>.active()`, on every path that *decides* from
+  bindings, rather than by a sweep. The write and sweep paths deliberately do
+  not filter: `grant` must find an expired row to refresh rather than duplicate
+  it, and revoking one must still delete it.
 - Bindings are written in the same database transaction as the resources they
   protect.
 

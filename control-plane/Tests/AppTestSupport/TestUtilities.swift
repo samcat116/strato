@@ -648,17 +648,61 @@ package actor MockImageFetchService: ImageFetchServiceProtocol {
 
 // MARK: - Conditioned role bindings
 
-/// Write a `role_bindings` row carrying a `condition` — which the schema
-/// otherwise refuses (`RejectConditionedRoleBindings`, STR-108).
+/// Run `body` with the STR-108 write boundary lifted, then put it back.
 ///
-/// Conditions are not implemented, so the evaluator skips such a row and it
-/// grants nothing. That skip is the defence in depth behind the write boundary,
-/// and the only way to exercise it is to reproduce the one way such a row can
-/// still appear: direct SQL against a database whose constraint predates or
-/// outlives this deployment. So the constraint is dropped for the rest of this
-/// test — safe because every test runs against its own database clone — and
-/// deliberately not restored: a test that wants both halves should assert the
-/// refusal before calling this.
+/// Conditions are not implemented, so the evaluator skips a conditioned binding
+/// and it grants nothing. That skip is the defence in depth behind the
+/// constraint, and the only way to exercise it is to reproduce the one way such
+/// a row can still appear: a write against a database whose constraint predates
+/// or outlives this deployment. Dropping the constraint is safe because every
+/// test runs against its own clone of the migrated template, which teardown
+/// destroys.
+///
+/// The restore is what makes it scoped rather than remembered: leaving the
+/// boundary down for the rest of the test would let a later assertion that a
+/// conditioned write is refused pass vacuously. It comes back `NOT VALID`,
+/// since any row `body` wrote would fail the re-scan a validating `ADD
+/// CONSTRAINT` performs — which is exactly the state being simulated: new
+/// writes refused, one legacy row already present.
+///
+/// (`Application.makeForBareDatabaseTesting()` is the house pattern for
+/// migration before/after tests that hand-build a legacy schema. This does not
+/// use it: the only difference from the current schema is one constraint, and
+/// dropping it in place also exercises the migration's idempotent
+/// drop-then-add.)
+package func withConditionedRoleBindingsAllowed<T>(
+    on db: any Database,
+    _ body: () async throws -> T
+) async throws -> T {
+    let sql = try sqlDatabaseForTest(db)
+    let constraint = RejectConditionedRoleBindings.constraintName
+    try await sql.raw(
+        "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
+    ).run()
+
+    func restore() async throws {
+        try await sql.raw(
+            """
+            ALTER TABLE "role_bindings" ADD CONSTRAINT \(unsafeRaw: constraint)
+            CHECK ("condition" IS NULL) NOT VALID
+            """
+        ).run()
+    }
+
+    do {
+        let result = try await body()
+        try await restore()
+        return result
+    } catch {
+        try? await restore()
+        throw error
+    }
+}
+
+/// Write a `role_bindings` row carrying a `condition` — which the schema
+/// otherwise refuses (`RejectConditionedRoleBindings`, STR-108) — leaving the
+/// boundary in place for everything after it. See
+/// `withConditionedRoleBindingsAllowed`.
 package func insertConditionedRoleBinding(
     principalType: IAMPrincipalType,
     principalID: UUID,
@@ -668,40 +712,57 @@ package func insertConditionedRoleBinding(
     condition: String,
     on db: any Database
 ) async throws {
-    guard let sql = db as? any SQLDatabase else {
-        throw TestSetupError.message("conditioned binding fixtures need a SQL database")
+    try await withConditionedRoleBindingsAllowed(on: db) {
+        let binding = RoleBinding(
+            principalType: principalType,
+            principalID: principalID,
+            role: role,
+            nodeType: nodeType,
+            nodeID: nodeID
+        )
+        binding.condition = condition
+        try await binding.save(on: db)
     }
-    let constraint = RejectConditionedRoleBindings.constraintName
-    try await sql.raw(
-        "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
-    ).run()
-
-    let binding = RoleBinding(
-        principalType: principalType,
-        principalID: principalID,
-        role: role,
-        nodeType: nodeType,
-        nodeID: nodeID
-    )
-    binding.condition = condition
-    try await binding.save(on: db)
 }
 
-/// Whether the schema refuses `condition` on `role_bindings` — the write
-/// boundary STR-108 installed. False once `insertConditionedRoleBinding` has
-/// dropped it in this test's clone.
-package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
-    guard let sql = db as? any SQLDatabase else {
-        throw TestSetupError.message("constraint introspection needs a SQL database")
-    }
+/// The state of the STR-108 write boundary on `role_bindings`.
+package enum ConditionedRoleBindingConstraintState: Equatable, Sendable {
+    /// No constraint: a conditioned row can be written.
+    case absent
+    /// Present but unvalidated — new writes are refused, existing rows were
+    /// never scanned. What `withConditionedRoleBindingsAllowed` restores.
+    case notValidated
+    /// Present and validated, which Postgres only permits when no conditioned
+    /// row survives.
+    case validated
+}
+
+package func conditionedRoleBindingConstraint(
+    on db: any Database
+) async throws -> ConditionedRoleBindingConstraintState {
+    let sql = try sqlDatabaseForTest(db)
     let rows = try await sql.raw(
         """
-        SELECT 1 AS present FROM pg_constraint
+        SELECT convalidated FROM pg_constraint
         WHERE conrelid = 'role_bindings'::regclass
           AND conname = \(bind: RejectConditionedRoleBindings.constraintName)
         """
     ).all()
-    return !rows.isEmpty
+    guard let row = rows.first else { return .absent }
+    return try row.decode(column: "convalidated", as: Bool.self) ? .validated : .notValidated
+}
+
+/// Whether the schema refuses a conditioned write — either constraint state
+/// does, validated or not.
+package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
+    try await conditionedRoleBindingConstraint(on: db) != .absent
+}
+
+private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {
+    guard let sql = db as? any SQLDatabase else {
+        throw TestSetupError.message("conditioned binding fixtures need a SQL database")
+    }
+    return sql
 }
 
 package enum TestSetupError: Error, CustomStringConvertible {

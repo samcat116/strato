@@ -1,17 +1,6 @@
 import Fluent
 import SQLKit
 
-enum ConditionedRoleBindingMigrationError: Error, CustomStringConvertible, Sendable {
-    case unsupportedDatabase(String)
-
-    var description: String {
-        switch self {
-        case .unsupportedDatabase(let dialect):
-            return "Cannot constrain role_bindings.condition on unsupported SQL dialect '\(dialect)'"
-        }
-    }
-}
-
 /// STR-108: make the database refuse a conditioned role binding.
 ///
 /// The condition vocabulary is declared but not compiled. `EntitySliceLoader`
@@ -26,8 +15,18 @@ enum ConditionedRoleBindingMigrationError: Error, CustomStringConvertible, Senda
 /// Pre-existing conditioned rows are deleted rather than grandfathered. They
 /// grant nothing today, so removing them changes no principal's access, and
 /// keeping them would mean an invalid-forever constraint guarding a table that
-/// still holds invisible dead grants. The count is logged so an operator who
-/// wrote one sees it go.
+/// still holds invisible dead grants. Each deleted row is logged in full —
+/// principal, role, node, condition — because `revert()` can restore the
+/// constraint but not the rows, so this log is the only record of what an
+/// operator meant to grant.
+///
+/// This deliberately differs from the closest precedent, `EnforcePersistedEnumValues`,
+/// which *aborts startup* when existing rows would violate the constraint it is
+/// about to add. There the offending value is load-bearing — a row the app will
+/// try to decode and trap on — so refusing to proceed is the only safe move.
+/// Here the offending rows are inert by construction, and failing every boot
+/// over a grant that confers nothing would be the worse outcome; logging them
+/// keeps the operator's intent recoverable without holding the deploy hostage.
 ///
 /// Lift this when conditions are actually compiled into the Cedar `when`
 /// clause; until then the column stays for that future, guarded.
@@ -35,48 +34,58 @@ struct RejectConditionedRoleBindings: AsyncMigration {
     static let constraintName = "ck_role_bindings_condition_unsupported"
 
     func prepare(on database: Database) async throws {
-        let sql = try Self.sqlDatabase(database)
+        let sql = try PostgresMigrationSQL.database(database)
 
+        // Return the identifying columns, not just a count: this statement is
+        // the last place the row's contents exist.
         let deleted = try await sql.raw(
-            "DELETE FROM \"role_bindings\" WHERE \"condition\" IS NOT NULL RETURNING \"id\""
+            """
+            DELETE FROM "role_bindings" WHERE "condition" IS NOT NULL
+            RETURNING "principal_type", "principal_id", "role", "node_type", "node_id", "condition"
+            """
         ).all()
         if !deleted.isEmpty {
             database.logger.warning(
                 """
-                Deleted \(deleted.count) role binding(s) carrying a condition. Binding conditions are \
+                Deleting \(deleted.count) role binding(s) carrying a condition. Binding conditions are \
                 not implemented — the evaluator has always skipped these rows, so they granted nothing \
-                and no access changes. Re-grant unconditionally if the access was intended.
+                and no access changes. Each is logged below; re-grant unconditionally if the access was \
+                intended.
                 """
             )
+            for row in deleted {
+                database.logger.warning("Deleted conditioned role binding: \(Self.describe(row))")
+            }
         }
 
         // Drop-then-add so a retry after an interrupted, non-transactional run
         // is safe.
-        try await Self.execute("ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(Self.quotedName)", on: sql)
-        try await Self.execute(
+        try await PostgresMigrationSQL.execute(
+            "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(Self.quotedName)", on: sql)
+        try await PostgresMigrationSQL.execute(
             "ALTER TABLE \"role_bindings\" ADD CONSTRAINT \(Self.quotedName) CHECK (\"condition\" IS NULL)",
             on: sql
         )
     }
 
     func revert(on database: Database) async throws {
-        let sql = try Self.sqlDatabase(database)
-        try await Self.execute("ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(Self.quotedName)", on: sql)
+        let sql = try PostgresMigrationSQL.database(database)
+        try await PostgresMigrationSQL.execute(
+            "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(Self.quotedName)", on: sql)
     }
 
-    private static var quotedName: String { "\"\(constraintName)\"" }
+    static var quotedName: String { PostgresMigrationSQL.identifier(constraintName) }
 
-    private static func sqlDatabase(_ database: Database) throws -> any SQLDatabase {
-        guard let sql = database as? any SQLDatabase else {
-            throw ConditionedRoleBindingMigrationError.unsupportedDatabase("non-SQL")
+    /// One deleted row, rendered so the grant can be reconstructed by hand.
+    /// Decoding is per-column and lenient: a row this cannot fully read is
+    /// still worth logging in part, and a log line is no place to throw.
+    private static func describe(_ row: any SQLRow) -> String {
+        func text(_ column: String) -> String {
+            (try? row.decode(column: column, as: String.self))
+                ?? (try? row.decode(column: column, as: UUID.self))?.uuidString
+                ?? "<unreadable>"
         }
-        guard sql.dialect.name == "postgresql" else {
-            throw ConditionedRoleBindingMigrationError.unsupportedDatabase(sql.dialect.name)
-        }
-        return sql
-    }
-
-    private static func execute(_ statement: String, on sql: any SQLDatabase) async throws {
-        try await sql.raw("\(unsafeRaw: statement)").run()
+        return "principal=\(text("principal_type")):\(text("principal_id")) role=\(text("role")) "
+            + "node=\(text("node_type")):\(text("node_id")) condition=\(text("condition"))"
     }
 }

@@ -182,8 +182,8 @@ final class IAMRoleBindingTests {
         try await withApp { app in
             let principal = UUID()
             let node = UUID()
-            // Drops the constraint, as an older schema would have it, and
-            // writes the row an operator could have inserted by hand.
+            // The row an operator could have inserted by hand against an older
+            // schema, with the constraint restored unvalidated around it.
             try await insertConditionedRoleBinding(
                 principalType: .user, principalID: principal, role: .editor,
                 nodeType: .project, nodeID: node, condition: "mfa", on: app.db)
@@ -192,15 +192,35 @@ final class IAMRoleBindingTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: principal, role: .viewer,
                 nodeType: .project, nodeID: node, createdBy: nil, on: app.db)
-            let refusedBefore = try await conditionedRoleBindingsAreRefused(on: app.db)
-            #expect(!refusedBefore)
+            let stateBefore = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(stateBefore == .notValidated)
 
             try await RejectConditionedRoleBindings().prepare(on: app.db)
 
             let rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
             #expect(rows.map(\.role) == [IAMRole.viewer.seededID.uuidString])
-            let refusedAfter = try await conditionedRoleBindingsAreRefused(on: app.db)
-            #expect(refusedAfter)
+            // Validated, which Postgres grants only after re-scanning the whole
+            // table — proof the sweep left no conditioned row behind.
+            let stateAfter = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(stateAfter == .validated)
+        }
+    }
+
+    @Test("Reverting the migration gives the column back, for the day conditions are implemented")
+    func migrationRevertRestoresWritability() async throws {
+        try await withApp { app in
+            try await RejectConditionedRoleBindings().revert(on: app.db)
+            let state = try await conditionedRoleBindingConstraint(on: app.db)
+            #expect(state == .absent)
+
+            let binding = RoleBinding(
+                principalType: .user, principalID: UUID(), role: .editor,
+                nodeType: .project, nodeID: UUID())
+            binding.condition = "mfa"
+            try await binding.save(on: app.db)
+
+            let stored = try await RoleBinding.find(binding.id, on: app.db)
+            #expect(stored?.condition == "mfa")
         }
     }
 
