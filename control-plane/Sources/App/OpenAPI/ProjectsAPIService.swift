@@ -197,7 +197,21 @@ struct ProjectsAPIService: APIProtocol {
                 try await RoleBindingService.revokeAll(
                     principalType: .serviceAccount, principalID: accountID, on: db)
             }
-            try await project.delete(on: db)
+            // The emptiness checks above and this delete are not one atomic
+            // step, and read-committed Postgres will happily commit a VM
+            // created in between. `vms.project_id` is RESTRICT (STR-98), so
+            // the database refuses rather than cascading a live VM row out of
+            // existence — which used to leave a running guest with no record,
+            // and then an agent tearing it down for having none. Translate
+            // that refusal into the same answer the check gives.
+            do {
+                try await project.delete(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot delete project: a VM or sandbox was created in it. "
+                        + "Delete or move its workloads first.")
+            }
             try await RoleBindingService.revokeAll(nodeType: .project, nodeID: projectID, on: db)
             let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removedPolicies = try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)

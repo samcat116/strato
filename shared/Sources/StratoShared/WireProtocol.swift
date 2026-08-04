@@ -337,7 +337,37 @@ public enum WireProtocol {
     /// mutation would cost more than the missing logs. In the other direction
     /// a nil from an older control plane reads as "off", which is what every
     /// rule written before this version meant.
-    public static let currentVersion = 24
+    /// Version 25: tombstone-confirmed teardown (STR-98). Until now, omission
+    /// from a `DesiredStateMessage` *was* the destroy instruction: anything on
+    /// a host the control plane did not list was force-stopped and
+    /// de-registered, so every workload's safety rested on one assembler
+    /// `WHERE` clause returning a complete list. A database restored from
+    /// backup, an agent re-enrolled under a new row, or a project-delete
+    /// cascade racing a create all produce a *short* list — not an error — and
+    /// took the host down with it.
+    ///
+    /// The destructive path now needs an explicit instruction. Adds
+    /// `DesiredStateMessage.tombstones` outbound and
+    /// `ObservedStateReport.unrecognized` / `.teardownRefusal` inbound: the
+    /// agent holds what a sync omits and reports it, the control plane
+    /// confirms no row exists, and only then does a tombstone authorize the
+    /// teardown — which the agent honors exactly as it honors any `.absent`
+    /// entry.
+    ///
+    /// Deliberately **no gate**, in either direction, and for once that is the
+    /// safe choice rather than the risky one. Every other version's tolerance
+    /// hazard was "the peer ignores the field and something silently doesn't
+    /// happen"; here the thing that doesn't happen is a teardown. A pre-v25
+    /// control plane sends no tombstones, so a v25 agent holds strays forever
+    /// instead of destroying live workloads — the failure mode is a leaked
+    /// process an operator can see and remove. In the other direction a
+    /// pre-v25 *agent* keeps the old destroy-on-omission behavior no matter
+    /// what the control plane does, which is exactly what
+    /// `supportsWorkloadTombstones(_:)` exists to make visible: registration
+    /// logs such agents at `notice` so the fleet's remaining exposure is
+    /// legible during a rollout, rather than the version silently meaning
+    /// nothing.
+    public static let currentVersion = 25
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -591,6 +621,23 @@ public enum WireProtocol {
     /// version string.
     public static func supportsGraphicsConsole(_ version: Int) -> Bool {
         version >= graphicsConsoleMinimumVersion
+    }
+
+    /// The lowest protocol version that holds unlisted workloads instead of
+    /// destroying them (see `currentVersion` version 25 notes).
+    public static let workloadTombstoneMinimumVersion = 25
+
+    /// Whether an agent registered with `version` treats omission from a sync
+    /// as "hold and report" rather than "destroy".
+    ///
+    /// Not a send-side gate — tombstones are additive and a pre-v25 agent
+    /// ignoring them changes nothing it would otherwise do. It exists to make
+    /// the *remaining* exposure legible: below this version, any sync that
+    /// under-lists a host still force-stops every workload it omitted, and no
+    /// control-plane behavior can prevent that. Registration says so out loud
+    /// so an operator upgrading a fleet knows which hosts are still armed.
+    public static func supportsWorkloadTombstones(_ version: Int) -> Bool {
+        version >= workloadTombstoneMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

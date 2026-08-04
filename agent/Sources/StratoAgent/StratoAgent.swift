@@ -283,7 +283,8 @@ private func launchAgent(options: AgentOptions) async throws {
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         simulation: finalSimulation,
-        spiffeConfig: config.spiffe
+        spiffeConfig: config.spiffe,
+        teardownGuard: config.teardownGuard
     )
 
     // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful

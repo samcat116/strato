@@ -951,6 +951,55 @@ struct AgentConfigTests {
         }
     }
 
+    // MARK: - Teardown blast-radius guard (STR-98)
+
+    @Test("Load the teardown guard settings")
+    func loadTeardownGuardSettings() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                reconcile_teardown_minimum = 10
+                reconcile_teardown_percent = 50
+                allow_bulk_teardown = true
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.reconcileTeardownMinimum == 10)
+            #expect(config.reconcileTeardownPercent == 50)
+            #expect(config.allowBulkTeardown == true)
+            let guardSettings = config.teardownGuard
+            #expect(guardSettings.minimumWorkloads == 10)
+            #expect(guardSettings.percentOfPresent == 50)
+            #expect(guardSettings.allowBulkTeardown)
+        }
+    }
+
+    @Test("The teardown guard defaults to on, at 3 workloads and 25%")
+    func teardownGuardDefaults() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.reconcileTeardownMinimum == nil)
+            #expect(config.allowBulkTeardown == nil)
+            let guardSettings = config.teardownGuard
+            #expect(guardSettings.minimumWorkloads == 3)
+            #expect(guardSettings.percentOfPresent == 25)
+            #expect(!guardSettings.allowBulkTeardown)
+            // The point of the defaults: a host losing everything is refused,
+            // while a couple of strays on a small host are not.
+            #expect(guardSettings.refusal(teardowns: 8, present: 8) != nil)
+            #expect(guardSettings.refusal(teardowns: 3, present: 3) == nil)
+            #expect(guardSettings.refusal(teardowns: 4, present: 40) == nil)
+        }
+    }
+
     // MARK: - Default Path Constants Tests
 
     @Test("Default config paths are correct")
