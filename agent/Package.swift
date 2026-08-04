@@ -145,6 +145,9 @@ let package = Package(
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebSocketKit", package: "websocket-kit"),
             ],
+            // Golden documents are read from the source tree via #filePath, not
+            // from a resource bundle, so SwiftPM should leave them alone.
+            exclude: ["Goldens"],
             swiftSettings: swiftSettings
         )
     ],
