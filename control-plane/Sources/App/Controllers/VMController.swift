@@ -929,9 +929,11 @@ struct VMController: RouteCollection {
                 }
                 // Delete the VM, then recompute its quotas from the remaining
                 // VMs, in one transaction so the reservation counters and the
-                // VM row stay consistent.
+                // VM row stay consistent. The VM's IAM bindings go in the same
+                // transaction — they have no FK to the row (STR-112).
                 do {
                     try await db.transaction { db in
+                        try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
                         try await vm.delete(on: db)
                         try await QuotaEnforcementService.release(for: vm, on: db)
                     }

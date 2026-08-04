@@ -847,8 +847,14 @@ struct ImageController: RouteCollection {
             // Continue with database deletion even if file deletion fails
         }
 
-        // Delete from database
-        try await image.delete(on: req.db)
+        // Delete from database, dropping the image node's bindings — the
+        // creator grant above and anything granted on it since — in the same
+        // transaction. Bindings have no FK to the row they protect, so a delete
+        // that skips this leaks them permanently (STR-112).
+        try await req.db.transaction { db in
+            try await RoleBindingService.revokeAll(nodeType: .image, nodeID: imageID, on: db)
+            try await image.delete(on: db)
+        }
 
         req.logger.info("Image deleted", metadata: ["image_id": .string(imageID.uuidString)])
 

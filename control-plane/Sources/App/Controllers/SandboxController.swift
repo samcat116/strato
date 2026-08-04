@@ -871,6 +871,7 @@ struct SandboxController: RouteCollection {
         guard !Task.isCancelled else { return }
         do {
             try await db.transaction { db in
+                try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
                 try await sandbox.delete(on: db)
                 try await QuotaEnforcementService.release(for: sandbox, on: db)
             }

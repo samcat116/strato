@@ -718,6 +718,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLogToSecurityGroupRules())
     app.migrations.add(CreateSandboxInterfaceSecurityGroups())
 
+    // One-time sweep of the bindings the VM, sandbox and image delete paths
+    // leaked before they learned to revoke (STR-112). Runs last: it reads every
+    // resource table it checks against, so it wants them in their final shape.
+    app.migrations.add(DeleteOrphanedResourceRoleBindings())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

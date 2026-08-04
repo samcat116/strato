@@ -1026,6 +1026,12 @@ final class ImageControllerTests {
                 withIntermediateDirectories: true)
             try "test content".data(using: .utf8)!.write(to: URL(fileURLWithPath: filePath))
 
+            // The creator binding image creation writes, which the delete has
+            // to drop with the row — bindings have no FK to it (STR-112).
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .image, nodeID: imageId, createdBy: user.id!, on: app.db)
+
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(imageId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -1035,6 +1041,12 @@ final class ImageControllerTests {
             // Verify image is deleted from database
             let deletedImage = try await Image.find(imageId, on: app.db)
             #expect(deletedImage == nil)
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.image.rawValue)
+                .filter(\.$nodeID == imageId)
+                .count()
+            #expect(bindings == 0)
         }
     }
 

@@ -560,6 +560,12 @@ final class DesiredStateReconciliationTests {
             let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
             try await operation.save(on: app.db)
 
+            // The creator binding VM creation writes. Bindings have no FK to
+            // the VM, so the confirmed deletion has to drop it (STR-112).
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id!, on: app.db)
+
             // Full-list semantics: the VM is missing from the agent's report.
             let envelope = try self.report(agentId: agentId, vms: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
@@ -569,6 +575,12 @@ final class DesiredStateReconciliationTests {
 
             let completed = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(completed?.status == .succeeded)
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
+                .filter(\.$nodeID == vm.id!)
+                .count()
+            #expect(bindings == 0)
         }
     }
 

@@ -442,6 +442,7 @@ struct ObservedStateApplier {
             }
 
             try await db.transaction { db in
+                try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
                 try await vm.delete(on: db)
                 try await QuotaEnforcementService.release(for: vm, on: db)
             }
@@ -582,6 +583,7 @@ struct ObservedStateApplier {
             await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
             try await db.transaction { db in
+                try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
                 try await sandbox.delete(on: db)
                 try await QuotaEnforcementService.release(for: sandbox, on: db)
             }
