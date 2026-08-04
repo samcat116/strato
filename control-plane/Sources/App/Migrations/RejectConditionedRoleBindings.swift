@@ -1,4 +1,5 @@
 import Fluent
+import Foundation
 import SQLKit
 
 /// STR-108: make the database refuse a conditioned role binding.
