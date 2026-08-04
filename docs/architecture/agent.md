@@ -467,12 +467,13 @@ failed resize is re-planned by the next sync rather than looking applied.
 `WorkloadKind` so VMs and sandboxes share one engine:
 
 - **A pure diff** (`Reconciler.plan`): desired list vs observed presence
-  (`.managed(status)` or `.orphaned`) → `[ReconcileWorkItem]` of steps
-  (`create`, `adopt`, `boot`, `pause`, `resume`, `resize`, `shutdown`,
-  `delete`).
+  (`.managed(status)` or `.orphaned`) → a `ReconcilePlan` of
+  `[ReconcileWorkItem]` steps (`create`, `adopt`, `boot`, `pause`, `resume`,
+  `resize`, `shutdown`, `delete`) plus the workloads this host holds that the
+  sync didn't account for.
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
-  present-but-undesired workloads get deleted (full-list semantics).
+  present-but-unlisted workloads are **held**, not deleted (below).
 - **The `Reconciler` actor** executes items on **per-workload serial
   lanes** (`SerialTaskQueue` in `MessageOrdering.swift`: FIFO per key,
   concurrent across keys). A VM's lane key is its bare ID — the same lane
@@ -485,6 +486,33 @@ failed resize is re-planned by the next sync rather than looking applied.
 After every item the agent sends a full `ObservedStateReport` — live status
 plus `observedGeneration`, `convergencePhase`, and error/failed-generation
 per workload; absence from the report is what confirms a deletion.
+
+### Holding what the control plane didn't mention (STR-98)
+
+A workload present here that a sync doesn't list is not destroyed. The agent
+keeps running it and reports it in `ObservedStateReport.unrecognized`; the
+control plane checks whether a record exists and, only if none does, answers
+with a `DesiredWorkloadTombstone` on a later sync, which the agent converges
+exactly like an `.absent` desired entry. Tombstoned deletes stay exempt from
+the 3-attempt cap — nothing can mint a new generation for a workload with no
+record, so a capped failure would leak the stray forever.
+
+This matters because the alternative was catastrophic and quiet: omission used
+to mean "destroy", so any control-plane condition that produced a short list —
+a restored database, this node re-enrolled under a new agent record, a
+scoping regression — force-stopped every workload it failed to mention. The
+disks survived; the records and the running guests did not.
+
+A second layer bounds the authorized path itself. `TeardownGuard` refuses a
+sync whose tombstones would remove more than `reconcile_teardown_minimum`
+workloads **and** more than `reconcile_teardown_percent` of what the host is
+running (defaults 3 and 25%). The refusal is logged at `error`, reported in
+`ObservedStateReport.teardownRefusal` so it reaches operators through the
+control plane, and everything else in the sync still converges. A deliberate
+drain sets `allow_bulk_teardown` in the agent config. Ordinary `.absent`
+deletes — the ones someone asked for through the API, with an operation row
+and an audit trail — are deliberately not counted, so normal bulk deletes are
+unaffected.
 
 ## Sandboxes on the agent
 

@@ -22,6 +22,10 @@ struct AgentController: RouteCollection {
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
         agents.post(":agentId", "actions", "update", use: updateAgent)
+        // Finishes a node's re-identification (STR-98): moves the workloads it
+        // is demonstrably running off the agent record it was enrolled under
+        // before.
+        agents.post(":agentId", "actions", "adopt-workloads", use: adoptWorkloads)
         agents.patch(":agentId", use: patchAgent)
         // Scope reassignment corrects the migration backfill's oldest-org
         // guess on multi-org installs; deliberately system-admin only (it
@@ -585,7 +589,234 @@ struct AgentController: RouteCollection {
 
         try await requireAgentPermission(req, agent: agent, permission: "view")
 
-        return try AgentResponse(from: agent)
+        // Workloads this agent holds that the control plane refused to
+        // authorize tearing down (STR-98). Only on the detail view: the list
+        // endpoint shouldn't pay for a claim query per agent, and this is
+        // something an operator investigates one host at a time.
+        let held = try await AgentWorkloadClaim.query(on: req.db)
+            .filter(\.$agentId == agentId.uuidString)
+            .filter(\.$disposition == .held)
+            .sort(\.$firstSeenAt)
+            .all()
+            .map(AgentResponse.HeldWorkloadSummary.init(from:))
+
+        return try AgentResponse(from: agent, heldWorkloads: held)
+    }
+
+    // MARK: - Workload adoption (STR-98)
+
+    struct AdoptWorkloadsRequest: Content {
+        /// The agent record whose placements should move to this agent.
+        var fromAgentId: UUID
+    }
+
+    struct AdoptWorkloadsResponse: Content {
+        let adoptedVMs: Int
+        let adoptedSandboxes: Int
+        let adoptedVolumes: Int
+        /// Workloads still placed on `fromAgentId` that this agent does not
+        /// report holding, so they were left alone. Named for what it is: a
+        /// plain "skipped" reads as "left stranded on a dead record", and
+        /// these may equally be workloads correctly running somewhere else.
+        let skippedUnclaimed: Int
+    }
+
+    /// Move a volume's replica rows from one agent record to another.
+    ///
+    /// `volume_replicas` is unique on `(volume_id, agent_id)`, so a straight
+    /// update collides when the target already has a replica of this volume —
+    /// possible on a replicated pool. There the source row is redundant rather
+    /// than movable: drop it and keep the target's own record of the copy.
+    private static func repointReplicas(
+        volumeID: UUID, from sourceId: String, to targetId: String, on db: Database
+    ) async throws {
+        let targetExists =
+            try await VolumeReplica.query(on: db)
+            .filter(\.$volume.$id == volumeID)
+            .filter(\.$agentId == targetId)
+            .count() > 0
+        if targetExists {
+            try await VolumeReplica.query(on: db)
+                .filter(\.$volume.$id == volumeID)
+                .filter(\.$agentId == sourceId)
+                .delete()
+            return
+        }
+        try await VolumeReplica.query(on: db)
+            .filter(\.$volume.$id == volumeID)
+            .filter(\.$agentId == sourceId)
+            .set(\.$agentId, to: targetId)
+            .update()
+    }
+
+    /// Re-point workloads from a superseded agent record onto the agent that
+    /// is actually running them.
+    ///
+    /// `Agent` rows are keyed by `(trust_domain, name)`, and `VM.hypervisorId`
+    /// stores the row's UUID. Re-enrolling a node under a corrected name — or
+    /// moving it to its organization's trust domain — therefore mints a *new*
+    /// row, and nothing re-points the workloads: the node comes back holding
+    /// every VM it had, with the database insisting they live on a record that
+    /// no longer connects. Before STR-98 the node's first sync listed nothing
+    /// and it destroyed all of them.
+    ///
+    /// Now it holds them and reports them, and this endpoint is how an
+    /// operator finishes the move. The evidence is what bounds it: only
+    /// workloads the target agent *reports holding* (a `held` claim) and that
+    /// are *currently placed* on `fromAgentId` move. There is no way to use
+    /// this to point a workload at a host that isn't running it.
+    func adoptWorkloads(req: Request) async throws -> AdoptWorkloadsResponse {
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
+        }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+
+        let body = try req.content.decode(AdoptWorkloadsRequest.self)
+        let targetId = agentId.uuidString
+        let sourceId = body.fromAgentId.uuidString
+        guard sourceId != targetId else {
+            throw Abort(.badRequest, reason: "An agent cannot adopt workloads from itself")
+        }
+
+        // The source record is a subject of this call, not just a parameter:
+        // adoption moves rows *off* it. Authorize it in its own right, and
+        // refuse to move workloads across an organization boundary — the
+        // trust-domain migration this exists for keeps a node in its own org,
+        // so a mismatch here is an operator mistake, not a supported case.
+        guard let sourceAgent = try await Agent.find(body.fromAgentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Source agent not found")
+        }
+        try await requireAgentPermission(req, agent: sourceAgent, permission: "manage")
+        // Compared at the root org, not the exact scope node: re-enrolling a
+        // node into a different OU of the same organization is a legitimate
+        // move, while landing one tenant's workload rows on another tenant's
+        // agent record is not.
+        let sourceOrg = try await sourceAgent.rootOrganizationID(on: req.db)
+        let targetOrg = try await agent.rootOrganizationID(on: req.db)
+        guard sourceOrg == targetOrg else {
+            throw Abort(
+                .conflict,
+                reason: "Cannot adopt workloads across organizations: "
+                    + "\(sourceAgent.name) and \(agent.name) belong to different organizations")
+        }
+
+        // Only claims that name this source: the operator is confirming one
+        // specific re-identification, not every stray the host holds.
+        let claims = try await AgentWorkloadClaim.query(on: req.db)
+            .filter(\.$agentId == targetId)
+            .filter(\.$disposition == .held)
+            .all()
+            .filter { $0.placedOnAgentId == sourceId }
+        guard !claims.isEmpty else {
+            throw Abort(
+                .conflict,
+                reason: "This agent does not report holding any workloads placed on that agent record")
+        }
+
+        let claimedVMIDs = Set(claims.filter { $0.resourceKind == .virtualMachine }.map(\.resourceID))
+        let claimedSandboxIDs = Set(claims.filter { $0.resourceKind == .sandbox }.map(\.resourceID))
+
+        let counts = try await req.db.transaction { db -> AdoptWorkloadsResponse in
+            var adoptedVMs = 0
+            var adoptedSandboxes = 0
+            var adoptedVolumes = 0
+            var skippedUnclaimed = 0
+
+            let sourceVMs = try await VM.query(on: db).filter(\.$hypervisorId == sourceId).all()
+            for vm in sourceVMs {
+                guard let vmID = vm.id, claimedVMIDs.contains(vmID) else {
+                    skippedUnclaimed += 1
+                    continue
+                }
+                vm.hypervisorId = targetId
+                try await vm.save(on: db)
+                adoptedVMs += 1
+            }
+
+            let sourceSandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == sourceId).all()
+            for sandbox in sourceSandboxes {
+                guard let sandboxID = sandbox.id, claimedSandboxIDs.contains(sandboxID) else {
+                    skippedUnclaimed += 1
+                    continue
+                }
+                sandbox.hypervisorId = targetId
+                try await sandbox.save(on: db)
+                adoptedSandboxes += 1
+            }
+
+            // Volumes are files on the host, so they move with it — but by
+            // *placement*, not by attachment. Three columns decide where a
+            // volume operation is dispatched and all three have to move
+            // together, or the endpoint reports a move it didn't finish:
+            //
+            // * `VolumeReplica.agentId` — what `VolumeService.placement(of:)`
+            //   consults *first*. Every volume created through `VolumeService`
+            //   has a replica row, so re-pointing `hypervisorId` alone would
+            //   leave every snapshot/resize/attach still dispatching to the
+            //   superseded record, hanging until the stuck-operation sweep.
+            // * `Volume.hypervisorId` — the fallback for rows with no replica.
+            // * `Volume.attachedAgentId` — set from the VM's placement at
+            //   attach time; left behind it would disagree with `hypervisorId`
+            //   on the same row.
+            //
+            // Detached volumes move too: their files are on the adopting host
+            // like everything else the source record owned, and leaving them
+            // would point a later attach at a dead record. A volume attached to
+            // a VM that stayed behind is the one case that must not move.
+            let sourceVolumes = try await Volume.query(on: db)
+                .filter(\.$hypervisorId == sourceId)
+                .all()
+            for volume in sourceVolumes {
+                if let attachedVMID = volume.$vm.id, !claimedVMIDs.contains(attachedVMID) {
+                    continue
+                }
+                guard let volumeID = volume.id else { continue }
+                volume.hypervisorId = targetId
+                if volume.attachedAgentId == sourceId {
+                    volume.attachedAgentId = targetId
+                }
+                try await volume.save(on: db)
+                try await Self.repointReplicas(
+                    volumeID: volumeID, from: sourceId, to: targetId, on: db)
+                adoptedVolumes += 1
+            }
+
+            // The claims are consumed: the next report re-derives whatever is
+            // still unaccounted for, and these workloads now appear in the
+            // target's own sync.
+            for claim in claims {
+                try await claim.delete(on: db)
+            }
+
+            return AdoptWorkloadsResponse(
+                adoptedVMs: adoptedVMs,
+                adoptedSandboxes: adoptedSandboxes,
+                adoptedVolumes: adoptedVolumes,
+                skippedUnclaimed: skippedUnclaimed)
+        }
+
+        req.logger.notice(
+            "Adopted workloads onto a re-enrolled agent record",
+            metadata: [
+                "agentId": .string(targetId),
+                "agentName": .string(agent.name),
+                "fromAgentId": .string(sourceId),
+                "adoptedVMs": .stringConvertible(counts.adoptedVMs),
+                "adoptedSandboxes": .stringConvertible(counts.adoptedSandboxes),
+                "adoptedVolumes": .stringConvertible(counts.adoptedVolumes),
+                "skippedUnclaimed": .stringConvertible(counts.skippedUnclaimed),
+            ])
+
+        // Both sides need a fresh sync: the target so it stops holding
+        // workloads nothing described, the source (if it is somehow still
+        // connected) so it stops being told it owns them.
+        await req.agentService.syncDesiredState(agentId: targetId)
+        await req.agentService.syncDesiredState(agentId: sourceId)
+
+        return counts
     }
 
     func deregisterAgent(req: Request) async throws -> HTTPStatus {

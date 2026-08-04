@@ -718,6 +718,13 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLogToSecurityGroupRules())
     app.migrations.add(CreateSandboxInterfaceSecurityGroups())
 
+    // Tombstone-confirmed teardown (STR-98): what an agent holds that no sync
+    // accounted for, and what the control plane decided about it. Omission
+    // from a sync stops being an instruction to destroy.
+    app.migrations.add(CreateAgentWorkloadClaim())
+    app.migrations.add(AddTeardownRefusalToAgent())
+    app.migrations.add(RestrictVMProjectDeletion())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
