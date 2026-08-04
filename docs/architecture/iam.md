@@ -312,7 +312,15 @@ see "Conditions are not implemented yet" below.
   not filter: `grant` must find an expired row to refresh rather than duplicate
   it, and revoking one must still delete it.
 - Bindings are written in the same database transaction as the resources they
-  protect.
+  protect — **and removed in it**. The table carries no foreign key to the node
+  it names (an id there may be a resource the database never joins against), so
+  nothing reclaims a binding whose node is gone: each delete path revokes its
+  own node's bindings, including the child nodes that cascade with the row —
+  `RoleBindingService.revokeAll(nodeType:nodeID:)`, or `ResourceBindingCleanup`
+  for VMs and sandboxes, whose snapshots go with them. A path that forgets
+  leaks rows permanently (STR-112). It is also why **node ids are never
+  reused**: with UUIDv4 they cannot be, and an orphaned binding on a recycled
+  id would silently start granting again.
 
 ### Conditions are not implemented yet (STR-108)
 

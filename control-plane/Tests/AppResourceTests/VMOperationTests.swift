@@ -120,6 +120,55 @@ final class VMOperationTests {
         }
     }
 
+    // MARK: - Delete cleans up IAM bindings (STR-112)
+
+    @Test("DELETE takes the VM's role bindings — and its checkpoints' — with the row")
+    func deleteRevokesRoleBindings() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let vmID = try vm.requireID()
+
+            // The creator binding VM creation writes, plus a checkpoint whose
+            // row cascades away with the VM and so orphans its binding too.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .virtualMachine, nodeID: vmID, createdBy: user.id!, on: app.db)
+            let snapshot = VMSnapshot(
+                name: "checkpoint", vmID: vmID, projectID: vm.$project.id,
+                environment: vm.environment, agentId: nil, createdByID: user.id!)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+
+            // Unplaced VM, so the delete resolves directly instead of waiting
+            // for an agent to confirm absence.
+            var operationId: UUID?
+            try await app.test(.DELETE, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operationId = try res.content.decode(OperationResponse.self).id
+            }
+
+            let operation = try await self.pollOperationCompleted(operationId!, on: app.db)
+            #expect(operation?.status == .succeeded)
+            let gone = try await VM.find(vmID, on: app.db)
+            #expect(gone == nil)
+
+            let vmBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
+                .filter(\.$nodeID == vmID)
+                .count()
+            #expect(vmBindings == 0)
+            let snapshotBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
+                .filter(\.$nodeID == snapshotID)
+                .count()
+            #expect(snapshotBindings == 0)
+        }
+    }
+
     // MARK: - Conflict guard
 
     @Test("A pending operation on the VM rejects a new mutation with 409")

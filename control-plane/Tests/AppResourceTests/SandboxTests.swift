@@ -736,9 +736,26 @@ final class SandboxTests {
 
     @Test("DELETE without an agent removes the record and succeeds the operation")
     func deleteWithoutAgentRemovesRecord() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
+        try await withSandboxTestApp { app, user, _, sandbox, token in
+            let sandboxID = try sandbox.requireID()
+
+            // The creator binding sandbox creation writes, plus a snapshot
+            // whose row cascades away with the sandbox and so orphans its own
+            // binding (STR-112).
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .sandbox, nodeID: sandboxID, createdBy: user.id!, on: app.db)
+            let snapshot = SandboxSnapshot(
+                name: "snap", sandboxID: sandboxID, projectID: sandbox.$project.id,
+                environment: sandbox.environment, agentId: nil, createdByID: user.id!)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+
             var operationId: UUID?
-            try await app.test(.DELETE, "/api/sandboxes/\(sandbox.id!)") { req in
+            try await app.test(.DELETE, "/api/sandboxes/\(sandboxID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
@@ -747,8 +764,19 @@ final class SandboxTests {
 
             let operation = try await self.pollOperationCompleted(operationId!, on: app.db)
             #expect(operation?.status == .succeeded)
-            let gone = try await Sandbox.find(sandbox.id, on: app.db)
+            let gone = try await Sandbox.find(sandboxID, on: app.db)
             #expect(gone == nil)
+
+            let sandboxBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
+                .filter(\.$nodeID == sandboxID)
+                .count()
+            #expect(sandboxBindings == 0)
+            let snapshotBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
+                .filter(\.$nodeID == snapshotID)
+                .count()
+            #expect(snapshotBindings == 0)
         }
     }
 
@@ -1207,6 +1235,22 @@ final class SandboxTests {
                 sandboxID: sandbox.id!, userID: user.id!, kind: .delete)
             try await operation.save(on: app.db)
 
+            // The creator binding sandbox creation writes, plus a snapshot
+            // whose row cascades away with the sandbox: bindings have no FK to
+            // either, so the confirmed deletion has to drop both (STR-112) —
+            // and the snapshot's only if the revoke reads it before the delete.
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .sandbox, nodeID: sandbox.id!, createdBy: user.id!, on: app.db)
+            let snapshot = SandboxSnapshot(
+                name: "snap", sandboxID: sandbox.id!, projectID: sandbox.$project.id,
+                environment: sandbox.environment, agentId: agentId, createdByID: user.id!)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
@@ -1214,6 +1258,17 @@ final class SandboxTests {
             #expect(completed.status == .succeeded)
             let gone = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(gone == nil)
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
+                .filter(\.$nodeID == sandbox.id!)
+                .count()
+            #expect(bindings == 0)
+            let snapshotBindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
+                .filter(\.$nodeID == snapshotID)
+                .count()
+            #expect(snapshotBindings == 0)
         }
     }
 
