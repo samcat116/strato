@@ -611,7 +611,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // inside the jail, which the jailer has already entered via
             // `--netns` (issue STR-100). A spec is capped at one NIC, so the
             // first attachment is the whole set.
-            if let nic = networkAttachments.first, case .tap(let tapName) = nic.attachment {
+            if let nic = networkAttachments.first {
+                // Firecracker's only network backend is a TAP opened by name —
+                // no fd passing, no vhost-user — so anything else cannot be
+                // realized here. Refuse loudly: an agent in `network_mode =
+                // "user"` (which is not macOS-only) or with no network service
+                // at all resolves every NIC to `.userMode`, and silently
+                // skipping it would boot the sandbox with no interface while
+                // the control plane records it as having one.
+                guard case .tap(let tapName) = nic.attachment else {
+                    throw SandboxRuntimeError.networkingUnsupported(
+                        "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
+                            + "Firecracker can only open a TAP by name inside its namespace; "
+                            + "sandbox networking needs network_mode = \"ovn\" with a working OVN/OVS")
+                }
                 try await manager.configureNetwork(
                     NetworkInterface.tap(id: "eth0", tapName: tapName, macAddress: nic.macAddress))
             }

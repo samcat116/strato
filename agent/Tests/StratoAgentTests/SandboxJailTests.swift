@@ -80,17 +80,33 @@ struct SandboxJailTests {
         // jailer has setuid'd.
         let p = plan("abc-123")
         let placement = NICPlacement.sandboxNetns(
-            netnsName: p.netnsName, ownerUID: p.uid, ownerGID: p.gid)
+            netnsName: p.netnsName, owner: JailOwner(uid: p.uid, gid: p.gid))
         #expect(placement.netnsName == "strato-sbx-abc-123")
-        #expect(NICPlacement.virtualMachine.netnsName == nil)
+        #expect(NICPlacement.hostNamespace.netnsName == nil)
 
-        guard case .sandboxNetns(_, let uid, let gid) = placement else {
+        guard case .sandboxNetns(_, let owner) = placement else {
             Issue.record("expected a sandbox placement")
             return
         }
-        #expect(uid == p.uid)
-        #expect(gid == p.gid)
-        #expect(uid != 0)
+        #expect(owner?.uid == p.uid)
+        #expect(owner?.gid == p.gid)
+        #expect(owner?.uid != 0)
+    }
+
+    @Test("the namespace name is derivable from the sandbox id alone")
+    func netnsNameNeedsNoConfig() {
+        // Teardown runs on agents whose jailer config is gone (the sandbox
+        // runtime was deconfigured since the sandbox was created). If the
+        // namespace name needed the config, that cleanup would have to fall
+        // back to the VM path and would leak the port, veth, and namespace.
+        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == "strato-sbx-abc-123")
+        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == plan("abc-123").netnsName)
+
+        // And a teardown placement is expressible with no ownership at all.
+        let teardown = NICPlacement.sandboxNetns(
+            netnsName: SandboxJailPlan.netnsName(sandboxId: "abc-123"), owner: nil)
+        #expect(teardown.netnsName == "strato-sbx-abc-123")
+        #expect(teardown != NICPlacement.hostNamespace)
     }
 
     @Test("the exec file basename keys the layout, not its directory")

@@ -130,6 +130,15 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
                 "restoring a networked sandbox needs the snapshot's network device remapped on load, "
                     + "which this agent cannot do yet (STR-104)")
         }
+        // Same reason: Firecracker can only open a TAP by name, so a NIC the
+        // orchestrator degraded to user-mode (no network service, or
+        // `network_mode = "user"`) is not realizable. Refusing here keeps
+        // simulation from validating a config that fails on real hardware.
+        if let nic = networkAttachments.first, !nic.attachment.isTap {
+            throw SandboxRuntimeError.networkingUnsupported(
+                "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
+                    + "Firecracker can only open a TAP by name inside its namespace")
+        }
         logger.info("Creating mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
         if var existing = sandboxes[sandboxId] {
             // Replayed create: refresh the spec, never regress the status.

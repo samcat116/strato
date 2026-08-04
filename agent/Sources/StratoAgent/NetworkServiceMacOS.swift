@@ -35,8 +35,14 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     /// `placement` is accepted for protocol conformance and ignored: user-mode
     /// SLIRP creates nothing on the host, so there is no device to put in a
-    /// namespace. macOS has no jailed sandboxes either — the Firecracker runtime
-    /// is Linux-only — so the sandbox placement never reaches here.
+    /// namespace.
+    ///
+    /// Despite the name this service is **not** macOS-only — `Agent.start()`
+    /// builds it for `network_mode = "user"` on every platform. So a jailed
+    /// Linux agent in user mode *can* reach here with a sandbox placement, and
+    /// gets `.userMode` back. That attachment cannot be realized by a jailed
+    /// Firecracker (its only backend is a TAP opened by name), which is why the
+    /// sandbox runtime refuses a non-TAP attachment rather than dropping it.
     func createVMNetwork(
         vmId: String, nicIndex: Int, config: VMNetworkConfig, placement: NICPlacement
     ) async throws -> VMNetworkInfo {

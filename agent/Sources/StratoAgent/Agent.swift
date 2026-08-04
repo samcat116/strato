@@ -3841,23 +3841,31 @@ extension Agent: ReconcileActuator {
     /// `forTeardown` derives the placement even on an agent that no longer jails
     /// new sandboxes: the jail layout is built unconditionally precisely so a
     /// previous life's jailed leftovers can still be cleaned up.
-    private func sandboxNICPlacement(sandboxId: String, forTeardown: Bool = false) throws -> NICPlacement {
-        guard let jailerConfig = sandboxJailerConfig, forTeardown || sandboxJailNewSandboxes else {
+    private func sandboxNICPlacement(sandboxId: String) throws -> NICPlacement {
+        guard sandboxJailNewSandboxes, let jailerConfig = sandboxJailerConfig else {
             throw SandboxRuntimeError.networkingUnsupported(
                 "a sandbox NIC lives in the jail's network namespace, and this agent creates sandboxes "
                     + "unjailed; set sandbox_jailer_mode = \"required\" and satisfy its prerequisites")
         }
         let plan = SandboxJailPlan(
             sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-        return .sandboxNetns(netnsName: plan.netnsName, ownerUID: plan.uid, ownerGID: plan.gid)
+        return .sandboxNetns(
+            netnsName: plan.netnsName, owner: JailOwner(uid: plan.uid, gid: plan.gid))
     }
 
-    /// The placement teardown should use. Never throws: cleanup must not be
-    /// blocked by a host that can no longer *create* what it is deleting. With
-    /// no jail layout at all there is nothing namespaced to remove, and the
-    /// host-namespace teardown is a harmless no-op on names that don't exist.
+    /// The placement teardown should use. Never throws, and never degrades to
+    /// the host-namespace path: a sandbox NIC that was created jailed must be
+    /// removed as one, or `sbx-<id>` stays in OVN NB and the veth stays on
+    /// `br-int` while the VM teardown deletes `vm-<id>` and a TAP that never
+    /// existed — silently, because teardown swallows errors by design.
+    ///
+    /// Nothing here needs the jailer config: the namespace name and all three
+    /// device names come from the sandbox id, and ownership is create-only. So
+    /// cleanup keeps working on an agent whose sandbox runtime was deconfigured
+    /// since the sandbox was created, which is exactly the case that used to
+    /// leak.
     private func sandboxTeardownPlacement(sandboxId: String) -> NICPlacement {
-        (try? sandboxNICPlacement(sandboxId: sandboxId, forTeardown: true)) ?? .virtualMachine
+        .sandboxNetns(netnsName: SandboxJailPlan.netnsName(sandboxId: sandboxId), owner: nil)
     }
 
     private func sandboxReconcileCreate(_ item: ReconcileWorkItem) async throws {
@@ -3874,7 +3882,7 @@ extension Agent: ReconcileActuator {
         // A network-free sandbox never reaches the placement, so don't refuse an
         // unjailed one over a NIC it doesn't have.
         let placement =
-            networks.isEmpty ? NICPlacement.virtualMachine : try sandboxNICPlacement(sandboxId: item.id)
+            networks.isEmpty ? NICPlacement.hostNamespace : try sandboxNICPlacement(sandboxId: item.id)
 
         // Same contract as the VM path: the orchestrator realizes the
         // sandbox's NIC on this host before the runtime runs, and rolls it

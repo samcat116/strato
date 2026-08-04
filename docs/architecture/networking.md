@@ -253,20 +253,49 @@ Two consequences worth carrying forward:
 
 **Teardown** is host-side only: removing the OVS port, deleting the host veth
 end (which destroys its peer, and with it the in-namespace devices and their
-filters), and deleting the namespace. It needs neither `ip netns exec` nor the
-namespace to still exist, which is what makes it work after an agent crash and
-on the create-rollback path, where the jail's own artifact cleanup never runs.
+filters), and — for the NIC that owns it — deleting the namespace. It needs
+neither `ip netns exec` nor the namespace to still exist, which is what makes it
+work after an agent crash and on the create-rollback path, where the jail's own
+artifact cleanup never runs.
+
+Two properties it is worth not breaking. Namespace deletion is scoped to NIC 0,
+because namespace lifetime belongs to the *jail*, not to any one NIC — a
+multi-NIC sandbox must not have NIC 0's teardown pull the namespace out from
+under NIC 1. And the whole teardown is derivable from the **sandbox id alone**:
+no jailer config, no ownership. That matters because an agent whose sandbox
+runtime has been deconfigured still has jailed leftovers from its previous life
+to clean up, and degrading to the VM teardown there would delete `vm-<id>` and a
+TAP that never existed while leaving the real `sbx-<id>` port, veth, and
+namespace behind — silently, since teardown swallows errors by design.
 
 **MTU** is applied to all three devices from the same `NetworkSpec.mtu` the guest
 is given — as it now is for the VM host TAP, which historically kept 1500 even on
 a network whose MTU had been lowered for an encapsulated uplink (see the MTU
-footgun note above).
+footgun note above). Two consequences of that VM-path change: it runs on every
+reconcile rather than only at create, so it reaches VMs that have been up since
+before it existed and a stale stored MTU surfaces then; and OVS derives a
+bridge's internal-port MTU from the minimum over its non-internal ports, so the
+first VM on a lowered-MTU network pulls `br-int`'s own MTU down host-wide. The
+latter is inert in a standard OVN deployment — nothing routes via the `br-int`
+internal port — but it is a host-scoped effect of a per-VM setting.
 
 **Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
-`cls_matchall`, and `act_mirred` modules. `tc` is an advisory preflight check
-rather than a jailing prerequisite: without it a host still runs sandboxes, it
-just refuses NICs. Networked sandboxes are refused outright on an unjailed agent
-— there is no namespace to attach into, and the isolation is the point.
+`cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
+path resolved from a fixed candidate list, not via `PATH` — a service manager's
+stripped environment must not be able to break a host the start-time probe
+declared usable — so a `tc` installed outside that list passes the (`PATH`-based)
+preflight check and still refuses every networked sandbox. The preflight hint
+names the list for that reason. `tc` is advisory rather than a jailing
+prerequisite: without it a host still runs sandboxes, it just refuses NICs.
+
+Networked sandboxes are refused, permanently and visibly, in three cases: an
+unjailed agent (no namespace to attach into, and the isolation is the point), a
+snapshot restore (STR-104), and an attachment that is not a TAP. That last one is
+reachable — `network_mode = "user"` builds the user-mode service on *every*
+platform, not just macOS, and an agent with no network service degrades every NIC
+the same way. Firecracker's only backend is a TAP opened by name, so the runtime
+refuses rather than skipping the device and booting a sandbox with no interface
+that the control plane still records as having one.
 
 **Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
 still `false`, so no sandbox `NetworkSpec` reaches an agent; STR-103 replaces

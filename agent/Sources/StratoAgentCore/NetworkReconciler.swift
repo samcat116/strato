@@ -89,7 +89,7 @@ public enum OVNNaming {
     /// the NIC is realized. The single place the `vm-`/`sbx-` split is decided.
     public static func portName(workloadId: String, nicIndex: Int, placement: NICPlacement) -> String {
         switch placement {
-        case .virtualMachine:
+        case .hostNamespace:
             return vmPortName(vmId: workloadId, nicIndex: nicIndex)
         case .sandboxNetns:
             return sandboxPortName(sandboxId: workloadId, nicIndex: nicIndex)

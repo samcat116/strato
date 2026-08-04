@@ -670,11 +670,12 @@ struct NetworkReconcilerTests {
     @Test("Placement selects which port namespace a workload's NIC lands in")
     func portNamingFollowsPlacement() {
         #expect(
-            OVNNaming.portName(workloadId: "ABC", nicIndex: 1, placement: .virtualMachine) == "vm-ABC-1")
+            OVNNaming.portName(workloadId: "ABC", nicIndex: 1, placement: .hostNamespace) == "vm-ABC-1")
         #expect(
             OVNNaming.portName(
                 workloadId: "ABC", nicIndex: 1,
-                placement: .sandboxNetns(netnsName: "strato-sbx-ABC", ownerUID: 100_000, ownerGID: 100_000))
+                placement: .sandboxNetns(
+                    netnsName: "strato-sbx-ABC", owner: JailOwner(uid: 100_000, gid: 100_000)))
                 == "sbx-ABC-1")
     }
 }

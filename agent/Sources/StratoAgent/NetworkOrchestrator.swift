@@ -27,7 +27,7 @@ struct NetworkOrchestrator: Sendable {
     /// spec's addressing passed through — matching the drivers' historical
     /// "no network service → user-mode fallback" behavior.
     func prepareAttachments(
-        vmId: String, networks: [NetworkSpec], placement: NICPlacement = .virtualMachine
+        vmId: String, networks: [NetworkSpec], placement: NICPlacement = .hostNamespace
     ) async throws -> [ResolvedNetworkAttachment] {
         guard let networkService else {
             if !networks.isEmpty {
@@ -133,7 +133,7 @@ struct NetworkOrchestrator: Sendable {
     /// Best-effort teardown of the first `count` NICs of a workload. Failures are
     /// logged, never thrown — network cleanup must not block VM deletion.
     /// `placement` must match what the NICs were created with.
-    func teardownAttachments(vmId: String, count: Int, placement: NICPlacement = .virtualMachine) async {
+    func teardownAttachments(vmId: String, count: Int, placement: NICPlacement = .hostNamespace) async {
         guard let networkService, count > 0 else { return }
 
         for index in 0..<count {

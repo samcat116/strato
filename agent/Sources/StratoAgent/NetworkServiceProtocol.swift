@@ -56,17 +56,17 @@ extension NetworkServiceProtocol {
     /// Realizes a VM NIC — the overwhelmingly common case, and the only shape
     /// that existed before sandbox NICs.
     func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
-        try await createVMNetwork(vmId: vmId, nicIndex: nicIndex, config: config, placement: .virtualMachine)
+        try await createVMNetwork(vmId: vmId, nicIndex: nicIndex, config: config, placement: .hostNamespace)
     }
 
     /// Detaches a VM's first NIC (the only one pre-multi-NIC agents created).
     func detachVMFromNetwork(vmId: String) async throws {
-        try await detachVMFromNetwork(vmId: vmId, nicIndex: 0, placement: .virtualMachine)
+        try await detachVMFromNetwork(vmId: vmId, nicIndex: 0, placement: .hostNamespace)
     }
 
     /// Detaches a VM NIC by index.
     func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
-        try await detachVMFromNetwork(vmId: vmId, nicIndex: nicIndex, placement: .virtualMachine)
+        try await detachVMFromNetwork(vmId: vmId, nicIndex: nicIndex, placement: .hostNamespace)
     }
 
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.

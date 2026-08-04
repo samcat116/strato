@@ -19,9 +19,11 @@ public struct NetnsCommand: Sendable, Equatable {
     }
 
     /// True when `output` from a failed run means the command's effect is
-    /// already in place.
+    /// already in place. Matching is deliberately locale-free: these are kernel
+    /// and iproute2 strings, and a locale-sensitive casing rule has no business
+    /// deciding whether an error gets swallowed.
     public func tolerates(_ output: String) -> Bool {
-        tolerated.contains { output.localizedCaseInsensitiveContains($0) }
+        tolerated.contains { output.range(of: $0, options: .caseInsensitive) != nil }
     }
 }
 
@@ -88,20 +90,67 @@ public struct SandboxNetnsAttachmentPlan: Sendable, Equatable {
     /// it twice is a no-op.
     public let teardown: [NetnsCommand]
 
-    /// Builds the plan for one NIC. `placement` must be `.sandboxNetns` — a VM's
-    /// NIC is realized by the plain host-TAP path and has no plan.
+    /// The host-side teardown for one NIC, derivable from the sandbox id alone —
+    /// no jailer config, no ownership, no `ip netns exec`, and no requirement
+    /// that the namespace still exist.
+    ///
+    /// Split out from `plan` because cleanup has to work on an agent that can no
+    /// longer *create* what it is deleting: an agent whose sandbox runtime was
+    /// deconfigured still has jailed leftovers from its previous life to remove,
+    /// and falling back to the VM teardown there would delete `vm-<id>` and
+    /// `tap<digest>` while leaving the sandbox's `sbx-<id>` port, veth, and
+    /// namespace behind — silently, since teardown swallows errors by design.
+    ///
+    /// `deletesNamespace` scopes the namespace removal to the NIC that owns it.
+    /// Namespace lifetime belongs to the *jail*, not to any one NIC: a multi-NIC
+    /// sandbox must not have NIC 0's teardown pull the namespace out from under
+    /// NIC 1. Only the whole-workload teardown paths (delete, create-rollback)
+    /// pass true, and they tear NICs down in index order.
+    public static func teardownCommands(
+        sandboxId: String,
+        nicIndex: Int,
+        netnsName: String,
+        ipBinaryPath: String,
+        bridge: String,
+        ovsTimeoutSeconds: Int,
+        deletesNamespace: Bool
+    ) -> (ovsDetach: [String], commands: [NetnsCommand]) {
+        let names = sandboxNICDeviceNames(sandboxId: sandboxId, nicIndex: nicIndex)
+        var commands: [NetnsCommand] = [
+            // Deleting the host end takes the peer — and therefore the
+            // namespace's whole veth, and the `tc` filters hanging off it —
+            // with it.
+            NetnsCommand(
+                ipBinaryPath, ["link", "del", names.vethHost],
+                tolerated: ["Cannot find device", "No such"])
+        ]
+        if deletesNamespace {
+            commands.append(
+                NetnsCommand(
+                    ipBinaryPath, ["netns", "del", netnsName],
+                    tolerated: ["No such file or directory", "Cannot remove"]))
+        }
+        return (
+            ovsDetach: [
+                "--timeout=\(ovsTimeoutSeconds)", "--if-exists", "del-port", bridge, names.vethHost,
+            ],
+            commands: commands
+        )
+    }
+
+    /// Builds the full create-and-teardown plan for one NIC.
     public static func plan(
         sandboxId: String,
         nicIndex: Int,
         netnsName: String,
-        ownerUID: UInt32,
-        ownerGID: UInt32,
+        owner: JailOwner,
         logicalPortName: String,
         mtu: Int?,
         ipBinaryPath: String,
         tcBinaryPath: String,
         bridge: String,
-        ovsTimeoutSeconds: Int
+        ovsTimeoutSeconds: Int,
+        deletesNamespaceOnTeardown: Bool = true
     ) -> SandboxNetnsAttachmentPlan {
         let names = sandboxNICDeviceNames(sandboxId: sandboxId, nicIndex: nicIndex)
         let tap = names.tap
@@ -153,7 +202,7 @@ public struct SandboxNetnsAttachmentPlan: Sendable, Equatable {
             ip(
                 [
                     "-n", netnsName, "tuntap", "add", "dev", tap, "mode", "tap",
-                    "user", String(ownerUID), "group", String(ownerGID),
+                    "user", String(owner.uid), "group", String(owner.gid),
                 ], []))
         if let mtuValue {
             namespaceSetup.append(ip(["-n", netnsName, "link", "set", tap, "mtu", mtuValue], []))
@@ -186,6 +235,12 @@ public struct SandboxNetnsAttachmentPlan: Sendable, Equatable {
                 ], []))
 
         let timeout = "--timeout=\(ovsTimeoutSeconds)"
+        // One implementation of teardown, shared with the config-free path, so
+        // the two can never derive different device names.
+        let removal = teardownCommands(
+            sandboxId: sandboxId, nicIndex: nicIndex, netnsName: netnsName,
+            ipBinaryPath: ipBinaryPath, bridge: bridge, ovsTimeoutSeconds: ovsTimeoutSeconds,
+            deletesNamespace: deletesNamespaceOnTeardown)
         return SandboxNetnsAttachmentPlan(
             tapName: tap,
             vethHostName: vethHost,
@@ -197,13 +252,8 @@ public struct SandboxNetnsAttachmentPlan: Sendable, Equatable {
             ],
             ovsVerify: [timeout, "get", "Interface", vethHost, "ofport", "error"],
             namespaceSetup: namespaceSetup,
-            ovsDetach: [timeout, "--if-exists", "del-port", bridge, vethHost],
-            teardown: [
-                // Deleting the host end takes the peer — and therefore the
-                // namespace's whole veth — with it.
-                ip(["link", "del", vethHost], ["Cannot find device", "No such"]),
-                ip(["netns", "del", netnsName], ["No such file or directory", "Cannot remove"]),
-            ]
+            ovsDetach: removal.ovsDetach,
+            teardown: removal.commands
         )
     }
 }

@@ -24,8 +24,7 @@ struct SandboxNetnsAttachmentPlanTests {
             sandboxId: Self.sandboxId,
             nicIndex: nicIndex,
             netnsName: Self.netns,
-            ownerUID: 100_042,
-            ownerGID: 100_042,
+            owner: JailOwner(uid: 100_042, gid: 100_042),
             logicalPortName: "sbx-\(Self.sandboxId)",
             mtu: mtu,
             ipBinaryPath: Self.ipPath,
@@ -96,7 +95,7 @@ struct SandboxNetnsAttachmentPlanTests {
     func tapCarriesOwnership() {
         let plan = SandboxNetnsAttachmentPlan.plan(
             sandboxId: Self.sandboxId, nicIndex: 0, netnsName: Self.netns,
-            ownerUID: 123_456, ownerGID: 654_321, logicalPortName: "sbx-x", mtu: nil,
+            owner: JailOwner(uid: 123_456, gid: 654_321), logicalPortName: "sbx-x", mtu: nil,
             ipBinaryPath: Self.ipPath, tcBinaryPath: Self.tcPath, bridge: "br-int", ovsTimeoutSeconds: 10)
 
         let create = plan.namespaceSetup.first { $0.arguments.contains("add") && $0.arguments.contains("tuntap") }
@@ -218,6 +217,45 @@ struct SandboxNetnsAttachmentPlanTests {
                 "link del \(plan.vethHostName)",
                 "netns del \(Self.netns)",
             ])
+    }
+
+    @Test("Only the namespace-owning NIC deletes the namespace")
+    func namespaceDeletionIsScopedToOneNIC() {
+        // Namespace lifetime belongs to the jail, not to any one NIC. A
+        // multi-NIC sandbox must not have NIC 0's teardown pull the namespace
+        // out from under NIC 1 — or, if a single-NIC detach ever exists, out
+        // from under a running jailed VMM.
+        let owning = SandboxNetnsAttachmentPlan.teardownCommands(
+            sandboxId: Self.sandboxId, nicIndex: 0, netnsName: Self.netns,
+            ipBinaryPath: Self.ipPath, bridge: "br-int", ovsTimeoutSeconds: 10,
+            deletesNamespace: true)
+        let secondary = SandboxNetnsAttachmentPlan.teardownCommands(
+            sandboxId: Self.sandboxId, nicIndex: 1, netnsName: Self.netns,
+            ipBinaryPath: Self.ipPath, bridge: "br-int", ovsTimeoutSeconds: 10,
+            deletesNamespace: false)
+
+        #expect(argv(owning.commands).contains { $0.hasPrefix("netns del") })
+        #expect(!argv(secondary.commands).contains { $0.hasPrefix("netns del") })
+        // Both still remove their own veth, and therefore their own peer.
+        #expect(owning.commands.first?.arguments.first == "link")
+        #expect(secondary.commands.first?.arguments.first == "link")
+        #expect(owning.ovsDetach != secondary.ovsDetach)
+    }
+
+    @Test("Teardown derives the same devices whether or not a full plan was built")
+    func teardownMatchesThePlan() {
+        // The two factories must never drift: a teardown built from the sandbox
+        // id alone (the config-free cleanup path) has to target exactly what the
+        // create plan produced, or cleanup silently misses the real devices.
+        for nicIndex in 0..<3 {
+            let plan = makePlan(nicIndex: nicIndex)
+            let standalone = SandboxNetnsAttachmentPlan.teardownCommands(
+                sandboxId: Self.sandboxId, nicIndex: nicIndex, netnsName: Self.netns,
+                ipBinaryPath: Self.ipPath, bridge: "br-int", ovsTimeoutSeconds: 10,
+                deletesNamespace: true)
+            #expect(standalone.ovsDetach == plan.ovsDetach)
+            #expect(argv(standalone.commands) == argv(plan.teardown))
+        }
     }
 
     @Test("Teardown tolerates devices and namespaces that are already gone")

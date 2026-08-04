@@ -124,6 +124,17 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// forever when `ovs-vswitchd` is down/overloaded (the default waits forever).
     static let ovsCommandTimeoutSeconds = 10
 
+    /// How many times to re-read a freshly attached port's `ofport` before
+    /// giving up, and the pause between attempts. Small: `ovs-vsctl` already
+    /// waits for `ovs-vswitchd`, so this only covers a narrow assignment window.
+    static let ovsBindingReadbackAttempts = 3
+    static let ovsBindingReadbackDelay: Duration = .milliseconds(50)
+
+    /// Bound on each `ip`/`tc` invocation in the sandbox namespace path, so a
+    /// wedged child cannot park the attach forever. Generous: these are local
+    /// netlink operations that answer in milliseconds.
+    static let netnsCommandTimeout: Duration = .seconds(15)
+
     // MARK: - Connection Management
 
     func connect() async throws {
@@ -344,13 +355,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // a veth pair into the jail's namespace (issue STR-100).
         let tapInterface: String
         switch placement {
-        case .virtualMachine:
+        case .hostNamespace:
             tapInterface = try await createTAPInterface(vmId: vmId, nicIndex: nicIndex, mtu: config.mtu)
             try await attachTAPToBridge(tapInterface: tapInterface, portName: portName)
-        case .sandboxNetns(let netnsName, let ownerUID, let ownerGID):
+        case .sandboxNetns(let netnsName, let owner):
+            // A teardown placement (no owner) cannot create devices: the TAP has
+            // to be created owned by the jail uid, because a jailed Firecracker
+            // has dropped CAP_NET_ADMIN before it opens it. Unreachable — every
+            // create path derives the owner from the jail plan.
+            guard let owner else {
+                throw NetworkError.invalidConfiguration(
+                    "a sandbox NIC cannot be realized without the jail's uid/gid; this placement was "
+                        + "built for teardown")
+            }
             tapInterface = try await attachSandboxNICIntoNetns(
                 sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName,
-                ownerUID: ownerUID, ownerGID: ownerGID, portName: portName, mtu: config.mtu)
+                owner: owner, portName: portName, mtu: config.mtu)
         }
 
         let networkInfo = VMNetworkInfo(
@@ -425,7 +445,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
 
         switch placement {
-        case .virtualMachine:
+        case .hostNamespace:
             let tapInterface = tapInterfaceName(for: vmId, nicIndex: nicIndex)
 
             // Detach the TAP from the integration bridge (idempotent via --if-exists)
@@ -447,10 +467,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
             // Remove the kernel TAP device
             try await removeTAPInterface(tapInterface)
-        case .sandboxNetns(let netnsName, let ownerUID, let ownerGID):
+        case .sandboxNetns(let netnsName, _):
             try await detachSandboxNICFromNetns(
-                sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName,
-                ownerUID: ownerUID, ownerGID: ownerGID, portName: portName)
+                sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName, portName: portName)
         }
 
         logger.info("VM detached from network successfully", metadata: ["vmId": .string(vmId)])
@@ -657,7 +676,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // `ovn-nbctl list` and for anyone correlating a port back to a resource.
         let (ownerKey, description): (String, String) = {
             switch placement {
-            case .virtualMachine: return ("vm-id", "VM network interface")
+            case .hostNamespace: return ("vm-id", "VM network interface")
             case .sandboxNetns: return ("sandbox-id", "Sandbox network interface")
             }
         }()
@@ -770,6 +789,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Match the host device to the MTU the guest is configured with. A
         // non-positive value is a bad row rather than a smaller MTU: skip it
         // rather than fail every create on that network.
+        //
+        // Two things to know about the blast radius (issue STR-100). This runs
+        // on every reconcile, not just create, so it reaches VMs that have been
+        // up since before it existed — a stale or wrong stored MTU surfaces
+        // here. And OVS derives a bridge's internal-port MTU from the minimum
+        // over its non-internal ports, so the first VM on a lowered-MTU network
+        // pulls `br-int`'s own MTU down host-wide. That is inert in a standard
+        // OVN deployment (nothing routes via the br-int internal port), but it
+        // is a host-scoped effect of a per-VM setting.
         if let mtu, mtu > 0 {
             try run("ip", ["link", "set", tapName, "mtu", String(mtu)])
         }
@@ -789,7 +817,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// *not* the obvious "move the TAP in" — that was measured to silently kill
     /// the OVS port while leaving its OVSDB rows intact (STR-99).
     private func attachSandboxNICIntoNetns(
-        sandboxId: String, nicIndex: Int, netnsName: String, ownerUID: UInt32, ownerGID: UInt32,
+        sandboxId: String, nicIndex: Int, netnsName: String, owner: JailOwner,
         portName: String, mtu: Int?
     ) async throws -> String {
         guard let ipBinaryPath else {
@@ -806,31 +834,28 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let started = ContinuousClock.now
         let plan = SandboxNetnsAttachmentPlan.plan(
             sandboxId: sandboxId, nicIndex: nicIndex, netnsName: netnsName,
-            ownerUID: ownerUID, ownerGID: ownerGID, logicalPortName: portName, mtu: mtu,
+            owner: owner, logicalPortName: portName, mtu: mtu,
             ipBinaryPath: ipBinaryPath, tcBinaryPath: tcBinaryPath,
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
 
         for command in plan.hostSetup {
-            try runNetnsCommand(command)
+            try await runNetnsCommand(command)
         }
         try run("ovs-vsctl", plan.ovsAttach)
 
-        // Row existence is not evidence of a binding: OVS keeps the `Port` and
-        // `Interface` rows — same UUID, `iface-id` still set — even when the
-        // device behind them is unusable. `ofport` and the `error` column are
-        // the only honest signals, and neither is ever cached: `ofport` is not
-        // stable across a device's disappearance and return (STR-99).
-        let binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", plan.ovsVerify))
-        guard binding.isBound else {
-            throw NetworkError.ovsError(
-                "OVS did not bind \(plan.vethHostName) on \(Self.ovnIntegrationBridge) for port \(portName) "
-                    + "(ofport=\(binding.ofport.map(String.init) ?? "unset"), "
-                    + "error=\(binding.error ?? "none")) — the sandbox NIC would report healthy and carry no packets")
-        }
+        _ = try await verifyOVSBinding(plan: plan, portName: portName, stage: "attach")
 
         for command in plan.namespaceSetup {
-            try runNetnsCommand(command)
+            try await runNetnsCommand(command)
         }
+
+        // Re-read after the namespace work. The veth host end never leaves the
+        // host namespace, so in theory nothing above can have disturbed it —
+        // but "moving a device out from under OVS silently kills its port while
+        // the rows survive" is precisely what STR-99 measured, and proving the
+        // binding *after* the move is what actually closes that loop. One
+        // `ovs-vsctl get` against ~15 other spawns.
+        let binding = try await verifyOVSBinding(plan: plan, portName: portName, stage: "namespace-setup")
 
         // Sandboxes are churn-heavy and cold start is a headline property, so
         // the cost of this path is measured rather than assumed.
@@ -853,41 +878,77 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return plan.tapName
     }
 
+    /// Proves the veth host end is really bound on the integration bridge.
+    ///
+    /// Row existence is not evidence: OVS keeps the `Port` and `Interface` rows
+    /// — same UUID, `iface-id` still set — even when the device behind them is
+    /// unusable, so a check that looks the port up by name sees health where
+    /// there are no packets. `ofport` and the `error` column are the only honest
+    /// signals, and the result is never cached: `ofport` is not stable across a
+    /// device's disappearance and return, observed 3 -> 4 (STR-99).
+    ///
+    /// `ovs-vsctl` waits for `ovs-vswitchd` to catch up before returning, so
+    /// `ofport` should already be populated; the bounded retry covers the case
+    /// where it isn't, because failing there would unwind an otherwise healthy
+    /// create.
+    private func verifyOVSBinding(
+        plan: SandboxNetnsAttachmentPlan, portName: String, stage: String
+    ) async throws -> OVSInterfaceBinding {
+        var binding = OVSInterfaceBinding(ofport: nil, error: nil)
+        for attempt in 1...Self.ovsBindingReadbackAttempts {
+            binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", plan.ovsVerify))
+            if binding.isBound { return binding }
+            // An `error` is a verdict, not a race — retrying cannot clear it.
+            if binding.error != nil { break }
+            if attempt < Self.ovsBindingReadbackAttempts {
+                try await Task.sleep(for: Self.ovsBindingReadbackDelay)
+            }
+        }
+        throw NetworkError.ovsError(
+            "OVS did not bind \(plan.vethHostName) on \(Self.ovnIntegrationBridge) for port \(portName) "
+                + "after \(stage) (ofport=\(binding.ofport.map(String.init) ?? "unset"), "
+                + "error=\(binding.error ?? "none")) — the sandbox NIC would report healthy and carry no packets")
+    }
+
     /// Removes the host-side half of a sandbox NIC. Needs neither the namespace
     /// nor anything inside it: deleting the host veth end destroys its peer, and
     /// the peer's death takes the `tc` filters with it.
     ///
-    /// The ownership pair is carried through unused — only device *creation*
-    /// needs it — so that create and teardown derive their names from one plan
-    /// rather than two implementations that could drift apart.
+    /// Derived from the sandbox id alone — no jailer config, no ownership — so
+    /// cleanup works on an agent that can no longer create what it is deleting.
+    /// `deletesNamespace` is false for any NIC but the first: namespace lifetime
+    /// belongs to the jail, not to one NIC.
     private func detachSandboxNICFromNetns(
-        sandboxId: String, nicIndex: Int, netnsName: String, ownerUID: UInt32, ownerGID: UInt32,
-        portName: String
+        sandboxId: String, nicIndex: Int, netnsName: String, portName: String
     ) async throws {
-        // Teardown must work on a host whose iproute2 has since been removed, so
-        // fall back to the PATH-resolved name rather than refusing to clean up.
-        let plan = SandboxNetnsAttachmentPlan.plan(
+        // Teardown must work on a host whose iproute2 has since been removed, or
+        // was never resolved because the network service came up before the
+        // probe. Falling back to the PATH-resolved name re-introduces a `PATH`
+        // dependency the create path deliberately avoids — the right trade for
+        // cleanup, which must attempt something rather than refuse.
+        let usingPATHFallback = ipBinaryPath == nil
+        let removal = SandboxNetnsAttachmentPlan.teardownCommands(
             sandboxId: sandboxId, nicIndex: nicIndex, netnsName: netnsName,
-            ownerUID: ownerUID, ownerGID: ownerGID, logicalPortName: portName, mtu: nil,
-            ipBinaryPath: ipBinaryPath ?? "ip", tcBinaryPath: tcBinaryPath ?? "tc",
-            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+            ipBinaryPath: ipBinaryPath ?? "ip",
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
+            deletesNamespace: nicIndex == 0)
 
         do {
-            try run("ovs-vsctl", plan.ovsDetach)
+            try run("ovs-vsctl", removal.ovsDetach)
         } catch {
             logger.warning(
                 "Failed to remove OVS port",
                 metadata: [
-                    "vethHost": .string(plan.vethHostName),
+                    "sandboxId": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
 
         // Each remaining step is independently tolerant so a partial teardown
         // still removes everything it can.
-        for command in plan.teardown {
+        for command in removal.commands {
             do {
-                try runNetnsCommand(command)
+                try await runNetnsCommand(command)
             } catch {
                 logger.warning(
                     "Failed to tear down sandbox NIC device",
@@ -895,6 +956,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                         "sandboxId": .string(sandboxId),
                         "command": .string(command.arguments.joined(separator: " ")),
                         "error": .string(error.localizedDescription),
+                        // Without an absolute path this ran through `PATH`, which
+                        // a service manager may have stripped — the likeliest
+                        // cause of a failure that says only "not found".
+                        "resolvedVia": .string(usingPATHFallback ? "PATH" : "absolute path"),
                     ])
             }
         }
@@ -902,10 +967,19 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Runs one planned `ip`/`tc` invocation, swallowing exactly the failures the
     /// plan declared benign (the state it establishes already holds).
-    private func runNetnsCommand(_ command: NetnsCommand) throws {
-        let result = try runProcessAt(command.executable, command.arguments)
-        guard result.status != 0 else { return }
-        let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    ///
+    /// Uses the async `ProcessRunner` rather than this file's blocking `Process`
+    /// shim: a sandbox attach spawns ~15 children, and blocking a cooperative
+    /// thread for each would serialize the whole actor against a path whose
+    /// latency *is* sandbox cold start. It also matches
+    /// `FirecrackerSandboxRuntime.createNetns`, which creates the same namespace.
+    private func runNetnsCommand(_ command: NetnsCommand) async throws {
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: command.executable),
+            arguments: command.arguments,
+            timeout: Self.netnsCommandTimeout)
+        guard result.terminationStatus != 0 else { return }
+        let detail = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
         if command.tolerates(detail) {
             logger.debug(
                 "Namespace command already satisfied",
@@ -915,7 +989,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 ])
             return
         }
-        throw NetworkError.tapError(networkCommandFailure(command.executable, command.arguments, result))
+        throw NetworkError.tapError(
+            networkCommandFailure(
+                command.executable, command.arguments,
+                CommandResult(status: result.terminationStatus, output: detail)))
     }
 
     private func attachTAPToBridge(tapInterface: String, portName: String) async throws {

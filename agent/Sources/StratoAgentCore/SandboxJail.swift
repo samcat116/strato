@@ -146,8 +146,9 @@ public struct SandboxJailPlan: Sendable, Equatable {
     public let jailDirectory: String
     /// The chroot root (`<jailDirectory>/root`): the jailed process's `/`.
     public let jailRoot: String
-    /// Name of the sandbox's dedicated (and, until guest networking lands,
-    /// deliberately empty) network namespace.
+    /// Name of the sandbox's dedicated network namespace. Empty for a
+    /// network-free sandbox; for one with a NIC it holds the veth peer and TAP
+    /// the orchestrator wired in (issue STR-100).
     public let netnsName: String
 
     // In-jail paths — what the Firecracker API is given. Fixed names: the
@@ -177,7 +178,18 @@ public struct SandboxJailPlan: Sendable, Equatable {
         let execName = URL(fileURLWithPath: firecrackerBinaryPath).lastPathComponent
         self.jailDirectory = "\(config.chrootBaseDir)/\(execName)/\(sandboxId)"
         self.jailRoot = jailDirectory + "/root"
-        self.netnsName = "strato-sbx-\(sandboxId)"
+        self.netnsName = Self.netnsName(sandboxId: sandboxId)
+    }
+
+    /// The namespace name for a sandbox, derived from its id **alone**.
+    ///
+    /// Split out from the full plan because network teardown needs it on an
+    /// agent that has no jailer config any more (the sandbox runtime was
+    /// deconfigured since the sandbox was created). Nothing else about the
+    /// layout is reachable there, and nothing else is needed: device names come
+    /// from the sandbox id too, and ownership is create-only.
+    public static func netnsName(sandboxId: String) -> String {
+        "strato-sbx-\(sandboxId)"
     }
 
     /// Host view of an in-jail path.
