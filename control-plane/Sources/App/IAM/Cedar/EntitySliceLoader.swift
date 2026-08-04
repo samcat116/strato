@@ -103,10 +103,15 @@ struct CedarEntitySlice: Equatable, Sendable {
     let entities: [CedarEntity]
     let grants: CedarRoleGrants
     /// Bindings along the chain that carried a `condition` document. The
-    /// condition vocabulary is not compiled yet (no store writes one), and
-    /// flattening a conditioned binding as if it were unconditional would turn
-    /// a restricted grant into an open one — so they are skipped, which can
-    /// only under-grant, and counted so the caller can log them.
+    /// condition vocabulary is not compiled, and flattening a conditioned
+    /// binding as if it were unconditional would turn a restricted grant into
+    /// an open one — so they are skipped, which can only under-grant, and
+    /// counted so the caller can log them.
+    ///
+    /// Since STR-108 the database refuses to store one
+    /// (`RejectConditionedRoleBindings`), so this stays zero; the skip remains
+    /// as defence in depth for a row written against an older schema, and as
+    /// the reason a future condition implementation cannot stop at the writer.
     let skippedConditionedBindings: Int
     /// Whether the ancestor chain reached its root. A truncated chain (an
     /// orphaned intermediate node, a scopeless legacy site) under-grants
@@ -125,9 +130,9 @@ struct CedarEntitySlice: Equatable, Sendable {
     /// The request context carrying the grants, shaped to the compiled
     /// schema: `roleIDs` is the caller's `Built.roleIDs`. Ambient conditions
     /// (`mfa`, `sourceIP`) belong to the request rather than the slice and
-    /// will merge in at check time; shadow evaluation (#481) passes this
-    /// through unchanged, so conditioned bindings are skipped and counted
-    /// until cutover (#482) wires the ambient half.
+    /// would merge in at check time; nothing wires the ambient half yet, which
+    /// is why conditioned bindings are skipped and counted rather than
+    /// evaluated (and, since STR-108, refused at write time).
     func baseContextValue(roleIDs: Set<UUID>) -> CedarValue {
         .record(["grants": grants.contextValue(roleIDs: roleIDs)])
     }

@@ -646,6 +646,74 @@ package actor MockImageFetchService: ImageFetchServiceProtocol {
     }
 }
 
+// MARK: - Conditioned role bindings
+
+/// Write a `role_bindings` row carrying a `condition` — which the schema
+/// otherwise refuses (`RejectConditionedRoleBindings`, STR-108).
+///
+/// Conditions are not implemented, so the evaluator skips such a row and it
+/// grants nothing. That skip is the defence in depth behind the write boundary,
+/// and the only way to exercise it is to reproduce the one way such a row can
+/// still appear: direct SQL against a database whose constraint predates or
+/// outlives this deployment. So the constraint is dropped for the rest of this
+/// test — safe because every test runs against its own database clone — and
+/// deliberately not restored: a test that wants both halves should assert the
+/// refusal before calling this.
+package func insertConditionedRoleBinding(
+    principalType: IAMPrincipalType,
+    principalID: UUID,
+    role: IAMRole,
+    nodeType: IAMNodeType,
+    nodeID: UUID,
+    condition: String,
+    on db: any Database
+) async throws {
+    guard let sql = db as? any SQLDatabase else {
+        throw TestSetupError.message("conditioned binding fixtures need a SQL database")
+    }
+    let constraint = RejectConditionedRoleBindings.constraintName
+    try await sql.raw(
+        "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
+    ).run()
+
+    let binding = RoleBinding(
+        principalType: principalType,
+        principalID: principalID,
+        role: role,
+        nodeType: nodeType,
+        nodeID: nodeID
+    )
+    binding.condition = condition
+    try await binding.save(on: db)
+}
+
+/// Whether the schema refuses `condition` on `role_bindings` — the write
+/// boundary STR-108 installed. False once `insertConditionedRoleBinding` has
+/// dropped it in this test's clone.
+package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
+    guard let sql = db as? any SQLDatabase else {
+        throw TestSetupError.message("constraint introspection needs a SQL database")
+    }
+    let rows = try await sql.raw(
+        """
+        SELECT 1 AS present FROM pg_constraint
+        WHERE conrelid = 'role_bindings'::regclass
+          AND conname = \(bind: RejectConditionedRoleBindings.constraintName)
+        """
+    ).all()
+    return !rows.isEmpty
+}
+
+package enum TestSetupError: Error, CustomStringConvertible {
+    case message(String)
+
+    package var description: String {
+        switch self {
+        case .message(let text): return text
+        }
+    }
+}
+
 // MARK: - Agent identity keys
 
 /// The key an agent registered under the bare name `name` is stored beneath in

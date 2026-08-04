@@ -125,11 +125,10 @@ final class IAMBatchDecisionTests {
         // A conditioned binding, which the loader skips and *counts* — the count
         // rides along on the decision into the log, so the batch has to carry it
         // per target rather than smear one batch-wide number across the page.
-        try await RoleBinding(
+        try await insertConditionedRoleBinding(
             principalType: .user, principalID: member.id!, role: .admin,
             nodeType: .project, nodeID: folderProject.id!,
-            condition: #"{"mfa": true}"#
-        ).save(on: app.db)
+            condition: #"{"mfa": true}"#, on: app.db)
 
         let version = try await PolicySetVersionService.current(on: app.db)
         await app.cedarPolicySet.rebuild(version: version, on: app.db)

@@ -718,6 +718,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLogToSecurityGroupRules())
     app.migrations.add(CreateSandboxInterfaceSecurityGroups())
 
+    // STR-108: the database refuses a conditioned role binding, because the
+    // condition vocabulary is not compiled and the evaluator skips such a row —
+    // a grant that looks live in every listing and confers nothing.
+    app.migrations.add(RejectConditionedRoleBindings())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
