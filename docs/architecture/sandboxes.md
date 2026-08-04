@@ -101,18 +101,21 @@ A sandbox is described by `SandboxSpec`
   merged over the image config by the guest agent.
 - **Networking**: at most one NIC on a `LogicalNetwork`, reusing the VM
   `NetworkSpec` so agents realize it through the same OVN/user-mode paths
-  (#416, landed — see the control-plane section). **In v1 the NIC never goes
-  on the wire**: the guest image has no in-guest networking (the init doesn't
-  bring up eth0 and the kernel has no IP autoconfiguration), so the runtimes
-  reject any spec with a non-nil network rather than mis-converge, and sync
-  assembly omits the `NetworkSpec`
-  (`SandboxSpecBuilder.guestNetworkingSupported`). The interface row and its
-  IPAM allocation are still created at sandbox create, so the address is
-  reserved and stable for when guest networking lands. **Security groups**
-  (STR-34) sit in the same holding pattern: the NIC joins the project's
-  default group — or the groups named in `securityGroupIds` — through
-  `sandbox_interface_security_groups`, and attach/detach accept a `sandboxId`,
-  but with no `NetworkSpec` on the wire nothing enforces them. See
+  (#416, landed — see the control-plane section). Agents can now realize one:
+  STR-100 attaches a veth + TAP into the jail's network namespace and binds it
+  to OVN (see the jailer section below). **The NIC still does not go on the
+  wire**, for two remaining reasons: the guest image has no in-guest networking
+  (the init doesn't bring up eth0 and the kernel has no IP autoconfiguration,
+  STR-101), and `SandboxSpecBuilder.guestNetworkingSupported` is a fleet-wide
+  flag while the capability is per-agent — an unjailed, non-Linux, or older
+  agent cannot realize a sandbox NIC and would fail every placement. STR-103
+  replaces the flag with a per-agent gate and is what flips it. The interface
+  row and its IPAM allocation are still created at sandbox create, so the
+  address is reserved and stable. **Security groups** (STR-34) sit in the same
+  holding pattern: the NIC joins the project's default group — or the groups
+  named in `securityGroupIds` — through `sandbox_interface_security_groups`,
+  and attach/detach accept a `sandboxId`, but nothing enforces them yet
+  (STR-102 grows the sync's membership assembly a sandbox arm). See
   `docs/architecture/networking.md`.
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, and v1 has no attachable storage.
@@ -408,14 +411,23 @@ persisted.
   to it; a slot collision between two sandboxes (rare at 2^16) weakens only
   their mutual isolation, never the host boundary.
 - **Network namespace**: every jailed sandbox gets a dedicated netns
-  (`strato-sbx-<id>`, created with `ip netns add`), today deliberately
-  **empty** — a compromised VMM sees no host interfaces at all. This is the
-  reconciliation point with the TAP/OVN attach flow: when guest networking
-  lands, the agent creates the TAP in the host namespace, plugs it into the
-  OVS integration bridge (exactly as for VMs), then moves it into the
-  sandbox's netns before spawning the jailer with `--netns` — OVS keeps the
-  port (datapath binding survives the namespace move) while the jailed
-  process sees the device.
+  (`strato-sbx-<id>`, created with `ip netns add`) which the jailer enters via
+  `--netns` — a compromised VMM sees no host interfaces at all. A network-free
+  sandbox's namespace stays empty. A sandbox **with** a NIC gets it wired in
+  before the VMM is spawned, by the network orchestrator on the reconcile lane
+  (STR-100) — see "Sandbox NICs" in
+  [`networking.md`](./networking.md) for the recipe. The short version: a veth
+  pair straddles the namespace with its host end on `br-int`, and a TAP inside
+  the namespace — owned by the sandbox's derived uid, because the jailer drops
+  `CAP_NET_ADMIN` before Firecracker's `TUNSETIFF` — is spliced to the veth
+  peer by two `tc` redirects.
+
+  The obvious alternative, creating the TAP in the host namespace and moving it
+  in, was measured and **does not work** (STR-99): within 30ms of the move OVS
+  reports `ofport: -1` and `error: "could not open network device"` and
+  `ovn-controller` releases the `Port_Binding`, while the OVSDB rows survive
+  untouched — so the port still appears in `ovs-vsctl show` with nothing behind
+  it.
 - **Seccomp**: Firecracker installs its own default seccomp filters
   unconditionally; the jailer adds no flag for it and the agent never passes
   `--no-seccomp`. Nothing to configure.

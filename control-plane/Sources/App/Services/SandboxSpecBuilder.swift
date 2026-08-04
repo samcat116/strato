@@ -6,15 +6,21 @@ import StratoShared
 /// list `VMSpecBuilder` produces; the field mapping itself is shared with the VM
 /// path via `NetworkSpec.build` (issue #597).
 enum SandboxSpecBuilder {
-    /// Whether sandbox NICs go on the wire at all. The v1 guest image has no
-    /// in-guest networking — the init never brings up eth0 and the guest kernel
-    /// has no IP autoconfiguration — so both sandbox runtimes refuse any spec
-    /// with a non-nil network (`SandboxRuntimeError.networkingUnsupported`)
-    /// rather than mis-converge. Until the guest image learns to configure its
-    /// NIC, the sandbox's interface row and its IPAM allocation exist only
+    /// Whether sandbox NICs go on the wire at all.
+    ///
+    /// Agents can now realize one: STR-100 attaches a veth + TAP into the jail's
+    /// network namespace and binds it to OVN. Two things still gate the wire.
+    /// The guest image has no in-guest networking — the init never brings up
+    /// eth0 and the guest kernel has no IP autoconfiguration (STR-101) — so a
+    /// NIC sent today would come up unconfigured inside the workload. And this
+    /// flag is fleet-wide, while the capability is per-agent: an agent that is
+    /// unjailed, non-Linux, or too old cannot realize a sandbox NIC and would
+    /// fail every placement it received. STR-103 replaces this constant with
+    /// that per-agent gate, and is what flips it.
+    ///
+    /// Meanwhile the sandbox's interface row and its IPAM allocation exist only
     /// control-plane-side: the address stays reserved and stable, but the wire
-    /// spec omits the NetworkSpec so the sandbox can actually boot. Flip this
-    /// when guest networking lands.
+    /// spec omits the NetworkSpec so the sandbox can actually boot.
     static let guestNetworkingSupported = false
 
     /// Builds the NetworkSpec for a sandbox's NIC, or nil when the sandbox has

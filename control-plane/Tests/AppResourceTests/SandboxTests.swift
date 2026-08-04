@@ -1046,11 +1046,14 @@ final class SandboxTests {
             let created = try #require(await Sandbox.find(sandboxID, on: app.db))
             let agentId = try await self.registerAgent(app: app, sandbox: created)
 
-            // The end-to-end contract with the v1 agent runtimes: both
-            // FirecrackerSandboxRuntime and MockSandboxRuntime throw
-            // `networkingUnsupported` for any spec with a non-nil network, so a
-            // freshly created sandbox converges only if its wire spec carries
-            // none.
+            // Agents can realize a sandbox NIC now (STR-100 attaches one into
+            // the jail's network namespace), but two things still keep it off
+            // the wire: the guest cannot configure the interface (STR-101), and
+            // `guestNetworkingSupported` is fleet-wide while the capability is
+            // per-agent — an unjailed or older agent would fail every placement
+            // it received. STR-103 replaces the flag with a per-agent gate; until
+            // then a freshly created sandbox converges only with no NIC on the
+            // wire.
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
             #expect(entry.spec.network == nil)

@@ -72,6 +72,43 @@ struct SandboxJailTests {
         #expect(p.netnsPath == "/var/run/netns/strato-sbx-abc-123")
     }
 
+    @Test("the NIC placement carries the jail's namespace and uid (issue STR-100)")
+    func nicPlacementDerivation() {
+        // The attachment path needs exactly these three facts, and each must
+        // match what the jailer itself is given — the TAP is created in that
+        // namespace and chowned to that uid, and Firecracker opens it after the
+        // jailer has setuid'd.
+        let p = plan("abc-123")
+        let placement = NICPlacement.sandboxNetns(
+            netnsName: p.netnsName, owner: JailOwner(uid: p.uid, gid: p.gid))
+        #expect(placement.netnsName == "strato-sbx-abc-123")
+        #expect(NICPlacement.hostNamespace.netnsName == nil)
+
+        guard case .sandboxNetns(_, let owner) = placement else {
+            Issue.record("expected a sandbox placement")
+            return
+        }
+        #expect(owner?.uid == p.uid)
+        #expect(owner?.gid == p.gid)
+        #expect(owner?.uid != 0)
+    }
+
+    @Test("the namespace name is derivable from the sandbox id alone")
+    func netnsNameNeedsNoConfig() {
+        // Teardown runs on agents whose jailer config is gone (the sandbox
+        // runtime was deconfigured since the sandbox was created). If the
+        // namespace name needed the config, that cleanup would have to fall
+        // back to the VM path and would leak the port, veth, and namespace.
+        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == "strato-sbx-abc-123")
+        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == plan("abc-123").netnsName)
+
+        // And a teardown placement is expressible with no ownership at all.
+        let teardown = NICPlacement.sandboxNetns(
+            netnsName: SandboxJailPlan.netnsName(sandboxId: "abc-123"), owner: nil)
+        #expect(teardown.netnsName == "strato-sbx-abc-123")
+        #expect(teardown != NICPlacement.hostNamespace)
+    }
+
     @Test("the exec file basename keys the layout, not its directory")
     func execFileBasename() {
         let p = SandboxJailPlan(
@@ -141,6 +178,26 @@ struct SandboxJailerResolverTests {
         #expect(
             SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { $0 == "/sbin/ip" }) == "/sbin/ip")
         #expect(SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { _ in false }) == nil)
+    }
+
+    @Test("the resolved tc path is the first executable candidate")
+    func tcBinaryResolution() {
+        #expect(
+            SandboxJailerResolver.resolveTCBinaryPath(isExecutable: { $0 == "/sbin/tc" }) == "/sbin/tc")
+        #expect(SandboxJailerResolver.resolveTCBinaryPath(isExecutable: { _ in false }) == nil)
+    }
+
+    @Test("a host without tc still jails — only networked sandboxes need it")
+    func missingTCDoesNotBlockJailing() {
+        // `tc` installs the redirects splicing a jailed VMM's TAP to its veth
+        // (issue STR-100). Losing that must cost NICs, not the whole barrier.
+        let noTC: (String) -> Bool = {
+            $0 != "/usr/sbin/tc" && $0 != "/sbin/tc" && $0 != "/usr/bin/tc" && $0 != "/bin/tc"
+        }
+        #expect(
+            SandboxJailerResolver.resolve(
+                mode: .required, jailerBinaryPath: "/usr/local/bin/jailer",
+                isRoot: true, isExecutable: noTC) == .jailed)
     }
 
     @Test("a host without iproute2 cannot jail — netns creation would fail every create")

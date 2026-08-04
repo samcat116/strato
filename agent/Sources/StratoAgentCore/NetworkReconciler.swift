@@ -75,6 +75,27 @@ public enum OVNNaming {
         nicIndex == 0 ? "vm-\(vmId)" : "vm-\(vmId)-\(nicIndex)"
     }
 
+    /// OVN logical switch port name for one NIC of a sandbox. Deliberately a
+    /// separate namespace from `vmPortName` rather than a reuse of it: a sandbox
+    /// port is realized differently (a veth into the jail's network namespace,
+    /// not a host TAP), so operators reading `ovs-vsctl show` — and the
+    /// floating-IP and port-group code — must be able to tell the two kinds
+    /// apart at a glance (issue STR-100).
+    public static func sandboxPortName(sandboxId: String, nicIndex: Int) -> String {
+        nicIndex == 0 ? "sbx-\(sandboxId)" : "sbx-\(sandboxId)-\(nicIndex)"
+    }
+
+    /// The logical switch port name for one NIC of a workload, chosen by where
+    /// the NIC is realized. The single place the `vm-`/`sbx-` split is decided.
+    public static func portName(workloadId: String, nicIndex: Int, placement: NICPlacement) -> String {
+        switch placement {
+        case .hostNamespace:
+            return vmPortName(vmId: workloadId, nicIndex: nicIndex)
+        case .sandboxNetns:
+            return sandboxPortName(sandboxId: workloadId, nicIndex: nicIndex)
+        }
+    }
+
     /// A stable, locally-administered unicast MAC for a floating IP, derived
     /// from the floating address itself (floating IPs are unique per site, so
     /// the MAC is too). Used as the `dnat_and_snat` rule's `external_mac`, the

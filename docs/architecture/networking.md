@@ -204,6 +204,105 @@ that **multi-PoP anycast is a genuine CDN build**, not a single-edge feature.
   L3; build L2 stretch only for a concrete same-tenant need (legacy same-subnet
   app, cross-site live migration).
 
+## Sandbox NICs
+
+A VM's VMM runs in the host network namespace, so its NIC is a host TAP plugged
+straight into `br-int`. A jailed sandbox's Firecracker does not: it runs
+chrooted inside `strato-sbx-<id>`, as a per-sandbox uid, with `CAP_NET_ADMIN`
+dropped, and its only network backend is a TAP opened *by name from inside the
+jail* — no fd passing, no vhost-user. So the device has to exist in that
+namespace, owned by that uid.
+
+The path is `NetworkServiceLinux`, driven through the same `NetworkOrchestrator`
+the VM path uses — not a special case inside the sandbox runtime — selected by a
+`NICPlacement` the agent derives from the jail plan (STR-100).
+
+**Port namespace.** Sandbox ports are `sbx-<id>[-<n>]`, deliberately disjoint
+from the VM path's `vm-<id>[-<n>]`, so the two kinds are distinguishable in OVN
+and OVS. Everything else about the logical port — switch lookup, DHCP options,
+addressing, `port_security` — is the VM path unchanged.
+
+**Topology: tc-redirect-tap.** A veth pair straddles the namespace. Its host end
+(`vth<digest>`) stays in the host namespace on `br-int` and never moves, so OVS
+never loses the device. The peer (`vtp<digest>`) is moved into the netns, and a
+TAP there (`tap<digest>`, created `user <uid> group <gid>`) is spliced to it by
+two `tc` `matchall`/`mirred` redirects — **both on the `ingress` hook**. A TAP's
+ingress is where frames the VMM *writes* appear and its egress is what the VMM
+reads, so putting either filter on the egress hook produces a port that binds
+and carries nothing. All three names are exactly 15 characters (`IFNAMSIZ`) and
+derived from a fixed FNV-1a digest, so create and teardown agree with no
+persisted state.
+
+**Why not just move the TAP in.** That was the original design. It was measured
+against a real `br-int` + `ovn-controller` and does not work (STR-99): within
+30ms of `ip link set <tap> netns <ns>` OVS reports `ofport: -1` and
+`error: "could not open network device"`, the device is gone from the datapath
+and the OpenFlow port list, and `ovn-controller` releases the `Port_Binding`.
+
+Two consequences worth carrying forward:
+
+- **The failure is silent at the OVSDB level.** The `Port` and `Interface` rows
+  survive the move untouched — same UUID, `iface-id` still set — so the port
+  still appears in `ovs-vsctl show`. Any health check that looks a port up by
+  name, or trusts a row's existence, sees health where there are no packets.
+  Check the `error` column, or `ofport != -1`, or the southbound `Port_Binding`.
+  The attach path reads back `ofport` and `error` after `add-port` for exactly
+  this reason.
+- **`ofport` is not stable** across a device's disappearance and return
+  (observed 3 → 4). Nothing caches it.
+
+**Teardown** is host-side only: removing the OVS port, deleting the host veth
+end (which destroys its peer, and with it the in-namespace devices and their
+filters), and — for the NIC that owns it — deleting the namespace. It needs
+neither `ip netns exec` nor the namespace to still exist, which is what makes it
+work after an agent crash and on the create-rollback path, where the jail's own
+artifact cleanup never runs.
+
+Two properties it is worth not breaking. Namespace deletion is scoped to NIC 0,
+because namespace lifetime belongs to the *jail*, not to any one NIC — a
+multi-NIC sandbox must not have NIC 0's teardown pull the namespace out from
+under NIC 1. And the whole teardown is derivable from the **sandbox id alone**:
+no jailer config, no ownership. That matters because an agent whose sandbox
+runtime has been deconfigured still has jailed leftovers from its previous life
+to clean up, and degrading to the VM teardown there would delete `vm-<id>` and a
+TAP that never existed while leaving the real `sbx-<id>` port, veth, and
+namespace behind — silently, since teardown swallows errors by design.
+
+**MTU** is applied to all three devices from the same `NetworkSpec.mtu` the guest
+is given — as it now is for the VM host TAP, which historically kept 1500 even on
+a network whose MTU had been lowered for an encapsulated uplink (see the MTU
+footgun note above). Two consequences of that VM-path change: it runs on every
+reconcile rather than only at create, so it reaches VMs that have been up since
+before it existed and a stale stored MTU surfaces then; and OVS derives a
+bridge's internal-port MTU from the minimum over its non-internal ports, so the
+first VM on a lowered-MTU network pulls `br-int`'s own MTU down host-wide. The
+latter is inert in a standard OVN deployment — nothing routes via the `br-int`
+internal port — but it is a host-scoped effect of a per-VM setting.
+
+**Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
+`cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
+path resolved from a fixed candidate list, not via `PATH` — a service manager's
+stripped environment must not be able to break a host the start-time probe
+declared usable — so a `tc` installed outside that list passes the (`PATH`-based)
+preflight check and still refuses every networked sandbox. The preflight hint
+names the list for that reason. `tc` is advisory rather than a jailing
+prerequisite: without it a host still runs sandboxes, it just refuses NICs.
+
+Networked sandboxes are refused, permanently and visibly, in three cases: an
+unjailed agent (no namespace to attach into, and the isolation is the point), a
+snapshot restore (STR-104), and an attachment that is not a TAP. That last one is
+reachable — `network_mode = "user"` builds the user-mode service on *every*
+platform, not just macOS, and an agent with no network service degrades every NIC
+the same way. Firecracker's only backend is a TAP opened by name, so the runtime
+refuses rather than skipping the device and booting a sandbox with no interface
+that the control plane still records as having one.
+
+**Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
+still `false`, so no sandbox `NetworkSpec` reaches an agent; STR-103 replaces
+that fleet-wide flag with a per-agent capability gate. The guest also cannot yet
+configure the interface (STR-101), and a networked sandbox is cold-only —
+snapshot restore and fork are refused until STR-104 remaps the device on load.
+
 ## Security groups
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
@@ -244,7 +343,11 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   exist so the model and the ≥1-group invariant are already right when guest
   networking lands. The agent-version gate is deliberately *not* applied to
   the sandbox path: with nothing on the wire, no agent version could change
-  what an attachment achieves.
+  what an attachment achieves. Note that the agent-side realization
+  (`VMNetworkConfig.securityGroupIds`) is nil for a sandbox NIC, so an
+  `sbx-` port joins **no** port groups — not even the drop group. STR-102 is
+  what grows the sync's membership assembly a sandbox arm; until then a sandbox
+  port would come up unfiltered, which is part of why the wire gate stays shut.
 
 ### Wire and rollout
 

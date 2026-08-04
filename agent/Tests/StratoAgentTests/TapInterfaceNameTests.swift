@@ -59,6 +59,56 @@ struct TapInterfaceNameTests {
         #expect(names.count == vmIds.count)
     }
 
+    // MARK: - Sandbox NIC devices (issue STR-100)
+
+    @Test("A sandbox NIC's three devices are distinct and each exactly 15 chars")
+    func sandboxDeviceNamesFitAndDiffer() {
+        let sandboxIds = [
+            "0d9f8c6a-3f21-4b0e-9a44-8a1c2f9b7e10",
+            "short",
+            "",
+            String(repeating: "z", count: 256),
+        ]
+        for sandboxId in sandboxIds {
+            for nicIndex in 0..<4 {
+                let names = sandboxNICDeviceNames(sandboxId: sandboxId, nicIndex: nicIndex)
+                let all = [names.tap, names.vethHost, names.vethPeer]
+                for name in all {
+                    #expect(name.count == 15, "'\(name)' is not exactly IFNAMSIZ-1 characters")
+                }
+                #expect(Set(all).count == 3)
+                #expect(names.tap.hasPrefix("tap"))
+                #expect(names.vethHost.hasPrefix("vth"))
+                #expect(names.vethPeer.hasPrefix("vtp"))
+            }
+        }
+    }
+
+    @Test("Sandbox device names are stable and share the VM helper's digest")
+    func sandboxDeviceNamesAreStable() {
+        // Create and teardown must agree across an agent restart, and the TAP
+        // must be the same name either helper would derive.
+        let sandboxId = "0d9f8c6a-3f21-4b0e-9a44-8a1c2f9b7e10"
+        for nicIndex in 0..<4 {
+            let first = sandboxNICDeviceNames(sandboxId: sandboxId, nicIndex: nicIndex)
+            let second = sandboxNICDeviceNames(sandboxId: sandboxId, nicIndex: nicIndex)
+            #expect(first == second)
+            #expect(first.tap == tapInterfaceName(for: sandboxId, nicIndex: nicIndex))
+        }
+    }
+
+    @Test("Sandbox devices do not collide across sandboxes or roles")
+    func sandboxDeviceNamesAreGloballyDistinct() {
+        var seen: Set<String> = []
+        for index in 0..<500 {
+            let names = sandboxNICDeviceNames(sandboxId: "sandbox-\(index)", nicIndex: 0)
+            for name in [names.tap, names.vethHost, names.vethPeer] {
+                #expect(!seen.contains(name), "'\(name)' collided")
+                seen.insert(name)
+            }
+        }
+    }
+
     // MARK: - Linux-only, opt-in integration test
     //
     // Exercises real TAP create/destroy via `ip tuntap`. Skipped unless running on

@@ -138,15 +138,66 @@ struct MockSandboxRuntimeTests {
         #expect(observed == .running)
     }
 
-    @Test("A networked spec is refused, mirroring the real runtime")
-    func networkingUnsupported() async throws {
+    @Test("A networked spec is accepted and its attachment recorded (issue STR-100)")
+    func networkedSpecIsAccepted() async throws {
         let runtime = makeRuntime()
         let spec = SandboxSpec(
             image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
             network: NetworkSpec(network: "default", networkId: UUID()))
+        let attachment = ResolvedNetworkAttachment(
+            network: "default", attachment: .tap(interface: "tapdeadbeef01"),
+            macAddress: "02:00:00:00:00:01", ipAddress: "10.0.0.5", netmask: "255.255.255.0",
+            gateway: "10.0.0.1")
+
+        try await runtime.createSandbox(
+            sandboxId: "sb-net", spec: spec, registryCredential: nil, networkAttachments: [attachment])
+
+        let recorded = await runtime.networkAttachments(sandboxId: "sb-net")
+        #expect(recorded.count == 1)
+        #expect(recorded.first?.attachment == .tap(interface: "tapdeadbeef01"))
+        #expect(try await runtime.getSandboxStatus(sandboxId: "sb-net") == .stopped)
+    }
+
+    @Test("A user-mode attachment is refused, not silently dropped")
+    func userModeAttachmentIsRefused() async throws {
+        // Reachable on a real Linux config: `network_mode = "user"` builds
+        // NetworkServiceMacOS on every platform (it is not macOS-gated), and a
+        // nil network service degrades every NIC the same way. Firecracker can
+        // only open a TAP by name, so accepting this would boot a sandbox with
+        // no interface while the control plane records it as having one.
+        let runtime = makeRuntime()
+        let spec = SandboxSpec(
+            image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
+            network: NetworkSpec(network: "default", networkId: UUID()))
+        let userMode = ResolvedNetworkAttachment(
+            network: "default", attachment: .userMode, macAddress: "02:00:00:00:00:01",
+            ipAddress: nil, netmask: nil, gateway: nil)
+
         await #expect(throws: SandboxRuntimeError.self) {
             try await runtime.createSandbox(
-                sandboxId: "sb-net", spec: spec, registryCredential: nil, networkAttachments: [])
+                sandboxId: "sb-usermode", spec: spec, registryCredential: nil,
+                networkAttachments: [userMode])
+        }
+        // And it left nothing half-created behind.
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.getSandboxStatus(sandboxId: "sb-usermode")
+        }
+    }
+
+    @Test("Restoring a networked sandbox is still refused, mirroring the real runtime")
+    func networkedRestoreIsRefused() async throws {
+        // A snapshot's captured device set has no network interface, and
+        // Firecracker cannot add one on load — that remap is STR-104. The mock
+        // must refuse it too, or simulation validates a config real hardware
+        // rejects.
+        let runtime = makeRuntime()
+        let spec = SandboxSpec(
+            image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
+            network: NetworkSpec(network: "default", networkId: UUID()),
+            restoreFrom: SandboxSnapshotRef(snapshotId: UUID(), sourceSandboxId: UUID()))
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.createSandbox(
+                sandboxId: "sb-net-restore", spec: spec, registryCredential: nil, networkAttachments: [])
         }
     }
 

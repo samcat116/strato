@@ -652,6 +652,32 @@ struct NetworkReconcilerTests {
         #expect(OVNNaming.vmPortName(vmId: "ABC", nicIndex: 0) == "vm-ABC")
         #expect(OVNNaming.vmPortName(vmId: "ABC", nicIndex: 2) == "vm-ABC-2")
     }
+
+    @Test("Sandbox ports take a namespace disjoint from VM ports (issue STR-100)")
+    func sandboxPortNaming() {
+        #expect(OVNNaming.sandboxPortName(sandboxId: "ABC", nicIndex: 0) == "sbx-ABC")
+        #expect(OVNNaming.sandboxPortName(sandboxId: "ABC", nicIndex: 2) == "sbx-ABC-2")
+        // The two kinds of port are realized differently — a host TAP versus a
+        // veth into a jail's namespace — so the same id must never yield the
+        // same port name for both.
+        for index in 0..<4 {
+            #expect(
+                OVNNaming.sandboxPortName(sandboxId: "ABC", nicIndex: index)
+                    != OVNNaming.vmPortName(vmId: "ABC", nicIndex: index))
+        }
+    }
+
+    @Test("Placement selects which port namespace a workload's NIC lands in")
+    func portNamingFollowsPlacement() {
+        #expect(
+            OVNNaming.portName(workloadId: "ABC", nicIndex: 1, placement: .hostNamespace) == "vm-ABC-1")
+        #expect(
+            OVNNaming.portName(
+                workloadId: "ABC", nicIndex: 1,
+                placement: .sandboxNetns(
+                    netnsName: "strato-sbx-ABC", owner: JailOwner(uid: 100_000, gid: 100_000)))
+                == "sbx-ABC-1")
+    }
 }
 
 /// Records the calls the reconciler drives, for asserting orchestration order

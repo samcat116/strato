@@ -241,6 +241,14 @@ actor Agent {
     private let sandboxJailerChrootDir: String
     private let sandboxJailerUidBase: UInt32
     private var sandboxJailerBlockedReason: String?
+    // The resolved jail layout, built unconditionally at start() — even an
+    // unjailed agent needs it to tear down jailed leftovers from a previous
+    // life. Nil only when this build/host has no sandbox runtime at all.
+    private var sandboxJailerConfig: SandboxJailerConfig?
+    // Whether *new* sandboxes get the jailer barrier. A sandbox NIC lives in
+    // the jail's network namespace, so without the barrier there is nowhere to
+    // put it and networked specs are refused (issue STR-100).
+    private var sandboxJailNewSandboxes = false
     // Warm start (issue #426): provision sandboxes from per-image template
     // snapshots when possible. Default on; warm failures cold-boot.
     private let sandboxWarmStart: Bool
@@ -419,9 +427,17 @@ actor Agent {
             case .ovn:
                 #if os(Linux)
                 logger.info("Network service initialized with SwiftOVN support")
+                // Resolve iproute2 up front, absolutely: attaching a NIC into a
+                // jailed sandbox's network namespace shells out to `ip` and
+                // `tc`, and a service manager's stripped `PATH` must not be able
+                // to break a host that has them (issue STR-100).
+                let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 networkService = NetworkServiceLinux(
                     nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
-                    uplink: ovnUplink, dynamicRouting: ovnDynamicRouting, logger: logger)
+                    uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
+                    ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
+                    tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
+                    logger: logger)
                 effectiveNetworkMode = .ovn
                 #else
                 logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
@@ -564,7 +580,9 @@ actor Agent {
                     jailerBinaryPath: sandboxJailerBinaryPath,
                     chrootBaseDir: sandboxJailerChrootDir,
                     uidBase: sandboxJailerUidBase,
-                    ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable))
+                    ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
+                    tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable))
+                sandboxJailerConfig = jailerConfig
                 var jailNewSandboxes = false
                 switch SandboxJailerResolver.resolve(
                     mode: sandboxJailerMode,
@@ -598,6 +616,7 @@ actor Agent {
                         "sandbox_jailer_mode is 'required' but the jailer is unusable; sandbox capability disabled",
                         metadata: ["reason": .string(reason)])
                 }
+                sandboxJailNewSandboxes = jailNewSandboxes
 
                 logger.info("Initializing sandbox runtime (Linux only)")
                 // Snapshot mobility (issue #428): exported artifacts move
@@ -3811,32 +3830,72 @@ extension Agent: ReconcileActuator {
         }
     }
 
+    /// Where this host realizes a sandbox's NIC (issue STR-100).
+    ///
+    /// A sandbox NIC lives inside the jail's network namespace, which only
+    /// exists when the jailer barrier is on. An unjailed sandbox has no
+    /// namespace to attach into and no privilege boundary the attachment is
+    /// protecting, so a networked spec is refused rather than quietly realized
+    /// in the host namespace — the isolation is the point.
+    ///
+    /// `forTeardown` derives the placement even on an agent that no longer jails
+    /// new sandboxes: the jail layout is built unconditionally precisely so a
+    /// previous life's jailed leftovers can still be cleaned up.
+    private func sandboxNICPlacement(sandboxId: String) throws -> NICPlacement {
+        guard sandboxJailNewSandboxes, let jailerConfig = sandboxJailerConfig else {
+            throw SandboxRuntimeError.networkingUnsupported(
+                "a sandbox NIC lives in the jail's network namespace, and this agent creates sandboxes "
+                    + "unjailed; set sandbox_jailer_mode = \"required\" and satisfy its prerequisites")
+        }
+        let plan = SandboxJailPlan(
+            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        return .sandboxNetns(
+            netnsName: plan.netnsName, owner: JailOwner(uid: plan.uid, gid: plan.gid))
+    }
+
+    /// The placement teardown should use. Never throws, and never degrades to
+    /// the host-namespace path: a sandbox NIC that was created jailed must be
+    /// removed as one, or `sbx-<id>` stays in OVN NB and the veth stays on
+    /// `br-int` while the VM teardown deletes `vm-<id>` and a TAP that never
+    /// existed — silently, because teardown swallows errors by design.
+    ///
+    /// Nothing here needs the jailer config: the namespace name and all three
+    /// device names come from the sandbox id, and ownership is create-only. So
+    /// cleanup keeps working on an agent whose sandbox runtime was deconfigured
+    /// since the sandbox was created, which is exactly the case that used to
+    /// leak.
+    private func sandboxTeardownPlacement(sandboxId: String) -> NICPlacement {
+        .sandboxNetns(netnsName: SandboxJailPlan.netnsName(sandboxId: sandboxId), owner: nil)
+    }
+
     private func sandboxReconcileCreate(_ item: ReconcileWorkItem) async throws {
         guard let desired = item.desiredSandbox else {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
         }
         let runtime = try requireSandboxRuntime()
 
-        // v1 has no in-guest networking (the runtime rejects networked specs).
-        // Fail here, before reserving host-side NICs, so an unsupported spec
-        // surfaces the permanent `networkingUnsupported` reason immediately
-        // instead of a transient network-prep failure that retries until the
-        // operation budget expires.
-        guard desired.spec.network == nil else {
-            throw SandboxRuntimeError.networkingUnsupported
-        }
+        // Resolve the placement before reserving anything, so a host that
+        // cannot realize a sandbox NIC at all surfaces the permanent reason
+        // immediately instead of a transient network-prep failure that retries
+        // until the operation budget expires.
+        let networks = desired.spec.network.map { [$0] } ?? []
+        // A network-free sandbox never reaches the placement, so don't refuse an
+        // unjailed one over a NIC it doesn't have.
+        let placement =
+            networks.isEmpty ? NICPlacement.hostNamespace : try sandboxNICPlacement(sandboxId: item.id)
 
         // Same contract as the VM path: the orchestrator realizes the
         // sandbox's NIC on this host before the runtime runs, and rolls it
         // back if the runtime never created the sandbox.
-        let networks = desired.spec.network.map { [$0] } ?? []
-        let attachments = try await networkOrchestrator.prepareAttachments(vmId: item.id, networks: networks)
+        let attachments = try await networkOrchestrator.prepareAttachments(
+            vmId: item.id, networks: networks, placement: placement)
         do {
             try await runtime.createSandbox(
                 sandboxId: item.id, spec: desired.spec,
                 registryCredential: desired.registryCredential, networkAttachments: attachments)
         } catch {
-            await networkOrchestrator.teardownAttachments(vmId: item.id, count: attachments.count)
+            await networkOrchestrator.teardownAttachments(
+                vmId: item.id, count: attachments.count, placement: placement)
             throw error
         }
 
@@ -3862,7 +3921,8 @@ extension Agent: ReconcileActuator {
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0)
+                    vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0,
+                    placement: sandboxTeardownPlacement(sandboxId: item.id))
                 logger.warning(
                     "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
                     metadata: ["sandboxId": .string(item.id)])
@@ -3876,7 +3936,8 @@ extension Agent: ReconcileActuator {
         try await requireSandboxRuntime().deleteSandbox(sandboxId: item.id)
 
         await networkOrchestrator.teardownAttachments(
-            vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0)
+            vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0,
+            placement: sandboxTeardownPlacement(sandboxId: item.id))
 
         managedSandboxes.removeValue(forKey: item.id)
         orphanedSandboxes.removeValue(forKey: item.id)
