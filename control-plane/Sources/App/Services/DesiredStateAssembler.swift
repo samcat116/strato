@@ -299,7 +299,33 @@ struct DesiredStateAssembler {
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
             desiredAgentUpdate: await desiredAgentUpdateForSync(agent: agent),
-            securityGroups: securityGroups)
+            securityGroups: securityGroups,
+            tombstones: try await tombstones(agentId: agentId, on: db))
+    }
+
+    /// The teardowns this sync authorizes (STR-98).
+    ///
+    /// Every entry is the second half of a round trip: the agent reported
+    /// holding a workload this assembly does not list, and
+    /// `ObservedStateApplier` confirmed no row describes it. Nothing here is
+    /// derived from the assembly's own queries, which is the point — a sync
+    /// that under-lists an agent produces no tombstones at all, so a scoping
+    /// bug can no longer authorize its own cleanup.
+    private func tombstones(agentId: String, on db: any Database) async throws
+        -> [DesiredWorkloadTombstone]
+    {
+        try await AgentWorkloadClaim.query(on: db)
+            .filter(\.$agentId == agentId)
+            .filter(\.$disposition == .tombstoned)
+            .all()
+            .compactMap { claim in
+                guard let generation = claim.tombstoneGeneration else { return nil }
+                return DesiredWorkloadTombstone(
+                    kind: claim.resourceKind.workloadKind,
+                    workloadId: claim.resourceID,
+                    generation: generation)
+            }
+            .sorted { $0.workloadId.uuidString < $1.workloadId.uuidString }
     }
 
     /// The agent self-update this sync should carry (issue #434): the rollout

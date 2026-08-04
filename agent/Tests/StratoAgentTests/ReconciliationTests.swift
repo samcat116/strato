@@ -48,8 +48,11 @@ struct ReconciliationTests {
         )
     }
 
-    private static func sync(_ vms: [DesiredVMState]) -> DesiredStateMessage {
-        DesiredStateMessage(vms: vms)
+    private static func sync(
+        _ vms: [DesiredVMState],
+        tombstones: [DesiredWorkloadTombstone] = []
+    ) -> DesiredStateMessage {
+        DesiredStateMessage(vms: vms, tombstones: tombstones)
     }
 
     /// Actuator double that records steps and simulates the hypervisor by
@@ -139,39 +142,116 @@ struct ReconciliationTests {
     @Test("Desired-but-absent VM plans create plus boot steps")
     func planCreatesAbsentVM() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running)],
             present: [:],
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].vmId == vmId.uuidString)
-        #expect(items[0].steps == [.create, .boot])
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].vmId == vmId.uuidString)
+        #expect(plan.items[0].steps == [.create, .boot])
     }
 
-    @Test("Present-but-undesired VM plans deletion (full-list semantics)")
-    func planDeletesUndesiredVM() {
-        let vmId = UUID().uuidString
-        let items = Reconciler.plan(
+    @Test("Present-but-unlisted VM is held and reported, never deleted")
+    func planHoldsUnlistedVM() {
+        // The core of STR-98: a sync that fails to mention a running VM — a
+        // restored database, a re-enrolled agent, a scoping bug — is not an
+        // instruction to destroy it.
+        let vmId = UUID()
+        let plan = Reconciler.plan(
             desired: [],
-            present: [vmId: .managed(.running)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 4]
+        )
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.count == 1)
+        #expect(plan.unrecognized[0].kind == .vm)
+        #expect(plan.unrecognized[0].workloadId == vmId)
+        #expect(plan.unrecognized[0].observedGeneration == 4)
+        #expect(plan.unrecognized[0].status == VMStatus.running.rawValue)
+    }
+
+    @Test("An orphaned VM the sync omits is held too, and reports as orphaned")
+    func planHoldsUnlistedOrphan() {
+        let vmId = UUID()
+        let plan = Reconciler.plan(
+            desired: [],
+            present: [vmId.uuidString: .orphaned],
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].vmId == vmId)
-        #expect(items[0].steps == [.delete])
-        #expect(items[0].desired == nil)
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.map(\.status) == ["orphaned"])
+        #expect(plan.unrecognized[0].observedGeneration == 0)
+    }
+
+    @Test("A tombstone deletes the workload it names, at its own generation")
+    func planDeletesTombstonedVM() {
+        let vmId = UUID()
+        let plan = Reconciler.plan(
+            desired: [],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 4],
+            tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 5)]
+        )
+        #expect(plan.unrecognized.isEmpty)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].vmId == vmId.uuidString)
+        #expect(plan.items[0].steps == [.delete])
+        #expect(plan.items[0].generation == 5)
+        #expect(plan.items[0].isTombstone)
+        #expect(plan.items[0].desired == nil)
+    }
+
+    @Test("A tombstone older than what the agent applied is dropped as stale")
+    func planRejectsStaleTombstone() {
+        // A replayed tombstone must not undo a newer sync that re-adopted the
+        // workload — the same staleness rule desired entries live under.
+        let vmId = UUID()
+        let plan = Reconciler.plan(
+            desired: [],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 9],
+            tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 4)]
+        )
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.isEmpty)  // tombstoned, just not at a generation we accept
+    }
+
+    @Test("A tombstone for a workload this host doesn't have plans nothing")
+    func planIgnoresTombstoneForAbsentWorkload() {
+        let plan = Reconciler.plan(
+            desired: [],
+            present: [:],
+            lastApplied: [:],
+            tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: UUID(), generation: 1)]
+        )
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.isEmpty)
+    }
+
+    @Test("An explicit absent entry still deletes, exactly as before")
+    func planDeletesExplicitlyAbsentVM() {
+        let vmId = UUID()
+        let plan = Reconciler.plan(
+            desired: [Self.desired(vmId, status: .absent, generation: 2)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [:]
+        )
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps == [.delete])
+        #expect(plan.items[0].isTombstone == false)
+        #expect(plan.unrecognized.isEmpty)
     }
 
     @Test("Satisfied VM at an already-applied generation plans nothing")
     func planIsIdempotentForConvergedState() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running, generation: 3)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 3]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     @Test("Stale generation is rejected by the generation guard")
@@ -179,12 +259,12 @@ struct ReconciliationTests {
         let vmId = UUID()
         // The agent already applied generation 5; a replayed generation-2 sync
         // asking for a different state must not roll the VM backward.
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .shutdown, generation: 2)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 5]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     @Test("Equal generation with drifted state re-plans convergence")
@@ -192,38 +272,38 @@ struct ReconciliationTests {
         let vmId = UUID()
         // Same generation as applied, but the VM regressed out of band
         // (e.g. the guest powered itself off): drift correction must act.
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running, generation: 3)],
             present: [vmId.uuidString: .managed(.shutdown)],
             lastApplied: [vmId.uuidString: 3]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps == [.boot])
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps == [.boot])
     }
 
     @Test("Orphan matching a desired VM plans re-adoption")
     func planAdoptsMatchingOrphan() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running)],
             present: [vmId.uuidString: .orphaned],
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps == [.adopt])
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps == [.adopt])
     }
 
     @Test("Absent VM desired absent yields an empty-step generation record")
     func planRecordsAlreadyAbsentDeletion() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .absent, generation: 4)],
             present: [:],
             lastApplied: [:]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps.isEmpty)
-        #expect(items[0].generation == 4)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps.isEmpty)
+        #expect(plan.items[0].generation == 4)
     }
 
     @Test("Status mismatch maps to the right convergence steps")
@@ -401,20 +481,21 @@ struct ReconciliationTests {
         #expect(generation == 1)
     }
 
-    @Test("Undesired-VM deletes are exempt from the attempt cap")
-    func undesiredDeleteRetriesPastCap() async {
+    @Test("Tombstoned deletes are exempt from the attempt cap")
+    func tombstonedDeleteRetriesPastCap() async {
         struct Boom: Error {}
-        let vmId = UUID().uuidString
-        let actuator = MockActuator(presence: [vmId: .managed(.running)])
+        let vmId = UUID()
+        let actuator = MockActuator(presence: [vmId.uuidString: .managed(.running)])
         await actuator.setFailure(Boom())
         let reconciler = makeReconciler(actuator)
 
-        // These VMs have no control-plane row, so nothing can ever mint a new
-        // generation to re-arm a capped failure — every sync must keep
-        // retrying the delete or the stray process leaks until restart.
+        // A tombstoned workload has no control-plane row, so nothing can ever
+        // mint a new generation to re-arm a capped failure — every sync must
+        // keep retrying the delete or the stray process leaks until restart.
+        let tombstone = DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 1)
         let rounds = Reconciler.maxAttemptsPerGeneration + 2
         for attempt in 1...rounds {
-            await reconciler.apply(Self.sync([]))
+            await reconciler.apply(Self.sync([], tombstones: [tombstone]))
             _ = await actuator.waitForReports(attempt)
         }
         let reports = await actuator.reportCount
@@ -422,25 +503,161 @@ struct ReconciliationTests {
 
         // Once the failure clears, the delete converges.
         await actuator.setFailure(nil)
-        await reconciler.apply(Self.sync([]))
+        await reconciler.apply(Self.sync([], tombstones: [tombstone]))
         _ = await actuator.waitForReports(rounds + 1)
         let presence = await actuator.presence
         #expect(presence.isEmpty)
     }
 
-    @Test("Deletion of an undesired VM removes it and reports")
-    func undesiredVMDeleted() async {
-        let vmId = UUID().uuidString
-        let actuator = MockActuator(presence: [vmId: .managed(.running)])
+    @Test("A sync that omits a VM holds it and reports it; only a tombstone removes it")
+    func unlistedVMHeldThenTombstoned() async {
+        let vmId = UUID()
+        let actuator = MockActuator(presence: [vmId.uuidString: .managed(.running)])
         let reconciler = makeReconciler(actuator)
 
         await reconciler.apply(Self.sync([]))
         _ = await actuator.waitForReports(1)
 
+        // Nothing was actuated, the VM is still running, and the control plane
+        // has been told about it.
+        let performedWhileHeld = await actuator.performed
+        #expect(performedWhileHeld.isEmpty)
+        let heldPresence = await actuator.presence
+        #expect(heldPresence.count == 1)
+        let held = await reconciler.unrecognizedWorkloads()
+        #expect(held.map(\.workloadId) == [vmId])
+        // The hold is reported immediately rather than waiting for the next
+        // heartbeat: it is one half of a round trip the control plane can't
+        // finish until it has seen it.
+        #expect(await actuator.reportCount == 1)
+
+        await reconciler.apply(
+            Self.sync(
+                [],
+                tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 1)]))
+        // Two more reports: the held set emptying, and the delete finishing.
+        _ = await actuator.waitForReports(3)
+
         let performed = await actuator.performed
         #expect(performed.map(\.step) == [.delete])
         let presence = await actuator.presence
         #expect(presence.isEmpty)
+        // Gone from the host, so no longer held either.
+        let stillHeld = await reconciler.unrecognizedWorkloads()
+        #expect(stillHeld.isEmpty)
+    }
+
+    // MARK: - Blast-radius guard (STR-98 phase 2)
+
+    @Test("A sync tombstoning the whole host is refused and reported")
+    func teardownGuardRefusesWholeHost() async {
+        let ids = (0..<5).map { _ in UUID() }
+        let actuator = MockActuator(
+            presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
+        let reconciler = makeReconciler(actuator)
+
+        let tombstones = ids.map {
+            DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1)
+        }
+        await reconciler.apply(Self.sync([], tombstones: tombstones))
+        _ = await actuator.waitForReports(1)
+
+        let performed = await actuator.performed
+        #expect(performed.isEmpty)
+        let presence = await actuator.presence
+        #expect(presence.count == 5)
+        let refusal = await reconciler.lastTeardownRefusal()
+        #expect(refusal?.requestedTeardowns == 5)
+        #expect(refusal?.presentWorkloads == 5)
+    }
+
+    @Test("A small share of the host tears down normally, and clears a prior refusal")
+    func teardownGuardAllowsSmallBatch() async {
+        let ids = (0..<20).map { _ in UUID() }
+        let actuator = MockActuator(
+            presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
+        let reconciler = makeReconciler(actuator)
+
+        // Refuse first, so the next sync has a refusal to clear.
+        await reconciler.apply(
+            Self.sync(
+                [],
+                tombstones: ids.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }))
+        _ = await actuator.waitForReports(1)
+        #expect(await reconciler.lastTeardownRefusal() != nil)
+
+        await reconciler.apply(
+            Self.sync(
+                [],
+                tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: ids[0], generation: 1)]))
+        // The refusal clearing reports, and so does the delete finishing.
+        _ = await actuator.waitForReports(3)
+
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.delete])
+        let presence = await actuator.presence
+        #expect(presence.count == 19)
+        #expect(await reconciler.lastTeardownRefusal() == nil)
+    }
+
+    @Test("A refused sync still converges everything that isn't a teardown")
+    func teardownGuardDoesNotBlockOtherWork() async {
+        let ids = (0..<5).map { _ in UUID() }
+        let bootId = UUID()
+        var presence = Dictionary(
+            uniqueKeysWithValues: ids.map { ($0.uuidString, VMPresence.managed(.running)) })
+        presence[bootId.uuidString] = .managed(.shutdown)
+        let actuator = MockActuator(presence: presence)
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(
+                [Self.desired(bootId, status: .running, generation: 1)],
+                tombstones: ids.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }))
+        // One report for the refusal, one for the boot that still ran.
+        _ = await actuator.waitForReports(2)
+
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.boot])
+        #expect(await reconciler.lastTeardownRefusal() != nil)
+    }
+
+    @Test("The operator override converges a full-host teardown")
+    func teardownGuardOverride() async {
+        let ids = (0..<5).map { _ in UUID() }
+        let actuator = MockActuator(
+            presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
+        let reconciler = Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            teardownGuard: TeardownGuard(allowBulkTeardown: true))
+
+        await reconciler.apply(
+            Self.sync(
+                [],
+                tombstones: ids.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }))
+        _ = await actuator.waitForReports(5)
+
+        let presence = await actuator.presence
+        #expect(presence.isEmpty)
+        #expect(await reconciler.lastTeardownRefusal() == nil)
+    }
+
+    @Test("The guard needs both halves: three teardowns on a three-VM host proceed")
+    func teardownGuardHonorsTheAbsoluteFloor() async {
+        let ids = (0..<3).map { _ in UUID() }
+        let actuator = MockActuator(
+            presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(
+                [],
+                tombstones: ids.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }))
+        _ = await actuator.waitForReports(3)
+
+        let presence = await actuator.presence
+        #expect(presence.isEmpty)
+        #expect(await reconciler.lastTeardownRefusal() == nil)
     }
 
     // MARK: - Online resize (issue #568)
@@ -448,39 +665,39 @@ struct ReconciliationTests {
     @Test("Running VM whose desired spec grew plans a resize")
     func planResizesGrownRunningVM() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 6)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.count == 1)
-        #expect(items[0].steps == [.resize])
-        #expect(items[0].generation == 2)
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].steps == [.resize])
+        #expect(plan.items[0].generation == 2)
     }
 
     @Test("Memory-only change on a running VM plans a resize")
     func planResizesMemoryChange() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, memoryBytes: 4 << 30)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.map(\.steps) == [[.resize]])
+        #expect(plan.items.map(\.steps) == [[.resize]])
     }
 
     @Test("Matching sizing on a converged VM plans nothing")
     func planSkipsResizeWhenSizeMatches() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 2],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     // MARK: - Balloon targets (issue #567 phase 2)
@@ -488,13 +705,13 @@ struct ReconciliationTests {
     @Test("Setting a balloon target on a running VM plans a resize")
     func planResizesForNewBalloonTarget() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, balloonTargetBytes: 512 << 20)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.map(\.steps) == [[.resize]])
+        #expect(plan.items.map(\.steps) == [[.resize]])
     }
 
     /// Clearing a target is a real convergence step — the balloon has to
@@ -502,7 +719,7 @@ struct ReconciliationTests {
     @Test("Clearing a balloon target on a running VM plans a resize")
     func planResizesWhenBalloonTargetCleared() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
@@ -510,13 +727,13 @@ struct ReconciliationTests {
                 vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
             ]
         )
-        #expect(items.map(\.steps) == [[.resize]])
+        #expect(plan.items.map(\.steps) == [[.resize]])
     }
 
     @Test("A balloon target already applied plans nothing")
     func planSkipsResizeWhenBalloonTargetMatches() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2, balloonTargetBytes: 512 << 20)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 2],
@@ -524,31 +741,31 @@ struct ReconciliationTests {
                 vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
             ]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     @Test("A stopped VM boots into the new size instead of resizing")
     func planBootsRatherThanResizesStoppedVM() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 6)],
             present: [vmId.uuidString: .managed(.shutdown)],
             lastApplied: [vmId.uuidString: 1],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.map(\.steps) == [[.boot]])
+        #expect(plan.items.map(\.steps) == [[.boot]])
     }
 
     @Test("A stale resize sync is dropped")
     func planDropsStaleResize() {
         let vmId = UUID()
-        let items = Reconciler.plan(
+        let plan = Reconciler.plan(
             desired: [Self.desiredSized(vmId, generation: 1, cpus: 6)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 4],
             presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
         )
-        #expect(items.isEmpty)
+        #expect(plan.items.isEmpty)
     }
 
     @Test("Applying a resize sync drives the step and advances the generation")

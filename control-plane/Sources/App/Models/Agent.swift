@@ -158,6 +158,18 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "update_failure_reason")
     var updateFailureReason: String?
 
+    /// Why this agent last refused to converge a sync's workload teardowns
+    /// (STR-98 phase 2), as reported. Non-nil means the host is holding
+    /// workloads the control plane authorized it to remove, because removing
+    /// them all at once looked more like a control-plane failure than an
+    /// intention. Cleared by the first report that carries no refusal.
+    @OptionalField(key: "teardown_refusal_reason")
+    var teardownRefusalReason: String?
+
+    /// When that refusal was last reported.
+    @Timestamp(key: "teardown_refused_at", on: .none)
+    var teardownRefusedAt: Date?
+
     init() {}
 
     init(
@@ -425,8 +437,46 @@ struct AgentResponse: Content {
     let updateBlockedReason: String?
     /// Terminal failure that halted the rollout at this agent, if any.
     let updateFailureReason: String?
+    /// Why the agent last refused to converge a sync's workload teardowns
+    /// (STR-98); nil in the steady state.
+    let teardownRefusalReason: String?
+    let teardownRefusedAt: Date?
+    /// Workloads this agent holds that no desired-state sync accounts for and
+    /// whose teardown the control plane refused to authorize, because a row
+    /// still exists for them. Non-empty means the control plane is describing
+    /// this host incorrectly — most often that the node re-enrolled under a
+    /// new agent record and its workloads are still placed on the old one, in
+    /// which case `placedOnAgentId` names it and the workloads can be adopted.
+    ///
+    /// Populated by the detail endpoint only; nil (not empty) in list
+    /// responses, which don't pay for the query.
+    let heldWorkloads: [HeldWorkloadSummary]?
 
-    init(from agent: Agent) throws {
+    /// One workload an agent holds that the control plane will not authorize
+    /// tearing down.
+    struct HeldWorkloadSummary: Content, Sendable {
+        let kind: String
+        let id: UUID
+        /// The workload's observed status on the agent.
+        let status: String?
+        /// `row_present_here` or `row_on_agent:<uuid>`.
+        let reason: String?
+        /// The agent record the workload's row is currently placed on, when
+        /// that is a different record than the one holding it.
+        let placedOnAgentId: String?
+        let firstSeenAt: Date?
+
+        init(from claim: AgentWorkloadClaim) throws {
+            self.kind = claim.resourceKind.rawValue
+            self.id = claim.resourceID
+            self.status = claim.observedStatus
+            self.reason = claim.reason
+            self.placedOnAgentId = claim.placedOnAgentId
+            self.firstSeenAt = claim.firstSeenAt
+        }
+    }
+
+    init(from agent: Agent, heldWorkloads: [HeldWorkloadSummary]? = nil) throws {
         guard let id = agent.id else {
             throw Abort(.internalServerError, reason: "Agent missing ID")
         }
@@ -461,5 +511,8 @@ struct AgentResponse: Content {
         self.updateAttemptedAt = agent.updateAttemptedAt
         self.updateBlockedReason = agent.updateBlockedReason
         self.updateFailureReason = agent.updateFailureReason
+        self.teardownRefusalReason = agent.teardownRefusalReason
+        self.teardownRefusedAt = agent.teardownRefusedAt
+        self.heldWorkloads = heldWorkloads
     }
 }

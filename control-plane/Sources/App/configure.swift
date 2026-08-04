@@ -718,6 +718,13 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLogToSecurityGroupRules())
     app.migrations.add(CreateSandboxInterfaceSecurityGroups())
 
+    // Tombstone-confirmed teardown (STR-98): what an agent holds that no sync
+    // accounted for, and what the control plane decided about it. Omission
+    // from a sync stops being an instruction to destroy.
+    app.migrations.add(CreateAgentWorkloadClaim())
+    app.migrations.add(AddTeardownRefusalToAgent())
+    app.migrations.add(RestrictVMProjectDeletion())
+
     // STR-108: the database refuses a conditioned role binding, because the
     // condition vocabulary is not compiled and the evaluator skips such a row —
     // a grant that looks live in every listing and confers nothing.

@@ -277,6 +277,13 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 - Nothing in a sync may expire. Image URLs are control-plane-relative paths
   fetched over SVID mTLS precisely so a replayed sync stays valid; a
   pre-signed or time-limited URL in a sync is a bug.
+- **Omission is not teardown** (STR-98). A workload missing from a sync is
+  *held and reported*, never destroyed; only an explicit tombstone (or an
+  `.absent` entry) removes one. Any change that makes absence destructive
+  again — or that narrows `DesiredStateAssembler`'s scoping without asking
+  what a short list would now do — is blocking. The same rule already governs
+  the mirror direction: an agent omitting a VM from its report must not delete
+  the row.
 
 **Resource operations**
 - `begin` inserts the `pending` row and applies the desired-state change in

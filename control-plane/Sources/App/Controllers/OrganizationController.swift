@@ -230,6 +230,34 @@ struct OrganizationController: RouteCollection {
         return OrganizationResponse(from: organization, userRole: "admin")
     }
 
+    /// Refuse a delete that would cascade over live workloads, naming the
+    /// projects holding them so the operator knows where to look.
+    private static func requireNoWorkloads(
+        inProjects projectIDs: [UUID], on db: Database
+    ) async throws {
+        guard !projectIDs.isEmpty else { return }
+        let vmProjects = try await VM.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs)
+            .all()
+            .map { $0.$project.id }
+        let sandboxProjects = try await Sandbox.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs)
+            .all()
+            .map { $0.$project.id }
+        let blocking = Set(vmProjects + sandboxProjects)
+        guard !blocking.isEmpty else { return }
+
+        let names = try await Project.query(on: db)
+            .filter(\.$id ~~ Array(blocking))
+            .all()
+            .map(\.name)
+            .sorted()
+        throw Abort(
+            .conflict,
+            reason: "Cannot delete organization: \(names.joined(separator: ", ")) "
+                + "still contain VMs or sandboxes. Delete or move those workloads first.")
+    }
+
     func delete(req: Request) async throws -> HTTPStatus {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
@@ -251,16 +279,6 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Cannot delete the default organization")
         }
 
-        // Update users who have this as current organization
-        let usersWithCurrentOrg = try await User.query(on: req.db)
-            .filter(\.$currentOrganizationId == organizationID)
-            .all()
-
-        for user in usersWithCurrentOrg {
-            user.currentOrganizationId = nil
-            try await user.save(on: req.db)
-        }
-
         // Bindings have no FK to the nodes they protect, so drop the org
         // node's bindings — and those of every project that cascades away
         // with it — alongside the row.
@@ -280,13 +298,44 @@ struct OrganizationController: RouteCollection {
                 .compactMap { $0.id }
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
+
+        // Refuse an org whose projects still hold workloads, before touching
+        // anything. The FK below is what makes this *correct* under a race;
+        // this is what makes it legible — it names the projects instead of
+        // surfacing a constraint violation — and it runs ahead of the user
+        // updates because those are not inside the transaction and would
+        // otherwise persist through a failed delete.
+        try await Self.requireNoWorkloads(inProjects: cascadedProjectIDs, on: req.db)
+
+        // Update users who have this as current organization
+        let usersWithCurrentOrg = try await User.query(on: req.db)
+            .filter(\.$currentOrganizationId == organizationID)
+            .all()
+
+        for user in usersWithCurrentOrg {
+            user.currentOrganizationId = nil
+            try await user.save(on: req.db)
+        }
         // Roles owned by the org (or by a project cascading away with it) go
         // too — a role outliving its owner is bindable nowhere and listed
         // nowhere, while still contributing a grants-field pair to the Cedar
         // schema. That makes this a policy-set change, so it runs inside
         // `withPolicySetChange` and bumps the version when roles actually went.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            try await organization.delete(on: db)
+            // Projects cascade away with the organization, and VM rows used to
+            // cascade away with them — hard-deleted by the database, with no
+            // `.absent`, no operation, and no audit, leaving running guests
+            // their agents could only learn about as an absence. `project_id`
+            // is RESTRICT now (STR-98), so the database refuses instead;
+            // translate that into an answer a caller can act on.
+            do {
+                try await organization.delete(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot delete organization: its projects still contain VMs or sandboxes. "
+                        + "Delete or move those workloads first.")
+            }
             // The trust domain row deliberately outlives the organization: it
             // is the instruction to destroy the org's CA, and the reconciler
             // has to be able to read it after the org is gone. Mark it for
