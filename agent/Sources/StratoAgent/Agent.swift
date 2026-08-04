@@ -1470,13 +1470,19 @@ actor Agent {
     /// minutes later.
     private func logHostPreflight(_ report: HostPreflight.Report) {
         for failure in report.failures {
-            let message: Logger.Message = "Host preflight failed: \(failure.detail ?? failure.kind.rawValue)"
+            let detail = failure.detail ?? failure.kind.rawValue
             let metadata: Logger.Metadata = ["check": .string(failure.kind.rawValue)]
             switch failure.severity {
             case .gating:
-                logger.error(message, metadata: metadata)
+                logger.error("Host preflight failed: \(detail)", metadata: metadata)
             case .advisory:
-                logger.warning(message, metadata: metadata)
+                logger.warning("Host preflight failed: \(detail)", metadata: metadata)
+            case .informational:
+                // Not a fault with this host: a dependency this build does not
+                // use yet. Both the level and the wording stay calm — warning
+                // "failed" here would have every node in every fleet reporting a
+                // non-problem on every reconnect.
+                logger.info("Host preflight note: \(detail)", metadata: metadata)
             }
         }
     }

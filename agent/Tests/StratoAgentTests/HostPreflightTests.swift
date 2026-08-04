@@ -443,7 +443,7 @@ struct HostPreflightTests {
         }
     }
 
-    @Test("libvirt failures are advisory until the agent actually drives libvirt")
+    @Test("libvirt failures are informational until the agent actually drives libvirt")
     func libvirtSeverityFollowsDriver() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -451,15 +451,40 @@ struct HostPreflightTests {
         var inputs = passingInputs(root: root)
         inputs.libvirt = .clientMissing
         inputs.libvirtRequired = false
-        let advisory = HostPreflight.run(inputs)
-        #expect(advisory.check(.libvirtConnection)?.severity == .advisory)
+        let notYet = HostPreflight.run(inputs)
+        // Informational, not advisory: every node in every fleet lacks libvirt
+        // today, and warning about a dependency this build does not use would
+        // have each one reporting a non-problem on every reconnect.
+        #expect(notYet.check(.libvirtConnection)?.severity == .informational)
+        #expect(notYet.check(.libvirtConnection)?.detail?.contains("will be required") == true)
         // Nothing about libvirt may gate placement while the QEMU driver still
         // manages VMs directly.
         let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-        #expect(advisory.gate([qemu]) == [qemu])
+        #expect(notYet.gate([qemu]) == [qemu])
 
         inputs.libvirtRequired = true
-        #expect(HostPreflight.run(inputs).check(.libvirtConnection)?.severity == .gating)
+        let required = HostPreflight.run(inputs)
+        #expect(required.check(.libvirtConnection)?.severity == .gating)
+        // Once it is a real requirement the message drops the hedge.
+        #expect(required.check(.libvirtConnection)?.detail?.contains("will be required") == false)
+    }
+
+    @Test("A daemon that answered unparseably is not told to start itself")
+    func unrecognizedLibvirtOutputGetsHonestRemediation() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .unrecognizedOutput("Using library: libvirt 12.0.0")
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.libvirtConnection))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("Using library: libvirt 12.0.0") == true)
+        // The connection succeeded, so none of the unreachable remediation applies.
+        #expect(check.detail?.contains("libvirt` group") == false)
+        #expect(check.detail?.contains("Start the daemon") == false)
+        #expect(!report.libvirtReady)
     }
 
     // MARK: - QEMU firmware descriptors

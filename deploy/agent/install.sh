@@ -93,7 +93,7 @@ INSTALL_SANDBOX_GUEST=0
 CONFIGURE_LIBVIRT=1
 
 # The account strato-agent.service runs as, and therefore the uid libvirt must
-# hand VM disks and sockets to (see configure_libvirt below). Root: the default
+# hand VM disks and sockets to (see configure_libvirt_conf below). Root: the default
 # storage/config/SPIRE paths are root-owned, the SPIRE workload selector the
 # control plane provisions is `unix:uid:0`, and the agent manages TAP devices,
 # netlink and ovs-vsctl. Running unprivileged is a supported but manual
@@ -524,20 +524,43 @@ detect_libvirt_units() {
 # commented-out keys documenting their defaults, and those lines are reference
 # material an operator reads — they must survive re-runs untouched.
 #
+# Duplicate assignments are collapsed to one, and the *last* occurrence decides
+# whether the file already agrees with us. libvirt's parser lets the last
+# assignment win, so a file carrying two `user =` lines would otherwise be read
+# as already-correct from the first while libvirt ran with the second — a silent
+# no-op in exactly the hand-edited case this function exists to fix. Collapsing
+# rather than rewriting each in place is what makes a second run a no-op.
+#
 # awk with the value passed through ENVIRON rather than sed, for the same reason
 # set_spiffe_key does it below: the value is data, never a replacement pattern.
 set_qemu_conf_key() {
   local key="$1" value="$2"
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$LIBVIRT_QEMU_CONF"; then
-    local current
+    local current occurrences
     current="$(sed -n \
       "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*\$/\1/p" \
-      "$LIBVIRT_QEMU_CONF" | head -1)"
-    [ "$current" != "$value" ] || return 1
+      "$LIBVIRT_QEMU_CONF" | tail -1)"
+    occurrences="$(grep -cE "^[[:space:]]*${key}[[:space:]]*=" "$LIBVIRT_QEMU_CONF")"
+    # Already right *and* stated once: nothing to do. Collapsing duplicates is
+    # worth a rewrite even when the effective value matches.
+    if [ "$current" = "$value" ] && [ "$occurrences" -eq 1 ]; then
+      return 1
+    fi
     log "Setting ${key} = ${value} in $LIBVIRT_QEMU_CONF (was ${current})"
+    # cp -p first so the redirect below truncates a file that already carries the
+    # original's mode and ownership: qemu.conf is 0600 root on Debian/Ubuntu and
+    # can hold VNC/SPICE passwords and TLS material, and a bare `> tmp` would
+    # create it 0644 under the ambient umask — both exposing it in /etc/libvirt
+    # while it exists and widening the real file once moved into place.
+    cp -p "$LIBVIRT_QEMU_CONF" "$LIBVIRT_QEMU_CONF.tmp"
+    # Our assignment lands at the first match's position; any further ones are
+    # dropped, leaving exactly one so the next run sees nothing to do.
     QEMU_CONF_KEY="$key" QEMU_CONF_VALUE="$value" awk '
       BEGIN { key = ENVIRON["QEMU_CONF_KEY"]; value = ENVIRON["QEMU_CONF_VALUE"] }
-      !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = " value; done = 1; next }
+      $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+        if (!written) { print key " = " value; written = 1 }
+        next
+      }
       { print }
     ' "$LIBVIRT_QEMU_CONF" > "$LIBVIRT_QEMU_CONF.tmp" \
       && mv "$LIBVIRT_QEMU_CONF.tmp" "$LIBVIRT_QEMU_CONF"
@@ -558,9 +581,16 @@ EOF
   printf '%s = %s\n' "$key" "$value" >> "$LIBVIRT_QEMU_CONF"
 }
 
-configure_libvirt() {
+# Writes the three qemu.conf keys we own. Sets LIBVIRT_CONF_CHANGED=1 when the
+# file was modified, so only a real change restarts the daemon. This is the one
+# piece --no-libvirt-config skips; everything else below runs regardless, because
+# a host whose qemu.conf is managed elsewhere still needs its socket enabled and
+# its agent account able to reach it.
+LIBVIRT_CONF_CHANGED=0
+
+configure_libvirt_conf() {
   if [ "$CONFIGURE_LIBVIRT" -eq 0 ]; then
-    log "Skipping libvirt configuration (--no-libvirt-config); ensure $LIBVIRT_QEMU_CONF sets user/group = \"$AGENT_USER\""
+    log "Leaving $LIBVIRT_QEMU_CONF alone (--no-libvirt-config); ensure it sets user/group = \"$AGENT_USER\" and dynamic_ownership = 1"
     return 0
   fi
   if [ ! -f "$LIBVIRT_QEMU_CONF" ]; then
@@ -568,27 +598,67 @@ configure_libvirt() {
     return 0
   fi
 
-  local changed=0
-  if set_qemu_conf_key user "\"$AGENT_USER\""; then changed=1; fi
-  if set_qemu_conf_key group "\"$AGENT_USER\""; then changed=1; fi
+  if set_qemu_conf_key user "\"$AGENT_USER\""; then LIBVIRT_CONF_CHANGED=1; fi
+  if set_qemu_conf_key group "\"$AGENT_USER\""; then LIBVIRT_CONF_CHANGED=1; fi
   # Explicit rather than left to the default, so a host where someone disabled
   # it (the natural-looking fix for the ownership problem, and the wrong one)
   # is corrected on the next run.
-  if set_qemu_conf_key dynamic_ownership 1; then changed=1; fi
+  if set_qemu_conf_key dynamic_ownership 1; then LIBVIRT_CONF_CHANGED=1; fi
 
-  # The agent connects to qemu:///system as itself. root needs no help; any
-  # other account needs the libvirt group for the socket and kvm for
-  # acceleration.
-  if [ "$AGENT_USER" != "root" ]; then
-    local group
-    for group in libvirt kvm; do
-      if getent group "$group" >/dev/null 2>&1; then
-        usermod -aG "$group" "$AGENT_USER" \
-          || warn "could not add $AGENT_USER to the $group group; the agent may not be able to reach qemu:///system"
-      fi
-    done
+  # swtpm_user/swtpm_group are deliberately left at the distro default (tss):
+  # libvirt creates the vTPM state under its own /var/lib/libvirt/swtpm, not the
+  # agent-owned tree, and the spike confirmed the agent only ever needs to reach
+  # the control socket. If the domain XML ends up placing TPM state under
+  # /var/lib/strato (issue #902), these two keys have to follow user/group.
+}
+
+# The agent connects to qemu:///system as itself. root needs no help; any other
+# account needs the libvirt group for the socket and kvm for acceleration. Not
+# governed by --no-libvirt-config: group membership is host state, not this
+# file's content, and an agent that cannot open the socket never starts a VM.
+grant_libvirt_access() {
+  [ "$AGENT_USER" != "root" ] || return 0
+  local group
+  for group in libvirt kvm; do
+    if getent group "$group" >/dev/null 2>&1; then
+      usermod -aG "$group" "$AGENT_USER" \
+        || warn "could not add $AGENT_USER to the $group group; the agent may not be able to reach qemu:///system"
+    fi
+  done
+}
+
+# libvirt's own `default` NAT network is not something Strato uses — the agent
+# does its own IPAM and TAP management — and on a hypervisor node it is an
+# unrequested virbr0, a dnsmasq bound to :53 on it, and a set of NAT rules
+# sitting next to OVS. Turn off its autostart, and tear it down now when doing so
+# cannot disturb a guest.
+disable_libvirt_default_network() {
+  command -v virsh >/dev/null 2>&1 || return 0
+  LC_ALL=C virsh -c qemu:///system net-info default >/dev/null 2>&1 || return 0
+
+  if LC_ALL=C virsh -c qemu:///system net-info default 2>/dev/null | grep -q '^Autostart:.*yes'; then
+    log "Disabling autostart of libvirt's 'default' NAT network (Strato does not use libvirt networking)"
+    LC_ALL=C virsh -c qemu:///system net-autostart --disable default >/dev/null 2>&1 \
+      || warn "could not disable autostart of libvirt's 'default' network; do it by hand with 'virsh net-autostart --disable default'"
   fi
 
+  # Only destroy it when no domain is running: on a fresh node there are none,
+  # and on a host that predates this script a running guest may be using virbr0.
+  # Being wrong here disconnects someone's VM, so leave it to the operator.
+  local running
+  running="$(LC_ALL=C virsh -c qemu:///system list --state-running --name 2>/dev/null | tr -d '[:space:]')"
+  if [ -n "$running" ]; then
+    warn "libvirt's 'default' network is still active and this host has running domains; leaving it up. Once they are gone: virsh net-destroy default"
+    return 0
+  fi
+  if LC_ALL=C virsh -c qemu:///system net-info default 2>/dev/null | grep -q '^Active:.*yes'; then
+    log "Tearing down libvirt's 'default' NAT network (virbr0 + dnsmasq)"
+    LC_ALL=C virsh -c qemu:///system net-destroy default >/dev/null 2>&1 \
+      || warn "could not destroy libvirt's 'default' network; do it by hand with 'virsh net-destroy default'"
+  fi
+}
+
+enable_libvirt_socket() {
   command -v systemctl >/dev/null 2>&1 || return 0
   detect_libvirt_units
   if [ -z "$LIBVIRT_SOCKET_UNIT" ]; then
@@ -598,7 +668,7 @@ configure_libvirt() {
   log "Enabling $LIBVIRT_SOCKET_UNIT"
   systemctl enable --now "$LIBVIRT_SOCKET_UNIT" \
     || warn "could not enable $LIBVIRT_SOCKET_UNIT; qemu:///system may be unreachable"
-  if [ "$changed" -eq 1 ]; then
+  if [ "$LIBVIRT_CONF_CHANGED" -eq 1 ]; then
     # try-restart, not restart: a socket-activated daemon that hasn't been
     # triggered yet will pick the new config up when it starts, and there is no
     # reason to start it early. Restarting a running libvirtd does not disturb
@@ -609,7 +679,10 @@ configure_libvirt() {
   fi
 }
 
-configure_libvirt
+configure_libvirt_conf
+grant_libvirt_access
+enable_libvirt_socket
+disable_libvirt_default_network
 
 install_spire_agent
 if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
@@ -658,10 +731,15 @@ version_ge() {
 # The version qemu:///system reports, which doubles as the reachability probe:
 # virsh has to connect to the daemon to answer. Empty when virsh is missing or
 # the connection failed.
+#
+# LC_ALL=C is load-bearing: virsh prints "Running against daemon:" through
+# gettext, so on a host whose locale has a libvirt catalog installed the marker
+# comes back translated and this reports a healthy daemon as unreachable. sudo
+# keeps LANG/LC_* via env_keep, so the installer inherits the operator's locale.
 LIBVIRT_VERSION=""
 check_libvirtd() {
   command -v virsh >/dev/null 2>&1 || return 1
-  LIBVIRT_VERSION="$(virsh -c qemu:///system version --daemon 2>/dev/null \
+  LIBVIRT_VERSION="$(LC_ALL=C virsh -c qemu:///system version --daemon 2>/dev/null \
     | sed -n 's/^Running against daemon:[[:space:]]*\([0-9.]*\).*/\1/p' | head -1)"
   [ -n "$LIBVIRT_VERSION" ]
 }

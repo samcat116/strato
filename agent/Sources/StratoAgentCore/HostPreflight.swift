@@ -51,6 +51,13 @@ public enum HostPreflight {
         /// Worth a loud log with remediation, but does not gate placement
         /// (e.g. missing UEFI firmware only affects disk-boot VMs).
         case advisory
+        /// A dependency this build does not use yet: worth stating once per
+        /// registration so an operator can get ahead of it, but not a problem
+        /// with the host as it stands, so it is logged at info rather than
+        /// warning. Every node in every fleet would otherwise report libvirt
+        /// missing on every reconnect for a requirement that isn't one until
+        /// issue #902.
+        case informational
     }
 
     public struct Check: Sendable, Equatable {
@@ -290,7 +297,7 @@ public enum HostPreflight {
             checks.append(
                 contentsOf: checkLibvirt(
                     libvirt, minimumVersion: inputs.minimumLibvirtVersion,
-                    severity: inputs.libvirtRequired ? .gating : .advisory))
+                    severity: inputs.libvirtRequired ? .gating : .informational))
         }
 
         if inputs.ovnMode {
@@ -448,19 +455,29 @@ public enum HostPreflight {
     /// `severity` follows `LibvirtProbe.driverBuilt`: gating once the agent
     /// really manages VMs through libvirt — a host that cannot reach
     /// `qemu:///system`, or runs a libvirt too old to snapshot UEFI guests,
-    /// cannot then serve the VM operations it is asked for — and advisory until
-    /// then, so hosts running today's direct-QEMU driver are told about the
-    /// coming requirement without being declared broken. `gate(_:)` starts
-    /// consuming `libvirtReady` with the driver (issue #902).
+    /// cannot then serve the VM operations it is asked for — and merely
+    /// informational until then, so hosts running today's direct-QEMU driver
+    /// hear about the coming requirement without being declared broken.
+    /// `gate(_:)` starts consuming `libvirtReady` with the driver (issue #902).
+    ///
+    /// The wording follows the same split: while the dependency is unused, each
+    /// message says so rather than reading as a live fault.
     static func checkLibvirt(
         _ status: LibvirtProbe.Status, minimumVersion: LibvirtProbe.Version, severity: Severity
     ) -> [Check] {
+        // Prefix, not a whole second set of strings: the remediation is
+        // identical either way, only its urgency changes.
+        let lede =
+            severity == .gating
+            ? "" : "libvirt will be required for VM management (issue #902), and is not usable here yet: "
+
         switch status {
         case .clientMissing:
             return [
                 .fail(
                     .libvirtConnection, severity: severity,
-                    "libvirt is not installed on this host (no `virsh` on PATH) — the agent manages VMs "
+                    lede
+                        + "libvirt is not installed on this host (no `virsh` on PATH) — the agent manages VMs "
                         + "through libvirtd. Install it (Debian/Ubuntu: "
                         + "`apt install libvirt-daemon-system libvirt-clients`) and start "
                         + "virtqemud.socket (or libvirtd.socket on a monolithic install); re-running "
@@ -470,10 +487,23 @@ public enum HostPreflight {
             return [
                 .fail(
                     .libvirtConnection, severity: severity,
-                    "cannot connect to \(LibvirtProbe.systemURI): \(detail). Start the daemon "
+                    lede + "cannot connect to \(LibvirtProbe.systemURI): \(detail). Start the daemon "
                         + "(`systemctl start virtqemud.socket`, or libvirtd.socket on a monolithic "
                         + "install); if it is running, the agent's account needs access to its socket — "
                         + "run the agent as root, or add its user to the `libvirt` group.")
+            ]
+        case .unrecognizedOutput(let detail):
+            // The daemon replied, so nothing about starting it or socket
+            // permissions applies. This is the state a mis-parsed (e.g.
+            // localized) or unexpectedly-shaped virsh lands in.
+            return [
+                .fail(
+                    .libvirtConnection, severity: severity,
+                    lede + "connected to \(LibvirtProbe.systemURI), but could not read the daemon version "
+                        + "from `virsh version --daemon` — it printed \"\(detail)\". The version floor "
+                        + "cannot be checked without it: confirm `virsh -c \(LibvirtProbe.systemURI) "
+                        + "version --daemon` prints a `Running against daemon:` line, and that virsh and "
+                        + "the daemon come from the same libvirt build.")
             ]
         case .reachable(let version):
             let connection = Check.pass(.libvirtConnection, severity: severity)
@@ -482,7 +512,8 @@ public enum HostPreflight {
                     connection,
                     .fail(
                         .libvirtVersion, severity: severity,
-                        "libvirt \(version) is older than the required \(minimumVersion) — VM checkpoints "
+                        lede
+                            + "libvirt \(version) is older than the required \(minimumVersion) — VM checkpoints "
                             + "need internal snapshots of UEFI guests, which libvirt supports only from "
                             + "10.9 and reliably only from 11.5. Ubuntu 24.04 ships 10.0.0 and is not a "
                             + "supported hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another "

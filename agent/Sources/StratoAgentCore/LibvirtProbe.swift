@@ -72,19 +72,50 @@ public enum LibvirtProbe {
         }
     }
 
-    /// What the probe found. Deliberately three states, not a bool plus an
-    /// optional: "libvirt was never installed on this host" and "libvirtd is
-    /// installed but refused the connection" need different remediation.
+    /// What the probe found. Deliberately one case per remediation, not a bool
+    /// plus an optional: "libvirt was never installed here", "libvirtd refused
+    /// the connection" and "the daemon answered but not in a shape we can read"
+    /// each need different advice, and telling someone to start a daemon that
+    /// just answered them is worse than saying nothing.
     public enum Status: Sendable, Equatable {
         /// No `virsh` on `PATH` — libvirt is not installed here.
         case clientMissing
         /// The connection failed. The detail is whatever virsh said, trimmed.
         case unreachable(String)
+        /// virsh exited cleanly — so the daemon is reachable — but its output
+        /// carried no version we could parse. The detail is the first line of
+        /// what it did print.
+        case unrecognizedOutput(String)
         /// Connected; the daemon reports this version.
         case reachable(Version)
     }
 
-    public static let probeTimeout: Duration = .seconds(10)
+    /// Bounds the probe, which runs on the registration path. Matches
+    /// `HypervisorProbe.versionProbeTimeout`: connecting to a local daemon is
+    /// sub-second when it is healthy, so a longer budget only makes a wedged
+    /// libvirtd cost more on every reconnect attempt.
+    public static let probeTimeout: Duration = .seconds(5)
+
+    /// The child environment for a virsh whose output we parse: inherited, with
+    /// the message locale pinned to C.
+    ///
+    /// virsh prints `Running against daemon:` through gettext, so on a host with
+    /// `LANG`/`LC_MESSAGES` set to a language libvirt ships a catalog for, the
+    /// marker comes back translated and the parse fails on a perfectly healthy
+    /// daemon — which, once these checks gate placement (issue #902), would take
+    /// a working node out of service because of its locale. `sudo` keeps
+    /// `LANG`/`LC_*` via `env_keep` on Debian/Ubuntu, so inheriting is a real
+    /// exposure, not a theoretical one. `LC_ALL=C` wins over `LC_MESSAGES` and
+    /// `LANG`, and gettext ignores `LANGUAGE` entirely once the message locale
+    /// is C — dropped here anyway rather than relying on that.
+    static func cLocaleEnvironment(
+        inheriting parent: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = parent
+        environment["LC_ALL"] = "C"
+        environment.removeValue(forKey: "LANGUAGE")
+        return environment
+    }
 
     /// Connects to `uri` with virsh and reports what came back.
     ///
@@ -109,7 +140,8 @@ public enum LibvirtProbe {
             result = try await ProcessRunner.run(
                 executableURL: URL(fileURLWithPath: virsh),
                 arguments: ["-c", uri, "version", "--daemon"],
-                timeout: timeout)
+                timeout: timeout,
+                environment: cLocaleEnvironment())
         } catch {
             return .unreachable("\(virsh) failed: \(error)")
         }
@@ -122,11 +154,11 @@ public enum LibvirtProbe {
             )
         }
         guard let version = daemonVersion(in: output) else {
-            // Connected, but the output was not what we parse. Treat it as
-            // unreachable rather than guessing a version: the version floor is
-            // the whole reason to ask.
-            return .unreachable(
-                "could not read the daemon version from `virsh -c \(uri) version --daemon` output")
+            // The daemon answered — so this is not a reachability problem — but
+            // there is no version to compare, and the version floor is the whole
+            // reason to ask. Kept distinct from `.unreachable` so the operator
+            // isn't told to start a daemon that just replied to them.
+            return .unrecognizedOutput(firstMeaningfulLine(output) ?? "(no output)")
         }
         return .reachable(version)
     }

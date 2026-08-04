@@ -84,14 +84,22 @@ public enum ProcessRunner {
     /// termination handler fires; the normal path below then completes and
     /// `ProcessTimedOutError` is thrown. Nil means wait indefinitely, the
     /// behaviour every existing caller already relies on.
+    ///
+    /// `environment` replaces the child's entire environment when given; nil
+    /// inherits this process's, which is what every caller that doesn't care
+    /// wants. Callers that parse a tool's human-readable output pass a copy of
+    /// the inherited environment with `LC_ALL=C` so a translated message cannot
+    /// break the parse (see `LibvirtProbe`).
     public static func run(
         executableURL: URL,
         arguments: [String],
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        environment: [String: String]? = nil
     ) async throws -> ProcessResult {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        if let environment { process.environment = environment }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

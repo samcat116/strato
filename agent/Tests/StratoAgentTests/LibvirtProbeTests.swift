@@ -6,6 +6,21 @@ import Testing
 @Suite("Libvirt Probe Tests")
 struct LibvirtProbeTests {
 
+    private func makeStubDirectory() throws -> String {
+        let dir = NSTemporaryDirectory() + "libvirt-probe-tests-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Drops a stub `virsh` on a directory used as the probe's search path, so
+    /// the probe's own PATH lookup and subprocess handling are exercised rather
+    /// than mocked.
+    private func writeStubVirsh(in directory: String, script: String) throws {
+        let path = "\(directory)/virsh"
+        try "#!/bin/sh\n\(script)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+    }
+
     // MARK: - Version parsing and ordering
 
     @Test("Dotted release numbers parse, with an implied patch")
@@ -65,6 +80,30 @@ struct LibvirtProbeTests {
         #expect(LibvirtProbe.daemonVersion(in: "Running against daemon: unknown") == nil)
     }
 
+    @Test("A translated daemon line does not parse — which is why the probe pins the C locale")
+    func translatedOutputDoesNotParse() throws {
+        // virsh prints the marker through gettext. This documents the failure
+        // mode `cLocaleEnvironment` exists to prevent: without it, a host whose
+        // locale has a libvirt catalog reports a healthy daemon as unusable.
+        let french = "Exécution sur le démon : 11.5.0"
+        #expect(LibvirtProbe.daemonVersion(in: french) == nil)
+    }
+
+    @Test("The probe's child environment pins LC_ALL and drops LANGUAGE")
+    func cLocaleEnvironment() throws {
+        let environment = LibvirtProbe.cLocaleEnvironment(inheriting: [
+            "PATH": "/usr/bin", "LANG": "fr_FR.UTF-8", "LC_MESSAGES": "fr_FR.UTF-8",
+            "LANGUAGE": "fr", "XDG_RUNTIME_DIR": "/run/user/1000",
+        ])
+
+        #expect(environment["LC_ALL"] == "C")
+        #expect(environment["LANGUAGE"] == nil)
+        // Inherited, not replaced: virsh needs PATH and the session's runtime
+        // directory as much as any other child.
+        #expect(environment["PATH"] == "/usr/bin")
+        #expect(environment["XDG_RUNTIME_DIR"] == "/run/user/1000")
+    }
+
     // MARK: - Probing
 
     @Test("A host with no virsh on PATH reports the client missing, not an unreachable daemon")
@@ -75,53 +114,76 @@ struct LibvirtProbeTests {
 
     @Test("A virsh that fails reports the reason it printed")
     func unreachableReportsStderr() async throws {
-        let dir = NSTemporaryDirectory() + "libvirt-probe-tests-" + UUID().uuidString
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let dir = try makeStubDirectory()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-
         // Stands in for a virsh that cannot reach the daemon.
-        let script = """
-            #!/bin/sh
-            echo "error: failed to connect to the hypervisor" >&2
-            exit 1
-            """
-        let path = "\(dir)/virsh"
-        try script.write(toFile: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        try writeStubVirsh(
+            in: dir,
+            script: """
+                echo "error: failed to connect to the hypervisor" >&2
+                exit 1
+                """)
 
         let status = await LibvirtProbe.probe(searchPath: dir)
         #expect(status == .unreachable("error: failed to connect to the hypervisor"))
     }
 
-    @Test("A virsh that connects but prints nothing parseable is unreachable, not silently accepted")
-    func unparseableOutputIsUnreachable() async throws {
-        let dir = NSTemporaryDirectory() + "libvirt-probe-tests-" + UUID().uuidString
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    @Test("A virsh that connects but prints nothing parseable is reported separately from unreachable")
+    func unparseableOutputIsItsOwnState() async throws {
+        let dir = try makeStubDirectory()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-
-        let path = "\(dir)/virsh"
-        try "#!/bin/sh\necho 'Using library: libvirt 12.0.0'\n".write(
-            toFile: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        try writeStubVirsh(in: dir, script: "echo 'Using library: libvirt 12.0.0'")
 
         let status = await LibvirtProbe.probe(searchPath: dir)
+        // Not `.unreachable`: the daemon answered, so advising someone to start
+        // it or join the libvirt group would be wrong.
+        #expect(status == .unrecognizedOutput("Using library: libvirt 12.0.0"))
+    }
+
+    @Test("A virsh that never exits is bounded by the probe timeout")
+    func hangingVirshTimesOut() async throws {
+        let dir = try makeStubDirectory()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        // `exec` so the sleep *is* the child rather than a grandchild holding the
+        // pipes open: same timeout path, without waiting out ProcessRunner's
+        // drain deadline for an orphan it cannot signal.
+        try writeStubVirsh(in: dir, script: "exec sleep 60")
+
+        let status = await LibvirtProbe.probe(searchPath: dir, timeout: .milliseconds(300))
+        // The registration path cannot afford to park on a wedged libvirtd, and
+        // the operator needs to see *why* the check failed, not a bare timeout.
         guard case .unreachable(let detail) = status else {
             Issue.record("expected .unreachable, got \(status)")
             return
         }
-        #expect(detail.contains("could not read the daemon version"))
+        #expect(detail.contains("virsh"))
+    }
+
+    @Test("The daemon version is read under a forced C locale, whatever the parent's locale")
+    func forcesCLocaleOnTheChild() async throws {
+        let dir = try makeStubDirectory()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        // Stands in for a real virsh, which prints the marker through gettext:
+        // English only when the message locale is C.
+        try writeStubVirsh(
+            in: dir,
+            script: """
+                if [ "$LC_ALL" = "C" ]; then
+                  echo 'Running against daemon: 12.0.0'
+                else
+                  echo 'Exécution sur le démon : 12.0.0'
+                fi
+                """)
+
+        let status = await LibvirtProbe.probe(searchPath: dir)
+        #expect(status == .reachable(LibvirtProbe.Version(major: 12, minor: 0, patch: 0)))
     }
 
     @Test("A connecting virsh reports the daemon's version")
     func reachableReportsVersion() async throws {
-        let dir = NSTemporaryDirectory() + "libvirt-probe-tests-" + UUID().uuidString
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let dir = try makeStubDirectory()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-
-        let path = "\(dir)/virsh"
-        try "#!/bin/sh\necho 'Running against daemon: 12.0.0'\n".write(
-            toFile: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        try writeStubVirsh(in: dir, script: "echo 'Running against daemon: 12.0.0'")
 
         let status = await LibvirtProbe.probe(searchPath: dir)
         #expect(status == .reachable(LibvirtProbe.Version(major: 12, minor: 0, patch: 0)))

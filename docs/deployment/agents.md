@@ -53,8 +53,17 @@ dynamic_ownership = 1
 ```
 
 AppArmor stays **enabled**. If a denial ever appears, fix the profile rather
-than disabling the security driver. Pass `--no-libvirt-config` if this file is
-managed by configuration management, and apply the equivalent yourself.
+than disabling the security driver. Pass `--no-libvirt-config` to leave this
+file to your configuration management — the flag governs the file only; the
+socket unit is still enabled and the agent's account still gets its access.
+
+**libvirt's `default` network is turned off.** `libvirt-daemon-system` defines
+and autostarts a NAT network on Debian/Ubuntu: `virbr0`, a dnsmasq bound to
+`192.168.122.1:53`, and NAT rules. Strato never uses it — the agent does its own
+IPAM and TAP management — so on an OVN node it is an unrequested bridge, resolver
+and ruleset next to OVS. The installer disables its autostart and tears it down,
+skipping the teardown (with a warning) if the host has running domains that might
+be attached to it.
 
 **Service account.** The agent runs as **root**, and the values above follow
 from that: the default storage, config, and SPIRE paths are root-owned, the
@@ -141,8 +150,9 @@ swtpm for guest TPMs, and OVN/OVS for SDN networking), configures
 attests the node to SPIRE with the join token, writes `/etc/strato/config.toml`,
 brings up host telemetry, and enables `strato-agent.service` so the node
 survives reboots. It detects the host OS/arch, verifies download checksums, and
-runs a host preflight — which refuses a libvirt older than 11.5 rather than
-leaving checkpoints to fail later.
+runs a host preflight, which reports a libvirt older than 11.5 as a `[MISS]`
+rather than leaving checkpoints to fail later. The preflight is a summary, not a
+gate: the install completes either way, so read its output.
 
 Useful flags (`--help` lists them all):
 
