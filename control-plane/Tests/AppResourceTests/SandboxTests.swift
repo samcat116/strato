@@ -798,6 +798,37 @@ final class SandboxTests {
         }
     }
 
+    @Test("GET /api/sandboxes/:id/operations lists newest first and honors limit")
+    func listOperationsNewestFirst() async throws {
+        try await withSandboxTestApp { app, user, _, sandbox, token in
+            let older = ResourceOperation(sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
+            older.status = .succeeded
+            try await older.save(on: app.db)
+            older.createdAt = Date().addingTimeInterval(-60)
+            try await older.save(on: app.db)
+
+            let newer = ResourceOperation(
+                sandboxID: sandbox.id!, userID: user.id!, kind: .shutdown)
+            newer.status = .succeeded
+            try await newer.save(on: app.db)
+
+            try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)/operations?limit=1") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operations = try res.content.decode([OperationResponse].self)
+                #expect(operations.count == 1)
+                #expect(operations.first?.id == newer.id)
+            }
+
+            try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)/operations?limit=abc") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     @Test("DELETE /api/projects/:id is rejected (409) while sandboxes exist")
     func projectDeleteBlockedBySandboxes() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
