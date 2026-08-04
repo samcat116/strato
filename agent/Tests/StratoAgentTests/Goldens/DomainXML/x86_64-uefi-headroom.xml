@@ -1,0 +1,66 @@
+<domain type='kvm'>
+  <name>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</name>
+  <uuid>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</uuid>
+  <maxMemory slots='1' unit='KiB'>8388608</maxMemory>
+  <memory unit='KiB'>8388608</memory>
+  <currentMemory unit='KiB'>2097152</currentMemory>
+  <vcpu placement='static' current='2'>8</vcpu>
+  <os firmware='efi'>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <firmware>
+      <feature enabled='no' name='enrolled-keys'/>
+      <feature enabled='no' name='secure-boot'/>
+    </firmware>
+    <nvram format='qcow2'>/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/nvram.fd</nvram>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough' check='none'>
+    <numa>
+      <cell id='0' cpus='0-7' memory='2097152' unit='KiB'/>
+    </numa>
+  </cpu>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/disk.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <controller type='virtio-serial' index='0'/>
+    <interface type='ethernet'>
+      <mac address='52:54:00:12:34:56'/>
+      <target dev='tap0f9ea1b23c4d' managed='no'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/serial.sock'/>
+      <target port='0'/>
+    </serial>
+    <console type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/console.sock'/>
+      <target type='virtio' port='0'/>
+    </console>
+    <channel type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/qga.sock'/>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <video>
+      <model type='none'/>
+    </video>
+    <memballoon model='virtio' freePageReporting='on'/>
+    <memory model='virtio-mem'>
+      <target>
+        <size unit='KiB'>6291456</size>
+        <node>0</node>
+        <block unit='KiB'>2048</block>
+        <requested unit='KiB'>0</requested>
+      </target>
+    </memory>
+  </devices>
+</domain>
