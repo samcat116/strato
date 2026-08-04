@@ -16,6 +16,7 @@ struct Strato: AsyncParsableCommand {
             VolumeCommand.self,
             ImageCommand.self,
             NetworkCommand.self,
+            DNSCommand.self,
             AgentCommand.self,
             ProjectCommand.self,
             OrgCommand.self,

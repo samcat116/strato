@@ -175,21 +175,22 @@ struct NetworkController: RouteCollection {
                     .badRequest,
                     reason: "Site \(siteId) does not serve the network's project")
             }
-            // A site that already has member agents but designates no network
-            // controller reconciles no topology at all: the switch would be
-            // created in the database and realized nowhere, and the first VM
-            // on it would park forever with no API-visible symptom (issue
-            // #743). An *empty* site is not refused — pre-provisioning a
-            // network for capacity that hasn't been enrolled yet is
-            // legitimate, and the first OVN-capable node to join becomes the
-            // controller automatically.
-            if site.$networkControllerAgent.id == nil {
+            // A site whose topology nobody authors — no designated network
+            // controller, or one that is offline past the grace window or came
+            // back unable to author (issue #833) — reconciles nothing: the
+            // switch would be created in the database and realized nowhere, and
+            // the first VM on it would park forever with no API-visible symptom
+            // (issue #743). An *empty* site is not refused — pre-provisioning a
+            // network for capacity that hasn't been enrolled yet is legitimate,
+            // and the first OVN-capable node to join becomes the controller
+            // automatically. (A site with an unusable controller has a member
+            // by definition, so only the unassigned case reaches that count.)
+            let authority = try await SiteNetworkAuthority.resolve(forSite: site, on: req.db)
+            if let refusal = SiteNetworkAuthority.refusal(
+                authority, consequence: "a network pinned to it would be realized nowhere")
+            {
                 let members = try await Agent.query(on: req.db).filter(\.$site.$id == siteId).count()
-                guard members == 0 else {
-                    throw SiteNetworkAuthority.missingControllerAbort(
-                        site: site,
-                        consequence: "a network pinned to it would be realized nowhere")
-                }
+                guard members == 0 else { throw refusal }
             }
         }
 
@@ -455,6 +456,39 @@ struct NetworkController: RouteCollection {
         if let leaseTime = request.leaseTime {
             try Self.validateLeaseTime(leaseTime)
             network.leaseTime = leaseTime
+        }
+
+        // The zone this network's VMs register into (issue #770). Only ever a
+        // zone already attached to the network — attachment is what grants
+        // resolution, and registering into a zone the network cannot resolve
+        // would publish names its own VMs can't look up.
+        if request.clearPrimaryDnsZone == true {
+            guard request.primaryDnsZoneId == nil else {
+                throw Abort(
+                    .badRequest,
+                    reason: "primaryDnsZoneId cannot be combined with clearPrimaryDnsZone=true")
+            }
+            network.$primaryDNSZone.id = nil
+        } else if let zoneID = request.primaryDnsZoneId, zoneID != network.$primaryDNSZone.id {
+            guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
+                throw Abort(.badRequest, reason: "DNS zone \(zoneID) does not exist")
+            }
+            let attached = try await DNSZoneNetwork.query(on: req.db)
+                .filter(\.$zone.$id == zoneID)
+                .filter(\.$logicalNetwork.$id == networkID)
+                .count()
+            guard attached > 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "DNS zone '\(zone.name)' is not attached to this network; attach it first")
+            }
+            let allowed = try await req.can("update", on: "dns_zone", id: zoneID.uuidString)
+            guard allowed else {
+                throw Abort(.forbidden, reason: "You don't have permission to modify this DNS zone")
+            }
+            try await DNSZoneService.assertPrimaryZoneAssignable(
+                zone: zone, networkID: networkID, on: req.db)
+            network.$primaryDNSZone.id = zoneID
         }
 
         do {

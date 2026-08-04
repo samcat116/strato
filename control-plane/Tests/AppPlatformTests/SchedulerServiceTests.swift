@@ -1,0 +1,892 @@
+import Testing
+import Vapor
+import StratoShared
+@testable import App
+
+@Suite("SchedulerService Tests", .serialized)
+struct SchedulerServiceTests {
+
+    // MARK: - Test Data Helpers
+
+    func createTestVM(
+        cpu: Int = 2,
+        memory: Int64 = 2048,
+        disk: Int64 = 20000,
+        hypervisorType: HypervisorType = .qemu
+    ) -> VM {
+        return VM(
+            name: "test-vm",
+            description: "Test VM",
+            image: "test-image",
+            projectID: UUID(),
+            environment: "test",
+            cpu: cpu,
+            memory: memory,
+            disk: disk,
+            hypervisorType: hypervisorType
+        )
+    }
+
+    func createTestAgent(
+        id: String = "test-agent",
+        name: String = "test-agent",
+        totalCPU: Int = 8,
+        availableCPU: Int = 6,
+        totalMemory: Int64 = 16000,
+        availableMemory: Int64 = 12000,
+        totalDisk: Int64 = 100000,
+        availableDisk: Int64 = 80000,
+        status: AgentStatus = .online,
+        runningVMCount: Int = 0,
+        supportedHypervisors: [HypervisorType] = [.qemu],
+        architecture: CPUArchitecture? = nil,
+        supportsInterVMNetworking: Bool = false,
+        supportsSandboxWorkloads: Bool = false,
+        supportsVTPM: Bool = false,
+        supportsMachineProfile: Bool = false,
+        supportsGraphicsConsole: Bool = false
+    ) -> SchedulableAgent {
+        return SchedulableAgent(
+            id: id,
+            name: name,
+            totalCPU: totalCPU,
+            availableCPU: availableCPU,
+            totalMemory: totalMemory,
+            availableMemory: availableMemory,
+            totalDisk: totalDisk,
+            availableDisk: availableDisk,
+            status: status,
+            runningVMCount: runningVMCount,
+            supportedHypervisors: supportedHypervisors,
+            architecture: architecture,
+            supportsInterVMNetworking: supportsInterVMNetworking,
+            supportsSandboxWorkloads: supportsSandboxWorkloads,
+            supportsVTPM: supportsVTPM,
+            supportsMachineProfile: supportsMachineProfile,
+            supportsGraphicsConsole: supportsGraphicsConsole
+        )
+    }
+
+    /// Placement requirements for a sandbox workload: Firecracker plus the
+    /// explicit sandbox-runtime capability, no disk.
+    func sandboxRequirements(cpu: Int = 1, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu,
+            memory: memory,
+            disk: 0,
+            hypervisorType: .firecracker,
+            requiresSandboxRuntime: true
+        )
+    }
+
+    // MARK: - Resource Utilization Tests
+
+    @Test("SchedulableAgent calculates CPU utilization correctly")
+    func testCPUUtilization() throws {
+        let agent = createTestAgent(totalCPU: 8, availableCPU: 6)
+        #expect(agent.cpuUtilization == 0.25)  // (8-6)/8 = 0.25
+
+        let fullyUtilized = createTestAgent(totalCPU: 8, availableCPU: 0)
+        #expect(fullyUtilized.cpuUtilization == 1.0)
+
+        let unused = createTestAgent(totalCPU: 8, availableCPU: 8)
+        #expect(unused.cpuUtilization == 0.0)
+    }
+
+    @Test("SchedulableAgent calculates memory utilization correctly")
+    func testMemoryUtilization() throws {
+        let agent = createTestAgent(totalMemory: 16000, availableMemory: 12000)
+        #expect(agent.memoryUtilization == 0.25)  // (16000-12000)/16000 = 0.25
+
+        let fullyUtilized = createTestAgent(totalMemory: 16000, availableMemory: 0)
+        #expect(fullyUtilized.memoryUtilization == 1.0)
+    }
+
+    @Test("SchedulableAgent calculates disk utilization correctly")
+    func testDiskUtilization() throws {
+        let agent = createTestAgent(totalDisk: 100000, availableDisk: 80000)
+        #expect(agent.diskUtilization == 0.2)  // (100000-80000)/100000 = 0.2
+    }
+
+    @Test("SchedulableAgent calculates overall utilization correctly")
+    func testOverallUtilization() throws {
+        let agent = createTestAgent(
+            totalCPU: 8, availableCPU: 6,  // 25% utilization
+            totalMemory: 16000, availableMemory: 12000,  // 25% utilization
+            totalDisk: 100000, availableDisk: 80000  // 20% utilization
+        )
+        // Overall = (0.25 * 0.4) + (0.25 * 0.4) + (0.2 * 0.2) = 0.1 + 0.1 + 0.04 = 0.24
+        let expected = 0.24
+        #expect(abs(agent.overallUtilization - expected) < 0.001)
+    }
+
+    // MARK: - Least Loaded Strategy Tests
+
+    @Test("Least loaded strategy selects agent with lowest utilization")
+    func testLeastLoadedStrategy() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger, defaultStrategy: .leastLoaded)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableCPU: 2),  // 75% CPU util
+            createTestAgent(id: "agent2", name: "agent2", availableCPU: 6),  // 25% CPU util - should be selected
+            createTestAgent(id: "agent3", name: "agent3", availableCPU: 4),  // 50% CPU util
+        ]
+
+        let vm = createTestVM(cpu: 2, memory: 2000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    @Test("Least loaded strategy with default strategy")
+    func testLeastLoadedDefaultStrategy() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)  // defaults to leastLoaded
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", totalMemory: 16000, availableMemory: 4000),  // 75% mem
+            createTestAgent(id: "agent2", name: "agent2", totalMemory: 16000, availableMemory: 14000),  // 12.5% mem
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 2000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    // MARK: - Best Fit Strategy Tests
+
+    @Test("Best fit strategy selects agent with least remaining capacity")
+    func testBestFitStrategy() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger, defaultStrategy: .bestFit)
+
+        let agents = [
+            createTestAgent(
+                id: "agent1", name: "agent1", availableCPU: 6, availableMemory: 12000, availableDisk: 80000),
+            // Least capacity - should be selected
+            createTestAgent(id: "agent2", name: "agent2", availableCPU: 2, availableMemory: 4000, availableDisk: 20000),
+            createTestAgent(id: "agent3", name: "agent3", availableCPU: 4, availableMemory: 8000, availableDisk: 50000),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 2000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents, strategy: .bestFit)
+
+        #expect(selectedId == "agent2")
+    }
+
+    // MARK: - Round Robin Strategy Tests
+
+    @Test("Round robin strategy distributes VMs evenly")
+    func testRoundRobinStrategy() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger, defaultStrategy: .roundRobin)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1"),
+            createTestAgent(id: "agent2", name: "agent2"),
+            createTestAgent(id: "agent3", name: "agent3"),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+
+        // Should cycle through agents
+        let first = try scheduler.selectAgent(for: vm, from: agents)
+        let second = try scheduler.selectAgent(for: vm, from: agents)
+        let third = try scheduler.selectAgent(for: vm, from: agents)
+        let fourth = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(first == "agent1")
+        #expect(second == "agent2")
+        #expect(third == "agent3")
+        #expect(fourth == "agent1")  // Wraps around
+    }
+
+    // MARK: - Random Strategy Tests
+
+    @Test("Random strategy selects from eligible agents")
+    func testRandomStrategy() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger, defaultStrategy: .random)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1"),
+            createTestAgent(id: "agent2", name: "agent2"),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents, strategy: .random)
+
+        // Should select one of the agents
+        #expect(selectedId == "agent1" || selectedId == "agent2")
+    }
+
+    // MARK: - Resource Filtering Tests
+
+    @Test("Scheduler filters out offline agents")
+    func testFiltersOfflineAgents() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", status: .offline),
+            createTestAgent(id: "agent2", name: "agent2", status: .online),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    @Test("Scheduler filters out agents with insufficient CPU")
+    func testFiltersInsufficientCPU() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableCPU: 1),  // Not enough
+            createTestAgent(id: "agent2", name: "agent2", availableCPU: 4),  // Enough
+        ]
+
+        let vm = createTestVM(cpu: 2, memory: 1000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    @Test("Scheduler filters out agents with insufficient memory")
+    func testFiltersInsufficientMemory() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableMemory: 1000),  // Not enough
+            createTestAgent(id: "agent2", name: "agent2", availableMemory: 10000),  // Enough
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 5000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    @Test("Scheduler filters out agents with insufficient disk")
+    func testFiltersInsufficientDisk() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableDisk: 5000),  // Not enough
+            createTestAgent(id: "agent2", name: "agent2", availableDisk: 50000),  // Enough
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 20000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent2")
+    }
+
+    // MARK: - Error Handling Tests
+
+    @Test("Scheduler throws error when no agents available")
+    func testNoAgentsAvailable() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents: [SchedulableAgent] = []
+        let vm = createTestVM()
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(for: vm, from: agents)
+        }
+    }
+
+    @Test("Scheduler throws error when no agents have sufficient resources")
+    func testInsufficientResources() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableCPU: 1, availableMemory: 500, availableDisk: 5000)
+        ]
+
+        let vm = createTestVM(cpu: 4, memory: 8000, disk: 50000)  // Requires more than available
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(for: vm, from: agents)
+        }
+    }
+
+    @Test("Scheduler throws error when all agents are offline")
+    func testAllAgentsOffline() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", status: .offline),
+            createTestAgent(id: "agent2", name: "agent2", status: .offline),
+        ]
+
+        let vm = createTestVM()
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(for: vm, from: agents)
+        }
+    }
+
+    // MARK: - Strategy Override Tests
+
+    @Test("Strategy can be overridden per request")
+    func testStrategyOverride() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger, defaultStrategy: .leastLoaded)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableCPU: 2),  // Higher utilization
+            createTestAgent(id: "agent2", name: "agent2", availableCPU: 6),  // Lower utilization
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+
+        // Default strategy (least loaded) should select agent2
+        let defaultSelection = try scheduler.selectAgent(for: vm, from: agents)
+        #expect(defaultSelection == "agent2")
+
+        // Override with best fit (should select agent with least capacity = agent1)
+        let overrideSelection = try scheduler.selectAgent(for: vm, from: agents, strategy: .bestFit)
+        #expect(overrideSelection == "agent1")
+    }
+
+    // MARK: - Edge Cases
+
+    @Test("Scheduler handles agent with zero total resources")
+    func testZeroTotalResources() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", totalCPU: 0, availableCPU: 0),
+            createTestAgent(id: "agent2", name: "agent2", totalCPU: 8, availableCPU: 6),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        // Should select agent2 since agent1 has no resources
+        #expect(selectedId == "agent2")
+    }
+
+    @Test("Scheduler handles exact resource match")
+    func testExactResourceMatch() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "agent1", name: "agent1", availableCPU: 2, availableMemory: 2048, availableDisk: 20000)
+        ]
+
+        let vm = createTestVM(cpu: 2, memory: 2048, disk: 20000)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "agent1")
+    }
+
+    // MARK: - Hard Placement Constraint Tests
+
+    @Test("Firecracker VM only lands on a Firecracker-capable agent")
+    func testHypervisorConstraintSelectsCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            // More attractive by utilization, but QEMU-only (e.g. a macOS agent)
+            createTestAgent(id: "qemu-only", name: "qemu-only", availableCPU: 8, supportedHypervisors: [.qemu]),
+            createTestAgent(
+                id: "linux-agent", name: "linux-agent", availableCPU: 2, supportedHypervisors: [.qemu, .firecracker]),
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000, hypervisorType: .firecracker)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "linux-agent")
+    }
+
+    @Test("Firecracker VM fails placement when no agent supports it")
+    func testHypervisorConstraintFailsWithoutCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "mac1", name: "mac1", supportedHypervisors: [.qemu]),
+            createTestAgent(id: "mac2", name: "mac2", supportedHypervisors: [.qemu]),
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors) = error
+            else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(required == .firecracker)
+            #expect(onlineAgents == 2)
+            #expect(agentsWithoutHypervisors == 0)
+        }
+    }
+
+    @Test("Agents advertising no hypervisors are counted in the mismatch error")
+    func testUnsupportedHypervisorCountsBrokenAgents() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "healthy", name: "healthy", supportedHypervisors: [.qemu]),
+            createTestAgent(id: "broken", name: "broken", supportedHypervisors: []),
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(_, _, let agentsWithoutHypervisors) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(agentsWithoutHypervisors == 1)
+            #expect(error.description.contains("advertise no usable hypervisor backend"))
+        }
+    }
+
+    @Test("Fleet with no usable hypervisors fails with a configuration-pointing error")
+    func testNoUsableHypervisors() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // e.g. agents whose QEMU binary probe failed at registration
+        let agents = [
+            createTestAgent(id: "broken1", name: "broken1", supportedHypervisors: []),
+            createTestAgent(id: "broken2", name: "broken2", supportedHypervisors: []),
+        ]
+
+        let vm = createTestVM(hypervisorType: .qemu)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected noUsableHypervisors error")
+        } catch let error as SchedulerError {
+            guard case .noUsableHypervisors(let onlineAgents) = error else {
+                Issue.record("Expected noUsableHypervisors, got \(error)")
+                return
+            }
+            #expect(onlineAgents == 2)
+            #expect(error.description.contains("binary path"))
+        }
+    }
+
+    @Test("Architecture requirement excludes mismatched and unknown-arch agents")
+    func testArchitectureConstraint() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "intel", name: "intel", availableCPU: 8, architecture: .x86_64),
+            createTestAgent(id: "unknown-arch", name: "unknown-arch", availableCPU: 8, architecture: nil),
+            createTestAgent(id: "arm", name: "arm", availableCPU: 2, architecture: .arm64),
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+        let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
+
+        #expect(selectedId == "arm")
+    }
+
+    @Test("Architecture requirement fails placement when no host matches")
+    func testArchitectureConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "intel", name: "intel", architecture: .x86_64),
+            createTestAgent(id: "unknown-arch", name: "unknown-arch", architecture: nil),
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+
+        do {
+            _ = try scheduler.selectAgent(requirements: requirements, from: agents)
+            Issue.record("Expected architectureMismatch error")
+        } catch let error as SchedulerError {
+            guard case .architectureMismatch(let required) = error else {
+                Issue.record("Expected architectureMismatch, got \(error)")
+                return
+            }
+            #expect(required == .arm64)
+        }
+    }
+
+    @Test("Inter-VM networking requirement excludes user-mode-only agents")
+    func testNetworkCapabilityConstraint() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "slirp", name: "slirp", availableCPU: 8, supportsInterVMNetworking: false),
+            createTestAgent(id: "ovn", name: "ovn", availableCPU: 2, supportsInterVMNetworking: true),
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+        let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
+
+        #expect(selectedId == "ovn")
+    }
+
+    @Test("Inter-VM networking requirement fails placement on user-mode-only fleet")
+    func testNetworkCapabilityConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "slirp", name: "slirp", supportsInterVMNetworking: false)
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+
+        do {
+            _ = try scheduler.selectAgent(requirements: requirements, from: agents)
+            Issue.record("Expected networkCapabilityUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .networkCapabilityUnsatisfied = error else {
+                Issue.record("Expected networkCapabilityUnsatisfied, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("Sandbox placement only lands on agents advertising the sandbox runtime")
+    func testSandboxRuntimeConstraintSelectsCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            // Firecracker-capable and more attractive by utilization, but the
+            // runtime was never advertised (no guest image, or a pre-runtime
+            // build) — hypervisor support alone must not qualify it.
+            createTestAgent(
+                id: "fc-only", name: "fc-only", availableCPU: 8,
+                supportedHypervisors: [.qemu, .firecracker]),
+            createTestAgent(
+                id: "sandbox-ready", name: "sandbox-ready", availableCPU: 2,
+                supportedHypervisors: [.qemu, .firecracker], supportsSandboxWorkloads: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+
+        #expect(selectedId == "sandbox-ready")
+    }
+
+    @Test("Sandbox placement fails with its own error when no agent advertises the runtime")
+    func testSandboxRuntimeConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "fc1", name: "fc1", supportedHypervisors: [.firecracker]),
+            createTestAgent(id: "fc2", name: "fc2", supportedHypervisors: [.firecracker]),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+            Issue.record("Expected sandboxRuntimeUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .sandboxRuntimeUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected sandboxRuntimeUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("sandbox runtime"))
+        }
+    }
+
+    @Test("Sandbox placement without Firecracker support fails as unsupported hypervisor")
+    func testSandboxRuntimeReportsHypervisorGapFirst() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // A QEMU-only fleet fails at the more fundamental hypervisor stage,
+        // pointing at the actual gap rather than the runtime capability.
+        let agents = [
+            createTestAgent(id: "qemu", name: "qemu", supportedHypervisors: [.qemu])
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(let required, _, _) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(required == .firecracker)
+        }
+    }
+
+    @Test("Sandbox-capable but resource-starved fleet fails on resources")
+    func testSandboxRuntimeConstraintThenResources() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(
+                id: "starved", name: "starved", availableCPU: 0,
+                supportedHypervisors: [.firecracker], supportsSandboxWorkloads: true)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(cpu: 2), from: agents)
+            Issue.record("Expected insufficientResources error")
+        } catch let error as SchedulerError {
+            guard case .insufficientResources = error else {
+                Issue.record("Expected insufficientResources, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("Hypervisor constraint is checked before resources")
+    func testConstraintErrorPrecedence() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // The only Firecracker-capable agent is also resource-starved: the
+        // failure should still be reported as insufficient resources, not as
+        // unsupported hypervisor, because a capable agent exists.
+        let agents = [
+            createTestAgent(
+                id: "starved", name: "starved", availableCPU: 0, supportedHypervisors: [.qemu, .firecracker]),
+            createTestAgent(id: "qemu-only", name: "qemu-only", availableCPU: 8, supportedHypervisors: [.qemu]),
+        ]
+
+        let vm = createTestVM(cpu: 2, hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected insufficientResources error")
+        } catch let error as SchedulerError {
+            guard case .insufficientResources = error else {
+                Issue.record("Expected insufficientResources, got \(error)")
+                return
+            }
+        }
+    }
+
+    // MARK: - Machine profile: Secure Boot and vTPM (issue #565)
+
+    /// Requirements for a Windows-shaped VM: firmware boot with Secure Boot
+    /// and a TPM 2.0.
+    private func windowsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu,
+            memory: memory,
+            disk: 0,
+            hypervisorType: .qemu,
+            requiresVTPM: true,
+            requiresSecureBoot: true
+        )
+    }
+
+    @Test("A vTPM VM only places on an agent that advertised swtpm")
+    func testVTPMPlacementPrefersCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            // New enough to understand the machine profile and far more
+            // attractive by utilization — but it never advertised swtpm, so it
+            // would boot the guest with no TPM and Windows setup would refuse.
+            createTestAgent(
+                id: "no-swtpm", name: "no-swtpm", availableCPU: 8, supportsMachineProfile: true),
+            createTestAgent(
+                id: "tpm-ready", name: "tpm-ready", availableCPU: 2,
+                supportsVTPM: true, supportsMachineProfile: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+
+        #expect(selectedId == "tpm-ready")
+    }
+
+    @Test("A vTPM VM with no swtpm-capable agent fails at placement, not silently")
+    func testVTPMConstraintFails() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "a1", name: "a1", supportsMachineProfile: true),
+            createTestAgent(id: "a2", name: "a2", supportsMachineProfile: true),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+            Issue.record("Expected vtpmUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .vtpmUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected vtpmUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("swtpm"))
+        }
+    }
+
+    /// An agent that predates wire v17 decodes the sync fine and simply
+    /// ignores `VMSpec.machine` — the guest boots without Secure Boot or a TPM
+    /// while the API says it has both. That silent divergence is exactly what
+    /// the gate exists to prevent, so such agents are excluded even when they
+    /// have swtpm installed.
+    @Test("An agent too old to realize the machine profile is not eligible")
+    func testMachineProfileRequiresNewEnoughAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
+            Issue.record("Expected machineProfileUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .machineProfileUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected machineProfileUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
+    }
+
+    /// Secure Boot needs no host binary — any agent that acts on the machine
+    /// profile can resolve a signed firmware set — so it must not inherit the
+    /// vTPM constraint.
+    @Test("Secure Boot alone does not require swtpm")
+    func testSecureBootDoesNotRequireVTPM() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let requirements = VMPlacementRequirements(
+            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu,
+            requiresVTPM: false, requiresSecureBoot: true)
+
+        let agents = [
+            createTestAgent(id: "sb-only", name: "sb-only", supportsVTPM: false, supportsMachineProfile: true)
+        ]
+
+        #expect(try scheduler.selectAgent(requirements: requirements, from: agents) == "sb-only")
+    }
+
+    /// The default profile must not narrow placement at all: an agent that
+    /// predates #565 entirely still takes ordinary VMs.
+    @Test("A VM with no machine profile places on a pre-v17 agent")
+    func testPlainVMIgnoresMachineProfileGates() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
+        ]
+        let vm = createTestVM(cpu: 2)
+
+        #expect(try scheduler.selectAgent(for: vm, from: agents) == "old")
+    }
+
+    /// The requirements a VM implies must carry its machine profile, or the
+    /// gates above would never engage on the real create path.
+    @Test("Placement requirements carry the VM's Secure Boot and TPM intent")
+    func testPlacementRequirementsCarryMachineProfile() throws {
+        let plain = createTestVM(cpu: 2)
+        let plainRequirements = SchedulerService.placementRequirements(for: plain)
+        #expect(!plainRequirements.requiresVTPM)
+        #expect(!plainRequirements.requiresSecureBoot)
+
+        let windows = createTestVM(cpu: 2)
+        windows.secureBoot = true
+        windows.tpmEnabled = true
+        let windowsRequirements = SchedulerService.placementRequirements(for: windows)
+        #expect(windowsRequirements.requiresVTPM)
+        #expect(windowsRequirements.requiresSecureBoot)
+    }
+
+    // MARK: - Graphics console (issue #566)
+
+    /// Requirements for a VM that asks for a display.
+    private func graphicsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu, memory: memory, disk: 0, hypervisorType: .qemu, requiresGraphicsConsole: true)
+    }
+
+    /// A pre-v23 agent decodes the sync fine and ignores `ConsoleSpec.graphics`,
+    /// so the guest boots headless while the API reports a display and the
+    /// Display tab shows nothing. Same silent divergence the machine profile is
+    /// gated on, so placement is refused rather than degraded.
+    @Test("An agent too old to realize a graphics console is not eligible")
+    func testGraphicsConsoleRequiresNewEnoughAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents)
+            Issue.record("Expected graphicsConsoleUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .graphicsConsoleUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected graphicsConsoleUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
+    }
+
+    /// The gate narrows to the capable agents rather than failing outright when
+    /// some of the fleet can serve the VM.
+    @Test("A graphics VM places on the one agent new enough to serve it")
+    func testGraphicsConsolePlacesOnCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", availableCPU: 8, supportsGraphicsConsole: false),
+            createTestAgent(id: "new", name: "new", availableCPU: 2, supportsGraphicsConsole: true),
+        ]
+
+        // "old" has more free CPU, so a strategy-only choice would pick it.
+        #expect(try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents) == "new")
+    }
+
+    /// The default must not narrow placement: a headless VM still takes any
+    /// agent, including one that predates the feature entirely.
+    @Test("A headless VM places on a pre-v23 agent")
+    func testHeadlessVMIgnoresGraphicsGate() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+
+        let agents = [
+            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
+        ]
+
+        #expect(try scheduler.selectAgent(for: createTestVM(cpu: 2), from: agents) == "old")
+    }
+
+    /// The gate only engages if the VM's intent reaches the requirements, so
+    /// the real create path has to carry it.
+    @Test("Placement requirements carry the VM's graphics console intent")
+    func testPlacementRequirementsCarryGraphicsConsole() throws {
+        let headless = createTestVM(cpu: 2)
+        #expect(!SchedulerService.placementRequirements(for: headless).requiresGraphicsConsole)
+
+        let graphical = createTestVM(cpu: 2)
+        graphical.graphicsConsole = true
+        #expect(SchedulerService.placementRequirements(for: graphical).requiresGraphicsConsole)
+    }
+}

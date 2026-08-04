@@ -28,7 +28,6 @@ struct CreateVMOperation: AsyncMigration {
             // At most one pending operation per VM, enforced by the database so
             // two concurrent mutations cannot both slip past the controller's
             // pending-check (the loser's insert fails and surfaces as 409).
-            // Partial indexes work on both SQLite and Postgres.
             try await sql.raw(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_vm_operations_pending_vm "
                     + "ON vm_operations (vm_id) WHERE status = 'pending'"

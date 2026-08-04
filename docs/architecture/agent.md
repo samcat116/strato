@@ -109,6 +109,7 @@ host cleanly rejects placements it can't serve.
 - **`QEMUService`** (`.qemu`): Linux KVM / macOS HVF via SwiftQEMU.
   Materializes boot disks through the storage backend, wires serial/console
   sockets, and re-adopts orphaned VMs over a deterministic QMP socket path.
+  Optionally gives the guest a **graphics console** (see below).
 - **`FirecrackerService`** (`.firecracker`, Linux only): translates the
   neutral spec into Firecracker API calls; requires direct-kernel boot and
   `.tap` network attachments. Shares one `FirecrackerClient` with the
@@ -188,6 +189,70 @@ Whether the host has a usable `swtpm` is what the agent advertises as
 preflight reports its absence as an advisory — a host without swtpm is
 perfectly useful, it just never receives a TPM placement.
 
+## Graphics console (VNC)
+
+A VM whose spec carries `ConsoleSpec.graphics == .vnc` (issue #566) is spawned
+with a display device and a VNC server on a Unix socket, so its framebuffer can
+be relayed to noVNC in the web UI. Headless is the default and its command line
+is unchanged.
+
+`StratoAgentCore/QEMUGraphicsDevice.swift` builds the arguments — in the core
+library, not beside the rest of the command line in `QEMUService`, for the same
+reason as `QEMUBalloonDevice`: that file links SwiftQEMU and so has no unit
+tests, and a device line QEMU rejects surfaces only as a QMP connect timeout.
+
+- `-display none` plus `-vnc unix:<vmDir>/vnc.sock`. In current QEMU `-vnc` *is*
+  a display backend, so the VNC server is what exports the framebuffer and no
+  local window is ever opened. `-nographic` is correspondingly **not** passed
+  for these VMs — its whole job is to force `-display none` and redirect the
+  *default* serial and monitor to stdio. The VM's serial console is unaffected,
+  because it is an explicit `-serial unix:…`, which is what `-nographic` defers
+  to anyway. (A side effect worth knowing: dropping `-nographic` also moves
+  QEMU's HMP monitor off the agent process's stdio.)
+- **Standard VGA on x86** (`-vga std`), not virtio. The point of this console is
+  pre-driver output — UEFI, GRUB, Windows Setup, a panic screen — and
+  `virtio-vga` needs a guest driver for anything past its VGA-compat mode.
+  virtio-gpu is also a separate QEMU module that some distribution builds omit
+  entirely, while `std` is always present. Passing `-vga std` *selects* the
+  default adapter rather than adding a second one, which is what keeps QEMU from
+  refusing to start with two VGA devices.
+- **`virtio-gpu-pci` on arm64**, where the `virt` machine creates no display
+  device at all and there is no `-vga` to select one. EDK2 drives it at firmware
+  time through `VirtioGpuDxe`.
+- `qemu-xhci` + `usb-tablet`, for **absolute** pointer positioning. Without it
+  the guest sees relative motion and its cursor drifts away from the browser's,
+  which makes a graphical installer unclickable. `q35` starts with USB off and
+  `virt` has no controller at all, so both the controller and the tablet's
+  `bus=` are explicit.
+- `usb-kbd`, on every architecture. It looks redundant on x86 — `q35` keeps the
+  default i8042 PS/2 controller, so a guest there types without it and this just
+  becomes a second keyboard — but arm64's `virt` has no PS/2 and creates no
+  input devices at all. Without it an aarch64 guest renders and accepts clicks
+  while dropping every keystroke, which breaks precisely the installer this
+  console exists to drive.
+
+**There is no RFB password.** The socket's file mode inside the VM directory,
+plus the control plane's `view_console` authorization in front of the relay, are
+the security boundary — the same trust model as the QMP and serial sockets
+beside it. It must never become a TCP listener.
+
+The socket path is deterministic, so a VM re-adopted after an agent restart
+resolves its console from `vmStoragePath + vmId` alone; the listener belongs to
+the surviving QEMU process, not to the agent. Conversely, a VM created headless
+can never gain a display without being recreated — the device is fixed in the
+QEMU process's arguments, and a stop/start respawns from those same arguments.
+
+`ConsoleSocketManager` relays whichever socket a session asked for as opaque
+bytes, so nothing agent-side understands RFB. Reads are handed to the control
+plane through an `OrderedByteRelay` (a synchronous `yield` on the channel's
+event loop, drained by one consumer task): a task-per-read forwards reads that
+can transpose, which is survivable for a text console and fatal for RFB, where
+the client reads a length-prefixed header and then exactly that many bytes.
+Sessions are keyed by stream as well as VM, so opening the Display tab does not
+tear down a serial console on the same VM. Graphics sessions are never evicted
+at all — QEMU multiplexes RFB clients on one socket, so two viewers is a
+supported case rather than a stale one.
+
 ## Guest provisioning (cloud-init)
 
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
@@ -259,6 +324,51 @@ pre-qga behavior:
   probes running QEMU VMs for hostname and configured addresses off the report's
   hot path, caching the result the observed-state report reads. This is the only
   way DHCP/SLAAC addresses the control plane never allocated become visible.
+
+### Running commands in a guest (`guest-exec`)
+
+`QGAClient.runCommand` executes a `GuestCommand` in the guest and returns its
+exit status with captured stdout/stderr. qga models exec as **spawn-and-poll**:
+`guest-exec` returns a PID, and `guest-exec-status` reports completion, handing
+over each captured stream base64-encoded and *whole* in the reply that first
+says `exited: true`. There is no completion notification, no PTY, no way to
+write further stdin, and no way to signal a running process — which is why this
+is a run-a-command primitive and can never back an interactive session.
+
+Three consequences shape the implementation:
+
+- **Polling is bounded by a caller-supplied deadline** (`StageBudget.guestExecSeconds`
+  by default) and is an ordinary backoff loop over cancellable awaits, not a
+  background task, so a timed-out or cancelled call leaves nothing running
+  agent-side. It does *not* stop the guest process — qga cannot signal it — so
+  the thrown `executionTimedOut` carries the PID. For the same reason the spawn
+  is never retried; only the polls are, and only on transport-level failures —
+  a reply the agent gave us (an error object, an undecodable shape) will not
+  read differently next time. `spawnCommand`/`commandStatus` are public
+  alongside `runCommand` so a caller can drive the waiting itself: that is what
+  modelling a long guest command as an async operation needs, and it is the
+  only way to collect a command `runCommand` abandoned at its deadline —
+  collecting the status is also what frees qga's in-guest entry and the output
+  it pins.
+- **Captured output is capped per stream** (1 MiB by default, clamped to qga's
+  own 16 MiB in-guest cap). Since the whole stream arrives in one JSON object,
+  the cap is enforced by sizing that read's framer budget: an oversized reply is
+  refused mid-stream as `responseTooLarge` rather than buffered and then
+  rejected. qga's own truncation surfaces separately as the result's
+  `stdoutTruncated`/`stderrTruncated`. Replies at this size are also why
+  `QGAObjectFramer` carries its scan cursor across appends — re-scanning the
+  buffer per socket chunk was free for a few-hundred-byte reply and quadratic
+  for a megabyte one.
+- **Each round trip opens its own channel**, so a long-running command doesn't
+  hold the one-client-at-a-time chardev away from shutdown and guest-info
+  probes. A poll that loses that race is retried until the deadline.
+
+Exec is not universally available: distros filter the RPC set, and the RHEL
+family ships an `--allow-rpcs` allowlist that omits `guest-exec` (Ubuntu,
+Debian, and Fedora do not filter — see issue #803). `queryCapabilities`
+(`guest-info`) reports which commands the agent will answer, so a caller can
+say "this guest can't run commands" up front; attempting it anyway comes back
+as `commandUnavailable` rather than a generic failure.
 
 ## Balloon memory stats (virtio-balloon)
 

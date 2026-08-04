@@ -38,6 +38,7 @@ public enum HostPreflight {
         case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
         case ipTool = "ip"
+        case tcTool = "tc"
         case ovsVsctlTool = "ovs-vsctl"
         case ovnAppctlTool = "ovn-appctl"
         case storageFreeSpace = "storage_free_space"
@@ -314,6 +315,24 @@ public enum HostPreflight {
                 checkTool(
                     "ip", kind: .ipTool, searchPath: inputs.searchPath,
                     hint: "install iproute2; the agent needs it to manage TAP devices"))
+            // Advisory: only *networked sandboxes* need `tc` (it installs the
+            // redirects splicing a jailed VMM's TAP to its veth). VMs and
+            // network-free sandboxes are unaffected, so a host without it is
+            // degraded, not broken.
+            //
+            // The hint names the candidate list because this check and the
+            // resolver disagree by construction: the check walks `PATH`, while
+            // the attach path invokes an absolute path resolved from a fixed
+            // list (a service manager's stripped `PATH` must not break it). A
+            // `tc` outside that list passes here and still refuses every
+            // networked sandbox, so the hint has to point at the real cause.
+            checks.append(
+                checkTool(
+                    "tc", kind: .tcTool, severity: .advisory, searchPath: inputs.searchPath,
+                    hint: "install iproute2; without `tc` the agent cannot attach a NIC into a jailed "
+                        + "sandbox's network namespace. It must be at one of "
+                        + SandboxJailerResolver.tcBinaryCandidates.joined(separator: ", ")
+                        + " — the agent invokes it by absolute path, not via PATH"))
             checks.append(
                 checkTool(
                     "ovs-vsctl", kind: .ovsVsctlTool, searchPath: inputs.searchPath,

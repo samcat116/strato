@@ -77,6 +77,71 @@ struct QGAObjectFramerTests {
         #expect(!framer.consumeThroughSyncMarker())
     }
 
+    @Test("A string spanning many appends does not close the object early")
+    func stringAcrossManyAppends() {
+        // The scan is resumable, so the string/escape machine has to survive a
+        // chunk boundary landing anywhere — including between a backslash and
+        // the quote it escapes, and around braces inside the string.
+        let raw = #"{"return": {"out-data": "a}{\"b\\", "exited": true}}"#
+        let framer = QGAObjectFramer()
+        for byte in Array(raw.utf8).dropLast() {
+            framer.append([byte])
+            #expect(framer.nextObject() == nil)  // never completes early
+        }
+        framer.append([Array(raw.utf8).last!])
+        let object = framer.nextObject()
+        #expect(object.map { String(decoding: $0, as: UTF8.self) } == raw)
+        #expect(framer.nextObject() == nil)
+    }
+
+    @Test("A resumed scan still frames the objects that follow it")
+    func resumedScanThenMoreObjects() {
+        // The parse state has to be reset after an object completes, or the
+        // next one inherits a stale depth and never closes.
+        let framer = QGAObjectFramer()
+        framer.append(bytes(#"{"return": {"a": 1"#))
+        #expect(framer.nextObject() == nil)
+        framer.append(bytes(#"}}{"return": 2}"#))
+        #expect(framer.nextObject().map { String(decoding: $0, as: UTF8.self) } == #"{"return": {"a": 1}}"#)
+        #expect(framer.nextObject().map { String(decoding: $0, as: UTF8.self) } == #"{"return": 2}"#)
+        #expect(framer.nextObject() == nil)
+    }
+
+    @Test("A large object arriving in many chunks frames correctly")
+    func largeChunkedObject() {
+        // A guest-exec-status reply is megabytes of base64 delivered in socket
+        // chunks — the case the resumable cursor exists for. This pins the
+        // correctness half of that (every boundary resumed at the right byte,
+        // with the right state); the cost half is a property of the algorithm,
+        // not something a test can observe from out here.
+        let payload = String(repeating: "QUJDRA==", count: 80_000)  // ~640 KB
+        let raw = #"{"return": {"out-data": "\#(payload)"}}"#
+        let framer = QGAObjectFramer(maxBufferedBytes: 4 << 20)
+        var remaining = Array(raw.utf8)[...]
+        while !remaining.isEmpty {
+            let chunk = remaining.prefix(16 * 1024)
+            remaining = remaining.dropFirst(chunk.count)
+            framer.append(Array(chunk))
+            if !remaining.isEmpty { #expect(framer.nextObject() == nil) }
+        }
+        let object = framer.nextObject()
+        #expect(object.map { String(decoding: $0, as: UTF8.self) } == raw)
+    }
+
+    @Test("A sync marker resets a scan already in progress")
+    func syncMarkerResetsScanState() {
+        // A resync mid-stream discards the partial object the cursor was
+        // parked in; the state that came with it must go too.
+        let framer = QGAObjectFramer()
+        framer.append(bytes(#"{"partial": "#))
+        #expect(framer.nextObject() == nil)
+        framer.append([0xFF])
+        framer.append(bytes(#"{"return": 42}"#))
+        #expect(framer.consumeThroughSyncMarker())
+        let object = framer.nextObject()
+        #expect(object.map { String(decoding: $0, as: UTF8.self) } == #"{"return": 42}"#)
+    }
+
     @Test("A never-closing object trips the buffer budget instead of growing unbounded")
     func overBudget() {
         let framer = QGAObjectFramer(maxBufferedBytes: 16)

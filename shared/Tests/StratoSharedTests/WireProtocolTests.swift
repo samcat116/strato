@@ -79,6 +79,19 @@ struct WireProtocolTests {
         #expect(WireProtocol.supportsVMCheckpoint(WireProtocol.currentVersion))
     }
 
+    @Test("graphics console gate starts at wire protocol v23")
+    func graphicsConsoleGate() {
+        // Both halves are optional fields, so a pre-v23 agent decodes the sync
+        // and the connect frame happily and just ignores them — booting the
+        // guest headless, then answering a VNC session with the serial socket.
+        // Nothing fails loudly, which is why the gate is load-bearing at both
+        // placement and session mint (issue #566).
+        #expect(WireProtocol.graphicsConsoleMinimumVersion == 23)
+        #expect(!WireProtocol.supportsGraphicsConsole(22))
+        #expect(WireProtocol.supportsGraphicsConsole(23))
+        #expect(WireProtocol.supportsGraphicsConsole(WireProtocol.currentVersion))
+    }
+
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {
         #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))

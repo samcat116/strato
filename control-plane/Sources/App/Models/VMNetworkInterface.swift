@@ -34,6 +34,14 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @Children(for: \.$interface)
     var observedAddresses: [VMInterfaceObservedAddress]
 
+    /// This NIC's security-group memberships (STR-34). Requires eager loading
+    /// with `.with(\.$securityGroupMemberships)`; `NetworkInterfaceResponse`
+    /// reports nil rather than an empty list when it wasn't loaded, because
+    /// "attached to no groups" is a claim about filtering that a missing
+    /// eager-load must never make.
+    @Children(for: \.$interface)
+    var securityGroupMemberships: [VMInterfaceSecurityGroup]
+
     @OptionalField(key: "mtu")
     var mtu: Int?
 

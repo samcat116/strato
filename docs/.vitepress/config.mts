@@ -33,6 +33,7 @@ export default defineConfig({
       {
         text: 'Guides',
         items: [
+          { text: 'Graphics Console', link: '/guide/graphics-console' },
           { text: 'Windows Guests', link: '/guide/windows-guests' }
         ]
       },
@@ -47,6 +48,7 @@ export default defineConfig({
           { text: 'Scheduler', link: '/architecture/scheduler' },
           { text: 'Multi-Replica Control Plane', link: '/architecture/multi-replica' },
           { text: 'Networking', link: '/architecture/networking' },
+          { text: 'DNS', link: '/architecture/dns' },
           { text: 'Storage', link: '/architecture/storage' },
           { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
@@ -65,6 +67,7 @@ export default defineConfig({
         text: 'Development',
         items: [
           { text: 'Local Development', link: '/development/local-development' },
+          { text: 'Code Review', link: '/development/code-review' },
           { text: 'Troubleshooting Kubernetes', link: '/development/troubleshooting-k8s' }
         ]
       },

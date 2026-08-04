@@ -3,9 +3,6 @@ import Fluent
 /// Drops the legacy single-NIC columns from `vms` once
 /// `MigrateVMNetworkConfigToInterfaces` has copied them into
 /// `vm_network_interfaces`.
-///
-/// Each column change is a separate `.update()` because SQLite cannot combine
-/// multiple ALTER TABLE actions in one statement.
 struct RemoveLegacyVMNetworkFields: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("vms").deleteField("mac_address").update()

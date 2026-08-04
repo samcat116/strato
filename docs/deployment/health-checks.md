@@ -19,9 +19,10 @@ All three return the same JSON shape:
   "status": "healthy",
   "timestamp": "2026-07-20T18:22:04Z",
   "checks": [
-    { "name": "database",   "status": "up" },
-    { "name": "migrations", "status": "up" },
-    { "name": "valkey",     "status": "up" }
+    { "name": "database",      "status": "up" },
+    { "name": "migrations",    "status": "up" },
+    { "name": "coordination",  "status": "up" },
+    { "name": "session-store", "status": "up" }
   ],
   "identity": {
     "instanceId": "6F2C…",
@@ -57,10 +58,30 @@ Checks are graded, because the dependencies are not equally fatal:
   process finished applying schema to it. (Authorization needs no check of its
   own: the Cedar evaluator is in-process and reads its data from the same
   Postgres the **database** check covers.)
-- **valkey** — **degraded only**. Coordination is deliberately fail-open (see
-  [multi-replica](../architecture/multi-replica.md)); agents still converge via
-  the periodic sync. Pulling every replica out of rotation because Valkey blipped
-  would be a worse outage than the blip.
+- **coordination** — **degraded only**. The coordination store is deliberately
+  fail-open (see [multi-replica](../architecture/multi-replica.md)); agents still
+  converge via the periodic sync. Pulling every replica out of rotation because
+  it blipped would be a worse outage than the blip.
+- **session-store** — **fatal when session storage has its own endpoint,
+  `degraded` when it shares the coordination one**. The grade follows whether the
+  failure can be replica-local, because that is the only case where pulling this
+  replica helps. A separate session Valkey can fail while this replica is
+  otherwise healthy, and a replica that cannot read sessions cannot authenticate
+  a browser — so 503 lets the load balancer send that traffic to one that can.
+  A *shared* endpoint fails for every replica at once, so 503 everywhere shifts
+  traffic nowhere and merely drops the traffic sessions do not back: agents
+  authenticate by SPIFFE/SPIRE mTLS, API-key and CLI clients by key, and the
+  reconciler needs only Postgres to converge. Absent from the payload when
+  sessions are not Valkey-backed (the test environment uses Fluent sessions).
+
+::: tip Both stores are one instance by default
+Unless you set `SESSION_VALKEY_HOST`, sessions share the coordination Valkey, and
+a blip there reports `degraded` at 200 — the same behavior as before the two
+stores were separable. Giving sessions their own endpoint (see
+[docker-compose](./docker-compose.md#splitting-session-storage)) is what makes
+the fatal grade meaningful, because only then can session storage fail without
+the coordination store failing too.
+:::
 
 ### Liveness never follows readiness
 

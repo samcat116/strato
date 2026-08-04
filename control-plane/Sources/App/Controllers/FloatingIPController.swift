@@ -180,7 +180,12 @@ struct FloatingIPController: RouteCollection {
         do {
             try await pool.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(.conflict, reason: "A floating IP pool named '\(name)' already exists")
+            // Names are unique per owner (STR-105), so this only ever reports a
+            // collision inside the caller's own scope — it can't be used to
+            // probe another tenant's pool names.
+            throw Abort(
+                .conflict,
+                reason: "A floating IP pool named '\(name)' already exists in this organization scope")
         }
 
         return try FloatingIPPoolResponse(from: pool, allocatedCount: 0)
@@ -448,9 +453,6 @@ struct FloatingIPController: RouteCollection {
         guard let vm = try await VM.find(request.vmId, on: req.db) else {
             throw Abort(.badRequest, reason: "VM \(request.vmId) does not exist")
         }
-        guard vm.$project.id == floatingIP.$project.id else {
-            throw Abort(.conflict, reason: "VM belongs to a different project than the floating IP")
-        }
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
         // the VM too (the volume-attach rule).
@@ -458,6 +460,12 @@ struct FloatingIPController: RouteCollection {
         guard hasVMPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
         }
+        // After the VM check, never before: a containment refusal handed to a
+        // caller who can't touch the VM would tell them it exists in another
+        // project (issue #777).
+        try ProjectContainment.require(
+            "VM", in: vm.$project.id,
+            sameProjectAs: "the floating IP", in: floatingIP.$project.id)
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
             .filter(\.$vm.$id == request.vmId)
@@ -668,7 +676,9 @@ struct FloatingIPController: RouteCollection {
     ///   requirement, so a later placement could land on a too-old agent);
     /// - the host is sited but the site has no designated network controller
     ///   (assembly then sends *no* agent the network state — unlike the
-    ///   site-less model, the hosting agent has no topology authority).
+    ///   site-less model, the hosting agent has no topology authority);
+    /// - the site's controller is offline past the grace window, or came back
+    ///   unable to author topology (issue #833).
     static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
@@ -678,12 +688,25 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
         }
-        switch try await SiteNetworkAuthority.resolve(forAgent: agent, on: db) {
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
+        if let refusal = SiteNetworkAuthority.refusal(
+            authority, host: agent, consequence: "nothing would realize the NAT rule")
+        {
+            throw refusal
+        }
+        switch authority {
         case .selfAuthored(let host):
             return host
         case .controller(let controller):
             return controller
+        case .controllerUnavailable(_, let controller, _):
+            // Only reachable through `refusal`'s host exemption — the hosting
+            // agent *is* the unavailable controller, and it is still the agent
+            // that realizes this NAT once it comes back.
+            return controller
         case .unassigned(let site):
+            // Already refused above — restated rather than force-unwrapped so
+            // the switch stays exhaustive without a fatal path.
             throw SiteNetworkAuthority.missingControllerAbort(
                 site: site, consequence: "nothing would realize the NAT rule")
         }

@@ -33,7 +33,19 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     // MARK: - VM Network Lifecycle
 
-    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
+    /// `placement` is accepted for protocol conformance and ignored: user-mode
+    /// SLIRP creates nothing on the host, so there is no device to put in a
+    /// namespace.
+    ///
+    /// Despite the name this service is **not** macOS-only — `Agent.start()`
+    /// builds it for `network_mode = "user"` on every platform. So a jailed
+    /// Linux agent in user mode *can* reach here with a sandbox placement, and
+    /// gets `.userMode` back. That attachment cannot be realized by a jailed
+    /// Firecracker (its only backend is a TAP opened by name), which is why the
+    /// sandbox runtime refuses a non-TAP attachment rather than dropping it.
+    func createVMNetwork(
+        vmId: String, nicIndex: Int, config: VMNetworkConfig, placement: NICPlacement
+    ) async throws -> VMNetworkInfo {
         logger.info(
             "Creating VM network with user-mode networking",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
@@ -65,7 +77,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         return networkInfo
     }
 
-    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
+    func detachVMFromNetwork(vmId: String, nicIndex: Int, placement: NICPlacement) async throws {
         logger.info(
             "Detaching VM from user-mode network",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])

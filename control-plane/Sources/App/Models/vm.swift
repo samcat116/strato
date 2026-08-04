@@ -44,6 +44,18 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    /// The VM's DNS label (issue #770) — the leftmost label of the name it
+    /// registers under in the primary zone of each network it has a NIC on.
+    ///
+    /// Stored rather than derived from `name` on read, for two reasons: a
+    /// slug is lossy, so renaming a VM would otherwise silently move its
+    /// records out from under whatever depends on them; and operators need to
+    /// pick a name a slug can't produce. Defaulted from a slugified `name` at
+    /// create time. Nil for VMs that predate the column — they get no derived
+    /// records until one is set.
+    @OptionalField(key: "hostname")
+    var hostname: String?
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -176,6 +188,18 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "tpm_enabled")
     var tpmEnabled: Bool
 
+    // Graphics console (issue #566): whether the guest boots with a display
+    // device and a VNC server for the web UI to attach to. Like the machine
+    // profile above, the control plane records only the intent — the agent
+    // picks the display device and owns the socket.
+    //
+    // Fixed at create, because the display device lives in the QEMU process's
+    // argument vector: a VM cannot gain or lose a display without being
+    // recreated, and a stop/start respawns from the arguments it was created
+    // with.
+    @Field(key: "graphics_console")
+    var graphicsConsole: Bool
+
     // Console configuration
     @Enum(key: "console_mode")
     var consoleMode: ConsoleMode
@@ -218,7 +242,8 @@ final class VM: Model, @unchecked Sendable {
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         secureBoot: Bool = false,
-        tpmEnabled: Bool = false
+        tpmEnabled: Bool = false,
+        graphicsConsole: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -243,6 +268,7 @@ final class VM: Model, @unchecked Sendable {
         self.serialMode = serialMode
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
+        self.graphicsConsole = graphicsConsole
     }
 }
 
@@ -404,6 +430,12 @@ struct NetworkInterfaceResponse: Content {
     let mtu: Int?
     let deviceName: String
     let orderIndex: Int
+    /// The security groups filtering this NIC (STR-34), sorted to match the
+    /// order agents receive in the spec. Deliberately **nil when the relation
+    /// wasn't eager-loaded**, unlike the `.value ?? []` treatment of the
+    /// address lists: an empty array here reads as "this NIC is in no group",
+    /// a security claim a forgotten `.with(...)` must not be able to make.
+    let securityGroupIds: [UUID]?
 
     init(from nic: VMNetworkInterface) {
         self.id = nic.id
@@ -421,6 +453,9 @@ struct NetworkInterfaceResponse: Content {
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
         self.orderIndex = nic.orderIndex
+        self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
+            memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
+        }
     }
 }
 
@@ -443,10 +478,17 @@ struct VMDetailResponse: Content {
     let disk: Int64
     let diskFormatted: String
     let networkInterfaces: [NetworkInterfaceResponse]
+    /// The VM's DNS label (issue #770) — what it registers as in the primary
+    /// zone of each network it sits on. Distinct from `observedHostname`,
+    /// which is whatever the guest OS calls itself.
+    let hostname: String?
     /// Machine profile (issue #565): whether the guest boots with UEFI Secure
     /// Boot and whether it has an emulated TPM 2.0.
     let secureBoot: Bool
     let tpmEnabled: Bool
+    /// Graphics console (issue #566): whether the guest has a display device
+    /// whose framebuffer the web UI can attach to. Fixed at create.
+    let graphicsConsole: Bool
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -468,10 +510,19 @@ struct VMDetailResponse: Content {
     let balloonTarget: Int64?
     let balloonTargetFormatted: String?
     let guestMemoryBalloonActualBytes: Int64?
+    /// Whether this VM's attached security groups are actually being enforced
+    /// (STR-34). False means a realizing agent — the host, or its site's
+    /// network controller — registered with a protocol older than the
+    /// security-group version, so it decodes the sync and ignores the fields:
+    /// the API would otherwise show filtering that no ACL applies. Nil means
+    /// the VM is unplaced, so there is no realizer to judge yet. Computed by
+    /// `SecurityGroupService.enforcementByVM` from the same realizer lookup
+    /// that gates attach/detach, so the two can never disagree.
+    let securityGroupsEnforced: Bool?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from vm: VM) {
+    init(from vm: VM, securityGroupsEnforced: Bool? = nil) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
@@ -492,8 +543,11 @@ struct VMDetailResponse: Content {
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map(NetworkInterfaceResponse.init)
+        self.securityGroupsEnforced = securityGroupsEnforced
+        self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
+        self.graphicsConsole = vm.graphicsConsole
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

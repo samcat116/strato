@@ -8,9 +8,6 @@ import Fluent
 /// was captured under, and the source host's CPU model (the fallback identity
 /// check for un-templated snapshots). `sandboxes` gains `cpu_template`, the
 /// create-time decision those snapshot rows inherit.
-///
-/// Each column is its own `.update()` — SQLite cannot combine multiple
-/// ALTER TABLE actions in one statement.
 struct AddSandboxSnapshotMobility: AsyncMigration {
     func prepare(on database: any Database) async throws {
         try await database.schema(SandboxSnapshot.schema)
@@ -19,7 +16,7 @@ struct AddSandboxSnapshotMobility: AsyncMigration {
         // `.array(of: .json)`, not `.json`: the model property is a Swift
         // array, and Fluent binds `[T]` as a Postgres array (`jsonb[]`) — a
         // scalar JSONB column rejects every save (the `agents.hypervisors`
-        // precedent). SQLite stores either shape as JSON text.
+        // precedent).
         try await database.schema(SandboxSnapshot.schema)
             .field("exported_artifacts", .array(of: .json))
             .update()

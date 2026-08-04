@@ -69,14 +69,21 @@ info:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
+    - `POST /api/vms/{vmID}/console/vnc` + `GET
+      /api/vms/{vmID}/console/vnc/{sessionID}/attach` — VM graphics console
+      (WebSocket attach). The POST mints a single-use session and returns
+      `{ sessionId, websocketPath, expiresAt }`; the attach relays RFB as
+      binary frames after one `{"type":"ready"}` text frame. Listed here with
+      its WebSocket half because the two are one exchange — the POST exists
+      only to give the upgrade's pre-flight failures real status codes.
     - `POST /api/sandboxes/{sandboxID}/exec` + `GET
       /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — sandbox exec
       (WebSocket attach).
 
     Everything else the control plane serves is described here. A route-drift
-    test (`AppTests/OpenAPISpecDriftTests`) boots the app and enforces both
-    directions — no registered route may go undocumented, and no operation may
-    describe a route that does not exist.
+    test (`AppPlatformTests/OpenAPISpecDriftTests`) boots the app and enforces
+    both directions — no registered route may go undocumented, and no operation
+    may describe a route that does not exist.
 
     ## The SCIM data plane
 
@@ -120,6 +127,12 @@ tags:
     description: Logical (SDN) networks.
   - name: Floating IPs
     description: External address pools and VM NIC attachments.
+  - name: DNS
+    description: >-
+      Internal name resolution: project-owned zones, their attachment to
+      logical networks, and user-authored records. A zone's effective contents
+      are derived (VM hostname → allocated addresses, plus PTR) ∪ authored,
+      assembled on demand and never stored.
   - name: Logs
     description: Loki-backed VM console and sandbox workload log queries.
   - name: Users
@@ -278,7 +291,13 @@ paths:
     post:
       operationId: createVM
       summary: Create a virtual machine
-      description: Records the VM and a pending `create` operation, returning the operation to poll.
+      description: >-
+        Records the VM and a pending `create` operation, returning the
+        operation to poll. `networkId`/`networkName` and `securityGroupIds` are
+        resolved within the VM's own project: one naming something outside it
+        is reported as `404`, not as a distinct cross-project refusal, since
+        ids are opaque and names are per-project — confirming that one exists
+        elsewhere would disclose another tenant's resources.
       tags: [Virtual Machines]
       requestBody:
         required: true
@@ -291,6 +310,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}:
     parameters:
@@ -1200,6 +1220,10 @@ paths:
     post:
       operationId: attachVolume
       summary: Attach a volume to a VM
+      description: >-
+        Requires `attach` on the volume and `update` on the VM. Refused with
+        `400` when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1601,6 +1625,10 @@ paths:
     post:
       operationId: attachFloatingIP
       summary: Attach a floating IP to a VM NIC
+      description: >-
+        Requires `update` on the floating IP and on the VM. Refused with `400`
+        when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Floating IPs]
       requestBody:
         required: true
@@ -1742,6 +1770,10 @@ paths:
       description: >-
         Rules are immutable; edit by deleting and recreating. At most one of
         `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+        `remoteGroupId` is resolved within this group's own project — one
+        naming a group outside it is reported as not found rather than as a
+        distinct cross-project refusal, since nothing authorizes the caller
+        against the group it names.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -1780,6 +1812,10 @@ paths:
     post:
       operationId: attachSecurityGroup
       summary: Attach a security group to a VM NIC
+      description: >-
+        Requires `attach` on the group and `update` on the VM. Refused with
+        `400` when the two belong to different projects — the status every
+        cross-project refusal answers with.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -1810,6 +1846,284 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/AttachSecurityGroupRequest"
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones:
+    get:
+      operationId: listDNSZones
+      summary: List DNS zones
+      tags: [DNS]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the visible DNS zones.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZoneListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createDNSZone
+      summary: Create a DNS zone
+      description: >-
+        Zone names are validated as fully-qualified domain names but are not
+        constrained to `.internal`, and are unique per project rather than
+        globally — two tenants may both serve `corp.example.com` internally.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDNSZoneRequest"
+      responses:
+        "200":
+          description: The created zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: getDNSZone
+      summary: Get a DNS zone
+      tags: [DNS]
+      responses:
+        "200":
+          description: The zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateDNSZone
+      summary: Update a DNS zone's name or description
+      description: >-
+        Renaming a zone moves every record in it, derived and authored alike.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDNSZoneRequest"
+      responses:
+        "200":
+          description: The updated zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteDNSZone
+      summary: Delete a DNS zone
+      description: >-
+        Refused while any network is attached; detach first, so losing
+        resolution is always an explicit act. Records cascade with the zone.
+      tags: [DNS]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/recordset:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: getDNSZoneRecordSet
+      summary: Get a zone's effective record set
+      description: >-
+        The zone's contents as **derived ∪ authored**, computed on demand and
+        never stored — exactly what a realization driver consumes. Derived
+        entries come from the hostnames and IPAM allocations of VMs on
+        networks whose primary zone is this one, plus the matching PTRs.
+      tags: [DNS]
+      responses:
+        "200":
+          description: The assembled record set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssembledDNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/dns-zones/{zoneId}/records:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    get:
+      operationId: listDNSRecords
+      summary: List a zone's authored records
+      tags: [DNS]
+      parameters:
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the zone's authored records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecordListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createDNSRecord
+      summary: Author a record in a zone
+      description: >-
+        Refused with `409` when the record would collide with one derived from
+        a VM, or would break CNAME's exclusivity rule — a shadowed record is
+        rejected at write time rather than silently never answered. Also `409`
+        when `ttl` or `view` disagrees with the record set this joins: those
+        belong to the whole RRset (RFC 2181 §5.2), not to individual records.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDNSRecordRequest"
+      responses:
+        "200":
+          description: The created record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/records/{recordId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+      - $ref: "#/components/parameters/DNSRecordID"
+    get:
+      operationId: getDNSRecord
+      summary: Get an authored record
+      tags: [DNS]
+      responses:
+        "200":
+          description: The record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateDNSRecord
+      summary: Update an authored record's value, TTL, or view
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDNSRecordRequest"
+      responses:
+        "200":
+          description: The updated record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteDNSRecord
+      summary: Delete an authored record
+      tags: [DNS]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/dns-zones/{zoneId}/networks:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+    post:
+      operationId: attachDNSZoneToNetwork
+      summary: Attach a zone to a logical network
+      description: >-
+        "VMs on this network can resolve this zone." Idempotent. Pass
+        `primary: true` to also make it the zone the network's VMs
+        auto-register into; that is refused when the VMs already on the
+        network would collide in it. Requires `attach` on the zone and
+        `update` on the network, and is refused with `400` when the two belong
+        to different projects — the status every cross-project refusal answers
+        with.
+      tags: [DNS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachDNSZoneRequest"
+      responses:
+        "200":
+          description: The zone, with its updated attachments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DNSZone"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/dns-zones/{zoneId}/networks/{networkId}:
+    parameters:
+      - $ref: "#/components/parameters/DNSZoneID"
+      - $ref: "#/components/parameters/DNSZoneNetworkID"
+    delete:
+      operationId: detachDNSZoneFromNetwork
+      summary: Detach a zone from a logical network
+      description: >-
+        Refused while this zone is the network's primary — clear the network's
+        primary zone first, so its VMs' derived records are never stranded.
+        Resolves the network the same way attach does: requires `update` on it,
+        and is refused with `400` when the zone and the network belong to
+        different projects — the status every cross-project refusal answers
+        with.
+      tags: [DNS]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -2952,6 +3266,165 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/members:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+    get:
+      operationId: listFolderMembers
+      summary: List a folder's user and group role grants
+      description: >-
+        Requires `iam:readPolicy` on the folder. Folder grants are stored as
+        role bindings and nothing else — there is no membership mirror table —
+        so `role` is always a role id.
+      tags: [Folders]
+      responses:
+        "200":
+          description: The folder's role grants.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderMembers"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: grantFolderMember
+      summary: Grant a user a role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Identify the user by `userID`
+        or `userEmail`. Returns an empty body.
+        The grant inherits down every folder, project, and resource beneath
+        the folder, and keeps applying to projects added later.
+        A principal may hold at most one role per folder; use `PATCH` to
+        change it.
+        A user outside the folder's organization can be granted a role, but
+        only by a caller who also holds `iam:grantExternal` on the folder;
+        such cross-org grants are recorded with a distinct
+        `iam.cross_org_grant` audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantFolderMemberRequest"
+      responses:
+        "201":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/members/{userID}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+      - name: userID
+        in: path
+        required: true
+        description: The user's id.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateFolderMemberRole
+      summary: Change a user's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Replaces the user's grant on
+        this folder; returns an empty body.
+        Changing an organization-external user's role is a new cross-org
+        grant: it requires `iam:grantExternal` on the folder and is recorded
+        with a distinct `iam.cross_org_grant` audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFolderMemberRoleRequest"
+      responses:
+        "200":
+          description: The role was updated.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: revokeFolderMember
+      summary: Revoke a user's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Revoking an
+        organization-external user's grant is recorded with a distinct
+        `iam.cross_org_revoke` audit event.
+      tags: [Folders]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/organizations/{organizationID}/ous/{ouID}/groups:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+    post:
+      operationId: grantFolderGroup
+      summary: Grant a group a role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Returns an empty body.
+        A group from another organization can be granted a role, but only by
+        a caller who also holds `iam:grantExternal` on the folder; such
+        cross-org grants are recorded with a distinct `iam.cross_org_grant`
+        audit event.
+        Checked against the tier-2 guardrails in force on the node before it
+        is accepted: a grant that would reach past a ceiling is refused with
+        `403`, naming the guardrail, who set it, and why.
+      tags: [Folders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantFolderGroupRequest"
+      responses:
+        "201":
+          description: The role was granted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}:
+    parameters:
+      - $ref: "#/components/parameters/OrganizationID"
+      - $ref: "#/components/parameters/FolderID"
+      - $ref: "#/components/parameters/GroupID"
+    delete:
+      operationId: revokeFolderGroup
+      summary: Revoke a group's role on a folder
+      description: >-
+        Requires `iam:setPolicy` on the folder. Revoking an
+        organization-external group's grant is recorded with a distinct
+        `iam.cross_org_revoke` audit event.
+      tags: [Folders]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/organizations/{organizationID}/groups:
     parameters:
       - $ref: "#/components/parameters/OrganizationID"
@@ -3173,6 +3646,12 @@ paths:
     get:
       operationId: getOrganizationResourceSummary
       summary: Get an organization's resource usage and quota compliance
+      description: >-
+        Usage totals and hierarchy statistics cover the rows the caller may
+        read. A quota appears only when the caller holds `quota:read` at the
+        org, folder, or project it hangs on: its figures are measured over
+        everything beneath that node, so an organization-scoped quota describes
+        the whole organization.
       tags: [Organizations]
       responses:
         "200":
@@ -3185,61 +3664,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /api/organizations/{organizationID}/merge:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationID"
-    post:
-      operationId: mergeOrganizations
-      summary: Merge another organization into this one
-      description: >-
-        The organization in the path is the merge target. The caller must be an
-        admin of both the target and `sourceOrganizationId`.
-      tags: [Organizations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MergeOrganizationsRequest"
-      responses:
-        "200":
-          description: The merge result, including any conflicts and warnings.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MergeOrganizationsResult"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /api/organizations/{organizationID}/bulk-transfer:
-    parameters:
-      - $ref: "#/components/parameters/OrganizationID"
-    post:
-      operationId: bulkTransferOrganizationResources
-      summary: Bulk-transfer resources between hierarchy nodes
-      description: >-
-        Organization admins only. Moves folders, projects, or VMs to new
-        parents. Set `validateOnly` to dry-run the transfers without applying
-        them. Individual failures are reported in `failedTransfers` rather than
-        failing the request.
-      tags: [Organizations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BulkTransferRequest"
-      responses:
-        "200":
-          description: The transfer result.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BulkTransferResult"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
   /api/organizations/{organizationID}/search:
     parameters:
       - $ref: "#/components/parameters/OrganizationID"
@@ -3267,7 +3691,13 @@ paths:
     get:
       operationId: getHierarchyEntityPath
       summary: Resolve an entity's breadcrumb path
-      description: Returns the ordered ancestor chain (organization → folders → project → resource) for the entity.
+      description: >-
+        Returns the ordered ancestor chain (organization → folders → project →
+        resource) for the entity, reduced to the components the caller may read.
+        A component the caller cannot read is omitted rather than refused, so a
+        project readable inside an unreadable folder comes back directly under
+        the organization; a caller who can read none of the chain gets the
+        organization alone.
       tags: [Organizations]
       responses:
         "200":
@@ -3961,6 +4391,9 @@ paths:
       description: >-
         Compares the quota's bookkeeping reservations against usage recomputed
         from the VMs in scope, with breakdowns by environment and status.
+        Requires `quota:read` on the org, folder, or project the quota hangs on
+        — the figures cover everything beneath that node, so an
+        organization-scoped quota reports the whole organization's consumption.
       tags: [Quotas]
       responses:
         "200":
@@ -7217,6 +7650,30 @@ components:
       schema:
         type: string
         format: uuid
+    DNSZoneID:
+      name: zoneId
+      in: path
+      required: true
+      description: The DNS zone's id.
+      schema:
+        type: string
+        format: uuid
+    DNSRecordID:
+      name: recordId
+      in: path
+      required: true
+      description: The DNS record's id.
+      schema:
+        type: string
+        format: uuid
+    DNSZoneNetworkID:
+      name: networkId
+      in: path
+      required: true
+      description: The attached logical network's id.
+      schema:
+        type: string
+        format: uuid
     OrganizationIdQuery:
       name: organization_id
       in: query
@@ -7955,6 +8412,13 @@ components:
       properties:
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label. Defaults to a slugified `name`, disambiguated
+            with a numeric suffix against whatever already registers into the
+            target network's primary zone. An explicit value is instead held to
+            strict uniqueness and answers `409` on a collision.
         description:
           type: string
         imageId:
@@ -8025,6 +8489,16 @@ components:
             `tpmCapable` (swtpm installed) are eligible; rejected for
             firecracker. Windows 11 and Server 2025 require this together with
             `secureBoot`.
+        graphicsConsole:
+          type: boolean
+          default: false
+          description: >-
+            Give the guest a display device and a VNC server, so its
+            framebuffer can be driven from the web UI — what a graphical OS
+            installer needs. Requires a QEMU VM placed on an agent new enough
+            to realize it; rejected for firecracker, which emulates no display
+            device. Fixed at creation: the display lives in the hypervisor
+            process's arguments, so an existing VM cannot gain or lose one.
         securityGroupIds:
           type: array
           items:
@@ -8039,6 +8513,11 @@ components:
       properties:
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label. Renaming the VM deliberately does not move its
+            records, so this is the only way its name in DNS changes.
         description:
           type: string
         cpu:
@@ -8073,6 +8552,12 @@ components:
           format: uuid
         name:
           type: string
+        hostname:
+          type: string
+          description: >-
+            The VM's DNS label — what it registers as in the primary zone of
+            each network it sits on. Distinct from `observedHostname`, which is
+            whatever the guest OS calls itself.
         description:
           type: string
         image:
@@ -8115,6 +8600,21 @@ components:
         tpmEnabled:
           type: boolean
           description: Whether the guest has an emulated TPM 2.0.
+        graphicsConsole:
+          type: boolean
+          description: >-
+            Whether the guest has a display device whose framebuffer the web UI
+            can attach to. Fixed at creation.
+        securityGroupsEnforced:
+          type: boolean
+          description: >-
+            Whether this VM's attached security groups are actually being
+            enforced. False means a realizing agent — the host, or its site's
+            network controller — registered with a protocol too old for
+            security groups, or the site has no usable network controller to
+            author the ACLs at all; either way the attached groups filter
+            nothing until an operator fixes it. Absent means the VM is
+            unplaced, so there is no realizer to judge yet.
         createdAt:
           type: string
           format: date-time
@@ -8156,6 +8656,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InterfaceAddress"
+        observedAddresses:
+          type: array
+          description: >-
+            Addresses the guest actually configured, as reported by the guest
+            agent — distinct from the allocated `addresses`. Empty until a
+            guest agent reports them.
+          items:
+            $ref: "#/components/schemas/ObservedInterfaceAddress"
         mtu:
           type: integer
         deviceName:
@@ -8163,6 +8671,15 @@ components:
           description: Stable device name (e.g. net0).
         orderIndex:
           type: integer
+        securityGroupIds:
+          type: array
+          description: >-
+            The security groups filtering this NIC. Absent — as opposed to an
+            empty array — means the server did not load membership for this
+            response, never that the NIC is in no group.
+          items:
+            type: string
+            format: uuid
     InterfaceAddress:
       type: object
       required: [family, address, prefixLength]
@@ -8176,6 +8693,20 @@ components:
           type: integer
         gateway:
           type: string
+    ObservedInterfaceAddress:
+      type: object
+      description: >-
+        An address the guest reported on this NIC. No gateway: the guest
+        reports what it configured, not how it routes.
+      required: [family, address]
+      properties:
+        family:
+          type: string
+          enum: [ipv4, ipv6]
+        address:
+          type: string
+        prefixLength:
+          type: integer
 
     CreateSandboxRequest:
       type: object
@@ -8228,6 +8759,16 @@ components:
             NIC, since sandbox guest networking is not implemented yet.
         networkName:
           type: string
+        securityGroupIds:
+          type: array
+          description: >-
+            Security groups for the sandbox's NIC. Omitting them attaches the
+            project's default group; supplying them without a network is a
+            400, since there would be no NIC to attach them to. Recorded but
+            not yet enforced.
+          items:
+            type: string
+            format: uuid
     UpdateSandboxRequest:
       type: object
       properties:
@@ -8293,6 +8834,16 @@ components:
           $ref: "#/components/schemas/SandboxStatus"
         exitCode:
           type: integer
+        securityGroupIds:
+          type: array
+          description: >-
+            The security groups attached to the sandbox's NIC (flat: a sandbox
+            has at most one). Absent when the sandbox has no NIC. Recorded but
+            **not enforced** — sandbox NICs are still omitted from the agent
+            sync entirely.
+          items:
+            type: string
+            format: uuid
         createdAt:
           type: string
           format: date-time
@@ -8875,6 +9426,17 @@ components:
           type: integer
         externalAccess:
           type: boolean
+        primaryDnsZoneId:
+          type: string
+          format: uuid
+          description: >-
+            The DNS zone this network's VMs auto-register into. Must already be
+            attached to the network.
+        clearPrimaryDnsZone:
+          type: boolean
+          description: >-
+            Unset the primary zone. A JSON `null` is indistinguishable from an
+            omitted field, so the clear is its own flag.
     Network:
       type: object
       required:
@@ -8921,6 +9483,10 @@ components:
         siteId:
           type: string
           format: uuid
+        primaryDnsZoneId:
+          type: string
+          format: uuid
+          description: The DNS zone this network's VMs auto-register into, if any.
         createdAt:
           type: string
           format: date-time
@@ -9078,6 +9644,12 @@ components:
           description: >-
             Security-group peer — matches the referenced group's current
             member addresses.
+        log:
+          type: boolean
+          description: >-
+            Whether the realized OVN ACL logs the packets it matches. Off by
+            default; set at rule creation and changed by delete + recreate,
+            like every other field of a rule.
         description:
           type: string
         createdAt:
@@ -9154,19 +9726,236 @@ components:
         remoteGroupId:
           type: string
           format: uuid
+        log:
+          type: boolean
+          description: Log the packets this rule matches. Defaults to false.
         description:
           type: string
     AttachSecurityGroupRequest:
       type: object
-      required: [vmId]
+      description: >-
+        Names exactly one workload — `vmId` or `sandboxId` — optionally
+        narrowed to one of its NICs. Naming neither or both is a 400.
       properties:
         vmId:
           type: string
           format: uuid
+        sandboxId:
+          type: string
+          format: uuid
+          description: >-
+            Sandbox memberships are recorded but not yet enforced: sandbox
+            NICs are still omitted from the agent sync entirely.
         interfaceId:
           type: string
           format: uuid
-          description: The VM NIC; defaults to the VM's first interface.
+          description: The NIC; defaults to the workload's first interface.
+    DNSRecordType:
+      type: string
+      description: >-
+        Deliberately wider than any realization driver: the OVN `DNS` table
+        answers A/AAAA/PTR only, and the per-network resolver is what makes
+        the rest resolvable. Drivers reject what they cannot do with a clear
+        error rather than the model pretending those records don't exist.
+      enum: [A, AAAA, CNAME, TXT, SRV, PTR]
+    DNSRecordView:
+      type: string
+      description: >-
+        Which side of a split horizon the record belongs to. Carried so
+        split-horizon is not a retrofit; nothing consumes it yet, so every
+        record is served internally regardless of its value.
+      enum: [internal, external, both]
+      default: both
+    DNSZoneNetworkAttachment:
+      type: object
+      required: [networkId, networkName, isPrimary]
+      properties:
+        networkId:
+          type: string
+          format: uuid
+        networkName:
+          type: string
+        isPrimary:
+          type: boolean
+          description: >-
+            Whether this zone is the network's primary — i.e. whether the
+            network's VMs auto-register their derived records here.
+    DNSZone:
+      type: object
+      required: [id, name, projectId, networks, recordCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: >-
+            The zone's fully-qualified name, lowercased and without a trailing
+            dot. Not constrained to `.internal`: a tenant may serve
+            `corp.example.com` internally. Unique per project, never globally.
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        networks:
+          type: array
+          description: The logical networks that can resolve this zone.
+          items:
+            $ref: "#/components/schemas/DNSZoneNetworkAttachment"
+        recordCount:
+          type: integer
+          description: >-
+            Authored records only. Derived records are assembled on demand and
+            never stored — fetch the record set for the effective view.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDNSZoneRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Fully-qualified zone name, e.g. `acme.internal`.
+        description:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+          description: Defaults to the caller's default project when omitted.
+    UpdateDNSZoneRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    AttachDNSZoneRequest:
+      type: object
+      required: [networkId]
+      properties:
+        networkId:
+          type: string
+          format: uuid
+        primary:
+          type: boolean
+          default: false
+          description: >-
+            Also make this zone the network's primary — the zone its VMs
+            auto-register into. Attaching alone only grants resolution.
+    DNSRecord:
+      type: object
+      required: [id, zoneId, name, fqdn, type, value, ttl, view]
+      properties:
+        id:
+          type: string
+          format: uuid
+        zoneId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Owner name relative to the zone; `@` is the apex.
+        fqdn:
+          type: string
+          description: The same name fully qualified.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        value:
+          type: string
+          description: >-
+            RDATA in zone-file text form: an address for A/AAAA, a target name
+            for CNAME/PTR, the string contents for TXT, and
+            `priority weight port target` for SRV.
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDNSRecordRequest:
+      type: object
+      required: [type, value]
+      properties:
+        name:
+          type: string
+          description: >-
+            Owner name relative to the zone; omitted means the apex (`@`). A
+            leftmost `*` label is a wildcard, including a bare `*` for the
+            zone-apex wildcard.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        value:
+          type: string
+        ttl:
+          type: integer
+          default: 300
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+    UpdateDNSRecordRequest:
+      type: object
+      description: >-
+        Name and type are the record's identity; change those by deleting and
+        recreating, so the rename is conflict-checked as the create it is.
+        `ttl` and `view` belong to the whole RRset (RFC 2181 §5.2), so changing
+        either applies to every record sharing this one's name and type.
+      properties:
+        value:
+          type: string
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+    AssembledDNSRecord:
+      type: object
+      required: [name, type, values, ttl, view, origin]
+      properties:
+        name:
+          type: string
+          description: Fully-qualified owner name.
+        type:
+          $ref: "#/components/schemas/DNSRecordType"
+        values:
+          type: array
+          description: >-
+            The RRset's values, deduplicated and sorted. A list because an
+            RRset is one: a dual-stack VM yields an A entry and an AAAA entry,
+            and a round-robin name yields several values.
+          items:
+            type: string
+        ttl:
+          type: integer
+        view:
+          $ref: "#/components/schemas/DNSRecordView"
+        origin:
+          type: string
+          description: >-
+            `derived` entries are generated from VM hostnames and their IPAM
+            allocations and are never stored; `authored` entries are record
+            rows.
+          enum: [derived, authored]
+    AssembledDNSZone:
+      type: object
+      required: [zoneId, zoneName, records]
+      properties:
+        zoneId:
+          type: string
+          format: uuid
+        zoneName:
+          type: string
+        records:
+          type: array
+          description: Sorted by name then type, so two assemblies diff cleanly.
+          items:
+            $ref: "#/components/schemas/AssembledDNSRecord"
     UserPublic:
       type: object
       description: The publicly readable projection of a user account.
@@ -9896,6 +10685,125 @@ components:
           items:
             $ref: "#/components/schemas/FolderTreeNode"
 
+    FolderMembers:
+      type: object
+      description: >-
+        A folder's user role grants and group role grants. Backed by
+        `role_bindings` directly — there is no membership mirror table for
+        folders — so only users and groups appear; machine principals are
+        managed from their own surfaces.
+      required: [users, groups]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderMember"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderGroupGrant"
+
+    FolderMember:
+      type: object
+      required: [username, displayName, email, role, roleDisplayName, external]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        username:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          format: uuid
+          description: The granted role's id.
+        roleDisplayName:
+          type: string
+          description: The role's name, or `(deleted role)` if the role no longer exists.
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the grant expires; absent if it never does.
+        external:
+          type: boolean
+          description: >-
+            The user is not a member of the folder's organization — a
+            cross-org grant, which UIs should render prominently.
+
+    FolderGroupGrant:
+      type: object
+      required: [name, role, roleDisplayName, external]
+      properties:
+        groupId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          format: uuid
+          description: The granted role's id.
+        roleDisplayName:
+          type: string
+          description: The role's name, or `(deleted role)` if the role no longer exists.
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        external:
+          type: boolean
+          description: >-
+            The group belongs to another organization — a cross-org grant,
+            which UIs should render prominently.
+
+    FolderRole:
+      type: string
+      description: >-
+        The role to grant on the folder: a role id, or a seeded role name
+        (`viewer`/`operator`/`editor`/`admin`). A role id must name a role
+        owned at or above the folder. The legacy project vocabulary
+        (`member`) is not accepted here.
+
+    GrantFolderMemberRequest:
+      type: object
+      description: Identify the user by `userID` or `userEmail`; supply exactly one.
+      required: [role]
+      properties:
+        userEmail:
+          type: string
+        userID:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/FolderRole"
+
+    UpdateFolderMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/FolderRole"
+
+    GrantFolderGroupRequest:
+      type: object
+      required: [groupID, role]
+      properties:
+        groupID:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/FolderRole"
+
     GroupDetail:
       type: object
       required: [name, description, organizationId]
@@ -10431,153 +11339,6 @@ components:
         name:
           type: string
         type:
-          type: string
-
-    MergeOrganizationsRequest:
-      type: object
-      required: [sourceOrganizationId, conflictResolution, preserveQuotas, mergeUsers]
-      properties:
-        sourceOrganizationId:
-          type: string
-          format: uuid
-          description: The organization to merge into the one named in the path.
-        conflictResolution:
-          type: object
-          required: [ouNameConflicts, projectNameConflicts, quotaConflicts, namingStrategy]
-          properties:
-            ouNameConflicts:
-              type: string
-              enum: [rename, merge, abort]
-            projectNameConflicts:
-              type: string
-              enum: [rename, merge, abort]
-            quotaConflicts:
-              type: string
-              enum: [sum, max, keep_target, abort]
-            namingStrategy:
-              type: string
-              enum: [prefix_source, suffix_source, manual]
-            prefix:
-              type: string
-              nullable: true
-            suffix:
-              type: string
-              nullable: true
-        preserveQuotas:
-          type: boolean
-        mergeUsers:
-          type: boolean
-        newName:
-          type: string
-          nullable: true
-          description: Optional new name for the target organization after the merge.
-
-    MergeOrganizationsResult:
-      type: object
-      required: [success, targetOrganizationId, mergedResourceCounts, conflicts, warnings, summary]
-      properties:
-        success:
-          type: boolean
-        targetOrganizationId:
-          type: string
-          format: uuid
-        mergedResourceCounts:
-          type: object
-          required: [organizationalUnits, projects, vms, quotas, users]
-          properties:
-            organizationalUnits:
-              type: integer
-            projects:
-              type: integer
-            vms:
-              type: integer
-            quotas:
-              type: integer
-            users:
-              type: integer
-        conflicts:
-          type: array
-          items:
-            type: object
-            required: [type, sourceName, targetName, resolution]
-            properties:
-              type:
-                type: string
-                description: The conflicting entity kind (`ou_name`, `project_name`, `quota_name`).
-              sourceName:
-                type: string
-              targetName:
-                type: string
-              resolution:
-                type: string
-              newName:
-                type: string
-                nullable: true
-        warnings:
-          type: array
-          items:
-            type: string
-        summary:
-          type: string
-
-    BulkTransferRequest:
-      type: object
-      required: [transfers, validateOnly]
-      properties:
-        transfers:
-          type: array
-          items:
-            type: object
-            required: [resourceType, resourceId, destinationType, destinationId]
-            properties:
-              resourceType:
-                type: string
-                enum: [ou, project, vm]
-              resourceId:
-                type: string
-                format: uuid
-              destinationType:
-                type: string
-                enum: [organization, ou, project]
-              destinationId:
-                type: string
-                format: uuid
-              newName:
-                type: string
-                nullable: true
-        validateOnly:
-          type: boolean
-          description: Validate the transfers without applying them.
-
-    BulkTransferResult:
-      type: object
-      required: [success, transferredCount, failedTransfers, warnings, summary]
-      properties:
-        success:
-          type: boolean
-        transferredCount:
-          type: integer
-        failedTransfers:
-          type: array
-          items:
-            type: object
-            required: [resourceId, resourceType, reason]
-            properties:
-              resourceId:
-                type: string
-                format: uuid
-              resourceType:
-                type: string
-              reason:
-                type: string
-              suggestion:
-                type: string
-                nullable: true
-        warnings:
-          type: array
-          items:
-            type: string
-        summary:
           type: string
 
     HierarchyValidationReport:
@@ -11845,6 +12606,23 @@ components:
           description: >-
             The member agent that authors this site's shared OVN northbound
             database; null when none is designated.
+        networkControllerStatus:
+          description: >-
+            Heartbeat-derived status of the designated network controller;
+            omitted when the site designates none. Reported as soon as the
+            heartbeat lapses, before the API begins refusing work.
+          allOf:
+            - $ref: '#/components/schemas/AgentStatus'
+        networkControllerIssue:
+          type: string
+          nullable: true
+          description: >-
+            Why the designated network controller cannot author this site's
+            topology right now — offline past the grace window, or re-registered
+            without the capabilities it was designated under. Null while it can.
+            When non-null, creating networked workloads, pinning networks to this
+            site, attaching floating IPs and attaching security groups here are
+            refused with 409.
         organizationId:
           type: string
           format: uuid
@@ -13325,6 +14103,36 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SecurityGroup"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    DNSZoneListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSZone"
+        total:
+          type: integer
+          description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    DNSRecordListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecord"
         total:
           type: integer
           description: Total visible items, ignoring `limit`/`offset`.

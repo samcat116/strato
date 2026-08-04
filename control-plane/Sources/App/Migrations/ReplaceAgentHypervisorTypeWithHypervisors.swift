@@ -7,9 +7,6 @@ import SQLKit
 ///
 /// Existing rows get an empty hypervisor list; it is repopulated the next time
 /// the agent registers (agents re-register on every reconnect).
-///
-/// Each schema change runs as its own ALTER TABLE because SQLite doesn't
-/// support multiple clauses in one statement.
 struct ReplaceAgentHypervisorTypeWithHypervisors: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("agents")
@@ -22,9 +19,7 @@ struct ReplaceAgentHypervisorTypeWithHypervisors: AsyncMigration {
         // `.array(of: .string)`); declaring it a scalar `.json` made writes fail
         // with "column is of type jsonb but expression is of type jsonb[]".
         //
-        // The empty-array default that backfills existing rows is engine-specific:
-        // Postgres spells an empty array `'{}'`, while SQLite stores arrays as JSON
-        // text where it is `'[]'`.
+        // Postgres spells an empty array `'{}'`.
         let emptyArrayDefault =
             (database as? SQLDatabase)?.dialect.name == "postgresql"
             ? "DEFAULT '{}'"

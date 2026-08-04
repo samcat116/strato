@@ -130,6 +130,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         /// warm-launch fallback (demote to cold) can re-materialize a
         /// private-registry image even after the rootfs cache evicted it.
         var registryCredential: RegistryCredential? = nil
+        /// The host-side NICs the orchestrator realized for this sandbox, kept
+        /// for the same reason as the credential: a re-provision under the same
+        /// id must reconfigure the same devices rather than silently drop them.
+        var networkAttachments: [ResolvedNetworkAttachment] = []
         /// For a warm-provisioned sandbox that has not launched yet: the
         /// template identity its held guest must echo before the workload is
         /// launched into it (issue #426). Nil after launch, for cold boots,
@@ -280,17 +284,6 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.jailerRequiredUnavailable(jailerBlockedReason)
         }
 
-        // v1 has no in-guest networking: the guest init mounts the rootfs and
-        // execs the workload without bringing up eth0 or DHCP, and the guest
-        // kernel has no IP autoconfiguration. Attaching a TAP would leave the
-        // workload with an unconfigured interface while the sandbox reported
-        // running, so reject networked specs rather than mis-converging. (The
-        // scheduler/IPAM path exists — #415/#416 — but the guest cannot yet use
-        // it; enabling it is a guest-image change.)
-        guard spec.network == nil, networkAttachments.isEmpty else {
-            throw SandboxRuntimeError.networkingUnsupported
-        }
-
         logger.info(
             "Creating sandbox",
             metadata: ["sandboxId": .string(sandboxId), "image": .string(spec.image)])
@@ -311,6 +304,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // identity, and report it healthy as one create operation. No registry
         // pull or cold/warm image provisioning belongs on this path.
         if let restoreFrom = spec.restoreFrom {
+            // A snapshot captures its device set: one taken before guest
+            // networking has no network interface, and Firecracker cannot add
+            // one to a restored VM — the restore has to remap an existing device
+            // via `network_overrides` (STR-104). Refuse rather than restore a
+            // sandbox whose NIC would silently not exist.
+            guard spec.network == nil else {
+                throw SandboxRuntimeError.networkingUnsupported(
+                    "restoring a networked sandbox needs the snapshot's network device remapped on load, "
+                        + "which this agent cannot do yet (STR-104)")
+            }
             try await provisionFromSandboxSnapshot(
                 sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom)
             return
@@ -343,8 +346,19 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // falls back to the cold path; a config document too large for the
         // standard capacity is cold-only (the device size would not match
         // the template's).
+        // A networked sandbox is cold-only, for the same reason a fork is
+        // refused above: a warm template's snapshot has no network device, and
+        // a restored VM cannot grow one (STR-104). Cold-booting costs the warm
+        // path's latency saving, which is the honest trade until the remap
+        // lands.
         let warmEligible =
-            warmStartActive && configData.count == SandboxConfigDrive.standardBlockImageBytes
+            warmStartActive && spec.network == nil
+            && configData.count == SandboxConfigDrive.standardBlockImageBytes
+        if warmStartActive, spec.network != nil {
+            logger.debug(
+                "Sandbox has a NIC, so it is cold-provisioned (warm templates carry no network device)",
+                metadata: ["sandboxId": .string(sandboxId)])
+        }
         let warmKey = warmSnapshotKey(
             imageDigest: materialized.manifestDigest, guestImage: guestImage, spec: spec)
         var warmMissed = true
@@ -390,7 +404,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         try await coldProvisionAndRegister(
             sandboxId: sandboxId, spec: spec, credential: registryCredential,
-            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData)
+            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData,
+            networkAttachments: networkAttachments)
 
         // This image had no usable warm template: build one in the background
         // so the next sandbox for the same (image, machine shape) warm-starts.
@@ -410,15 +425,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         materialized: MaterializedRootfs,
         guestImage: SandboxGuestImage,
         nonce: String,
-        configData: Data
+        configData: Data,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         let vm = try await provisionColdMicroVM(
             vmId: sandboxId, spec: spec, rootfsSourcePath: materialized.rootfsPath,
-            configData: configData, guestImage: guestImage)
+            configData: configData, guestImage: guestImage, networkAttachments: networkAttachments)
         sandboxes[sandboxId] = Managed(
             spec: spec, rootfsPath: vm.rootfsPath, configPath: vm.configPath,
             vsockUdsPath: vm.vsockUdsPath, identityNonce: nonce, jail: vm.jail,
-            registryCredential: credential, manager: vm.manager, lastExitCode: nil)
+            registryCredential: credential, networkAttachments: networkAttachments,
+            manager: vm.manager, lastExitCode: nil)
         logger.info(
             "Sandbox created",
             metadata: [
@@ -446,7 +463,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         spec: SandboxSpec,
         rootfsSourcePath: String,
         configData: Data,
-        guestImage: SandboxGuestImage
+        guestImage: SandboxGuestImage,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws -> ProvisionedMicroVM {
         // Stage the per-VM artifacts. Jailed (issue #425), everything the
         // microVM touches lives inside its chroot and the Firecracker API is
@@ -492,11 +510,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 try chownPath(path, uid: plan.uid, gid: plan.gid)
             }
 
-            // A dedicated — and, until guest networking lands, deliberately
-            // empty — network namespace: even a compromised VMM sees no host
-            // interfaces. The future TAP attach flow creates the device in the
-            // host namespace, plugs it into the OVS bridge, and moves it in
-            // here before spawn.
+            // A dedicated network namespace: even a compromised VMM sees no
+            // host interfaces. When the sandbox has a NIC the network
+            // orchestrator has already created this namespace and wired a veth
+            // + TAP into it (issue STR-100) — it runs first, on the reconcile
+            // lane, before the runtime is called. This call is what covers the
+            // network-free case, and reusing an existing namespace is exactly
+            // what makes the two orders equivalent.
             try await createNetns(plan.netnsName)
 
             vsockUdsPath = plan.vsockUDSHostPath
@@ -585,8 +605,29 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     ])
             }
 
-            // No network interface: networked specs are rejected above until the
-            // guest image can configure one.
+            // The sandbox's NIC, when it has one. The device is a TAP the
+            // orchestrator created inside this sandbox's network namespace and
+            // chowned to the jail's uid; Firecracker opens it by name from
+            // inside the jail, which the jailer has already entered via
+            // `--netns` (issue STR-100). A spec is capped at one NIC, so the
+            // first attachment is the whole set.
+            if let nic = networkAttachments.first {
+                // Firecracker's only network backend is a TAP opened by name —
+                // no fd passing, no vhost-user — so anything else cannot be
+                // realized here. Refuse loudly: an agent in `network_mode =
+                // "user"` (which is not macOS-only) or with no network service
+                // at all resolves every NIC to `.userMode`, and silently
+                // skipping it would boot the sandbox with no interface while
+                // the control plane records it as having one.
+                guard case .tap(let tapName) = nic.attachment else {
+                    throw SandboxRuntimeError.networkingUnsupported(
+                        "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
+                            + "Firecracker can only open a TAP by name inside its namespace; "
+                            + "sandbox networking needs network_mode = \"ovn\" with a working OVN/OVS")
+                }
+                try await manager.configureNetwork(
+                    NetworkInterface.tap(id: "eth0", tapName: tapName, macAddress: nic.macAddress))
+            }
 
             try await manager.configureVsock(
                 VsockConfig(guestCid: Self.guestCID, udsPath: apiPaths.vsock))
@@ -1061,9 +1102,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         removeArtifacts(sandboxId)
         sandboxes.removeValue(forKey: sandboxId)
 
+        // Unreachable with a NIC today — networked specs never warm-start, so
+        // there is no warm launch to demote — but carried through rather than
+        // dropped, so the day that changes this path rebuilds the same device
+        // set instead of silently producing an unnetworked sandbox.
         try await coldProvisionAndRegister(
             sandboxId: sandboxId, spec: managed.spec, credential: managed.registryCredential,
-            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData)
+            materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData,
+            networkAttachments: managed.networkAttachments)
     }
 
     /// Best-effort wall-clock resync after a snapshot restore or warm
@@ -1887,9 +1933,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     "the image config exceeds the standard config-drive capacity")
             }
 
+            // A template is per-(image, machine shape) and shared across
+            // sandboxes, so it can never carry a particular sandbox's NIC.
             let provisioned = try await provisionColdMicroVM(
                 vmId: templateId, spec: spec, rootfsSourcePath: materialized.rootfsPath,
-                configData: configData, guestImage: guestImage)
+                configData: configData, guestImage: guestImage, networkAttachments: [])
             vm = provisioned
             try await provisioned.manager.start()
 

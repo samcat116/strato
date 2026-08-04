@@ -94,6 +94,15 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @OptionalParent(key: "site_id")
     var site: Site?
 
+    /// The zone VMs on this network **auto-register into** (issue #770) — the
+    /// zone their derived `<hostname>.<zone>` and PTR records land in. Must be
+    /// one of the network's attached zones (`DNSZoneNetwork`), which keeps
+    /// derived-record placement unambiguous while attachment stays
+    /// many-to-many. Nil is the ordinary case for a network that resolves
+    /// zones without registering into any of them.
+    @OptionalParent(key: "primary_dns_zone_id")
+    var primaryDNSZone: DNSZone?
+
     /// User who created the network; nil for seeded networks.
     @OptionalParent(key: "created_by_id")
     var createdBy: User?
@@ -260,12 +269,18 @@ struct UpdateNetworkRequest: Content {
     let leaseTime: Int?
     /// Toggle outbound SNAT. Re-synced to agents, which add/remove the SNAT rule.
     let externalAccess: Bool?
+    /// The zone this network's VMs auto-register into. Must already be
+    /// attached to the network. Send `clearPrimaryDnsZone: true` to unset it —
+    /// a JSON `null` is indistinguishable from an omitted field here.
+    let primaryDnsZoneId: UUID?
+    let clearPrimaryDnsZone: Bool?
 
     init(
         name: String? = nil, subnet: String? = nil, gateway: String? = nil,
         subnet6: String? = nil, gateway6: String? = nil, ipv6Enabled: Bool? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil, externalAccess: Bool? = nil
+        leaseTime: Int? = nil, externalAccess: Bool? = nil,
+        primaryDnsZoneId: UUID? = nil, clearPrimaryDnsZone: Bool? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -278,6 +293,8 @@ struct UpdateNetworkRequest: Content {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
+        self.primaryDnsZoneId = primaryDnsZoneId
+        self.clearPrimaryDnsZone = clearPrimaryDnsZone
     }
 }
 
@@ -296,6 +313,8 @@ struct NetworkResponse: Content {
     let leaseTime: Int?
     let externalAccess: Bool
     let siteId: UUID?
+    /// The zone this network's VMs auto-register into, if any (issue #770).
+    let primaryDnsZoneId: UUID?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -314,6 +333,7 @@ struct NetworkResponse: Content {
         self.leaseTime = network.leaseTime
         self.externalAccess = network.externalAccess
         self.siteId = network.$site.id
+        self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }

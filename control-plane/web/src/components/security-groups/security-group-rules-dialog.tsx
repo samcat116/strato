@@ -111,6 +111,7 @@ function SecurityGroupRules({
     peerType: "any" as "any" | "cidr" | "group",
     cidr: "",
     remoteGroupId: "",
+    log: false,
     description: "",
   });
 
@@ -168,6 +169,7 @@ function SecurityGroupRules({
       remoteCIDR: form.peerType === "cidr" ? cidr : undefined,
       remoteGroupId:
         form.peerType === "group" ? form.remoteGroupId : undefined,
+      log: form.log || undefined,
       description: form.description.trim() || undefined,
     };
 
@@ -181,6 +183,10 @@ function SecurityGroupRules({
         portMin: "",
         portMax: "",
         cidr: "",
+        // Reset with the per-rule fields, not kept like direction/protocol:
+        // logging is a debugging choice about one rule, and leaving it stuck
+        // on silently logs every rule added afterwards.
+        log: false,
         description: "",
       }));
     } catch (error) {
@@ -209,6 +215,11 @@ function SecurityGroupRules({
               <div className="min-w-0">
                 <p className="text-sm text-foreground/80">
                   {ruleSummary(rule, groupNameById)}
+                  {rule.log && (
+                    <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                      logged
+                    </span>
+                  )}
                 </p>
                 {rule.description && (
                   <p className="text-xs text-muted-foreground truncate">
@@ -431,6 +442,29 @@ function SecurityGroupRules({
               className="bg-background border-border text-foreground"
               disabled={isAdding}
             />
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="ruleLog"
+              type="checkbox"
+              checked={form.log}
+              onChange={(e) => setForm({ ...form, log: e.target.checked })}
+              className="mt-1 h-4 w-4 rounded border-border"
+              disabled={isAdding}
+            />
+            <div className="space-y-1">
+              <Label htmlFor="ruleLog" className="text-foreground">
+                Log matching packets
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Records every flow this rule admits in the hypervisor&apos;s
+                firewall log. Useful while debugging a rule; expensive to leave
+                on for busy traffic. The rule is enforced either way, but hosts
+                running an agent older than the logging protocol emit no log
+                line — if nothing appears, check the agent&apos;s version.
+              </p>
+            </div>
           </div>
 
           <Button

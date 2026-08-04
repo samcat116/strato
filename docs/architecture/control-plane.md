@@ -34,7 +34,12 @@ Two targets under `control-plane/Sources/`:
   (`SPIFFE_ENDPOINT_SOCKET`; the Kubernetes topology, where the entry must
   carry `admin = true`).
 
-Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
+Tests are swift-testing, split across four targets by domain —
+`AppIdentityTests`, `AppIAMTests`, `AppResourceTests`, `AppPlatformTests` —
+over a shared `AppTestSupport` fixture library. The split is a build-time
+one: a module's `-emit-module` job is single-threaded and re-runs whenever any
+file in it changes, so one 59k-line target cost ~9.8s on every test edit
+against ~2.4s for the four targets in parallel. Keep them roughly balanced.
 
 ## Boot sequence
 
@@ -48,12 +53,17 @@ Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
    (SSF revocation enforcement), and `AuthorizationMiddleware` — the
    structurally default-deny authorization gate, which runs in every
    environment including tests.
-3. **Coordination**: Valkey (`ValkeyCoordinationStore` + Valkey-backed
-   sessions) in real deployments — startup fails hard if it's missing;
-   `InMemoryCoordinationStore` + Fluent sessions under `.testing`. Session
-   keys carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every
-   read slides, and the driver skips the write-back when a request left the
-   session data unchanged.
+3. **Coordination and sessions**: two Valkey-backed stores, configured
+   separately because their failure contracts are opposites (issue #855).
+   `ValkeyCoordinationStore` fails open — flushing it degrades convergence, not
+   correctness — while losing session storage logs every user out. Coordination
+   reads `VALKEY_*`; sessions read `SESSION_VALKEY_*` and fall back wholesale to
+   the coordination endpoint when unset, so they share one client unless the
+   endpoints differ. Startup fails hard if either is missing or unreachable.
+   Under `.testing`: `InMemoryCoordinationStore` + Fluent sessions. Session keys
+   carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every read
+   slides, and the driver skips the write-back when a request left the session
+   data unchanged.
 4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
    ~87 ordered migrations and `autoMigrate()`. Migrations run at startup;
    there is no separate migrate step.
@@ -110,6 +120,17 @@ The important ones to know when navigating `Services/`:
   **`RegistryClientService`** (OCI tag resolution + pull tokens for sandboxes).
 - **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
   WebSockets to the agent socket for consoles and sandbox exec.
+  `ConsoleSessionManager` carries both of a VM's consoles: the serial console
+  upgrades in one step (`GET /api/vms/:id/console`), while the graphics console
+  (issue #566) is minted and attached in two — `POST /api/vms/:id/console/vnc`
+  returns a single-use session, and `GET …/console/vnc/:sessionID/attach`
+  upgrades it. The split exists for error reporting: a display can be
+  unavailable because the VM was created headless (409), because its agent is
+  too old to realize one, or because its socket is held by another replica
+  (503), and each deserves a status code rather than an unexplained disconnect
+  after the upgrade. Both directions of both consoles run through a serial
+  pump, since a task-per-frame relay can transpose frames — merely ugly on a
+  terminal, unrecoverable for RFB.
 - Identity/compliance: `WebAuthnService`, `OIDCIdentityService`,
   `AuditService`, `SSFService`, the `SCIM/` handlers, and the `SPIFFE/`
   services (SPIRE identity validation and registration).
@@ -349,14 +370,22 @@ what makes the test harness safe.
 
 ## Testing
 
-`Tests/AppTests` runs against Postgres — the engine production uses — both
+The suite runs against Postgres — the engine production uses — both
 locally (any reachable server via `DATABASE_*` env vars) and in CI.
 
-The harness (`TestUtilities.swift`) migrates **once per process into a
-template database, then clones per test** with
-`CREATE DATABASE ... TEMPLATE ...`. `withApp { app in ... }` (from
-`BaseTestCase`) boots via `configure()` against the pre-migrated clone and
-tears down with `shutdownForTesting()`, which drops the clone.
+The harness (`Tests/AppTestSupport/TestUtilities.swift`) migrates **once per
+test process into a template database, then clones per test** with
+`CREATE DATABASE ... TEMPLATE ...`; each of the four test bundles is its own
+process, so each builds its own pid-named template. `withApp { app in ... }`
+boots via `configure()` against the pre-migrated clone and tears down with
+`shutdownForTesting()`, which drops the clone.
+
+The fixtures are `package` rather than `internal` because `AppTestSupport` is
+a separate module: it `@testable import`s `App` and re-exports App's internal
+types at package visibility, which is legal only within one package.
+`BaseTestCase` is the exception — `package` classes cannot be subclassed
+across modules — so it stays in `AppIdentityTests` with the suites that
+inherit from it.
 
 Authorization tests run through the **real** `AuthorizationMiddleware` and
 the real Cedar evaluator against `role_bindings` rows the tests create —

@@ -76,6 +76,9 @@ enum CedarSchemaBuilder {
         case "network": return [.network] + projectContainers
         case "floatingip": return [.floatingIP] + projectContainers
         case "securitygroup": return [.securityGroup] + projectContainers
+        // Records sit under their zone, so a `dns:*` action can target either
+        // — a binding on one zone reaches its records and nothing else.
+        case "dns": return [.dnsZone, .dnsRecord] + projectContainers
         case "serviceaccount": return [.serviceAccount] + projectContainers
         case "operation": return [.vm, .sandbox] + projectContainers
         case "project": return projectContainers
@@ -237,8 +240,11 @@ enum CedarSchemaBuilder {
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
         case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .vmSnapshot, .floatingIP,
-            .securityGroup, .serviceAccount, .network:
+            .securityGroup, .serviceAccount, .network, .dnsZone:
             return [.project]
+        // A record's container is its zone, not the project directly: records
+        // cannot exist outside a zone, so delegating a zone carries them.
+        case .dnsRecord: return [.dnsZone]
         case .site, .agent: return [.organization, .folder]
         case .user, .group, .workload: return []
         }

@@ -135,6 +135,8 @@ struct VMController: RouteCollection {
                 $0.with(\.$observedAddresses)
                 // The response reports each NIC's network by name as well as id.
                 $0.with(\.$logicalNetwork)
+                // …and which security groups filter it (STR-34).
+                $0.with(\.$securityGroupMemberships)
             }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
@@ -152,9 +154,13 @@ struct VMController: RouteCollection {
         let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
         let readable = try await req.canFilter("vm:read", on: nodes)
 
+        // Batched for the same reason the authorization decision is: a
+        // per-row realizer walk would be three queries per VM.
+        let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
+
         return allVMs.compactMap { vm in
             guard let id = vm.id, readable.contains(IAMNode(type: .virtualMachine, id: id)) else { return nil }
-            return VMDetailResponse(from: vm)
+            return VMDetailResponse(from: vm, securityGroupsEnforced: enforcement[id])
         }
     }
 
@@ -179,9 +185,13 @@ struct VMController: RouteCollection {
             try await interface.$observedAddresses.load(on: req.db)
             // The response reports the NIC's network by name as well as id.
             try await interface.$logicalNetwork.load(on: req.db)
+            // …and which security groups filter it (STR-34).
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
 
-        return VMDetailResponse(from: vm)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
     }
 
     func create(req: Request) async throws -> Response {
@@ -189,6 +199,10 @@ struct VMController: RouteCollection {
 
         struct CreateVMRequest: Content {
             let name: String
+            /// The VM's DNS label (issue #770). Defaults to a slugified
+            /// `name`, disambiguated against whatever already registers into
+            /// the target network's primary zone.
+            let hostname: String?
             let description: String?
             let imageId: UUID?
             let projectId: UUID?
@@ -218,6 +232,12 @@ struct VMController: RouteCollection {
             // behavior — and both are what Windows 11 / Server 2025 require.
             let secureBoot: Bool?
             let tpm: Bool?
+            // Graphics console (issue #566): whether the guest boots with a
+            // display device whose framebuffer the web UI can attach to.
+            // Defaults false — headless, today's behavior. Fixed at create,
+            // because the display device lives in the hypervisor process's
+            // argument vector.
+            let graphicsConsole: Bool?
             // Security groups for the VM's NIC. Omitted (or empty) means the
             // project's default group — every NIC must belong to at least one
             // group.
@@ -274,26 +294,8 @@ struct VMController: RouteCollection {
         // Resolve the NIC's security groups. Explicit ids must exist, belong
         // to this project, and fit the per-NIC cap; omitted (or empty) means
         // the project's default group, ensured inside the create transaction.
-        // No agent-version gate here: VM create must work on a pre-security-
-        // group fleet, where assembly simply omits the fields (documented
-        // mixed-fleet rollout semantics).
-        let requestedSecurityGroupIds: [UUID] = (createRequest.securityGroupIds ?? [])
-            .reduce(into: []) { unique, groupId in
-                if !unique.contains(groupId) { unique.append(groupId) }
-            }
-        if requestedSecurityGroupIds.count > SecurityGroup.maxGroupsPerNIC {
-            throw Abort(
-                .badRequest,
-                reason: "At most \(SecurityGroup.maxGroupsPerNIC) security groups per interface")
-        }
-        for groupId in requestedSecurityGroupIds {
-            guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Security group \(groupId) does not exist")
-            }
-            guard group.$project.id == projectId else {
-                throw Abort(.badRequest, reason: "Security group \(groupId) belongs to a different project")
-            }
-        }
+        let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
+            createRequest.securityGroupIds, projectID: projectId, on: req.db)
 
         // Create the VM instance from the image.
         // Pre-compute values to avoid complex expression
@@ -385,7 +387,8 @@ struct VMController: RouteCollection {
             maxCpu: maxCpuValue,
             maxMemory: maxMemoryValue,
             secureBoot: createRequest.secureBoot ?? false,
-            tpmEnabled: createRequest.tpm ?? false
+            tpmEnabled: createRequest.tpm ?? false,
+            graphicsConsole: createRequest.graphicsConsole ?? false
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -437,6 +440,17 @@ struct VMController: RouteCollection {
                 reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
         }
 
+        // Firecracker emulates no display device at all — it boots a kernel
+        // directly and its only console is a serial port. Same reasoning as
+        // Secure Boot above: returning 202 for a VM whose Display tab could
+        // never work is worse than refusing (issue #566).
+        if vm.graphicsConsole, vm.hypervisorType == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'graphicsConsole' is not supported for firecracker VMs "
+                    + "(no emulated display device); use the qemu hypervisor")
+        }
+
         let userID = try user.requireID()
 
         // Reserve quota and persist the VM and its pending create operation in one
@@ -479,6 +493,35 @@ struct VMController: RouteCollection {
                     // Generate unique paths and configurations using the generated ID
                     let vmID = try vm.requireID()
 
+                    // Every VM starts with one NIC on the network the caller named,
+                    // resolved here — inside the transaction — so the row that IPAM
+                    // allocates from is the one the NIC's foreign key then pins
+                    // (issue #765).
+                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
+                        requestedID: createRequest.networkId,
+                        requestedName: createRequest.networkName,
+                        projectID: projectId,
+                        on: db
+                    )
+                    let logicalNetworkID = try logicalNetwork.requireID()
+
+                    // The VM's DNS label (issue #770), resolved against the
+                    // zone the network registers into. An explicit hostname is
+                    // held to strict uniqueness — the caller named it, so a
+                    // collision is worth a 409 — while the default is
+                    // disambiguated with a suffix, because two VMs called
+                    // "web server" is an ordinary thing to do and failing the
+                    // create over an implicit label would be baffling.
+                    let registrationZones = try await DNSZoneService.registrationZones(
+                        networkIDs: [logicalNetworkID], on: db)
+                    if let requestedHostname = createRequest.hostname {
+                        vm.hostname = try await DNSZoneService.validatedExplicitHostname(
+                            requestedHostname, forVM: vmID, in: registrationZones, on: db)
+                    } else {
+                        vm.hostname = try await DNSZoneService.availableHostname(
+                            basedOn: vm.name, forVM: vmID, in: registrationZones, on: db)
+                    }
+
                     // Image-based paths - disk will be created by agent from cached image
                     vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
 
@@ -494,19 +537,9 @@ struct VMController: RouteCollection {
                     // Update VM with generated paths
                     try await vm.update(on: db)
 
-                    // Every VM starts with one NIC on the network the caller named,
-                    // resolved here — inside the transaction — so the row that IPAM
-                    // allocates from is the one the NIC's foreign key then pins
-                    // (issue #765). The control plane owns IPAM (issue #212): the
-                    // address is allocated here so agents receive it in the spec
-                    // instead of inventing one.
-                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
-                        requestedID: createRequest.networkId,
-                        requestedName: createRequest.networkName,
-                        projectID: projectId,
-                        on: db
-                    )
-                    let logicalNetworkID = try logicalNetwork.requireID()
+                    // The control plane owns IPAM (issue #212): the address is
+                    // allocated here so agents receive it in the spec instead
+                    // of inventing one.
                     let allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
                     let networkGateway = logicalNetwork.gateway
                     // Dual-stack network: the NIC gets one address per family.
@@ -633,6 +666,10 @@ struct VMController: RouteCollection {
         // and Content's Encodable half has nothing to encode here.
         struct UpdateVMRequest: Decodable {
             let name: String?
+            /// The VM's DNS label (issue #770). Set explicitly: renaming the
+            /// VM deliberately does *not* move its records, so this is the
+            /// only way its name in DNS changes.
+            let hostname: String?
             let description: String?
             /// Target boot vCPU count (issue #568).
             let cpu: Int?
@@ -646,12 +683,13 @@ struct VMController: RouteCollection {
             let balloonTarget: Int64??
 
             enum CodingKeys: String, CodingKey {
-                case name, description, cpu, memory, balloonTarget
+                case name, hostname, description, cpu, memory, balloonTarget
             }
 
             init(from decoder: any Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 name = try c.decodeIfPresent(String.self, forKey: .name)
+                hostname = try c.decodeIfPresent(String.self, forKey: .hostname)
                 description = try c.decodeIfPresent(String.self, forKey: .description)
                 cpu = try c.decodeIfPresent(Int.self, forKey: .cpu)
                 memory = try c.decodeIfPresent(Int64.self, forKey: .memory)
@@ -665,6 +703,13 @@ struct VMController: RouteCollection {
 
         if let name = updateRequest.name {
             existingVM.name = name
+        }
+
+        if let hostname = updateRequest.hostname {
+            let vmID = try existingVM.requireID()
+            let zones = try await DNSZoneService.registrationZones(vmID: vmID, on: req.db)
+            existingVM.hostname = try await DNSZoneService.validatedExplicitHostname(
+                hostname, forVM: vmID, in: zones, on: req.db)
         }
 
         if let description = updateRequest.description {
@@ -842,8 +887,12 @@ struct VMController: RouteCollection {
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return try await VMDetailResponse(from: vm).encodeResponse(for: req)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db)
+        ).encodeResponse(for: req)
     }
 
     func delete(req: Request) async throws -> Response {
@@ -960,8 +1009,11 @@ struct VMController: RouteCollection {
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
             try await interface.$observedAddresses.load(on: req.db)
+            try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return VMDetailResponse(from: vm)
+        return try await VMDetailResponse(
+            from: vm,
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
     }
 
     func start(req: Request) async throws -> Response {
@@ -974,19 +1026,26 @@ struct VMController: RouteCollection {
 
         // A boot the network path can't complete is refused up front rather
         // than accepted as a 202 that never finishes: on an OVN host whose
-        // site designates no network controller, the VM's logical switch is
-        // authored by nobody and the agent parks the workload forever
-        // (issue #743). Placement guards the same condition at create time;
-        // this catches a site that lost its controller since.
+        // site designates no network controller — or one whose controller is
+        // long offline or came back unable to author (issue #833) — the VM's
+        // logical switch is authored by nobody and the agent parks the workload
+        // forever (issue #743). Placement guards the same condition at create
+        // time; this catches a site that lost its controller since. Passing the
+        // host lets `refusal` exempt the single-node site whose own node is the
+        // offline controller: there the boot is simply waiting on that node to
+        // come back, which is what desired state is for.
         if let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let agent = try await Agent.find(agentUUID, on: req.db),
-            agent.supportsInterVMNetworking,
-            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
-                forAgent: agent, on: req.db)
+            agent.supportsInterVMNetworking
         {
-            throw SiteNetworkAuthority.missingControllerAbort(
-                site: site, consequence: "this VM's network cannot be realized and it would never boot")
+            let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: req.db)
+            if let refusal = SiteNetworkAuthority.refusal(
+                authority, host: agent,
+                consequence: "this VM's network cannot be realized and it would never boot")
+            {
+                throw refusal
+            }
         }
 
         // The desired status and generation bump are the mutation;

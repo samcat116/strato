@@ -5,7 +5,7 @@ import SQLKit
 /// Adds the gateway denormalized onto each NIC row at allocation time (so spec
 /// building needs no network lookup), and a unique index guarding control-plane
 /// IPAM against two concurrent creates allocating the same address on one
-/// network. NULL ip_address rows are exempt on both PostgreSQL and SQLite.
+/// network. NULL ip_address rows are exempt.
 struct AddGatewayToVMNetworkInterface: AsyncMigration {
     /// Point-in-time mapping of `vm_network_interfaces` with only the columns
     /// this migration touches, so later model changes cannot break it (see
@@ -29,8 +29,6 @@ struct AddGatewayToVMNetworkInterface: AsyncMigration {
     }
 
     func prepare(on database: Database) async throws {
-        // Single action per update() call: SQLite cannot combine multiple
-        // ALTER TABLE actions in one statement.
         try await database.schema("vm_network_interfaces")
             .field("gateway", .string)
             .update()

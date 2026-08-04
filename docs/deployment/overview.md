@@ -19,6 +19,12 @@ reclaimed. The idle window defaults to 7 days and is set with
 `SESSION_TTL_SECONDS` (seconds; values under 60 are ignored). Shorten it for
 stricter re-authentication; note it bounds inactivity, not total session age.
 
+By default sessions share the Valkey instance the coordination layer uses. The
+two can be separated with `SESSION_VALKEY_*`, which is worth doing: coordination
+is fail-open, session storage is not, so sharing one instance lets a
+coordination problem log everyone out. See
+[docker-compose](./docker-compose.md#splitting-session-storage).
+
 ## Self-registration
 
 By default anyone who can reach the sign-in screen can create an account from

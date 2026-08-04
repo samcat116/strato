@@ -296,6 +296,14 @@ free-form Cedar text.
 - Nodes: any tree node — Org, Folder, Project, or an **individual resource**.
   Resource-level bindings exist from day one.
 - Many-to-many. The one-parent rule constrains *resources*, never principals.
+- **Which nodes have a write surface.** Org grants go through the org members
+  API, project grants through the project members/groups APIs, and folder
+  grants through `/api/organizations/{orgID}/ous/{ouID}/members` and
+  `…/groups` (STR-109) — the endpoint that makes "this team administers
+  everything under `engineering`" expressible as one grant instead of an
+  org-wide role or a copy per project. Resource-level bindings are still
+  written only by the creator-binding path; there is no customer-facing
+  endpoint to author or revoke one individually.
 - **Every binding has a nullable `expires_at`.** TTL is a property of the
   grant primitive.
 - Bindings are written in the same database transaction as the resources they
@@ -318,6 +326,11 @@ viewer   ⊂  operator  ⊂  editor  ⊂  admin
 | `editor` | operator + `*:create/update/delete`, `volume:attach/snapshot/…`, `vm:viewConsole` |
 | `admin` | editor + `iam:setPolicy`, `project:transfer`, `quota:manage`, `group:manage`, `folder:create`, `agent:manage` |
 
+A few actions are deliberately in **no** seeded role: `project:create` (bare
+org membership grants it), the identity-plane `user:*` set and
+`agent:updateArtifact` (reached through the tier-1 policies), and in-guest
+execution — see below.
+
 Roles are **global** (one set across all resource types), not per-service;
 narrow per-type roles can be added later if needed. This is deliberately not
 GCP's basic-roles mistake: membership is a curated, reviewable schema change —
@@ -331,6 +344,54 @@ Today's environment roles (`environment_manager`, deployer, approver) become
 **conditioned bindings** (e.g. `editor` on a project where
 `resource.environment == "staging"`), consistent with
 environment-as-attribute.
+
+### In-guest execution is never in a default role (#804)
+
+Running a command inside a VM's guest is two actions, `vm:exec` (interactive
+session) and `vm:runCommand` (non-interactive, output captured), and **no
+seeded role carries either**. They are reachable only through a custom role
+somebody wrote on purpose, or through the tier-1 `platform-system-admin`
+policy.
+
+Both are root-on-VM. That is not the shape of `vm:start`, and folding them into
+`editor` — or even `admin` — would mean a binding written at the org for one
+reason silently conferring a shell on every VM in every project beneath it,
+including projects created long afterwards. An org admin can still reach exec;
+they hold `iam:setPolicy` and can author the role. The difference is that they
+have to do it, and the binding row is then a listable answer to "who has a
+shell on this fleet, and who gave it to them". That is the substance of
+"granted explicitly rather than inherited", without a second inheritance rule
+that would apply to one action and confuse every reader of the other hundred.
+
+The split between the two is about **attribution, not privilege**.
+`vm:runCommand` is not a lesser `vm:exec` — a one-shot `sh -c` is a shell. What
+differs is what the platform can say afterwards: a non-interactive run carries
+its command in the request body and its output in a stored operation record, so
+each invocation is a discrete, attributable row, while an interactive session
+is a byte stream the control plane never parses. Two actions let an
+organization say "automation may run recorded commands here, humans may not
+hold unrecorded shells"; one action cannot express that. Both ride the `vm`
+service group, so an existing `vm:*` ceiling covers them with no edit.
+
+Sandboxes keep a single `sandbox:exec` (in `operator`), and the asymmetry is
+intended: a sandbox is an ephemeral, project-scoped unit of compute that exists
+to be executed in, and its whole lifetime is the blast radius. A VM is a
+durable machine holding durable data.
+
+**Both route shapes derive the verb.** `AuthorizationMiddleware` maps a
+method and path to a permission for the two resource-mapped prefixes, and its
+defaults are weaker than in-guest execution: an unlisted POST subpath falls
+back to `update`, an unlisted GET to `read`. That matters because the two
+halves arrive in different shapes — the interactive attach is a WebSocket
+*upgrade*, so a GET (`…/exec/:sessionID/attach`, generalizing the sandbox
+route), while the recorded run is a POST under `…/actions/run`. So the verb
+list is consulted for GET as well as POST, and an `/actions/<verb>` subpath is
+read one segment deeper. Without the first, an exec WebSocket would be gated on
+`vm:read` — a *viewer* permission; without the second, on `vm:update`. Neither
+backstop would have complained: the verb list never fired on a GET, and the
+`assertHandlerEvaluated` check returns early for GET and for
+`.switchingProtocols`. A GET whose subpath is not a registered verb (`/status`,
+`/operations`, `/console`, snapshot listing) still reads.
 
 ### Roles are rows, defaults included (shipped with #604/#605)
 
@@ -502,6 +563,34 @@ of the current system are unchanged by the migration:
   from the store per-request — the token itself is never a standing grant.
 - API keys are unchanged. The short-lived-credential successor path is
   JWT-SVIDs (below), which sits alongside them rather than replacing them.
+
+### Credential scopes are a parallel gate, to be folded in (STR-115)
+
+API keys and CLI sessions carry a `scopes` array (`read`/`write`/`admin`)
+enforced by `APIKeyScopeMiddleware` entirely outside the evaluator, with the
+required scope derived from the HTTP method alone. That is this section's
+invariant violated in-tree: a scoped credential is identity carrying
+authorization. The consequences are concrete: `admin` is never *required* by
+anything (safe methods need `read`, everything else `write`), so `read`+`write`
+is full account power; a default CLI login asks for and receives `read write`;
+guardrails cannot ceiling what a credential may do; and none of the canonical
+narrowing use cases (a CI token for one project, a monitoring key that reads
+VMs but not images) is expressible.
+
+**Decided direction** (STR-115 is the implementation): a credential is issued
+*on behalf of* a principal and optionally carries a **restriction** in the
+existing action/role vocabulary — a role id, an action list, or a node scope —
+and enforcement moves into the evaluator so the effective permission is
+`bindings ∩ restriction`, recorded in `iam_decision_logs` with tier
+attribution like every other decision. Guardrails then cover credentials for
+free. The current scopes become a compatibility shim (`read` → the viewer
+action set; `write`/`admin` → unrestricted) so existing keys keep working;
+the bespoke three-value enum takes on no new consumers.
+
+Until then, the one repair already made (STR-116): a scope refusal writes a
+`scope_denied` row to `iam_decision_logs` naming the principal, the credential
+(`api_key`/`cli_session` + id), and the missing scope — previously it was the
+only authorization denial that left no decision row at all.
 
 ### The workload registry (issue #491)
 
@@ -850,6 +939,31 @@ in an organization bound an admin on `GET /api/sites/:id` and not on
 `GET /api/sites`. Every list endpoint now filters per row through `req.can`
 for every caller, admins included.
 
+The pre-cutover audit looked for handler-level *allows* that bypassed the
+evaluator, so it could not see the other shape of the same gap: a list that
+never asked at all. The container lists — projects, folders, quotas, and the
+hierarchy tree, search and resource dumps under `/api/organizations/:id` —
+gated on `view_organization` and then returned everything inside the
+organization, which is exactly the `inherited_member` behaviour the invariant
+above deliberately reverses: bare membership let you enumerate every project
+name, description, folder and VM count in the org while every individual
+`GET /api/projects/:id` answered 403 (issue #870). They route through the
+evaluator now — projects and quota rows in STR-116, folders, the hierarchy
+tree, its resource dumps and both search routes in STR-113 — on
+`project:read` / `folder:read` / `vm:read` / the quota's own scope.
+**Reaching a container is not reaching its contents**: an organization-level
+gate says the caller may see the container, and each row inside it is still a
+decision of its own. `docs/architecture/authorization-edge-audit.md` carries
+the per-endpoint table and what remains open.
+
+Two things the fix has to keep apart, because collapsing them is how the leak
+happened: the query **bound** and the **gate**. A bound derived from
+membership rows decides too — silently, by never putting a row in front of the
+evaluator — which is the same defect pointing the other way, and it costs a
+caller rows they hold a real grant on. So a bound has to come from the
+caller's grants (`ProjectVisibility`) wherever the gate can see further than
+membership does.
+
 What legitimately remains admin-conditional in controllers, in exactly two
 shapes:
 
@@ -868,8 +982,9 @@ shapes:
 
 - **The list-scoping narrowing** in `ProjectVisibility` (issue #688). The
   project-scoped list endpoints (`/api/volumes`, `/api/networks`,
-  `/api/security-groups`, `/api/floating-ips`) used to load every project in
-  the installation and evaluate each one; they now derive a *superset* of the
+  `/api/security-groups`, `/api/floating-ips`, `/api/dns-zones`, and since
+  issue #870 the project-scoped rows of `/api/quotas`) used to load every
+  project in the installation and evaluate each one; they now derive a *superset* of the
   caller's reachable projects from their own grants and narrow the row query to
   it, then decide each project the surviving rows land in through `req.can` as
   before. An admin holds no bindings, so a bindings-derived superset would be

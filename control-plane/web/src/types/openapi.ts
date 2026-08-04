@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create a virtual machine
-         * @description Records the VM and a pending `create` operation, returning the operation to poll.
+         * @description Records the VM and a pending `create` operation, returning the operation to poll. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
          */
         post: operations["createVM"];
         delete?: never;
@@ -896,7 +896,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a volume to a VM */
+        /**
+         * Attach a volume to a VM
+         * @description Requires `attach` on the volume and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachVolume"];
         delete?: never;
         options?: never;
@@ -1157,7 +1160,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a floating IP to a VM NIC */
+        /**
+         * Attach a floating IP to a VM NIC
+         * @description Requires `update` on the floating IP and on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachFloatingIP"];
         delete?: never;
         options?: never;
@@ -1242,7 +1248,7 @@ export interface paths {
         put?: never;
         /**
          * Add a rule to a security group
-         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer.
+         * @description Rules are immutable; edit by deleting and recreating. At most one of `remoteCIDR`/`remoteGroupId`; both absent means any peer. `remoteGroupId` is resolved within this group's own project — one naming a group outside it is reported as not found rather than as a distinct cross-project refusal, since nothing authorizes the caller against the group it names.
          */
         post: operations["createSecurityGroupRule"];
         delete?: never;
@@ -1285,7 +1291,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a security group to a VM NIC */
+        /**
+         * Attach a security group to a VM NIC
+         * @description Requires `attach` on the group and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
         post: operations["attachSecurityGroup"];
         delete?: never;
         options?: never;
@@ -1311,6 +1320,174 @@ export interface paths {
          */
         post: operations["detachSecurityGroup"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List DNS zones */
+        get: operations["listDNSZones"];
+        put?: never;
+        /**
+         * Create a DNS zone
+         * @description Zone names are validated as fully-qualified domain names but are not constrained to `.internal`, and are unique per project rather than globally — two tenants may both serve `corp.example.com` internally.
+         */
+        post: operations["createDNSZone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /** Get a DNS zone */
+        get: operations["getDNSZone"];
+        /**
+         * Update a DNS zone's name or description
+         * @description Renaming a zone moves every record in it, derived and authored alike.
+         */
+        put: operations["updateDNSZone"];
+        post?: never;
+        /**
+         * Delete a DNS zone
+         * @description Refused while any network is attached; detach first, so losing resolution is always an explicit act. Records cascade with the zone.
+         */
+        delete: operations["deleteDNSZone"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/recordset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a zone's effective record set
+         * @description The zone's contents as **derived ∪ authored**, computed on demand and never stored — exactly what a realization driver consumes. Derived entries come from the hostnames and IPAM allocations of VMs on networks whose primary zone is this one, plus the matching PTRs.
+         */
+        get: operations["getDNSZoneRecordSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        /** List a zone's authored records */
+        get: operations["listDNSRecords"];
+        put?: never;
+        /**
+         * Author a record in a zone
+         * @description Refused with `409` when the record would collide with one derived from a VM, or would break CNAME's exclusivity rule — a shadowed record is rejected at write time rather than silently never answered. Also `409` when `ttl` or `view` disagrees with the record set this joins: those belong to the whole RRset (RFC 2181 §5.2), not to individual records.
+         */
+        post: operations["createDNSRecord"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/records/{recordId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        /** Get an authored record */
+        get: operations["getDNSRecord"];
+        /** Update an authored record's value, TTL, or view */
+        put: operations["updateDNSRecord"];
+        post?: never;
+        /** Delete an authored record */
+        delete: operations["deleteDNSRecord"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach a zone to a logical network
+         * @description "VMs on this network can resolve this zone." Idempotent. Pass `primary: true` to also make it the zone the network's VMs auto-register into; that is refused when the VMs already on the network would collide in it. Requires `attach` on the zone and `update` on the network, and is refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         */
+        post: operations["attachDNSZoneToNetwork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dns-zones/{zoneId}/networks/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The attached logical network's id. */
+                networkId: components["parameters"]["DNSZoneNetworkID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach a zone from a logical network
+         * @description Refused while this zone is the network's primary — clear the network's primary zone first, so its VMs' derived records are never stranded. Resolves the network the same way attach does: requires `update` on it, and is refused with `400` when the zone and the network belong to different projects — the status every cross-project refusal answers with.
+         */
+        delete: operations["detachDNSZoneFromNetwork"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2188,6 +2365,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organizations/{organizationID}/ous/{ouID}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a folder's user and group role grants
+         * @description Requires `iam:readPolicy` on the folder. Folder grants are stored as role bindings and nothing else — there is no membership mirror table — so `role` is always a role id.
+         */
+        get: operations["listFolderMembers"];
+        put?: never;
+        /**
+         * Grant a user a role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Identify the user by `userID` or `userEmail`. Returns an empty body. The grant inherits down every folder, project, and resource beneath the folder, and keeps applying to projects added later. A principal may hold at most one role per folder; use `PATCH` to change it. A user outside the folder's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        post: operations["grantFolderMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/members/{userID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a user's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Revoking an organization-external user's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
+         */
+        delete: operations["revokeFolderMember"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a user's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Replaces the user's grant on this folder; returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the folder and is recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        patch: operations["updateFolderMemberRole"];
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant a group a role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Returns an empty body. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         */
+        post: operations["grantFolderGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The group's id. */
+                groupID: components["parameters"]["GroupID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a group's role on a folder
+         * @description Requires `iam:setPolicy` on the folder. Revoking an organization-external group's grant is recorded with a distinct `iam.cross_org_revoke` audit event.
+         */
+        delete: operations["revokeFolderGroup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/organizations/{organizationID}/groups": {
         parameters: {
             query?: never;
@@ -2358,56 +2647,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get an organization's resource usage and quota compliance */
+        /**
+         * Get an organization's resource usage and quota compliance
+         * @description Usage totals and hierarchy statistics cover the rows the caller may read. A quota appears only when the caller holds `quota:read` at the org, folder, or project it hangs on: its figures are measured over everything beneath that node, so an organization-scoped quota describes the whole organization.
+         */
         get: operations["getOrganizationResourceSummary"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/organizations/{organizationID}/merge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Merge another organization into this one
-         * @description The organization in the path is the merge target. The caller must be an admin of both the target and `sourceOrganizationId`.
-         */
-        post: operations["mergeOrganizations"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/organizations/{organizationID}/bulk-transfer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk-transfer resources between hierarchy nodes
-         * @description Organization admins only. Moves folders, projects, or VMs to new parents. Set `validateOnly` to dry-run the transfers without applying them. Individual failures are reported in `failedTransfers` rather than failing the request.
-         */
-        post: operations["bulkTransferOrganizationResources"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2455,7 +2701,7 @@ export interface paths {
         };
         /**
          * Resolve an entity's breadcrumb path
-         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity.
+         * @description Returns the ordered ancestor chain (organization → folders → project → resource) for the entity, reduced to the components the caller may read. A component the caller cannot read is omitted rather than refused, so a project readable inside an unreadable folder comes back directly under the organization; a caller who can read none of the chain gets the organization alone.
          */
         get: operations["getHierarchyEntityPath"];
         put?: never;
@@ -2966,7 +3212,7 @@ export interface paths {
         };
         /**
          * Get a quota's reserved and actual usage
-         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status.
+         * @description Compares the quota's bookkeeping reservations against usage recomputed from the VMs in scope, with breakdowns by environment and status. Requires `quota:read` on the org, folder, or project the quota hangs on — the figures cover everything beneath that node, so an organization-scoped quota reports the whole organization's consumption.
          */
         get: operations["getResourceQuotaUsage"];
         put?: never;
@@ -4838,6 +5084,8 @@ export interface components {
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
             name: string;
+            /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
+            hostname?: string;
             description?: string;
             /**
              * Format: uuid
@@ -4887,11 +5135,18 @@ export interface components {
              * @default false
              */
             tpm: boolean;
+            /**
+             * @description Give the guest a display device and a VNC server, so its framebuffer can be driven from the web UI — what a graphical OS installer needs. Requires a QEMU VM placed on an agent new enough to realize it; rejected for firecracker, which emulates no display device. Fixed at creation: the display lives in the hypervisor process's arguments, so an existing VM cannot gain or lose one.
+             * @default false
+             */
+            graphicsConsole: boolean;
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
         };
         UpdateVMRequest: {
             name?: string;
+            /** @description The VM's DNS label. Renaming the VM deliberately does not move its records, so this is the only way its name in DNS changes. */
+            hostname?: string;
             description?: string;
             /** @description Target boot vCPU count. On a running VM it must not exceed `maxCpu`. */
             cpu?: number;
@@ -4905,6 +5160,8 @@ export interface components {
             /** Format: uuid */
             id?: string;
             name: string;
+            /** @description The VM's DNS label — what it registers as in the primary zone of each network it sits on. Distinct from `observedHostname`, which is whatever the guest OS calls itself. */
+            hostname?: string;
             description: string;
             image: string;
             /** Format: uuid */
@@ -4931,6 +5188,10 @@ export interface components {
             secureBoot?: boolean;
             /** @description Whether the guest has an emulated TPM 2.0. */
             tpmEnabled?: boolean;
+            /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
+            graphicsConsole?: boolean;
+            /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
+            securityGroupsEnforced?: boolean;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -4953,10 +5214,14 @@ export interface components {
             network?: string;
             macAddress: string;
             addresses: components["schemas"]["InterfaceAddress"][];
+            /** @description Addresses the guest actually configured, as reported by the guest agent — distinct from the allocated `addresses`. Empty until a guest agent reports them. */
+            observedAddresses?: components["schemas"]["ObservedInterfaceAddress"][];
             mtu?: number;
             /** @description Stable device name (e.g. net0). */
             deviceName: string;
             orderIndex: number;
+            /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
+            securityGroupIds?: string[];
         };
         InterfaceAddress: {
             /** @enum {string} */
@@ -4964,6 +5229,13 @@ export interface components {
             address: string;
             prefixLength: number;
             gateway?: string;
+        };
+        /** @description An address the guest reported on this NIC. No gateway: the guest reports what it configured, not how it routes. */
+        ObservedInterfaceAddress: {
+            /** @enum {string} */
+            family: "ipv4" | "ipv6";
+            address: string;
+            prefixLength?: number;
         };
         CreateSandboxRequest: {
             name: string;
@@ -4996,6 +5268,8 @@ export interface components {
              */
             networkId?: string;
             networkName?: string;
+            /** @description Security groups for the sandbox's NIC. Omitting them attaches the project's default group; supplying them without a network is a 400, since there would be no NIC to attach them to. Recorded but not yet enforced. */
+            securityGroupIds?: string[];
         };
         UpdateSandboxRequest: {
             name?: string;
@@ -5027,6 +5301,8 @@ export interface components {
             restoredFromSnapshotId?: string;
             status: components["schemas"]["SandboxStatus"];
             exitCode?: number;
+            /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Recorded but **not enforced** — sandbox NICs are still omitted from the agent sync entirely. */
+            securityGroupIds?: string[];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5342,6 +5618,13 @@ export interface components {
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
+            /**
+             * Format: uuid
+             * @description The DNS zone this network's VMs auto-register into. Must already be attached to the network.
+             */
+            primaryDnsZoneId?: string;
+            /** @description Unset the primary zone. A JSON `null` is indistinguishable from an omitted field, so the clear is its own flag. */
+            clearPrimaryDnsZone?: boolean;
         };
         Network: {
             /** Format: uuid */
@@ -5363,6 +5646,11 @@ export interface components {
             externalAccess: boolean;
             /** Format: uuid */
             siteId?: string;
+            /**
+             * Format: uuid
+             * @description The DNS zone this network's VMs auto-register into, if any.
+             */
+            primaryDnsZoneId?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -5467,6 +5755,8 @@ export interface components {
              * @description Security-group peer — matches the referenced group's current member addresses.
              */
             remoteGroupId?: string;
+            /** @description Whether the realized OVN ACL logs the packets it matches. Off by default; set at rule creation and changed by delete + recreate, like every other field of a rule. */
+            log?: boolean;
             description?: string;
             /** Format: date-time */
             createdAt?: string;
@@ -5511,16 +5801,137 @@ export interface components {
             remoteCIDR?: string;
             /** Format: uuid */
             remoteGroupId?: string;
+            /** @description Log the packets this rule matches. Defaults to false. */
+            log?: boolean;
             description?: string;
         };
+        /** @description Names exactly one workload — `vmId` or `sandboxId` — optionally narrowed to one of its NICs. Naming neither or both is a 400. */
         AttachSecurityGroupRequest: {
             /** Format: uuid */
-            vmId: string;
+            vmId?: string;
             /**
              * Format: uuid
-             * @description The VM NIC; defaults to the VM's first interface.
+             * @description Sandbox memberships are recorded but not yet enforced: sandbox NICs are still omitted from the agent sync entirely.
+             */
+            sandboxId?: string;
+            /**
+             * Format: uuid
+             * @description The NIC; defaults to the workload's first interface.
              */
             interfaceId?: string;
+        };
+        /**
+         * @description Deliberately wider than any realization driver: the OVN `DNS` table answers A/AAAA/PTR only, and the per-network resolver is what makes the rest resolvable. Drivers reject what they cannot do with a clear error rather than the model pretending those records don't exist.
+         * @enum {string}
+         */
+        DNSRecordType: "A" | "AAAA" | "CNAME" | "TXT" | "SRV" | "PTR";
+        /**
+         * @description Which side of a split horizon the record belongs to. Carried so split-horizon is not a retrofit; nothing consumes it yet, so every record is served internally regardless of its value.
+         * @default both
+         * @enum {string}
+         */
+        DNSRecordView: "internal" | "external" | "both";
+        DNSZoneNetworkAttachment: {
+            /** Format: uuid */
+            networkId: string;
+            networkName: string;
+            /** @description Whether this zone is the network's primary — i.e. whether the network's VMs auto-register their derived records here. */
+            isPrimary: boolean;
+        };
+        DNSZone: {
+            /** Format: uuid */
+            id: string;
+            /** @description The zone's fully-qualified name, lowercased and without a trailing dot. Not constrained to `.internal`: a tenant may serve `corp.example.com` internally. Unique per project, never globally. */
+            name: string;
+            description?: string;
+            /** Format: uuid */
+            projectId: string;
+            /** @description The logical networks that can resolve this zone. */
+            networks: components["schemas"]["DNSZoneNetworkAttachment"][];
+            /** @description Authored records only. Derived records are assembled on demand and never stored — fetch the record set for the effective view. */
+            recordCount: number;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateDNSZoneRequest: {
+            /** @description Fully-qualified zone name, e.g. `acme.internal`. */
+            name: string;
+            description?: string;
+            /**
+             * Format: uuid
+             * @description Defaults to the caller's default project when omitted.
+             */
+            projectId?: string;
+        };
+        UpdateDNSZoneRequest: {
+            name?: string;
+            description?: string;
+        };
+        AttachDNSZoneRequest: {
+            /** Format: uuid */
+            networkId: string;
+            /**
+             * @description Also make this zone the network's primary — the zone its VMs auto-register into. Attaching alone only grants resolution.
+             * @default false
+             */
+            primary: boolean;
+        };
+        DNSRecord: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            zoneId: string;
+            /** @description Owner name relative to the zone; `@` is the apex. */
+            name: string;
+            /** @description The same name fully qualified. */
+            fqdn: string;
+            type: components["schemas"]["DNSRecordType"];
+            /** @description RDATA in zone-file text form: an address for A/AAAA, a target name for CNAME/PTR, the string contents for TXT, and `priority weight port target` for SRV. */
+            value: string;
+            ttl: number;
+            view: components["schemas"]["DNSRecordView"];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CreateDNSRecordRequest: {
+            /** @description Owner name relative to the zone; omitted means the apex (`@`). A leftmost `*` label is a wildcard, including a bare `*` for the zone-apex wildcard. */
+            name?: string;
+            type: components["schemas"]["DNSRecordType"];
+            value: string;
+            /** @default 300 */
+            ttl: number;
+            view?: components["schemas"]["DNSRecordView"];
+        };
+        /** @description Name and type are the record's identity; change those by deleting and recreating, so the rename is conflict-checked as the create it is. `ttl` and `view` belong to the whole RRset (RFC 2181 §5.2), so changing either applies to every record sharing this one's name and type. */
+        UpdateDNSRecordRequest: {
+            value?: string;
+            ttl?: number;
+            view?: components["schemas"]["DNSRecordView"];
+        };
+        AssembledDNSRecord: {
+            /** @description Fully-qualified owner name. */
+            name: string;
+            type: components["schemas"]["DNSRecordType"];
+            /** @description The RRset's values, deduplicated and sorted. A list because an RRset is one: a dual-stack VM yields an A entry and an AAAA entry, and a round-robin name yields several values. */
+            values: string[];
+            ttl: number;
+            view: components["schemas"]["DNSRecordView"];
+            /**
+             * @description `derived` entries are generated from VM hostnames and their IPAM allocations and are never stored; `authored` entries are record rows.
+             * @enum {string}
+             */
+            origin: "derived" | "authored";
+        };
+        AssembledDNSZone: {
+            /** Format: uuid */
+            zoneId: string;
+            zoneName: string;
+            /** @description Sorted by name then type, so two assemblies diff cleanly. */
+            records: components["schemas"]["AssembledDNSRecord"][];
         };
         /** @description The publicly readable projection of a user account. */
         UserPublic: {
@@ -5906,6 +6317,69 @@ export interface components {
             projectCount: number;
             children: components["schemas"]["FolderTreeNode"][];
         };
+        /** @description A folder's user role grants and group role grants. Backed by `role_bindings` directly — there is no membership mirror table for folders — so only users and groups appear; machine principals are managed from their own surfaces. */
+        FolderMembers: {
+            users: components["schemas"]["FolderMember"][];
+            groups: components["schemas"]["FolderGroupGrant"][];
+        };
+        FolderMember: {
+            /** Format: uuid */
+            userId?: string;
+            username: string;
+            displayName: string;
+            email: string;
+            /**
+             * Format: uuid
+             * @description The granted role's id.
+             */
+            role: string;
+            /** @description The role's name, or `(deleted role)` if the role no longer exists. */
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+            /**
+             * Format: date-time
+             * @description When the grant expires; absent if it never does.
+             */
+            expiresAt?: string | null;
+            /** @description The user is not a member of the folder's organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
+        };
+        FolderGroupGrant: {
+            /** Format: uuid */
+            groupId?: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description The granted role's id.
+             */
+            role: string;
+            /** @description The role's name, or `(deleted role)` if the role no longer exists. */
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
+            external: boolean;
+        };
+        /** @description The role to grant on the folder: a role id, or a seeded role name (`viewer`/`operator`/`editor`/`admin`). A role id must name a role owned at or above the folder. The legacy project vocabulary (`member`) is not accepted here. */
+        FolderRole: string;
+        /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
+        GrantFolderMemberRequest: {
+            userEmail?: string;
+            /** Format: uuid */
+            userID?: string;
+            role: components["schemas"]["FolderRole"];
+        };
+        UpdateFolderMemberRoleRequest: {
+            role: components["schemas"]["FolderRole"];
+        };
+        GrantFolderGroupRequest: {
+            /** Format: uuid */
+            groupID: string;
+            role: components["schemas"]["FolderRole"];
+        };
         GroupDetail: {
             /** Format: uuid */
             id?: string;
@@ -6169,79 +6643,6 @@ export interface components {
             id: string;
             name: string;
             type: string;
-        };
-        MergeOrganizationsRequest: {
-            /**
-             * Format: uuid
-             * @description The organization to merge into the one named in the path.
-             */
-            sourceOrganizationId: string;
-            conflictResolution: {
-                /** @enum {string} */
-                ouNameConflicts: "rename" | "merge" | "abort";
-                /** @enum {string} */
-                projectNameConflicts: "rename" | "merge" | "abort";
-                /** @enum {string} */
-                quotaConflicts: "sum" | "max" | "keep_target" | "abort";
-                /** @enum {string} */
-                namingStrategy: "prefix_source" | "suffix_source" | "manual";
-                prefix?: string | null;
-                suffix?: string | null;
-            };
-            preserveQuotas: boolean;
-            mergeUsers: boolean;
-            /** @description Optional new name for the target organization after the merge. */
-            newName?: string | null;
-        };
-        MergeOrganizationsResult: {
-            success: boolean;
-            /** Format: uuid */
-            targetOrganizationId: string;
-            mergedResourceCounts: {
-                organizationalUnits: number;
-                projects: number;
-                vms: number;
-                quotas: number;
-                users: number;
-            };
-            conflicts: {
-                /** @description The conflicting entity kind (`ou_name`, `project_name`, `quota_name`). */
-                type: string;
-                sourceName: string;
-                targetName: string;
-                resolution: string;
-                newName?: string | null;
-            }[];
-            warnings: string[];
-            summary: string;
-        };
-        BulkTransferRequest: {
-            transfers: {
-                /** @enum {string} */
-                resourceType: "ou" | "project" | "vm";
-                /** Format: uuid */
-                resourceId: string;
-                /** @enum {string} */
-                destinationType: "organization" | "ou" | "project";
-                /** Format: uuid */
-                destinationId: string;
-                newName?: string | null;
-            }[];
-            /** @description Validate the transfers without applying them. */
-            validateOnly: boolean;
-        };
-        BulkTransferResult: {
-            success: boolean;
-            transferredCount: number;
-            failedTransfers: {
-                /** Format: uuid */
-                resourceId: string;
-                resourceType: string;
-                reason: string;
-                suggestion?: string | null;
-            }[];
-            warnings: string[];
-            summary: string;
         };
         HierarchyValidationReport: {
             isValid: boolean;
@@ -6903,6 +7304,10 @@ export interface components {
              * @description The member agent that authors this site's shared OVN northbound database; null when none is designated.
              */
             networkControllerAgentId?: string | null;
+            /** @description Heartbeat-derived status of the designated network controller; omitted when the site designates none. Reported as soon as the heartbeat lapses, before the API begins refusing work. */
+            networkControllerStatus?: components["schemas"]["AgentStatus"];
+            /** @description Why the designated network controller cannot author this site's topology right now — offline past the grace window, or re-registered without the capabilities it was designated under. Null while it can. When non-null, creating networked workloads, pinning networks to this site, attaching floating IPs and attaching security groups here are refused with 409. */
+            networkControllerIssue?: string | null;
             /** Format: uuid */
             organizationId?: string | null;
             /** Format: uuid */
@@ -7604,6 +8009,20 @@ export interface components {
             limit: number;
             offset: number;
         };
+        DNSZoneListPage: {
+            items: components["schemas"]["DNSZone"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        DNSRecordListPage: {
+            items: components["schemas"]["DNSRecord"][];
+            /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
         UserListPage: {
             items: components["schemas"]["UserPublic"][];
             /** @description Total visible items, ignoring `limit`/`offset`. */
@@ -8289,6 +8708,12 @@ export interface components {
         SecurityGroupID: string;
         /** @description The security group rule's id. */
         SecurityGroupRuleID: string;
+        /** @description The DNS zone's id. */
+        DNSZoneID: string;
+        /** @description The DNS record's id. */
+        DNSRecordID: string;
+        /** @description The attached logical network's id. */
+        DNSZoneNetworkID: string;
         /** @description Scope results to one organization. */
         OrganizationIdQuery: string;
         /** @description Scope results to one project. */
@@ -8591,6 +9016,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };
@@ -10710,6 +11136,372 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listDNSZones: {
+        parameters: {
+            query?: {
+                /** @description Scope results to one project. */
+                project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the visible DNS zones. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZoneListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The created zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated zone. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteDNSZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSZoneRecordSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assembled record set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssembledDNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listDNSRecords: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the zone's authored records. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecordListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDNSRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description The created record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDNSRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteDNSRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The DNS record's id. */
+                recordId: components["parameters"]["DNSRecordID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    attachDNSZoneToNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachDNSZoneRequest"];
+            };
+        };
+        responses: {
+            /** @description The zone, with its updated attachments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DNSZone"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    detachDNSZoneFromNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The DNS zone's id. */
+                zoneId: components["parameters"]["DNSZoneID"];
+                /** @description The attached logical network's id. */
+                networkId: components["parameters"]["DNSZoneNetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     listUsers: {
         parameters: {
             query?: {
@@ -12127,6 +12919,181 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listFolderMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The folder's role grants. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderMembers"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    grantFolderMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantFolderMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    revokeFolderMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateFolderMemberRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The user's id. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFolderMemberRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    grantFolderGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantFolderGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description The role was granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["GuardrailCheckUnavailable"];
+        };
+    };
+    revokeFolderGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The organization's id. */
+                organizationID: components["parameters"]["OrganizationID"];
+                /** @description The folder's id (an organizational unit on the wire). */
+                ouID: components["parameters"]["FolderID"];
+                /** @description The group's id. */
+                groupID: components["parameters"]["GroupID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     listGroups: {
         parameters: {
             query?: never;
@@ -12467,67 +13434,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-        };
-    };
-    mergeOrganizations: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MergeOrganizationsRequest"];
-            };
-        };
-        responses: {
-            /** @description The merge result, including any conflicts and warnings. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MergeOrganizationsResult"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    bulkTransferOrganizationResources: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The organization's id. */
-                organizationID: components["parameters"]["OrganizationID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkTransferRequest"];
-            };
-        };
-        responses: {
-            /** @description The transfer result. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkTransferResult"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
         };
     };
     searchOrganizationHierarchy: {

@@ -73,9 +73,7 @@ enum IPAMService {
     ///
     /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (see
-    /// `QuotaEnforcementService.lockQuotas` for the same pattern). On SQLite
-    /// (local tests) there is no advisory-lock primitive and writes already
-    /// serialize on the database file, so this is a no-op.
+    /// `QuotaEnforcementService.lockQuotas` for the same pattern).
     private static func lockAllocations(key: String, on db: Database) async throws {
         guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
@@ -84,6 +82,13 @@ enum IPAMService {
     /// Lock key for a logical network's address pool.
     private static func allocationLockKey(networkID: UUID) -> String {
         "ipam:\(networkID.uuidString)"
+    }
+
+    /// Lock key for a floating IP pool's address range. Keyed on the id for
+    /// the same reason as networks: pool names are unique only within their
+    /// owning org or folder (STR-105).
+    private static func allocationLockKey(floatingIPPoolID: UUID) -> String {
+        "fip:\(floatingIPPoolID.uuidString)"
     }
 
     /// Allocates the lowest free host address in `network`'s subnet.
@@ -240,9 +245,10 @@ enum IPAMService {
     /// backstops same-table races. Callers run inside the transaction that
     /// saves the new row.
     static func allocateFloatingIP(for pool: FloatingIPPool, on db: Database) async throws -> String {
-        try await lockAllocations(key: "fip:\(pool.name)", on: db)
+        let poolID = try pool.requireID()
+        try await lockAllocations(key: allocationLockKey(floatingIPPoolID: poolID), on: db)
         let used = try await FloatingIP.query(on: db)
-            .filter(\.$pool.$id == pool.requireID())
+            .filter(\.$pool.$id == poolID)
             .all()
             .compactMap { parseIPv4($0.address) }
         return try allocateIP(

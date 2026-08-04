@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Before creating a PR (and again before declaring work done), run `git fetch origin main && git merge origin/main` and resolve conflicts locally. Parallel sessions land PRs frequently, so branches go stale within hours — don't wait for the merge-conflict notification.
 - Review comments from `chatgpt-codex-connector[bot]` that only report Codex usage limits are noise: do not reply, push, or take any action on them.
 - Use `/pr-comments` to fetch and address unresolved review threads on the current branch's PR.
+- `docs/development/code-review.md` is the review checklist — what to check when reviewing, and the author's pre-review pass. Its "Strato-specific traps" section lists the invariants that break most often (generation bumps, verdict paths, Valkey failing open, agent-owned paths).
 
 ## Development Commands
 
@@ -22,20 +23,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Independent Swift packages: `control-plane/`, `agent/`, `shared/`, `cli/`, `clients/swift/` (plus vendored `SwiftFirecracker/`). Each builds and tests separately:
 
 - `swift build --package-path <pkg>` / `swift test --package-path <pkg>`
-- `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating; run the full suite once before creating or updating a PR
+- `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating
 - Tests use swift-testing (`@Test`/`#expect`), not XCTest
+
+**CI does not run tests.** PR validation is a compile check only — it builds each package without `--build-tests`, so test targets are not even type-checked, and nothing on `main` runs them either. Running the full suite for every package you touched, before creating or updating a PR, is on you. The `Full Test Suite (manual)` workflow (`gh workflow run main-tests.yaml --ref <branch>`) runs everything on the CI runners if you want a second opinion.
 
 Build & test notes:
 - Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
 - Control-plane tests run against Postgres everywhere (the SQLite backend was removed). They expect a reachable server via `DATABASE_*` env vars — defaults `localhost:5432`, user `strato`, password `strato_password`, database `strato_test`; `docs/development/local-development.md` has a `docker run` one-liner matching the defaults. The harness clones a migrated template database per test, so parallel worktrees can share one server.
-- Known CI flake: the "Test Control Plane (Postgres)" step of the Test Control Plane job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
-- Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
+- Known flake in the control-plane suite: it can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure matches that signature and doesn't reproduce on a rerun, it's the race, not your diff.
+- Swift CI (the PR compile check and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
 ### Formatting and linting (CI-enforced)
 
 - **Swift**: CI runs `swift format lint --strict --recursive` over all `Sources/` and `Tests/` directories, using the `.swift-format` config at the repo root (4-space indent, 120-col lines). Format before pushing: `swift format --in-place --recursive <changed dirs>`.
 - **Frontend**: `cd control-plane/web && bun run lint` and `bun run build` — CI runs both with Bun (`bun install --frozen-lockfile`). The frontend uses Bun, not npm.
-- Legacy JS in `control-plane/Public/js`: `cd control-plane && npm run lint` (eslint).
 
 ### Local development
 
@@ -92,6 +94,7 @@ Multiple control-plane replicas are supported (see `docs/architecture/multi-repl
 - Agent liveness: `agent:{name}:presence` keys with 60s TTL. Socket routing: `agent:{name}:replica` records which replica holds the agent's WebSocket.
 - **Sync nudges**: a mutation on replica A for an agent socketed to replica B publishes to B's `replica:{id}:nudges` pub/sub channel; B pushes a fresh sync. Lost nudges are backstopped by the periodic sync timer.
 - Imperative actions that aren't states (volume ops, reboot) forward over `replica:{id}:rpc` channels. Scheduler placement reservations (`resv:*`) and singleton sweep locks (`lock:sweep:*`) also live in Valkey.
+- **Sessions are a separate Valkey store, not coordination state** (issue #855). Coordination fails open; session storage cannot — losing it logs every user out, and passkeys are the only interactive auth. Coordination reads `VALKEY_*`, sessions read `SESSION_VALKEY_*` and fall back *wholesale* (never per-field) to the coordination endpoint, sharing one client when the endpoints match. `/health/ready` grades `coordination` degraded-only, and `session-store` fatal *only when it has its own endpoint* — a shared endpoint fails on every replica at once, so 503 would shift traffic nowhere.
 
 ### Scheduler
 
@@ -113,6 +116,7 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 - **The control plane does IPAM** (`IPAMService`): allocates static IPs/netmask/gateway from a `LogicalNetwork`'s subnet and passes them to the agent.
 - Agent-side, `NetworkOrchestrator` routes to a platform driver behind `NetworkServiceProtocol`; hypervisor drivers receive typed `NetworkAttachment` values (TAP path + driver type) rather than assuming a format.
 - Linux: OVN/OVS (via SwiftOVN) for real SDN — TAP interfaces, VM-to-VM traffic, isolation. macOS: QEMU user-mode SLIRP only (outbound NAT, no inbound, no VM-to-VM) — dev/test only.
+- **DNS** (`docs/architecture/dns.md`) is a separate control-plane-owned model: project-scoped `DNSZone`s attach many-to-many to networks, each network optionally naming one as its **primary** (the zone its VMs register into). A zone's contents are **derived ∪ authored** — `VM.hostname` → allocated addresses plus PTR, unioned with `DNSRecord` rows — assembled on demand by `DNSZoneAssembler` and never stored, so realization stays a swappable driver. Nothing realizes it yet; guests still get DHCP option delivery only.
 
 ### Storage and images
 

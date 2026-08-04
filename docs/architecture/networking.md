@@ -204,10 +204,110 @@ that **multi-PoP anycast is a genuine CDN build**, not a single-edge feature.
   L3; build L2 stretch only for a concrete same-tenant need (legacy same-subnet
   app, cross-site live migration).
 
+## Sandbox NICs
+
+A VM's VMM runs in the host network namespace, so its NIC is a host TAP plugged
+straight into `br-int`. A jailed sandbox's Firecracker does not: it runs
+chrooted inside `strato-sbx-<id>`, as a per-sandbox uid, with `CAP_NET_ADMIN`
+dropped, and its only network backend is a TAP opened *by name from inside the
+jail* — no fd passing, no vhost-user. So the device has to exist in that
+namespace, owned by that uid.
+
+The path is `NetworkServiceLinux`, driven through the same `NetworkOrchestrator`
+the VM path uses — not a special case inside the sandbox runtime — selected by a
+`NICPlacement` the agent derives from the jail plan (STR-100).
+
+**Port namespace.** Sandbox ports are `sbx-<id>[-<n>]`, deliberately disjoint
+from the VM path's `vm-<id>[-<n>]`, so the two kinds are distinguishable in OVN
+and OVS. Everything else about the logical port — switch lookup, DHCP options,
+addressing, `port_security` — is the VM path unchanged.
+
+**Topology: tc-redirect-tap.** A veth pair straddles the namespace. Its host end
+(`vth<digest>`) stays in the host namespace on `br-int` and never moves, so OVS
+never loses the device. The peer (`vtp<digest>`) is moved into the netns, and a
+TAP there (`tap<digest>`, created `user <uid> group <gid>`) is spliced to it by
+two `tc` `matchall`/`mirred` redirects — **both on the `ingress` hook**. A TAP's
+ingress is where frames the VMM *writes* appear and its egress is what the VMM
+reads, so putting either filter on the egress hook produces a port that binds
+and carries nothing. All three names are exactly 15 characters (`IFNAMSIZ`) and
+derived from a fixed FNV-1a digest, so create and teardown agree with no
+persisted state.
+
+**Why not just move the TAP in.** That was the original design. It was measured
+against a real `br-int` + `ovn-controller` and does not work (STR-99): within
+30ms of `ip link set <tap> netns <ns>` OVS reports `ofport: -1` and
+`error: "could not open network device"`, the device is gone from the datapath
+and the OpenFlow port list, and `ovn-controller` releases the `Port_Binding`.
+
+Two consequences worth carrying forward:
+
+- **The failure is silent at the OVSDB level.** The `Port` and `Interface` rows
+  survive the move untouched — same UUID, `iface-id` still set — so the port
+  still appears in `ovs-vsctl show`. Any health check that looks a port up by
+  name, or trusts a row's existence, sees health where there are no packets.
+  Check the `error` column, or `ofport != -1`, or the southbound `Port_Binding`.
+  The attach path reads back `ofport` and `error` after `add-port` for exactly
+  this reason.
+- **`ofport` is not stable** across a device's disappearance and return
+  (observed 3 → 4). Nothing caches it.
+
+**Teardown** is host-side only: removing the OVS port, deleting the host veth
+end (which destroys its peer, and with it the in-namespace devices and their
+filters), and — for the NIC that owns it — deleting the namespace. It needs
+neither `ip netns exec` nor the namespace to still exist, which is what makes it
+work after an agent crash and on the create-rollback path, where the jail's own
+artifact cleanup never runs.
+
+Two properties it is worth not breaking. Namespace deletion is scoped to NIC 0,
+because namespace lifetime belongs to the *jail*, not to any one NIC — a
+multi-NIC sandbox must not have NIC 0's teardown pull the namespace out from
+under NIC 1. And the whole teardown is derivable from the **sandbox id alone**:
+no jailer config, no ownership. That matters because an agent whose sandbox
+runtime has been deconfigured still has jailed leftovers from its previous life
+to clean up, and degrading to the VM teardown there would delete `vm-<id>` and a
+TAP that never existed while leaving the real `sbx-<id>` port, veth, and
+namespace behind — silently, since teardown swallows errors by design.
+
+**MTU** is applied to all three devices from the same `NetworkSpec.mtu` the guest
+is given — as it now is for the VM host TAP, which historically kept 1500 even on
+a network whose MTU had been lowered for an encapsulated uplink (see the MTU
+footgun note above). Two consequences of that VM-path change: it runs on every
+reconcile rather than only at create, so it reaches VMs that have been up since
+before it existed and a stale stored MTU surfaces then; and OVS derives a
+bridge's internal-port MTU from the minimum over its non-internal ports, so the
+first VM on a lowered-MTU network pulls `br-int`'s own MTU down host-wide. The
+latter is inert in a standard OVN deployment — nothing routes via the `br-int`
+internal port — but it is a host-scoped effect of a per-VM setting.
+
+**Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
+`cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
+path resolved from a fixed candidate list, not via `PATH` — a service manager's
+stripped environment must not be able to break a host the start-time probe
+declared usable — so a `tc` installed outside that list passes the (`PATH`-based)
+preflight check and still refuses every networked sandbox. The preflight hint
+names the list for that reason. `tc` is advisory rather than a jailing
+prerequisite: without it a host still runs sandboxes, it just refuses NICs.
+
+Networked sandboxes are refused, permanently and visibly, in three cases: an
+unjailed agent (no namespace to attach into, and the isolation is the point), a
+snapshot restore (STR-104), and an attachment that is not a TAP. That last one is
+reachable — `network_mode = "user"` builds the user-mode service on *every*
+platform, not just macOS, and an agent with no network service degrades every NIC
+the same way. Firecracker's only backend is a TAP opened by name, so the runtime
+refuses rather than skipping the device and booting a sandbox with no interface
+that the control plane still records as having one.
+
+**Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
+still `false`, so no sandbox `NetworkSpec` reaches an agent; STR-103 replaces
+that fleet-wide flag with a per-agent capability gate. The guest also cannot yet
+configure the interface (STR-101), and a networked sandbox is cold-only —
+snapshot restore and fork are refused until STR-104 remaps the device on load.
+
 ## Security groups
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
-on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
+on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
+(v24 added per-rule ACL logging).
 
 ### Model (control plane)
 
@@ -215,9 +315,11 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   **`SecurityGroupRule`** rows are immutable (edit = delete + recreate) and
   carry direction (`ingress`/`egress`), ethertype (`ipv4`/`ipv6`), optional
   protocol (`tcp`/`udp`/`icmp`) with a destination port range (ICMP: type and
-  code), and a peer that is a CIDR **or a reference to another security
-  group** in the same project. Every rule mutation bumps the group's
-  `generation` (the `LogicalNetwork.generation` replay-safety pattern).
+  code), a peer that is a CIDR **or a reference to another security
+  group** in the same project, and an optional `log` flag that turns on OVN
+  ACL logging for the flows the rule admits. Every rule mutation bumps the
+  group's `generation` (the `LogicalNetwork.generation` replay-safety
+  pattern).
 - **Mandatory default group**: every project has an auto-created, undeletable,
   un-renamable `default` group (rules editable) seeded with AWS semantics —
   allow all ingress from the group itself, allow all egress. Every VM NIC
@@ -229,8 +331,23 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   traffic — deleting that rule is how an operator opts a project into real
   ingress filtering.
 - Groups referenced by another group's rules, attached groups, and the default
-  group refuse deletion (409, schema-backstopped). Sandbox NICs do not
-  participate yet (their specs carry a nil group list = unmanaged).
+  group refuse deletion (409, schema-backstopped) — attachment counts span
+  both join tables, so a group held only by a sandbox NIC is just as
+  undeletable.
+- **Sandbox NICs carry membership but no enforcement.**
+  `sandbox_interface_security_groups` mirrors the VM join, sandbox create
+  attaches the project default, and attach/detach take a `sandboxId` — but
+  sandbox guest networking is still off
+  (`SandboxSpecBuilder.guestNetworkingSupported`), so a sandbox NIC's
+  `NetworkSpec` never reaches an agent and these rows filter nothing. They
+  exist so the model and the ≥1-group invariant are already right when guest
+  networking lands. The agent-version gate is deliberately *not* applied to
+  the sandbox path: with nothing on the wire, no agent version could change
+  what an attachment achieves. Note that the agent-side realization
+  (`VMNetworkConfig.securityGroupIds`) is nil for a sandbox NIC, so an
+  `sbx-` port joins **no** port groups — not even the drop group. STR-102 is
+  what grows the sync's membership assembly a sandbox arm; until then a sandbox
+  port would come up unfiltered, which is part of why the wire gate stays shut.
 
 ### Wire and rollout
 
@@ -244,6 +361,19 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   keeps legacy traffic flowing during a mixed-version rollout. The control
   plane refuses attach/detach for VMs placed on pre-v20 agents and omits both
   fields from their syncs (`WireProtocol.supportsSecurityGroups`).
+- **The API says when filtering is inert.** `VMDetail.securityGroupsEnforced`
+  is false when a realizing agent — the host, or its site's network
+  controller — registered pre-v20, *or* when nothing would author the site's
+  ACLs at all (no controller, or an unusable one), so neither a mixed-version
+  fleet nor a broken site can quietly show attached groups that no ACL
+  applies; nil means the VM is unplaced. It and the attach/detach gate share
+  one resolution (`SecurityGroupService.realization`, itself resolved through
+  `SiteNetworkAuthority`) so they cannot disagree. Per-NIC membership is on
+  the same response (`NetworkInterface.securityGroupIds`), absent rather than
+  empty when the server didn't load it.
+- Per-rule `log` (v24) is additive with **no gate**, unlike v20's fields: a
+  pre-v24 agent builds the identical enforcing ACL and only omits the log
+  line, so the failure mode is a missing diagnostic, not open traffic.
 
 ### Enforcement (agent)
 
@@ -255,8 +385,22 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
   (`agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift`).
 - The site-singleton **`pg_strato_drop`** group holds every managed port and
   provides the default deny: both-direction `ip` drops at priority 1001 (ARP
-  is not `ip`, so address resolution survives) plus DHCPv4/v6 and IPv6
-  ND/RS/RA carve-outs at 1002.
+  is not `ip`, so address resolution survives) plus DHCPv4/v6, IPv6
+  ND/RS/RA, and MLD carve-outs at 1002. MLD is spelled as explicit
+  `icmp6.type` values rather than OVN's `mldv1`/`mldv2` predicates, so the
+  match parses on every OVN version we support — and it is **asymmetric**: a
+  member port may send listener Reports and Dones (131/132/143) but only
+  *receive* Queries (130). Letting guests originate Queries would let any
+  member win MLD querier election on the shared segment and then stop
+  querying, timing out every other guest's multicast state; `pg_strato_drop`
+  spans the whole site, so that would cross project boundaries.
+- A rule with `log` set maps onto the ACL's `log`/`severity`/`name` columns
+  (`severity` pinned to `info`, `name` derived from the rule id so a log line
+  names what emitted it). The drop group's own ACLs are never logged — that
+  would drown the log in per-guest DHCP and multicast chatter.
+- Two revision counters force rewrites on upgrade without waiting for a rule
+  edit: `dropGroupRevision` when the drop group's ACL set changes shape, and
+  `aclSchemaRevision` when the builder's ACL *construction* changes.
 - **Ownership follows the topology-authority split**: port groups and ACLs are
   authored only by the site's network-controller agent (generation-stamped
   full replace of a group's ACL set; teardown = observed managed groups −
@@ -272,11 +416,12 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20.
 ### Known limitations / follow-ups
 
 - Group-reference peers match only addresses OVN knows from LSP `addresses`.
-- Network-level stateless ACLs (NACLs, switch-attached), sandbox NIC
-  participation, MLD allowance in the drop group, and per-rule logging/stats
-  (OVN ACL `log`) are follow-ups.
-- Dataplane verification on real multi-node hardware is pending (same status
-  as geneve/FIP verification above).
+- Sandbox NIC membership is recorded but not enforced, pending sandbox guest
+  networking (see the model section above).
+- Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
+  are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
+  rule has no rate limit.
+- There is no UI for security groups on sandboxes; membership is API-only.
 
 ## OVN dynamic routing (native, 25.03+)
 
@@ -439,10 +584,42 @@ The per-agent-local-NB (Unix socket) model cannot express this.
   leaving or deregistering — with the site emptied there is no topology left
   to author.
 
-Remaining in this phase: controller-failover UX (re-designation after the
-first is a manual `PUT /api/sites/:id`; syncs handle the handover
-level-triggered) and geneve verification on real multi-node hardware (recipe
-in `deploy/ovn-central/README.md`).
+- **Liveness and capability regression (issue #833):** a designation that
+  *exists* reaches the same dead end far more often than a missing one — the
+  controller is an ordinary hypervisor node that can crash, be drained, or
+  re-register in user-mode or on a rolled-back pre-v4 binary, and nothing
+  re-checked the bar it was designated under. `SiteNetworkAuthority.resolve`
+  therefore also reports `.controllerUnavailable`, and every precondition goes
+  through one `refusal` helper so the two "nothing would realize this" states
+  are worded and handled alike: placement, `POST /vms/:id/start`, pinning a
+  network to the site, attaching a floating IP, and attaching a security group
+  (previously a silent no-op there). Two deliberate softenings:
+  - **A grace window.** Liveness is judged on heartbeat age against
+    `SITE_CONTROLLER_OFFLINE_GRACE_SECONDS` (default 300s), not the 60s
+    `Agent.isOnline` threshold, so a node reboot keeps degrading to the
+    existing 202-and-converge behavior instead of a wall of `409`s. A
+    capability regression gets no grace — it never converges on its own.
+  - **The host exemption.** When the unavailable controller *is* the
+    workload's own host (the single-node site), the refusal is skipped: the
+    workload and its topology author share a fate, the node is already visible
+    as offline, and desired state may legitimately be set while it reboots.
+    The cross-node stall this exists for is unaffected.
+
+  Reporting, so the outage is visible before the first refusal: `SiteDetail`
+  carries `networkControllerStatus` (heartbeat-derived, no grace) and
+  `networkControllerIssue` (non-null exactly when work is being refused), the
+  sites page renders both, the stale-agent sweep logs a warning naming the site
+  and sets the `strato_site_network_controller_up` gauge to 0, and registration
+  re-validates a standing designation — handing the job back (so an eligible
+  peer can claim it on its next registration) only when the site has another
+  eligible member.
+
+Remaining in this phase: automatic controller failover — re-designation away
+from a *live* controller needs a fencing story (two agents authoring one shared
+NB is worse than the stall), so today a replacement is a manual
+`PUT /api/sites/:id`; syncs handle the handover level-triggered. Also geneve
+verification on real multi-node hardware (recipe in
+`deploy/ovn-central/README.md`).
 
 ### Phase 3 — Floating IPs + north-south advertisement — **implemented (first cut)**
 
@@ -456,7 +633,8 @@ in `deploy/ovn-central/README.md`).
 **As built (issue #344):**
 
 - **Control plane:** `FloatingIPPool` rows (external IPv4 CIDR, optional
-  gateway exclusion, optional site pin, org/folder-scoped like sites) and
+  gateway exclusion, optional site pin, org/folder-scoped like sites; the name
+  is unique within that owner, not deployment-wide — STR-105) and
   `FloatingIP` rows (pool + address + project, optional FK to a
   `VMNetworkInterface`; `SET NULL` on NIC delete, so removing a VM *detaches*
   rather than releases). `IPAMService.allocateFloatingIP` reuses the
@@ -531,7 +709,13 @@ in `deploy/ovn-central/README.md`).
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental) — met
   since the images moved to Ubuntu 26.04 (OVN 26.03), but still experimental
   upstream.
-- **IPv4-only IPAM** today; IPv6 is out of scope for this roadmap.
+- **Dual-stack IPAM** — networks default to a generated ULA /64 alongside their
+  IPv4 subnet, and each NIC carries one address row per family. IPv6 is
+  allocated, delivered (RA + DHCPv6), and realized; what remains open is
+  IPv6-specific L3 work such as external egress.
+- **Name resolution** is a separate track: see [dns](./dns.md). What exists on
+  this substrate today is DHCP option delivery only (`dns_servers` /
+  `domain_name` → OVN `DHCP_Options`); the OVN `DNS` table is not yet written.
 
 ## References
 

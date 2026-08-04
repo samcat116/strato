@@ -518,7 +518,15 @@ actor AgentService {
         // never appears, with no API-visible symptom. An existing designation
         // is never displaced. The sync pushed right after this registration
         // carries the new controller its authoritative topology.
+        //
+        // Re-validation runs first: every condition the designation was made
+        // under is a property of *this* registration, and an agent that came
+        // back in user-mode or on a rolled-back binary would otherwise keep the
+        // job while authoring nothing (issue #833). When it hands the job back,
+        // an eligible peer claims it on its own next registration.
         if let siteID = agent.$site.id {
+            await SiteNetworkAuthority.revalidateDesignation(
+                agent: agent, siteID: siteID, on: db, logger: app.logger)
             await SiteNetworkAuthority.designateIfUnset(
                 agent: agent, siteID: siteID, on: db, logger: app.logger)
         }
@@ -985,9 +993,42 @@ actor AgentService {
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
                     metadata: ["agentName": .string(agent.name)])
+                await warnIfSiteNetworkController(agent)
             }
         } catch {
             app.logger.error("Stale-agent sweep failed: \(error)")
+        }
+    }
+
+    /// Raises the alarm when the node that just went quiet is some site's
+    /// designated network controller.
+    ///
+    /// This is the highest-value signal in the site-authority area: nothing
+    /// else in the site can author topology while it is gone, so *every* new
+    /// networked workload there is about to be refused, and already-running
+    /// ones keep running — which is exactly what makes the outage easy to miss
+    /// (issue #833). Best effort: a failure here must not abort the sweep.
+    private func warnIfSiteNetworkController(_ agent: Agent) async {
+        guard let agentID = agent.id else { return }
+        do {
+            let controlled = try await Site.query(on: app.db)
+                .filter(\.$networkControllerAgent.$id == agentID)
+                .all()
+            for site in controlled {
+                Telemetry.recordSiteNetworkControllerUp(site: site.name, up: false)
+                app.logger.warning(
+                    "Site network controller went offline; nothing authors the site's network topology until it returns",
+                    metadata: [
+                        "agentName": .string(agent.name),
+                        "site": .string(site.name),
+                        "graceSeconds": .stringConvertible(
+                            Int(SiteNetworkAuthority.controllerOfflineGrace)),
+                    ])
+            }
+        } catch {
+            app.logger.warning(
+                "Failed to check whether the stale agent is a site's network controller",
+                metadata: ["agentName": .string(agent.name), "error": .string("\(error)")])
         }
     }
 
@@ -1048,31 +1089,16 @@ actor AgentService {
                 .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
-            for vm in transitional {
-                guard let vmID = vm.id else { continue }
-
-                let hasPendingOperation =
-                    try await ResourceOperation.query(on: db)
-                    .filter(\.$resourceKind == .virtualMachine)
-                    .filter(\.$resourceID == vmID)
-                    .filter(\.$status == .pending)
-                    .count() > 0
-                // A pending operation owns this VM's resolution via its own budget.
-                guard !hasPendingOperation else { continue }
-
-                let previous = vm.status
-                vm.setStatus(.error)
-                try await vm.save(on: db)
-                Telemetry.vmEnteredError(reason: "stuck_transition")
-
-                app.logger.warning(
-                    "VM stuck in transitional state past timeout; marking as error",
-                    metadata: [
-                        "vmId": .string(vmID.uuidString),
-                        "stuckStatus": .string(previous.rawValue),
-                        "timeoutSeconds": .string("\(Int(timeout))"),
-                    ])
-            }
+            try await markStuckTransitionalResources(
+                transitional.compactMap { vm -> StuckTransitionalResource? in
+                    guard let vmID = vm.id else { return nil }
+                    return StuckTransitionalResource(id: vmID, stuckStatus: vm.status.rawValue) {
+                        vm.setStatus(.error)
+                        try await vm.save(on: db)
+                    }
+                },
+                kind: .virtualMachine, timeout: timeout, on: db,
+                telemetry: { Telemetry.vmEnteredError(reason: "stuck_transition") })
 
             // Same backstop for sandboxes: transitional with no pending
             // operation means the confirming report never landed.
@@ -1081,29 +1107,15 @@ actor AgentService {
                 .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
                 .all()
 
-            for sandbox in transitionalSandboxes {
-                guard let sandboxID = sandbox.id else { continue }
-
-                let hasPendingOperation =
-                    try await ResourceOperation.query(on: db)
-                    .filter(\.$resourceKind == .sandbox)
-                    .filter(\.$resourceID == sandboxID)
-                    .filter(\.$status == .pending)
-                    .count() > 0
-                guard !hasPendingOperation else { continue }
-
-                let previous = sandbox.status
-                sandbox.setStatus(.error)
-                try await sandbox.save(on: db)
-
-                app.logger.warning(
-                    "Sandbox stuck in transitional state past timeout; marking as error",
-                    metadata: [
-                        "sandboxId": .string(sandboxID.uuidString),
-                        "stuckStatus": .string(previous.rawValue),
-                        "timeoutSeconds": .string("\(Int(timeout))"),
-                    ])
-            }
+            try await markStuckTransitionalResources(
+                transitionalSandboxes.compactMap { sandbox -> StuckTransitionalResource? in
+                    guard let sandboxID = sandbox.id else { return nil }
+                    return StuckTransitionalResource(id: sandboxID, stuckStatus: sandbox.status.rawValue) {
+                        sandbox.setStatus(.error)
+                        try await sandbox.save(on: db)
+                    }
+                },
+                kind: .sandbox, timeout: timeout, on: db)
 
             // Volumes are the one resource kind mutated through the same
             // async-agent-RPC pattern that was never brought under the
@@ -1171,6 +1183,59 @@ actor AgentService {
             }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
+        }
+    }
+
+    /// One resource the stuck sweep found in a transitional status: enough to
+    /// decide on it (`id`), to log it (`stuckStatus`, captured before the
+    /// transition to `.error`), and to resolve it (`markError`).
+    private struct StuckTransitionalResource {
+        let id: UUID
+        let stuckStatus: String
+        let markError: () async throws -> Void
+    }
+
+    /// Marks resources stuck in a transitional status past `timeout` as
+    /// `.error`, skipping any whose resolution a pending operation still owns
+    /// via its own budget. Shared by the VM and sandbox backstops, which differ
+    /// only in the model queried, the `resourceKind` filter, and the VM-only
+    /// telemetry counter.
+    private func markStuckTransitionalResources(
+        _ resources: [StuckTransitionalResource],
+        kind: OperationResourceKind,
+        timeout: TimeInterval,
+        on db: Database,
+        telemetry: (() -> Void)? = nil
+    ) async throws {
+        // Deliberately not `kind.displayName`: that is a mid-sentence noun
+        // ("sandbox"), and these labels open the log message, so reusing it
+        // would lowercase the sentence-initial word on the sandbox path.
+        let (label, idKey): (String, String) =
+            switch kind {
+            case .virtualMachine: ("VM", "vmId")
+            case .sandbox: ("Sandbox", "sandboxId")
+            }
+
+        for resource in resources {
+            let hasPendingOperation =
+                try await ResourceOperation.query(on: db)
+                .filter(\.$resourceKind == kind)
+                .filter(\.$resourceID == resource.id)
+                .filter(\.$status == .pending)
+                .count() > 0
+            // A pending operation owns this resource's resolution via its own budget.
+            guard !hasPendingOperation else { continue }
+
+            try await resource.markError()
+            telemetry?()
+
+            app.logger.warning(
+                "\(label) stuck in transitional state past timeout; marking as error",
+                metadata: [
+                    idKey: .string(resource.id.uuidString),
+                    "stuckStatus": .string(resource.stuckStatus),
+                    "timeoutSeconds": .string("\(Int(timeout))"),
+                ])
         }
     }
 
@@ -2183,6 +2248,10 @@ actor AgentService {
     /// releasing the reservation, as a dispatch failure does, since the
     /// placement never becomes desired state.
     ///
+    /// The same refusal covers a site whose designated controller is offline
+    /// past the grace window or came back unable to author topology (issue
+    /// #833) — the workload would park on a switch nobody writes either way.
+    ///
     /// Site-less agents (legacy self-authored NB) and non-overlay
     /// (user-mode/SLIRP) agents realize their networking without a site
     /// controller and are unaffected.
@@ -2193,13 +2262,13 @@ actor AgentService {
             let agent = try await Agent.find(agentUUID, on: db),
             agent.supportsInterVMNetworking
         else { return }
+        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
         guard
-            case .unassigned(let site) = try await SiteNetworkAuthority.resolve(
-                forAgent: agent, on: db)
+            let reason = SiteNetworkAuthority.refusalReason(
+                authority, host: agent, consequence: consequence)
         else { return }
         await app.coordination.releaseReservation(agentId: agentId, vmId: workloadId)
-        throw AgentServiceError.schedulingFailed(
-            SiteNetworkAuthority.missingControllerReason(site: site, consequence: consequence))
+        throw AgentServiceError.schedulingFailed(reason)
     }
 
     /// The site a VM's placement is pinned to, derived from its NICs'
@@ -2346,7 +2415,12 @@ actor AgentService {
                 // machine profile reaches the agent at all.
                 supportsVTPM: agent.tpmCapable
                     && WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
-                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0)
+                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
+                // One signal only for the graphics console (issue #566): every
+                // candidate is already QEMU-capable, and a QEMU built without
+                // VNC fails the create loudly instead of degrading — so there
+                // is no host capability to advertise beyond the protocol.
+                supportsGraphicsConsole: WireProtocol.supportsGraphicsConsole(agent.wireProtocolVersion ?? 0)
             )
         }
     }

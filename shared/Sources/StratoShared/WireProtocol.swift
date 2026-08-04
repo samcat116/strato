@@ -290,7 +290,54 @@ public enum WireProtocol {
     /// registration capability rather than the version alone — a v22 agent on
     /// a host with no QEMU backend understands the messages but can never
     /// realize them.
-    public static let currentVersion = 22
+    /// Version 23: the graphics console (issue #566). Adds
+    /// `ConsoleSpec.graphics` outbound — which makes the QEMU driver spawn the
+    /// guest with a display device and a `vnc.sock` in its VM directory —
+    /// and `ConsoleConnectMessage.stream`, which picks that socket over the
+    /// serial one for a console session.
+    ///
+    /// Both fields are optional and their absence encodes to nothing, so a
+    /// pre-v23 agent receives byte-identical JSON to today's and decodes it
+    /// fine. That tolerance is exactly the hazard, and it is v18's *silent*
+    /// kind rather than v22's undecodable-envelope kind — there are no new
+    /// `MessageType` cases here, so nothing ever fails loudly:
+    ///
+    /// * ignoring `graphics`, the agent boots the guest headless while the API
+    ///   says it has a display — a Windows install that can never be driven,
+    ///   with nothing explaining why. Gated at *placement*, like v18.
+    /// * ignoring `stream`, the agent answers a VNC connect with the serial
+    ///   socket. noVNC then reads kernel log text where it expects `RFB
+    ///   003.008` and hangs on the handshake rather than reporting an error.
+    ///   Gated again when a console session is minted, since an agent can be
+    ///   downgraded after its VMs were placed.
+    ///
+    /// Unlike v18 this needs no registration capability flag beside the
+    /// version. A vTPM needed one because `swtpm` may be missing from an
+    /// otherwise-capable host; here placement already restricts to
+    /// QEMU-capable agents, and a QEMU built `--disable-vnc` fails the create
+    /// loudly at spawn rather than degrading.
+    ///
+    /// `GraphicsMode` decodes strictly, following `DesiredVMStatus` — a mode
+    /// this build cannot realize must not quietly become "no display" on a VM
+    /// the API says has one. Size that choice knowingly: a `DesiredStateMessage`
+    /// is decoded in one shot, so a future unknown mode would fail the *whole*
+    /// sync for that agent and stop it converging on everything, not just the
+    /// VM that carried it. The version gate is what keeps that unreachable, and
+    /// any future mode must ship with its own bump for exactly this reason.
+    ///
+    /// Version 24: per-rule security-group ACL logging (STR-34). Adds
+    /// `DesiredSecurityGroupRule.log`, which the agent maps onto the OVN ACL's
+    /// `log`/`severity`/`name` columns. Additive and nil-tolerant in both
+    /// directions, and — unlike v20's fields, which this rides alongside —
+    /// there is deliberately **no gate**. v20 needed one because the API would
+    /// have claimed filtering that no ACL enforced; a `log` flag claims only
+    /// that packets get logged. A pre-v24 agent builds the identical
+    /// enforcing ACL and merely omits the log line, so the failure mode is a
+    /// missing diagnostic rather than open traffic, and refusing the rule
+    /// mutation would cost more than the missing logs. In the other direction
+    /// a nil from an older control plane reads as "off", which is what every
+    /// rule written before this version meant.
+    public static let currentVersion = 24
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -524,6 +571,26 @@ public enum WireProtocol {
     /// it.
     public static func supportsVMCheckpoint(_ version: Int) -> Bool {
         version >= vmCheckpointMinimumVersion
+    }
+
+    /// The lowest protocol version that realizes a graphics console
+    /// (see `currentVersion` version 23 notes).
+    public static let graphicsConsoleMinimumVersion = 23
+
+    /// Whether an agent registered with `version` understands the graphics
+    /// console — both halves of it, since they always ship together:
+    /// `ConsoleSpec.graphics` (so the VM spawns with a display device and a VNC
+    /// socket) and `ConsoleConnectMessage.stream` (so a console session can ask
+    /// for that socket instead of the serial one).
+    ///
+    /// Load-bearing in two places, because both failures are silent. At
+    /// placement: a pre-v23 agent decodes the spec, ignores `graphics`, and
+    /// boots the guest headless while the API reports a display. At session
+    /// mint: it ignores `stream` and hands back the *serial* socket, so noVNC
+    /// would sit forever reading kernel log text where it expects an RFB
+    /// version string.
+    public static func supportsGraphicsConsole(_ version: Int) -> Bool {
+        version >= graphicsConsoleMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

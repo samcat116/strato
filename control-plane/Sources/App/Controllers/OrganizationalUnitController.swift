@@ -48,7 +48,7 @@ struct OrganizationalUnitController: RouteCollection {
             .sort(\.$name)
             .all()
 
-        return try await Self.responses(for: ous, on: req.db)
+        return try await Self.responses(for: try await Self.readable(ous, on: req), on: req.db)
     }
 
     func show(req: Request) async throws -> OrganizationalUnitResponse {
@@ -267,7 +267,13 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.conflict, reason: "Cannot delete folder with projects. Move or delete projects first.")
         }
 
-        try await ou.delete(on: req.db)
+        // Bindings have no FK to the node they protect, so the folder's own
+        // grants have to go with it. This became load-bearing once folder
+        // grants were authorable (STR-109): before that nothing wrote one.
+        try await req.db.transaction { db in
+            try await RoleBindingService.revokeAll(nodeType: .organizationalUnit, nodeID: ouID, on: db)
+            try await ou.delete(on: db)
+        }
         return .noContent
     }
 
@@ -401,7 +407,7 @@ struct OrganizationalUnitController: RouteCollection {
             .sort(\.$name)
             .all()
 
-        return try await Self.responses(for: subOUs, on: req.db)
+        return try await Self.responses(for: try await Self.readable(subOUs, on: req), on: req.db)
     }
 
     func createSubOU(req: Request) async throws -> OrganizationalUnitResponse {
@@ -472,9 +478,27 @@ struct OrganizationalUnitController: RouteCollection {
         return 0
     }
 
-    /// The folder rows a list endpoint returns, each carrying its child and
-    /// project counts — both measured for the whole page in one grouped
-    /// aggregate rather than two queries per row.
+    /// The folders the caller may read, decided in one batch.
+    ///
+    /// Reaching the organization is not reaching what is inside it (issue #870):
+    /// the `view_organization` gate the list handlers open with is satisfied by
+    /// bare membership, which grants `org:read` and `project:create` and nothing
+    /// below — so without this the folder structure of the whole organization is
+    /// enumerable by any member.
+    ///
+    /// The counts each response carries are still counts over *all* children —
+    /// they say how much is in a folder the caller may already read, not what.
+    private static func readable(
+        _ folders: [OrganizationalUnit], on req: Request
+    ) async throws -> [OrganizationalUnit] {
+        let nodes = folders.compactMap { folder in
+            folder.id.map { IAMNode(type: .organizationalUnit, id: $0) }
+        }
+        guard !nodes.isEmpty else { return [] }
+        let allowed = Set(try await req.canFilter("folder:read", on: nodes).map(\.id))
+        return folders.filter { folder in folder.id.map(allowed.contains) ?? false }
+    }
+
     private static func responses(
         for ous: [OrganizationalUnit],
         on db: Database

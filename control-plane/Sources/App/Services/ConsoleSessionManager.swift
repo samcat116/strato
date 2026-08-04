@@ -18,12 +18,43 @@ final class ConsoleSessionManager: @unchecked Sendable {
     /// Maps vmId -> Set of sessionIds (multiple users can view same console)
     private var vmSessions: [String: Set<String>] = [:]
 
+    /// Graphics sessions minted by `POST .../console/vnc` but not yet attached
+    /// (issue #566). The serial console upgrades in one step and never lands
+    /// here.
+    private var pendingSessions: [String: PendingConsoleSession] = [:]
+
+    /// How long a minted graphics session may go unattached. Long enough for a
+    /// browser to open a socket, short enough that an abandoned mint cannot be
+    /// replayed later.
+    static let pendingSessionTTL: TimeInterval = 60
+
     struct ConsoleSessionInfo: Sendable {
         let sessionId: String
         let vmId: String
         let agentKey: String
         let userId: String?
+        /// Which of the VM's consoles this session carries. The agent needs it
+        /// to pick a socket; the control plane keeps it for logs and so a
+        /// graphics session is never confused with a serial one.
+        let stream: ConsoleStream
         let createdAt: Date
+        /// Whether the browser has been told the console is live.
+        ///
+        /// This is what decides whether a teardown may still explain itself: a
+        /// failure *before* ready arrives on a socket nobody has claimed, so
+        /// the reason can be written to it. After ready the socket belongs to
+        /// the console's own protocol — noVNC in the graphics case — and a text
+        /// frame injected there would be read as part of the byte stream.
+        var readyNotified: Bool = false
+    }
+
+    /// A minted-but-not-yet-attached graphics session.
+    struct PendingConsoleSession: Sendable {
+        let sessionId: String
+        let vmId: String
+        let agentKey: String
+        let userId: String
+        let expiresAt: Date
     }
 
     init(app: Application) {
@@ -38,6 +69,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         vmId: String,
         agentKey: String,
         userId: String?,
+        stream: ConsoleStream = .serial,
         websocket: WebSocket?
     ) {
         lock.withLock {
@@ -46,6 +78,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 vmId: vmId,
                 agentKey: agentKey,
                 userId: userId,
+                stream: stream,
                 createdAt: Date()
             )
 
@@ -69,6 +102,116 @@ final class ConsoleSessionManager: @unchecked Sendable {
             ])
     }
 
+    // MARK: - Pending graphics sessions (issue #566)
+
+    /// Mint a graphics session for a request that has already passed every
+    /// check. Returns it (including `expiresAt`) for the 201 response.
+    ///
+    /// The graphics console is minted over HTTP and attached separately, unlike
+    /// the serial console which upgrades in one step. The reason is error
+    /// reporting: a display can be unavailable for several distinct reasons —
+    /// the VM was created headless, its agent is too old, its socket lives on
+    /// another replica — and each deserves a status code the client can act on.
+    /// Reported instead as a text frame on an already-upgraded socket, they
+    /// would all reach noVNC as an unexplained disconnect.
+    func createPendingVNCSession(
+        vmId: String,
+        agentKey: String,
+        userId: String,
+        now: Date = Date()
+    ) -> PendingConsoleSession {
+        let session = PendingConsoleSession(
+            sessionId: UUID().uuidString,
+            vmId: vmId,
+            agentKey: agentKey,
+            userId: userId,
+            expiresAt: now.addingTimeInterval(Self.pendingSessionTTL)
+        )
+
+        lock.withLock {
+            sweepExpiredPendingLocked(now: now)
+            pendingSessions[session.sessionId] = session
+        }
+
+        app.logger.info(
+            "Graphics console session minted",
+            metadata: [
+                "sessionId": .string(session.sessionId),
+                "vmId": .string(vmId),
+                "agentKey": .string(agentKey),
+            ])
+        return session
+    }
+
+    /// Consume a pending graphics session and bind the browser WebSocket to it.
+    ///
+    /// Single-use, and validated against the VM and the user it was minted for:
+    /// the session id is the only credential on the attach URL, so a leaked one
+    /// must not let a different user — or a different VM's tab — attach.
+    ///
+    /// `websocket` is optional only so unit tests can drive the lifecycle
+    /// without a live socket; the controller always passes one.
+    @discardableResult
+    func attachVNCSession(
+        sessionId: String,
+        vmId: String,
+        userId: String,
+        websocket: WebSocket?,
+        now: Date = Date()
+    ) throws -> PendingConsoleSession {
+        let session = try lock.withLock { () -> PendingConsoleSession in
+            if sessions[sessionId] != nil {
+                throw ConsoleSessionError.alreadyAttached(sessionId)
+            }
+            guard let pending = pendingSessions[sessionId] else {
+                sweepExpiredPendingLocked(now: now)
+                throw ConsoleSessionError.sessionNotFound(sessionId)
+            }
+            guard pending.expiresAt > now else {
+                pendingSessions.removeValue(forKey: sessionId)
+                throw ConsoleSessionError.sessionExpired(sessionId)
+            }
+            // Compare as UUIDs so casing differences between the minted id and
+            // the path parameter cannot cause a false mismatch.
+            let vmMatches = UUID(uuidString: pending.vmId) == UUID(uuidString: vmId)
+            let userMatches = UUID(uuidString: pending.userId) == UUID(uuidString: userId)
+            guard vmMatches, userMatches else {
+                throw ConsoleSessionError.sessionMismatch(sessionId)
+            }
+
+            pendingSessions.removeValue(forKey: sessionId)
+            sessions[sessionId] = ConsoleSessionInfo(
+                sessionId: sessionId,
+                vmId: pending.vmId,
+                agentKey: pending.agentKey,
+                userId: pending.userId,
+                stream: .vnc,
+                createdAt: now
+            )
+            if let websocket {
+                frontendConnections[sessionId] = websocket
+            }
+            vmSessions[pending.vmId, default: []].insert(sessionId)
+            return pending
+        }
+
+        app.logger.info(
+            "Graphics console session attached",
+            metadata: [
+                "sessionId": .string(sessionId),
+                "vmId": .string(session.vmId),
+                "agentKey": .string(session.agentKey),
+            ])
+        return session
+    }
+
+    /// Drop pending sessions past their TTL. Lazy rather than timer-driven:
+    /// mints are rare, so sweeping on each one is cheaper than a background
+    /// task and has no lifecycle of its own. Caller holds the lock.
+    private func sweepExpiredPendingLocked(now: Date) {
+        pendingSessions = pendingSessions.filter { $0.value.expiresAt > now }
+    }
+
     /// Remove a console session
     func removeSession(sessionId: String) {
         lock.withLock {
@@ -87,6 +230,55 @@ final class ConsoleSessionManager: @unchecked Sendable {
                         "vmId": .string(sessionInfo.vmId),
                     ])
             }
+        }
+    }
+
+    /// Agent-initiated session teardown, closing the browser socket with the
+    /// agent's reason.
+    ///
+    /// Without this a console the agent could not open leaves the browser
+    /// waiting forever: the agent's failure reply is an `ErrorMessage`
+    /// correlated by `requestId`, and console connects are sent fire-and-forget
+    /// with no pending request to match it against, so it is dropped. The
+    /// disconnect notification is a stream event keyed by `sessionId`, which
+    /// does route — so it is what carries the bad news to the browser.
+    ///
+    /// The reason must travel as a **data** frame, not on the close frame:
+    /// WebSocketKit's `close(code:)` writes a two-byte status code and nothing
+    /// else, so a browser's `event.reason` is always empty and noVNC's
+    /// `disconnect` event carries nothing either. Sending it as data is the
+    /// only way the text reaches anyone.
+    ///
+    /// It is sent only *before* `ready`, which is exactly when these failures
+    /// happen. After ready the socket belongs to the console's own protocol —
+    /// injecting a text frame into a live RFB stream would be worse than
+    /// staying quiet — and a post-ready teardown is an ordinary disconnect the
+    /// UI already reports.
+    func closeSession(sessionId: String, fromAgentKey agentKey: String, reason: String?) {
+        let target = lock.withLock { () -> (websocket: WebSocket, session: ConsoleSessionInfo)? in
+            guard let session = sessions[sessionId], session.agentKey == agentKey,
+                let websocket = frontendConnections[sessionId]
+            else { return nil }
+            return (websocket, session)
+        }
+
+        // A browser-initiated teardown gets here too, with the socket already
+        // closing; closing it again is a no-op.
+        if let target {
+            if !target.session.readyNotified, let reason {
+                // Same shapes the two frontends already parse: JSON control
+                // frames for the graphics console, an `error: ` prefix for the
+                // serial one.
+                target.websocket.send(
+                    target.session.stream == .vnc ? Self.errorControlFrame(reason) : "error: \(reason)")
+            }
+            _ = target.websocket.close(code: .normalClosure)
+        }
+        removeSession(sessionId: sessionId, fromAgentKey: agentKey)
+        if let reason {
+            app.logger.debug(
+                "Console session closed by agent",
+                metadata: ["sessionId": .string(sessionId), "reason": .string(reason)])
         }
     }
 
@@ -141,6 +333,11 @@ final class ConsoleSessionManager: @unchecked Sendable {
     func closeAllSessions(forAgent agentKey: String, reason: String) {
         let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
             var closed: [(String, WebSocket?)] = []
+            // Minted-but-unattached graphics sessions go too: the socket they
+            // were minted against is gone, so attaching one later could only
+            // fail — and it would fail after the upgrade, where saying why is
+            // hardest.
+            pendingSessions = pendingSessions.filter { $0.value.agentKey != agentKey }
             for (sessionId, session) in sessions where session.agentKey == agentKey {
                 sessions.removeValue(forKey: sessionId)
                 let websocket = frontendConnections.removeValue(forKey: sessionId)
@@ -222,8 +419,42 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 "sessionId": .string(sessionId)
             ])
 
-        // Send a "ready" text message to the frontend
-        ws.send("ready")
+        // The serial console's frontend parses the bare string `ready`; the
+        // graphics console uses the JSON control frames the exec path
+        // established, because once noVNC owns the socket it treats every text
+        // frame as its own and an unstructured one is unparseable.
+        let stream = lock.withLock { () -> ConsoleStream in
+            sessions[sessionId]?.readyNotified = true
+            return sessions[sessionId]?.stream ?? .serial
+        }
+        ws.send(stream == .vnc ? Self.readyControlFrame : "ready")
+    }
+
+    /// The last control frame the graphics console sends. Everything after it
+    /// is RFB: noVNC is attached to the socket by then and would read a later
+    /// text frame as part of its own stream, so a post-ready failure closes the
+    /// socket without explanation rather than corrupting it.
+    static let readyControlFrame = #"{"type":"ready"}"#
+
+    private struct ErrorControlFrame: Encodable {
+        let type = "error"
+        let message: String
+    }
+
+    /// A pre-ready failure, in the same JSON shape.
+    ///
+    /// Encoded rather than interpolated: these messages now carry text the
+    /// *agent* wrote, and hand-rolled escaping that covers `\` and `"` still
+    /// emits invalid JSON for a reason containing a newline — which the
+    /// frontend would silently drop in its parse `catch`, turning an
+    /// explanatory failure back into a blank one.
+    static func errorControlFrame(_ message: String) -> String {
+        guard let data = try? JSONEncoder().encode(ErrorControlFrame(message: message)),
+            let json = String(data: data, encoding: .utf8)
+        else {
+            return #"{"type":"error","message":"Console unavailable"}"#
+        }
+        return json
     }
 
     /// Route user input from frontend to agent
@@ -247,18 +478,24 @@ final class ConsoleSessionManager: @unchecked Sendable {
     }
 
     /// Send console connect message to agent
-    func sendConsoleConnect(sessionId: String, vmId: String, agentKey: String) async throws {
+    func sendConsoleConnect(
+        sessionId: String, vmId: String, agentKey: String, stream: ConsoleStream = .serial
+    ) async throws {
         app.logger.info(
             "Sending console connect to agent",
             metadata: [
                 "sessionId": .string(sessionId),
                 "vmId": .string(vmId),
                 "agentKey": .string(agentKey),
+                "stream": .string(stream.rawValue),
             ])
 
+        // Omit the selector for a serial connect, so the frame a pre-v23 agent
+        // receives is byte-identical to the one it already handles.
         let message = ConsoleConnectMessage(
             vmId: vmId,
-            sessionId: sessionId
+            sessionId: sessionId,
+            stream: stream == .serial ? nil : stream
         )
 
         try await sendMessageToAgent(message, agentKey: agentKey)
@@ -321,6 +558,9 @@ enum ConsoleSessionError: Error, LocalizedError {
     case sessionNotFound(String)
     case agentNotConnected(String)
     case vmNotRunning(String)
+    case sessionExpired(String)
+    case sessionMismatch(String)
+    case alreadyAttached(String)
 
     var errorDescription: String? {
         switch self {
@@ -330,6 +570,12 @@ enum ConsoleSessionError: Error, LocalizedError {
             return "Agent not connected: \(agentKey)"
         case .vmNotRunning(let vmId):
             return "VM is not running: \(vmId)"
+        case .sessionExpired(let sessionId):
+            return "Console session expired: \(sessionId)"
+        case .sessionMismatch(let sessionId):
+            return "Console session does not belong to this VM and user: \(sessionId)"
+        case .alreadyAttached(let sessionId):
+            return "Console session is already attached: \(sessionId)"
         }
     }
 }

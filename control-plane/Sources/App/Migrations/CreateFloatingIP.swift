@@ -48,8 +48,7 @@ struct CreateFloatingIP: AsyncMigration {
         // see the NIC as free and commit — the partial unique index makes the
         // second insert/update fail instead. Partial (NULLs excluded) because
         // detached rows all share interface_id = NULL. Raw SQL: Fluent's
-        // schema builder has no partial-index support; the syntax is common to
-        // both SQLite and Postgres.
+        // schema builder has no partial-index support.
         if let sql = database as? SQLDatabase {
             try await sql.raw(
                 """

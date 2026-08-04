@@ -17,6 +17,21 @@ struct HierarchySnapshot {
     let vms: [VM]
     let quotas: [ResourceQuota]
 
+    /// The folders the caller may read in their own right, as opposed to those
+    /// `readable(on:)` additionally retains to keep the tree connected. Equal to
+    /// `folders` until that narrowing runs.
+    ///
+    /// The two differ only for a caller who can read a project but not the
+    /// folders it is nested in, and the distinction matters because only the
+    /// nested tree needs the ancestors: a flat list of folders has nothing to
+    /// connect, so it shows `decidedFolders` and no more.
+    var decidedFolders: [OrganizationalUnit] {
+        guard let decidedFolderIDs else { return folders }
+        return folders.filter { folder in folder.id.map(decidedFolderIDs.contains) ?? false }
+    }
+
+    private let decidedFolderIDs: Set<UUID>?
+
     static func load(organizationID: UUID, on db: Database) async throws -> HierarchySnapshot {
         let folders = try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organizationID)
@@ -52,7 +67,85 @@ struct HierarchySnapshot {
             folders: folders,
             projects: projects,
             vms: vms,
-            quotas: quotas
+            quotas: quotas,
+            decidedFolderIDs: nil
+        )
+    }
+
+    // MARK: - Visibility
+
+    /// The snapshot narrowed to the rows the caller may actually read.
+    ///
+    /// The hierarchy endpoints gate on `view_organization`, which bare org
+    /// membership grants — so without this they hand a bare member every
+    /// folder, project and VM in the organization, the same disclosure the
+    /// project list endpoints made (issue #870). Reaching a container is not
+    /// reaching its contents; each row is put to the evaluator on its own node,
+    /// three batched decisions for the whole tree.
+    ///
+    /// One row is kept without a decision of its own: folders on the path down
+    /// to a project the caller *can* read. Dropping them would strand the
+    /// project outside the nesting, and the project's own materialized `path`
+    /// (which `GET /api/projects/{id}/path` already hands to any project member)
+    /// names them anyway. Their quotas are not kept — only folders that survive
+    /// `folder:read` contribute those.
+    ///
+    /// That argument is about *nesting*, so it only holds for the tree: a
+    /// consumer with nothing to connect reads `decidedFolders` instead, and
+    /// never sees a folder it did not earn.
+    ///
+    /// Quotas are the exception to "the container gate implies it": an
+    /// organization-scoped quota used to ride the handler's `view_organization`
+    /// on the grounds that it describes that organization, but its `usage` and
+    /// `utilization` are the organization's measured consumption, not a
+    /// description — the inventory above in scalar form. They go through
+    /// ``QuotaVisibility``, which is the one gate every route onto that number
+    /// shares.
+    func readable(on req: Request) async throws -> HierarchySnapshot {
+        let readableFolderIDs = Set(
+            try await req.canFilter(
+                "folder:read",
+                on: folders.compactMap { folder in folder.id.map { IAMNode(type: .organizationalUnit, id: $0) } }
+            ).map(\.id))
+        let readableProjectIDs = Set(
+            try await req.canFilter(
+                "project:read",
+                on: projects.compactMap { project in project.id.map { IAMNode(type: .project, id: $0) } }
+            ).map(\.id))
+        let readableVMIDs = Set(
+            try await req.canFilter(
+                "vm:read",
+                on: vms.compactMap { vm in vm.id.map { IAMNode(type: .virtualMachine, id: $0) } }
+            ).map(\.id))
+
+        let keptProjects = projects.filter { project in project.id.map(readableProjectIDs.contains) ?? false }
+
+        // Retain each surviving folder's ancestor chain, so the tree the
+        // builder walks is still connected. Stopping at an id already retained
+        // is safe: every insertion walks its own chain to the root.
+        let foldersByID = Dictionary(
+            folders.compactMap { folder in folder.id.map { ($0, folder) } },
+            uniquingKeysWith: { first, _ in first })
+        var keptFolderIDs: Set<UUID> = []
+        func retainChain(from folderID: UUID?) {
+            var current = folderID
+            while let id = current, !keptFolderIDs.contains(id) {
+                keptFolderIDs.insert(id)
+                current = foldersByID[id]?.$parentOU.id
+            }
+        }
+        for folderID in readableFolderIDs { retainChain(from: folderID) }
+        for project in keptProjects { retainChain(from: project.$organizationalUnit.id) }
+
+        return HierarchySnapshot(
+            organizationID: organizationID,
+            folders: folders.filter { folder in folder.id.map(keptFolderIDs.contains) ?? false },
+            projects: keptProjects,
+            vms: vms.filter { vm in
+                readableProjectIDs.contains(vm.$project.id) && (vm.id.map(readableVMIDs.contains) ?? false)
+            },
+            quotas: try await QuotaVisibility.readable(quotas, on: req),
+            decidedFolderIDs: readableFolderIDs
         )
     }
 

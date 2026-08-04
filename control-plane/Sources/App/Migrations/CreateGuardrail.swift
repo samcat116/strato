@@ -37,9 +37,7 @@ struct CreateGuardrail: AsyncMigration {
             // that writes it. `GuardrailEffect` has a single case and the store
             // rejects a permit-shaped request with a 400; this is the backstop
             // for anything reaching the table another way (a repair script, a
-            // future bulk import). Postgres only: SQLite cannot add a CHECK
-            // outside CREATE TABLE, and the SQLite path is local tests, where
-            // the two layers above are in force.
+            // future bulk import).
             if sql.dialect.name == "postgresql" {
                 try await sql.raw(
                     """

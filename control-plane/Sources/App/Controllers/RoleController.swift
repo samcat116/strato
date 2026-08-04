@@ -199,14 +199,14 @@ struct RoleController: RouteCollection {
     /// includes the platform defaults and everything inherited — is
     /// `bindable`.
     func list(req: Request) async throws -> RoleListResponse {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         guard let ownerType = req.query[String.self, at: "ownerType"],
             let ownerId = req.query[String.self, at: "ownerId"]
         else {
             throw Abort(.badRequest, reason: "ownerType and ownerId query parameters are required")
         }
-        let owner = try RoleOwner(type: ownerType, id: ownerId)
-        try await requirePolicyAdmin(on: owner.node, write: false, req: req)
+        let owner = try IAMPolicySetOwner(type: ownerType, id: ownerId, kind: .role)
+        try await owner.requirePolicyAdmin(write: false, req: req)
 
         let roles = try await RoleStore.owned(by: owner.type, ownerID: owner.id, on: req.db)
         return RoleListResponse(roles: try roles.map(RoleDTO.init))
@@ -214,26 +214,23 @@ struct RoleController: RouteCollection {
 
     /// GET /api/iam/roles/:roleID
     func get(req: Request) async throws -> RoleDTO {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         let role = try await find(req)
         // Platform rows are the seeded defaults: public knowledge, and the
         // same content `bindable` and the catalog already hand out.
         if let owner = try owner(of: role) {
-            try await requirePolicyAdmin(on: owner.node, write: false, req: req)
+            try await owner.requirePolicyAdmin(write: false, req: req)
         }
         return try RoleDTO(role)
     }
 
     /// POST /api/iam/roles
     func create(req: Request) async throws -> Response {
-        let user = try requireUser(req)
+        let user = try req.auth.require(User.self)
         let payload = try req.content.decode(CreateRoleRequest.self)
-        guard RoleStore.creatableOwnerTypes.contains(payload.ownerType) else {
-            throw RoleError.uncreatableOwnerType(payload.ownerType.rawValue)
-        }
-        let owner = RoleOwner(type: payload.ownerType, id: payload.ownerId)
-        try await requireOwnerExists(owner, on: req.db)
-        try await requirePolicyAdmin(on: owner.node, write: true, req: req)
+        let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .role)
+        try await owner.requireExists(on: req.db)
+        try await owner.requirePolicyAdmin(write: true, req: req)
 
         let id = payload.id ?? UUID()
         let prepared = try await prepare(
@@ -263,13 +260,13 @@ struct RoleController: RouteCollection {
 
     /// PATCH /api/iam/roles/:roleID
     func update(req: Request) async throws -> RoleDTO {
-        let user = try requireUser(req)
+        let user = try req.auth.require(User.self)
         let existing = try await find(req)
         try requireUnmanaged(existing)
         guard let owner = try owner(of: existing), let id = existing.id else {
             throw RoleError.managedRoleImmutable(existing.name)
         }
-        try await requirePolicyAdmin(on: owner.node, write: true, req: req)
+        try await owner.requirePolicyAdmin(write: true, req: req)
 
         let payload = try req.content.decode(UpdateRoleRequest.self)
         // A body that touches neither the permit nor the labels is a no-op
@@ -310,13 +307,13 @@ struct RoleController: RouteCollection {
 
     /// DELETE /api/iam/roles/:roleID
     func delete(req: Request) async throws -> HTTPStatus {
-        let user = try requireUser(req)
+        let user = try req.auth.require(User.self)
         let role = try await find(req)
         try requireUnmanaged(role)
         guard let owner = try owner(of: role), let id = role.id else {
             throw RoleError.managedRoleImmutable(role.name)
         }
-        try await requirePolicyAdmin(on: owner.node, write: true, req: req)
+        try await owner.requirePolicyAdmin(write: true, req: req)
 
         // Refused rather than cascaded: dropping a role out from under live
         // bindings would silently revoke whatever they grant, with nothing in
@@ -350,7 +347,7 @@ struct RoleController: RouteCollection {
     /// declared as such rather than tripping the default-deny middleware's
     /// "mutating handler forgot its check" assertion.
     func validate(req: Request) async throws -> ValidateRoleResponse {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         req.markRowScopedAuthorization()
         let payload = try req.content.decode(ValidateRoleRequest.self)
         let id = payload.id ?? UUID()
@@ -361,7 +358,7 @@ struct RoleController: RouteCollection {
 
     /// GET /api/iam/roles/bindable?nodeType=&nodeId=
     func bindable(req: Request) async throws -> BindableRolesResponse {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         guard let nodeType = req.query[String.self, at: "nodeType"],
             let nodeId = req.query[String.self, at: "nodeId"]
         else {
@@ -381,7 +378,7 @@ struct RoleController: RouteCollection {
     /// The action vocabulary, generated from the registry. Authenticated only:
     /// it describes the software, not any deployment's policy.
     func actions(req: Request) async throws -> ActionCatalogResponse {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         return Self.actionCatalog()
     }
 
@@ -416,41 +413,6 @@ struct RoleController: RouteCollection {
         )
     }
 
-    /// A role's owner as both halves it is used as: the store's
-    /// `(ownerType, ownerID)` pair and the tree node the gates run on.
-    private struct RoleOwner {
-        let type: IAMRoleOwnerType
-        let id: UUID
-
-        var node: IAMNode {
-            // Every creatable owner type has a node type; the platform
-            // sentinel is refused before this is reached.
-            IAMNode(type: type.nodeType ?? .organization, id: id)
-        }
-
-        init(type: IAMRoleOwnerType, id: UUID) {
-            self.type = type
-            self.id = id
-        }
-
-        init(type: String, id: String) throws {
-            guard let ownerType = IAMRoleOwnerType(rawValue: type),
-                RoleStore.creatableOwnerTypes.contains(ownerType)
-            else {
-                throw RoleError.uncreatableOwnerType(type)
-            }
-            guard let ownerID = UUID(uuidString: id) else {
-                throw Abort(.badRequest, reason: "Role owner id must be a UUID")
-            }
-            self.init(type: ownerType, id: ownerID)
-        }
-    }
-
-    private func requireUser(_ req: Request) throws -> User {
-        guard let user = req.auth.get(User.self) else { throw Abort(.unauthorized) }
-        return user
-    }
-
     private func find(_ req: Request) async throws -> IAMRoleDefinition {
         guard let id = req.parameters.get("roleID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Role id must be a UUID")
@@ -463,33 +425,16 @@ struct RoleController: RouteCollection {
 
     /// The owner of a role, or nil for a platform row (which has no node to
     /// gate on and no owner to scope it to).
-    private func owner(of role: IAMRoleDefinition) throws -> RoleOwner? {
+    private func owner(of role: IAMRoleDefinition) throws -> IAMPolicySetOwner? {
         guard let type = IAMRoleOwnerType(rawValue: role.ownerType) else {
             throw Abort(.internalServerError, reason: "Role row names an unknown owner type '\(role.ownerType)'")
         }
         guard type != .platform else { return nil }
-        return RoleOwner(type: type, id: role.ownerID)
+        return IAMPolicySetOwner(type: type, id: role.ownerID, kind: .role)
     }
 
     private func requireUnmanaged(_ role: IAMRoleDefinition) throws {
         guard !role.managed else { throw RoleError.managedRoleImmutable(role.name) }
-    }
-
-    /// A role scoped to an owner that does not exist would be bindable
-    /// nowhere, so this is a `404` at the boundary rather than an orphan row.
-    private func requireOwnerExists(_ owner: RoleOwner, on db: any Database) async throws {
-        let exists: Bool
-        switch owner.type {
-        case .organization:
-            exists = try await Organization.find(owner.id, on: db) != nil
-        case .project:
-            exists = try await Project.find(owner.id, on: db) != nil
-        case .platform:
-            exists = false
-        }
-        guard exists else {
-            throw RoleError.unknownOwner("\(owner.type.rawValue)/\(owner.id)")
-        }
     }
 
     private func prepare(
@@ -503,14 +448,6 @@ struct RoleController: RouteCollection {
             existingRoles: existing,
             engine: req.application.cedarEngine
         )
-    }
-
-    /// Reading and writing a role is `iam:readPolicy` / `iam:setPolicy` on its
-    /// owner — the same gate guardrails use, for the same reason.
-    private func requirePolicyAdmin(on node: IAMNode, write: Bool, req: Request) async throws {
-        guard try await req.can(write ? "iam:setPolicy" : "iam:readPolicy", on: node) else {
-            throw Abort(.forbidden, reason: "Managing roles requires admin on the role's owner or a container above it")
-        }
     }
 
     /// The node's own read action — `project:read` for a project, `vm:read`

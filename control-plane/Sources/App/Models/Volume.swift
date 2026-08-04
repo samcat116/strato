@@ -69,8 +69,8 @@ final class Volume: Model, @unchecked Sendable {
     var errorMessage: String?
 
     // Placement: the pool whose agents hold this volume's replicas. Nullable
-    // at the schema level only (SQLite constraint); the backfill migration and
-    // the create path guarantee it is always set.
+    // at the schema level only; the backfill migration and the create path
+    // guarantee it is always set.
     @OptionalParent(key: "pool_id")
     var pool: StoragePool?
 

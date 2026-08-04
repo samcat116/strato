@@ -63,6 +63,14 @@ final class SecurityGroupRule: Model, @unchecked Sendable {
     @OptionalParent(key: "remote_group_id")
     var remoteGroup: SecurityGroup?
 
+    /// Whether the realized OVN ACL logs the packets it matches (STR-34).
+    /// Off by default: logging every allowed flow on a busy NIC is expensive,
+    /// so it is an opt-in diagnostic rather than a posture. Immutable with the
+    /// rest of the rule — flipping it is delete + recreate, which bumps the
+    /// group's generation and so reaches agents on the next sync.
+    @Field(key: "log")
+    var log: Bool
+
     @OptionalField(key: "description")
     var ruleDescription: String?
 
@@ -81,6 +89,7 @@ final class SecurityGroupRule: Model, @unchecked Sendable {
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
         remoteGroupID: UUID? = nil,
+        log: Bool = false,
         description: String? = nil
     ) {
         self.id = id
@@ -92,6 +101,7 @@ final class SecurityGroupRule: Model, @unchecked Sendable {
         self.portRangeMax = portRangeMax
         self.remoteCIDR = remoteCIDR
         self.$remoteGroup.id = remoteGroupID
+        self.log = log
         self.ruleDescription = description
     }
 }

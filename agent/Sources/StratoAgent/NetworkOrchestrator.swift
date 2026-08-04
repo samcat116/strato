@@ -18,10 +18,17 @@ struct NetworkOrchestrator: Sendable {
     /// Realizes every NIC in `networks` (in spec order). On failure, host-side
     /// resources of already-realized NICs are rolled back before rethrowing.
     ///
+    /// `placement` says where the NICs are realized: VMs run in the host network
+    /// namespace, a jailed sandbox's VMM does not (issue STR-100). The same
+    /// funnel serves both so a new workload kind never grows its own copy of
+    /// this rollback logic.
+    ///
     /// Without a network service, every NIC degrades to `.userMode` with the
     /// spec's addressing passed through — matching the drivers' historical
     /// "no network service → user-mode fallback" behavior.
-    func prepareAttachments(vmId: String, networks: [NetworkSpec]) async throws -> [ResolvedNetworkAttachment] {
+    func prepareAttachments(
+        vmId: String, networks: [NetworkSpec], placement: NICPlacement = .hostNamespace
+    ) async throws -> [ResolvedNetworkAttachment] {
         guard let networkService else {
             if !networks.isEmpty {
                 logger.warning(
@@ -43,7 +50,8 @@ struct NetworkOrchestrator: Sendable {
                     // No OVN here (user-mode SLIRP), so its DHCP responder can't
                     // run; fall back to static guest config.
                     dhcpEnabled: false,
-                    dnsServers: spec.dnsServers
+                    dnsServers: spec.dnsServers,
+                    domainName: spec.domainName
                 )
             }
         }
@@ -65,11 +73,13 @@ struct NetworkOrchestrator: Sendable {
                 dnsServers: spec.dnsServers,
                 domainName: spec.domainName,
                 leaseTime: spec.leaseTime,
-                securityGroupIds: spec.securityGroupIds
+                securityGroupIds: spec.securityGroupIds,
+                mtu: spec.mtu
             )
 
             do {
-                let info = try await networkService.createVMNetwork(vmId: vmId, nicIndex: index, config: config)
+                let info = try await networkService.createVMNetwork(
+                    vmId: vmId, nicIndex: index, config: config, placement: placement)
                 // OVN can only serve DHCP for a real TAP-backed port; a service
                 // that degraded this NIC to user-mode did not program DHCP, so
                 // don't tell the guest to expect it.
@@ -90,7 +100,8 @@ struct NetworkOrchestrator: Sendable {
                         gateway6: spec.gateway6,
                         mtu: spec.mtu,
                         dhcpEnabled: dhcpRealized,
-                        dnsServers: spec.dnsServers
+                        dnsServers: spec.dnsServers,
+                        domainName: spec.domainName
                     ))
             } catch {
                 logger.error(
@@ -105,7 +116,7 @@ struct NetworkOrchestrator: Sendable {
                 // created some of its resources (e.g. the OVN port exists but
                 // the TAP/OVS step threw). Teardown is idempotent, so covering
                 // a NIC that never got started is harmless.
-                await teardownAttachments(vmId: vmId, count: index + 1)
+                await teardownAttachments(vmId: vmId, count: index + 1, placement: placement)
                 throw error
             }
         }
@@ -119,14 +130,16 @@ struct NetworkOrchestrator: Sendable {
         return resolved
     }
 
-    /// Best-effort teardown of the first `count` NICs of a VM. Failures are
+    /// Best-effort teardown of the first `count` NICs of a workload. Failures are
     /// logged, never thrown — network cleanup must not block VM deletion.
-    func teardownAttachments(vmId: String, count: Int) async {
+    /// `placement` must match what the NICs were created with.
+    func teardownAttachments(vmId: String, count: Int, placement: NICPlacement = .hostNamespace) async {
         guard let networkService, count > 0 else { return }
 
         for index in 0..<count {
             do {
-                try await networkService.detachVMFromNetwork(vmId: vmId, nicIndex: index)
+                try await networkService.detachVMFromNetwork(
+                    vmId: vmId, nicIndex: index, placement: placement)
             } catch {
                 logger.error(
                     "Failed to tear down VM NIC",

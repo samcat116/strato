@@ -21,11 +21,6 @@ import Vapor
 /// same transaction — see `PolicyController`.
 enum PolicyStore {
 
-    /// The owner types the API accepts. There is no platform-owned authored
-    /// policy: the platform's policy is the seeded roles and tier-1 permits,
-    /// which are code, not rows a request creates.
-    static let creatableOwnerTypes: Set<IAMRoleOwnerType> = [.organization, .project]
-
     // MARK: - Preparing a write
 
     /// The Cedar text and derived effect a write will store.
@@ -192,7 +187,7 @@ enum PolicyStore {
         enabled: Bool,
         on db: any Database
     ) async throws -> IAMPolicy {
-        guard creatableOwnerTypes.contains(ownerType) else {
+        guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
         }
         let policy = IAMPolicy(

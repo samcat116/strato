@@ -13,9 +13,6 @@ import SQLKit
 ///   nullable; a logical zone may have no physical coordinates at all.
 /// * `labels` — a JSON object defaulting to `{}`, so existing rows read as an
 ///   empty (never null) map, matching the non-optional model property.
-///
-/// One field per `.update()` call, matching `CreateSite` and the rest of the
-/// migration set (historically for SQLite compatibility).
 struct AddSiteMetadata: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("sites")

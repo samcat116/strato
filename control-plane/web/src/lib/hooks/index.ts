@@ -48,6 +48,7 @@ export {
   useTransferProject,
 } from "./use-projects";
 export { useConsole } from "./use-console";
+export { useVNC } from "./use-vnc";
 export { useSandboxExec } from "./use-sandbox-exec";
 export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
 export { useSandboxLogs, useInvalidateSandboxLogs } from "./use-sandbox-logs";

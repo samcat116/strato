@@ -129,6 +129,12 @@ export interface VMNetworkInterface {
   mtu?: number;
   deviceName: string;
   orderIndex: number;
+  /**
+   * The security groups filtering this NIC. `undefined` means the server did
+   * not report membership (an older control plane), never that the NIC is in
+   * no group — an empty array is what says that.
+   */
+  securityGroupIds?: string[];
 }
 
 export interface VM {
@@ -158,6 +164,22 @@ export interface VM {
    */
   secureBoot?: boolean;
   tpmEnabled?: boolean;
+  /**
+   * Whether the VM's attached security groups are actually enforced. `false`
+   * means a realizing agent is too old for security groups, or its site has no
+   * usable network controller to author the ACLs — either way the groups the
+   * UI shows filter nothing. `undefined` means the VM is unplaced (or the
+   * control plane predates the field) — unknown, not "no".
+   */
+  securityGroupsEnforced?: boolean;
+  /**
+   * Graphics console (backend issue #566): whether the guest has a display
+   * device whose framebuffer the Display tab can attach to. Fixed at creation
+   * — the display lives in the hypervisor process's arguments, so an existing
+   * VM cannot gain or lose one. Optional here only because older control
+   * planes omit it.
+   */
+  graphicsConsole?: boolean;
   /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
@@ -605,6 +627,14 @@ export interface Site {
   regionCode?: string;
   labels: Record<string, string>;
   networkControllerAgentId?: string;
+  /** Heartbeat-derived status of the designated controller; absent when none is designated. */
+  networkControllerStatus?: AgentStatus;
+  /**
+   * Why the designated controller cannot author this site's topology right now;
+   * absent while it can. When present, new networked workloads, site-pinned
+   * networks, floating-IP attaches and security-group attaches here are refused.
+   */
+  networkControllerIssue?: string;
   organizationId?: string;
   organizationalUnitId?: string;
   createdAt?: string;
@@ -947,6 +977,14 @@ export interface CreateVMRequest {
    */
   tpm?: boolean;
   /**
+   * Graphics console: gives the guest a display device and a VNC server, so a
+   * graphical OS installer can be driven from the Display tab. Defaults to
+   * false (headless). Rejected with 400 for Firecracker, which emulates no
+   * display device, and only schedulable onto an agent new enough to realize
+   * one. Cannot be changed after creation.
+   */
+  graphicsConsole?: boolean;
+  /**
    * Security groups for the VM's NIC (max 5, same project as the VM).
    * Omitted → the project's default group.
    */
@@ -1052,6 +1090,12 @@ export interface Sandbox {
   status: SandboxStatus;
   /** Exit code of a workload that ran to completion (`status === "Exited"`). */
   exitCode?: number | null;
+  /**
+   * Security groups on the sandbox's NIC (flat: a sandbox has at most one).
+   * Absent when the sandbox has no NIC. Recorded but not yet enforced —
+   * sandbox NICs are still omitted from the agent sync entirely.
+   */
+  securityGroupIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1139,6 +1183,21 @@ export interface SandboxSnapshot {
 export interface UpdateSandboxRequest {
   name?: string;
   ttlSeconds?: number;
+}
+
+// VM graphics console (backend issue #566): POST /api/vms/:id/console/vnc
+// mints a short-lived single-use session, then the browser attaches over a
+// WebSocket at `websocketPath` and hands that socket to noVNC. The two-step
+// shape exists so the reasons a display can be unavailable — the VM was
+// created headless (409), its agent is too old or its socket is on another
+// replica (503) — arrive as status codes rather than as an unexplained
+// disconnect after the upgrade.
+export interface VNCSession {
+  sessionId: string;
+  /** Same-origin WebSocket path, e.g. `/api/vms/<id>/console/vnc/<sessionId>/attach`. */
+  websocketPath: string;
+  /** When the pending (unattached) session expires. */
+  expiresAt: string;
 }
 
 // Sandbox exec (backend issue #423): POST /api/sandboxes/:id/exec creates a
@@ -1645,6 +1704,8 @@ export interface SecurityGroupRule {
   /** At most one of remoteCIDR/remoteGroupId; both absent means "any peer". */
   remoteCIDR?: string;
   remoteGroupId?: string;
+  /** Whether the realized OVN ACL logs the packets this rule matches. */
+  log?: boolean;
   description?: string;
   createdAt?: string;
 }
@@ -1683,12 +1744,20 @@ export interface CreateSecurityGroupRuleRequest {
   portRangeMax?: number;
   remoteCIDR?: string;
   remoteGroupId?: string;
+  /** Log the packets this rule matches. Defaults to false. */
+  log?: boolean;
   description?: string;
 }
 
+/**
+ * Names exactly one workload — `vmId` or `sandboxId` — optionally narrowed to
+ * one of its NICs. Naming neither or both is rejected with a 400.
+ */
 export interface AttachSecurityGroupRequest {
-  vmId: string;
-  /** The VM NIC to attach to; defaults to the VM's first interface. */
+  vmId?: string;
+  /** Sandbox memberships are recorded but not yet enforced. */
+  sandboxId?: string;
+  /** The NIC to attach to; defaults to the workload's first interface. */
   interfaceId?: string;
 }
 

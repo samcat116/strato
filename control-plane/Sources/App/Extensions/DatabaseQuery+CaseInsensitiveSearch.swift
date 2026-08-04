@@ -1,12 +1,10 @@
 import Fluent
 import SQLKit
 
-// MARK: - Engine-agnostic case-insensitive search filters
+// MARK: - Case-insensitive search filters
 //
-// PostgreSQL supports `ILIKE` for case-insensitive matching, but SQLite does not.
-// To keep behaviour identical across both engines (production runs Postgres, tests
-// may run either), these helpers emit `LOWER(<column>) LIKE LOWER(<pattern>) ESCAPE '\'`,
-// which is valid on both SQLite and PostgreSQL.
+// These helpers emit `LOWER(<column>) LIKE LOWER(<pattern>) ESCAPE '\'` rather
+// than PostgreSQL's `ILIKE`.
 //
 // The filter is built as a `DatabaseQuery.Filter.custom` wrapping a `SQLQueryString`.
 // The Fluent → SQL converter serializes a `.custom` payload that is an `SQLExpression`

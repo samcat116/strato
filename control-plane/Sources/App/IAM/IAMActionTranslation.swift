@@ -58,6 +58,9 @@ enum IAMActionTranslator {
         case .network: return "network"
         case .floatingIP: return "floatingip"
         case .securityGroup: return "securitygroup"
+        // Zones and their records share one service: they are one authoring
+        // surface (issue #770).
+        case .dnsZone, .dnsRecord: return "dns"
         case .volume, .volumeSnapshot: return "volume"
         case .site: return "site"
         case .agent: return "agent"
@@ -99,8 +102,23 @@ enum IAMActionTranslator {
             }
 
         // Lifecycle verbs are permissions of their own on VMs and sandboxes.
+        // `exec` now resolves for both (issue #804): the registry guard above
+        // is what kept it sandbox-only, so adding `vm:exec` to the registry is
+        // the whole change on this side. That guard is coarse by node type,
+        // though — `service(for:)` folds the snapshot types into their parent
+        // service, so `exec` on a `vm_snapshot` translates to `vm:exec` and
+        // clears both the registry and schema checks, exactly as `start` and
+        // `stop` already do. No call site asks that, and nothing here narrows
+        // it; do not read the guard as a per-node-type filter.
         case "start", "stop", "restart", "pause", "resume", "exec":
             return "\(service):\(permission)"
+        case "run":
+            // The non-interactive, output-captured half of in-guest execution.
+            // Spelled out rather than folded into the verb-passthrough above
+            // because the action is `runCommand`, not `run` — the registry name
+            // says what it does to the guest, while the route says what the
+            // caller asked for.
+            return service == "vm" ? "vm:runCommand" : nil
         case "snapshot":
             switch service {
             case "sandbox": return "sandbox:snapshot"
@@ -123,6 +141,7 @@ enum IAMActionTranslator {
             case "volume": return "volume:attach"
             case "floatingip": return "floatingip:attach"
             case "securitygroup": return "securitygroup:attach"
+            case "dns": return "dns:attach"
             default: return nil
             }
         case "detach":
@@ -130,6 +149,7 @@ enum IAMActionTranslator {
             case "volume": return "volume:detach"
             case "floatingip": return "floatingip:detach"
             case "securitygroup": return "securitygroup:detach"
+            case "dns": return "dns:detach"
             default: return nil
             }
         case "clone":
@@ -176,6 +196,8 @@ enum IAMActionTranslator {
             return "floatingip:create"
         case "create_security_group":
             return "securitygroup:create"
+        case "create_dns_zone":
+            return "dns:create"
 
         default:
             return nil

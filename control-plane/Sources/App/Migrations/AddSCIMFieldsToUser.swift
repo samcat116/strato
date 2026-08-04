@@ -2,7 +2,6 @@ import Fluent
 
 struct AddSCIMFieldsToUser: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // SQLite doesn't support multiple ADD clauses in a single ALTER TABLE statement
         try await database.schema("users")
             .field("scim_provisioned", .bool, .required, .custom("DEFAULT FALSE"))
             .update()

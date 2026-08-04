@@ -46,8 +46,8 @@ final class IAMRoleDefinition: Model, @unchecked Sendable {
     static let schema = "iam_roles"
 
     /// Owner sentinel for platform rows. A real value (not NULL) so the
-    /// `(owner_type, owner_id, name)` uniqueness holds on both Postgres and
-    /// SQLite — NULLs are distinct in unique indexes on both engines.
+    /// `(owner_type, owner_id, name)` uniqueness holds — NULLs are distinct
+    /// in unique indexes.
     static let platformOwnerID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
     @ID(key: .id)

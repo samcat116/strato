@@ -119,6 +119,100 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("- 192.168.1.5/24") == true)
         #expect(yaml?.contains("nameservers:") == true)
         #expect(yaml?.contains("addresses: [1.1.1.1, 8.8.8.8]") == true)
+        // No domain on the network: no search list at all.
+        #expect(yaml?.contains("search:") == false)
+    }
+
+    @Test("static NIC with a domain renders the search list alongside nameservers")
+    func staticNICWithSearchDomain() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                dhcpEnabled: false,
+                dnsServers: ["1.1.1.1"],
+                domainName: "corp.example.com"
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(
+            yaml == """
+                version: 2
+                ethernets:
+                  nic0:
+                    match:
+                      macaddress: "52:54:00:aa:bb:cc"
+                    set-name: nic0
+                    addresses:
+                      - 192.168.1.5/24
+                    gateway4: 192.168.1.1
+                    nameservers:
+                      search: [corp.example.com]
+                      addresses: [1.1.1.1]
+                """)
+    }
+
+    @Test("a domain with no resolvers still renders a nameservers search list")
+    func searchDomainWithoutResolvers() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                domainName: "corp.example.com"
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("nameservers:") == true)
+        #expect(yaml?.contains("search: [corp.example.com]") == true)
+        #expect(yaml?.contains("addresses: [") == false)
+    }
+
+    @Test("a blank domain renders no search list")
+    func blankSearchDomainOmitted() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                domainName: "   "
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml != nil)
+        #expect(yaml?.contains("nameservers") == false)
+    }
+
+    @Test("DHCP NIC writes no search list (OVN's responder delivers the domain)")
+    func dhcpNICOmitsSearchDomain() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                dhcpEnabled: true,
+                dnsServers: ["1.1.1.1"],
+                domainName: "corp.example.com"
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("dhcp4: true") == true)
+        #expect(yaml?.contains("search:") == false)
+        #expect(yaml?.contains("nameservers") == false)
     }
 
     @Test("v4-only NICs render byte-identical YAML to pre-IPv6 agents")

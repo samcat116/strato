@@ -114,6 +114,8 @@ struct SandboxController: RouteCollection {
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
+            // The response reports the NIC's security groups (STR-34).
+            .with(\.$networkInterfaces) { $0.with(\.$securityGroupMemberships) }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
@@ -143,15 +145,27 @@ struct SandboxController: RouteCollection {
         return try await req.authorizedSandbox(sandboxID, permission: permission)
     }
 
+    /// Loads the NIC and its security-group memberships so the response can
+    /// report `securityGroupIds`. Without this the field is nil, which reads
+    /// as "no NIC" — so every handler that returns a detail response calls it.
+    private static func loadNICSecurityGroups(_ sandbox: Sandbox, on db: Database) async throws {
+        try await sandbox.$networkInterfaces.load(on: db)
+        for interface in sandbox.networkInterfaces {
+            try await interface.$securityGroupMemberships.load(on: db)
+        }
+    }
+
     func show(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
         return SandboxDetailResponse(from: sandbox)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh, so no agent
@@ -209,6 +223,10 @@ struct SandboxController: RouteCollection {
             /// yet (see `attachNIC`).
             let networkId: UUID?
             let networkName: String?
+            /// Security groups for the sandbox's NIC (STR-34). Omitted means
+            /// the project's default group. Only meaningful alongside a
+            /// network, since without one there is no NIC to attach them to.
+            let securityGroupIds: [UUID]?
         }
 
         let createRequest = try req.content.decode(CreateSandboxRequest.self)
@@ -308,6 +326,20 @@ struct SandboxController: RouteCollection {
             resourceKind: "sandboxes"
         )
         let projectId = try project.requireID()
+
+        // The NIC's security groups (STR-34), validated against this project
+        // before anything is written. Naming groups without a network is a
+        // mistake worth reporting rather than silently dropping: there would
+        // be no NIC for them to land on.
+        let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
+            createRequest.securityGroupIds, projectID: projectId, on: req.db)
+        if !requestedSecurityGroupIds.isEmpty,
+            createRequest.networkId == nil, createRequest.networkName == nil
+        {
+            throw Abort(
+                .badRequest,
+                reason: "'securityGroupIds' needs a network: without one the sandbox has no interface to attach to")
+        }
 
         let imageRef =
             restoreSource?.image
@@ -447,6 +479,7 @@ struct SandboxController: RouteCollection {
                         projectID: projectId,
                         requestedNetworkID: createRequest.networkId,
                         requestedNetworkName: createRequest.networkName,
+                        securityGroupIDs: requestedSecurityGroupIds,
                         on: db
                     )
 
@@ -511,9 +544,15 @@ struct SandboxController: RouteCollection {
     /// control-plane address reservation; refusing the create, or silently
     /// picking a network on the caller's behalf, would both be worse than
     /// reserving nothing.
+    ///
+    /// The NIC joins its security groups here too (STR-34), the project's
+    /// default when the caller named none — the same ≥1-group invariant VM
+    /// create establishes, so the rows are already right when sandbox guest
+    /// networking lands. Conditional on a NIC existing, unlike the VM path:
+    /// a network-less sandbox has nothing to attach groups to.
     private static func attachNIC(
         to sandboxID: UUID, projectID: UUID, requestedNetworkID: UUID?, requestedNetworkName: String?,
-        on db: Database
+        securityGroupIDs: [UUID], on db: Database
     ) async throws {
         guard requestedNetworkID != nil || requestedNetworkName != nil else { return }
 
@@ -535,6 +574,17 @@ struct SandboxController: RouteCollection {
         )
         try await networkInterface.save(on: db)
         let interfaceID = try networkInterface.requireID()
+
+        let groupIDs: [UUID]
+        if securityGroupIDs.isEmpty {
+            groupIDs = [try await SecurityGroupService.ensureDefaultGroup(projectID: projectID, on: db).requireID()]
+        } else {
+            groupIDs = securityGroupIDs
+        }
+        for groupID in groupIDs {
+            try await SandboxInterfaceSecurityGroup(interfaceID: interfaceID, securityGroupID: groupID)
+                .save(on: db)
+        }
 
         let address = SandboxInterfaceAddress(
             interfaceID: interfaceID,
@@ -584,6 +634,7 @@ struct SandboxController: RouteCollection {
         }
 
         try await sandbox.save(on: req.db)
+        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
         return SandboxDetailResponse(from: sandbox)
     }
 

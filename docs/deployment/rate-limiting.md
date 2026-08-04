@@ -47,7 +47,10 @@ A rejected request returns `429 Too Many Requests` with a JSON body
 ## Storage backend
 
 Counters live in **Valkey/Redis** when it's configured (`VALKEY_HOST`), so the
-limit is enforced consistently across every control-plane replica. Without Valkey
+limit is enforced consistently across every control-plane replica. They use the
+*coordination* endpoint, not the session one — shared counters that fall back to
+a local store when the backend is gone are coordination-shaped, so
+`SESSION_VALKEY_*` does not affect them. Without Valkey
 the limiter falls back to a **process-local** counter — correct for a single
 instance, but with multiple replicas each enforces its own counters (roughly N×
 the effective limit). Prefer Valkey for multi-node deployments.

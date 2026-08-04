@@ -10,7 +10,6 @@ import Fluent
 /// removes the agents/sites first.
 struct AddOrganizationScopeToInfra: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // One field per .update() for SQLite compatibility.
         try await database.schema("agents")
             .field("organization_id", .uuid, .references("organizations", "id", onDelete: .restrict))
             .update()

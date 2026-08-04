@@ -46,7 +46,20 @@ struct ResourceQuotaController: RouteCollection {
         return paging.page(quotas)
     }
 
-    /// Every quota in the caller's organizations, by name, ready for slicing.
+    /// Every quota hanging on a scope the caller may read, by name, ready for
+    /// slicing.
+    ///
+    /// `readableQuotas` below is the gate; everything here is only the bound
+    /// that runs before it. Which matters because the two must not be derived
+    /// from the same thing: a bound taken from membership rows silently decides
+    /// too, by never putting a row in front of the evaluator. Project rows are
+    /// therefore bounded by the caller's *grants* (`ProjectVisibility`, as every
+    /// other project-scoped list does), so a caller whose only grant is a
+    /// binding on a project — with no `user_organizations` row for that
+    /// project's organization — still reaches that project's quota. Org and
+    /// folder rows keep the membership bound, because `readableQuotas` decides
+    /// both on `org:read` of the owning organization and no wider bound would
+    /// survive that.
     func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -58,63 +71,94 @@ struct ResourceQuotaController: RouteCollection {
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
 
-        if organizationIDs.isEmpty {
-            return []
-        }
+        let ouIDs =
+            organizationIDs.isEmpty
+            ? []
+            : try await OrganizationalUnit.query(on: req.db)
+                .filter(\.$organization.$id ~~ organizationIDs)
+                .all()
+                .compactMap { $0.id }
+
+        // The projects the caller's own grants reach. Nil means "no bound"
+        // (a system admin, an unbounded authored permit), not "everything is
+        // visible" — those rows are still decided below.
+        let visibility = try await ProjectVisibility.resolve(on: req)
 
         var query = ResourceQuota.query(on: req.db)
 
         switch level {
         case "organization":
+            if organizationIDs.isEmpty {
+                return []
+            }
             query = query.filter(\.$organization.$id ~~ organizationIDs)
                 .filter(\.$organizationalUnit.$id == nil)
                 .filter(\.$project.$id == nil)
         case "project":
-            // Get all projects in user's organizations
-            let directProjects = try await Project.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
-
-            let ouProjects =
-                !ouIDs.isEmpty
-                ? try await Project.query(on: req.db)
-                    .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                    .all() : []
-
-            let allProjects = directProjects + ouProjects
-            let projectIDs = allProjects.compactMap { $0.id }
-
-            if projectIDs.isEmpty {
+            if visibility.reachesNoProject {
                 return []
             }
-            query = query.filter(\.$project.$id ~~ projectIDs)
+            query = query.filter(\.$project.$id != nil)
+            if let candidates = visibility.candidateProjectIDs {
+                query = query.filter(\.$project.$id ~~ candidates)
+            }
         case "organizational_unit":
-            // Get all OUs in user's organizations
-            let ous = try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            let ouIDs = ous.compactMap { $0.id }
             if ouIDs.isEmpty {
                 return []
             }
             query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
                 .filter(\.$project.$id == nil)
         default:
-            // No level specified, return all quotas in user's organizations
-            query = query.group(.or) { or in
-                or.filter(\.$organization.$id ~~ organizationIDs)
-                // TODO: Add project and OU quota filtering for user access
+            // Every level at once. Folder- and project-scoped rows used to be
+            // dropped here (a standing TODO) because nothing decided them; now
+            // that `readableQuotas` decides each one they belong in the
+            // unfiltered list.
+            if organizationIDs.isEmpty, ouIDs.isEmpty, visibility.reachesNoProject {
+                return []
+            }
+            query = query.group(.or) { anyQuota in
+                if !organizationIDs.isEmpty {
+                    anyQuota.filter(\.$organization.$id ~~ organizationIDs)
+                }
+                if !ouIDs.isEmpty {
+                    anyQuota.filter(\.$organizationalUnit.$id ~~ ouIDs)
+                }
+                if let candidates = visibility.candidateProjectIDs {
+                    if !candidates.isEmpty {
+                        anyQuota.filter(\.$project.$id ~~ candidates)
+                    }
+                } else {
+                    anyQuota.filter(\.$project.$id != nil)
+                }
             }
         }
 
         let quotas = try await query.sort(\.$name).sort(\.$id).all()
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await readableQuotas(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
+    }
+
+    /// Drop the quota rows the caller may not read, deciding each through the
+    /// evaluator exactly as the matching item route (`verifyQuotaAccess`) does.
+    ///
+    /// The membership filters above only bound the candidate set to the
+    /// caller's organizations; they are not the item route's gate. Each scope
+    /// goes through its own decision here (STR-116), so a guardrail forbid or a
+    /// revoked binding narrows the list the same way it narrows the object read
+    /// — otherwise the list keeps showing a quota the item route now 403s.
+    ///
+    /// The question is `quota:read` on the node the row hangs on, for every
+    /// scope. It was `org:read` for org- and folder-scoped rows, matching the
+    /// `requireMember` the item route then used; both moved together, because
+    /// the row ships `usage`/`utilization` — the scope's measured consumption —
+    /// and bare membership must not reach it. See ``QuotaVisibility``.
+    ///
+    /// A scopeless row is never in the input — the queries above always filter
+    /// on a scope FK — but is dropped defensively; the item route requires
+    /// system admin for one.
+    private func readableQuotas(_ quotas: [ResourceQuota], on req: Request) async throws
+        -> [ResourceQuota]
+    {
+        try await QuotaVisibility.readable(quotas, on: req)
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {
@@ -449,7 +493,7 @@ struct ResourceQuotaController: RouteCollection {
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+        try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
 
         // Validate environment if specified
         if let environment = createRequest.environment {
@@ -511,19 +555,25 @@ struct ResourceQuotaController: RouteCollection {
 
     // MARK: - Helper Methods
 
+    /// Gate reading a quota — the row itself (`show`) and its freshly measured
+    /// usage (`getUsage`).
+    ///
+    /// One question, `quota:read` on the node the quota hangs on, for every
+    /// scope (``QuotaVisibility``). `getUsage` is the sharpest reason it cannot
+    /// be the `requireMember` it used to be: it measures the scope live and
+    /// returns the per-VM breakdown alongside the totals, so on an
+    /// organization-scoped quota a bare member was handed the organization's
+    /// vCPU/memory/VM consumption and its VMs by environment and status — the
+    /// inventory the hierarchy endpoints filter per row, in scalar form, from
+    /// the one route nothing had narrowed.
     private func verifyQuotaAccess(quota: ResourceQuota, on req: Request) async throws {
-        if let orgID = quota.$organization.id {
-            try await OrganizationAccessService.requireMember(organizationID: orgID, on: req)
-        } else if let ouID = quota.$organizationalUnit.id {
-            guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-                throw Abort(.notFound, reason: "Folder not found")
-            }
-            try await OrganizationAccessService.requireMember(organizationID: ou.$organization.id, on: req)
-        } else if let projectID = quota.$project.id {
-            let project = try await req.requireProject(id: projectID)
-            try await OrganizationAccessService.requireProjectMember(project: project, on: req)
-        } else {
+        guard QuotaVisibility.measuredNode(of: quota) != nil else {
+            // A scopeless row measures nothing and belongs to no organization.
             try requireSystemAdminForScopelessQuota(on: req)
+            return
+        }
+        guard try await QuotaVisibility.canRead(quota, on: req) else {
+            throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }
 
@@ -537,7 +587,7 @@ struct ResourceQuotaController: RouteCollection {
             try await OrganizationAccessService.requireAdmin(organizationID: ou.$organization.id, on: req)
         } else if let projectID = quota.$project.id {
             let project = try await req.requireProject(id: projectID)
-            try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
+            try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
         } else {
             try requireSystemAdminForScopelessQuota(on: req)
         }

@@ -30,18 +30,11 @@ struct AgentController: RouteCollection {
     }
 
     // MARK: - Authorization
-
-    /// Agent management is delegated to the owning organization: enrolling a
-    /// node or force-offlining agents is scoped to the org/OU
-    /// whose capacity it is (`manage_agents`), and system admins retain
-    /// unconditional access. Defense in depth — do not rely on route-level
-    /// middleware.
-    private func requireUser(_ req: Request) throws -> User {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        return user
-    }
+    //
+    // Agent management is delegated to the owning organization: enrolling a
+    // node or force-offlining agents is scoped to the org/OU whose capacity it
+    // is (`manage_agents`), and system admins retain unconditional access.
+    // Defense in depth — do not rely on route-level middleware.
 
     private func requireSystemAdmin(_ req: Request) throws {
         // The decision-marking gate, so admin-only mutations (scopeless
@@ -386,7 +379,7 @@ struct AgentController: RouteCollection {
 
     /// Every enrollment the caller may read, newest first, ready for slicing.
     func visibleEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         // Unlike Site and Agent, an enrollment stores its scope as plain columns
@@ -537,7 +530,7 @@ struct AgentController: RouteCollection {
 
     /// Every agent the caller may read, newest first, ready for slicing.
     func visibleAgents(req: Request) async throws -> [AgentResponse] {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         var query = Agent.query(on: req.db)

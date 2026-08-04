@@ -312,9 +312,7 @@ struct QuotaEnforcementService {
     /// transaction ends, giving cross-replica serialization (every replica shares
     /// the same Postgres) without a persisted lock row. Locks are taken in a stable
     /// (sorted) id order so two creates touching an overlapping set of quotas can't
-    /// deadlock by acquiring them in opposite orders. On SQLite (local tests) there
-    /// is no advisory-lock primitive and writes already serialize on the database
-    /// file, so this is a no-op.
+    /// deadlock by acquiring them in opposite orders.
     private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
         guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
         let keys = quotas.compactMap { $0.id?.uuidString }.sorted()

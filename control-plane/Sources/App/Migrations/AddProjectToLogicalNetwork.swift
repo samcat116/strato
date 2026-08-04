@@ -5,7 +5,6 @@ import Fluent
 /// "default" network), and the seeded network has no creator.
 struct AddProjectToLogicalNetwork: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // Add fields one at a time for SQLite compatibility
         try await database.schema("logical_networks")
             .field("project_id", .uuid, .references("projects", "id", onDelete: .cascade))
             .update()

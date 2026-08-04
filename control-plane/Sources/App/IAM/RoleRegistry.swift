@@ -62,6 +62,13 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case network
     case floatingIP = "floating_ip"
     case securityGroup = "security_group"
+    /// A DNS zone (issue #770) — a project-scoped resource, like a network.
+    case dnsZone = "dns_zone"
+    /// An authored DNS record. Unlike the snapshot types, whose container is
+    /// the project because they only *reference* their parent resource, a
+    /// record's container really is its zone: it cannot exist without one, and
+    /// delegating a zone must carry its records with it.
+    case dnsRecord = "dns_record"
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
@@ -125,6 +132,7 @@ enum IAMRoleRegistry {
             "network:read", "network:list",
             "floatingip:read", "floatingip:list",
             "securitygroup:read", "securitygroup:list",
+            "dns:read", "dns:list",
             "serviceaccount:read", "serviceaccount:list",
             "project:read",
             "folder:read",
@@ -157,6 +165,12 @@ enum IAMRoleRegistry {
             "floatingip:attach", "floatingip:detach",
             "securitygroup:create", "securitygroup:update", "securitygroup:delete",
             "securitygroup:attach", "securitygroup:detach",
+            // Zones and records share one service: they are one authoring
+            // surface, and a role that can write records but not the zone
+            // holding them isn't a distinction anyone has asked for.
+            // `attach`/`detach` gate binding a zone to a logical network.
+            "dns:create", "dns:update", "dns:delete",
+            "dns:attach", "dns:detach",
             "serviceaccount:create", "serviceaccount:update", "serviceaccount:delete",
             "project:update",
         ],
@@ -202,6 +216,25 @@ enum IAMRoleRegistry {
     /// plumbing.
     static let identityActions: Set<String> = ["user:read", "user:update", "user:delete"]
 
+    /// In-guest command execution on a VM (the guest-agent stack, issue #804):
+    /// `vm:exec` is an interactive session, `vm:runCommand` a non-interactive
+    /// run with its output captured.
+    ///
+    /// **No seeded role carries either**, deliberately — not `editor`, not
+    /// `admin`. Both are root-on-VM, and a seeded role is inherited down the
+    /// whole subtree it is bound on, so a default role carrying them would
+    /// confer a shell on every VM beneath every binding written for any other
+    /// reason. They are reachable through a custom role somebody authored on
+    /// purpose (the binding row being the audit trail), or through the tier-1
+    /// `platform-system-admin` policy, which reaches everything.
+    ///
+    /// The two are equal in privilege — a one-shot `sh -c` is a shell — and
+    /// differ only in what the platform can attest to afterwards, which is why
+    /// they are separable at all. docs/architecture/iam.md ("In-guest execution
+    /// is never in a default role") carries the full argument for both halves
+    /// of the decision; keep it there rather than growing a second copy here.
+    static let guestExecutionActions: Set<String> = ["vm:exec", "vm:runCommand"]
+
     /// Actions no seeded role carries and only the tier-1
     /// `platform-system-admin` policy reaches. `agent:updateArtifact` overrides
     /// the agent's update artifact with an arbitrary URL — that binary is
@@ -224,6 +257,7 @@ enum IAMRoleRegistry {
     static let allActions: Set<String> =
         IAMRole.allCases.reduce(
             into: membershipDerivedActions.union(identityActions).union(systemAdminOnlyActions)
+                .union(guestExecutionActions)
         ) {
             $0.formUnion(actions(for: $1))
         }

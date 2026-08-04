@@ -14,10 +14,6 @@ struct HierarchyController: RouteCollection {
             org.get("resources", use: getAllResources)
             org.get("resources", "summary", use: getResourceSummary)
 
-            // Bulk operations
-            org.post("merge", use: mergeOrganizations)
-            org.post("bulk-transfer", use: bulkTransferResources)
-
             // Search and navigation
             org.get("search", use: searchHierarchy)
             org.get("path", ":entityType", ":entityID", use: getEntityPath)
@@ -48,10 +44,11 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Build complete hierarchy
-        let hierarchy = try await HierarchyTreeBuilder.buildCompleteHierarchy(organization: organization, on: req.db)
-
-        return hierarchy
+        // Build the complete hierarchy — over the rows this caller may read,
+        // not every row in the organization (issue #870).
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+            .readable(on: req)
+        return try HierarchyTreeBuilder.buildCompleteHierarchy(organization: organization, snapshot: snapshot)
     }
 
     func getAllResources(req: Request) async throws -> OrganizationResourcesResponse {
@@ -70,9 +67,14 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Every row the response reports on, in four flat queries.
+        // Every row the response reports on, in four flat queries, narrowed to
+        // the ones this caller may read (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
-        let allOUs = snapshot.folders.sorted { $0.path < $1.path }
+            .readable(on: req)
+        // A flat array, so it carries only folders decided in their own right —
+        // the ancestors the tree retains for connectivity have nothing to
+        // connect here.
+        let allOUs = snapshot.decidedFolders.sorted { $0.path < $1.path }
         let allProjects = snapshot.projects
         let allVMs = snapshot.vms
         let allQuotas = snapshot.quotas
@@ -131,9 +133,17 @@ struct HierarchyController: RouteCollection {
         }
 
         // Usage totals, the organization's quotas and the hierarchy stats all
-        // come off one load instead of re-deriving the same rows three times.
+        // come off one load instead of re-deriving the same rows three times —
+        // and off the caller's own view of it, so the totals never count rows
+        // the tree above would not show them (issue #870).
         let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
-        let quotaCompliance = try await QuotaComplianceService.complianceInfos(for: snapshot.quotas, on: req.db)
+            .readable(on: req)
+
+        // The snapshot's quotas are already the ones this caller may read
+        // (`QuotaVisibility`), and compliance measures exactly what that gate
+        // covers — so there is no second decision to make here.
+        let quotaCompliance = try await QuotaComplianceService.complianceInfos(
+            for: snapshot.quotas, on: req.db)
 
         return ResourceSummaryResponse(
             organizationId: organizationID,
@@ -164,11 +174,14 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let results = try await HierarchySearchService.search(
-            organizationID: organizationID,
-            query: query,
-            entityType: entityType,
-            on: req.db
+        let results = try await HierarchySearchService.readable(
+            try await HierarchySearchService.search(
+                organizationID: organizationID,
+                query: query,
+                entityType: entityType,
+                on: req.db
+            ),
+            on: req
         )
 
         return HierarchySearchResponse(
@@ -203,11 +216,14 @@ struct HierarchyController: RouteCollection {
             )
         }
 
-        let results = try await HierarchySearchService.globalSearch(
-            organizationIDs: organizationIDs,
-            query: query,
-            entityType: entityType,
-            on: req.db
+        let results = try await HierarchySearchService.readable(
+            try await HierarchySearchService.globalSearch(
+                organizationIDs: organizationIDs,
+                query: query,
+                entityType: entityType,
+                on: req.db
+            ),
+            on: req
         )
 
         return HierarchySearchResponse(
@@ -233,71 +249,21 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let pathComponents = try await HierarchyPathResolver.buildEntityPath(
+        let fullPath = try await HierarchyPathResolver.buildEntityPath(
             entityType: entityType,
             entityID: entityID,
             organizationID: organizationID,
             on: req.db
         )
+        // Names, decided per component — the same filter the tree and the search
+        // results next door apply (issue #870).
+        let pathComponents = try await HierarchyPathResolver.visibleComponents(fullPath, on: req)
 
         return EntityPathResponse(
             entityId: entityID,
             entityType: entityType,
             organizationId: organizationID,
             pathComponents: pathComponents
-        )
-    }
-
-    // MARK: - Bulk Operations
-
-    func mergeOrganizations(req: Request) async throws -> MergeOrganizationsResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let mergeRequest = try req.content.decode(MergeOrganizationsRequest.self)
-
-        // Verify user has admin access to both organizations
-        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-        try await OrganizationAccessService.requireAdmin(
-            organizationID: mergeRequest.sourceOrganizationId, on: req)
-
-        guard let targetOrg = try await Organization.find(organizationID, on: req.db),
-            let sourceOrg = try await Organization.find(mergeRequest.sourceOrganizationId, on: req.db)
-        else {
-            throw Abort(.notFound, reason: "Organization not found")
-        }
-
-        return try await HierarchyMaintenanceService.performOrganizationMerge(
-            sourceOrg: sourceOrg,
-            targetOrg: targetOrg,
-            mergeRequest: mergeRequest,
-            on: req.db
-        )
-    }
-
-    func bulkTransferResources(req: Request) async throws -> BulkTransferResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let transferRequest = try req.content.decode(BulkTransferRequest.self)
-
-        // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        return try await HierarchyMaintenanceService.performBulkTransfer(
-            organizationID: organizationID,
-            transferRequest: transferRequest,
-            on: req.db
         )
     }
 

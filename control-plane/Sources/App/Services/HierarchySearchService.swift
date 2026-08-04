@@ -6,6 +6,45 @@ import Fluent
 /// Extracted from `HierarchyController`; handlers keep authentication and response
 /// wrapping while the query building lives here.
 struct HierarchySearchService {
+
+    /// The results the caller may actually read.
+    ///
+    /// Both searches below narrow on organization membership, which grants
+    /// `org:read` and nothing inside it — so a bare member matching on a name
+    /// would be told the folder, project or VM exists (issue #870). Each row is
+    /// decided on its own node, one batch per entity kind.
+    ///
+    /// The searches cap each entity kind at 10 rows *before* this runs, so a
+    /// filtered search can return fewer than the cap while matches remain
+    /// unseen. That is the cap's pre-existing shape — it bounds the query, it
+    /// has never been a page — and narrowing it correctly means paging the
+    /// search, not deciding more rows than were read.
+    static func readable(_ results: [HierarchySearchResult], on req: Request) async throws
+        -> [HierarchySearchResult]
+    {
+        let actions: [String: (action: String, nodeType: IAMNodeType)] = [
+            "organizational_unit": ("folder:read", .organizationalUnit),
+            "project": ("project:read", .project),
+            "vm": ("vm:read", .virtualMachine),
+        ]
+
+        var allowedByType: [String: Set<UUID>] = [:]
+        for (type, check) in actions {
+            let ids = results.filter { $0.type == type }.map(\.id)
+            guard !ids.isEmpty else { continue }
+            let nodes = ids.map { IAMNode(type: check.nodeType, id: $0) }
+            allowedByType[type] = Set(try await req.canFilter(check.action, on: nodes).map(\.id))
+        }
+
+        return results.filter { result in
+            // A result kind nobody mapped is not silently published: an
+            // unmapped kind means a new entity type reached the search without
+            // a decision to gate it on.
+            guard let allowed = allowedByType[result.type] else { return false }
+            return allowed.contains(result.id)
+        }
+    }
+
     /// Searches OUs, projects, and VMs within a single organization.
     /// - Parameter entityType: optional filter — `"ou"`, `"project"`, or `"vm"`.
     static func search(organizationID: UUID, query: String, entityType: String?, on db: Database) async throws
@@ -42,11 +81,19 @@ struct HierarchySearchService {
 
         // Search Projects
         if entityType == nil || entityType == "project" {
+            // The join belongs on the query, not inside the `or` group: a join
+            // added within the group closure is dropped from the emitted SQL
+            // while its filter survives, and the statement then names a table
+            // it never joined. It is a left join because a project at the
+            // organization's root has no folder.
             let projects = try await Project.query(on: db)
+                .join(
+                    OrganizationalUnit.self,
+                    on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id, method: .left
+                )
                 .group(.or) { or in
                     or.filter(\.$organization.$id == organizationID)
-                    or.join(OrganizationalUnit.self, on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id)
-                        .filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
+                    or.filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
                 }
                 .group(.or) { or in
                     or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
@@ -76,10 +123,13 @@ struct HierarchySearchService {
         if entityType == nil || entityType == "vm" {
             let vms = try await VM.query(on: db)
                 .join(Project.self, on: \VM.$project.$id == \Project.$id)
+                .join(
+                    OrganizationalUnit.self,
+                    on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id, method: .left
+                )
                 .group(.or) { or in
                     or.filter(Project.self, \.$organization.$id == organizationID)
-                    or.join(OrganizationalUnit.self, on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id)
-                        .filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
+                    or.filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
                 }
                 .group(.or) { or in
                     or.filter(.caseInsensitiveContains(schema: VM.schema, column: "name", value: query))

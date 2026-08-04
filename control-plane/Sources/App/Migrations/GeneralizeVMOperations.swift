@@ -8,8 +8,7 @@ import SQLKit
 /// backfills to `virtual_machine` via its default.
 ///
 /// The column keeps its deliberate no-FK property: a delete operation must
-/// outlive the row it removes. Each step is its own statement because SQLite
-/// cannot combine multiple ALTER TABLE actions.
+/// outlive the row it removes.
 struct GeneralizeVMOperations: AsyncMigration {
     func prepare(on database: Database) async throws {
         if let sql = database as? SQLDatabase {
@@ -41,8 +40,7 @@ struct GeneralizeVMOperations: AsyncMigration {
             // At most one pending operation per resource, enforced by the
             // database so two concurrent mutations cannot both slip past the
             // controller's pending-check (the loser's insert fails and
-            // surfaces as 409). Partial indexes work on both SQLite and
-            // Postgres.
+            // surfaces as 409).
             try await sql.raw(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_operations_pending_resource "
                     + "ON resource_operations (resource_kind, resource_id) WHERE status = 'pending'"

@@ -23,8 +23,7 @@ struct CreateRoleBinding: AsyncMigration {
             .create()
 
         // Secondary lookup indexes: by node (who-can, resource cleanup) and by
-        // principal (offboarding sweeps). Plain SQL works on both Postgres and
-        // SQLite.
+        // principal (offboarding sweeps).
         if let sql = database as? SQLDatabase {
             try await sql.raw(
                 "CREATE INDEX IF NOT EXISTS idx_role_bindings_node ON role_bindings (node_type, node_id)"

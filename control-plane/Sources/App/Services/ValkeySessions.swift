@@ -169,15 +169,51 @@ extension Request {
 }
 
 extension Application.Sessions.Provider {
-    /// Session storage in Valkey via the shared `app.valkey` client.
-    static var valkey: Self {
+    /// Session storage in `store`.
+    ///
+    /// The store is injected rather than resolved from `app` inside this
+    /// closure so the caller decides which client backs sessions — the
+    /// coordination client by default, or a separate one when
+    /// `SESSION_VALKEY_HOST` names another endpoint (issue #855). It also lets
+    /// `configure` hold on to the same instance for the readiness probe.
+    static func valkey(store: any SessionStore) -> Self {
         .init {
             $0.sessions.use { app in
                 ValkeySessionDriver(
-                    store: ValkeySessionStore(client: app.valkey),
+                    store: store,
                     ttl: ValkeySessionDriver.ttlFromEnvironment(logger: app.logger)
                 )
             }
         }
     }
+}
+
+// MARK: - Readiness
+
+extension Application {
+    /// The live session store, when one is configured (never under `.testing`,
+    /// which uses Fluent sessions).
+    ///
+    /// Held so `/health/ready` can probe session storage directly. Unlike
+    /// coordination, this dependency cannot fail open: a replica that cannot
+    /// read sessions cannot authenticate anyone, so readiness grades it fatal.
+    var sessionStore: (any SessionStore)? {
+        get { storage[SessionStoreKey.self] }
+        set { setStorageValue(SessionStoreKey.self, to: newValue) }
+    }
+
+    private struct SessionStoreKey: StorageKey {
+        typealias Value = any SessionStore
+    }
+}
+
+extension SessionStore {
+    /// Readiness round-trip: a plain `GETEX` of a key nothing writes, so it
+    /// proves reachability without touching a real session. A miss is the
+    /// expected result — only a thrown error means the store is unusable.
+    func probeReachability() async throws {
+        _ = try await read(Self.readinessProbeKey, refreshingTTL: 60)
+    }
+
+    static var readinessProbeKey: String { "vrs-health-probe" }
 }
