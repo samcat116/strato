@@ -199,7 +199,7 @@ struct RoleController: RouteCollection {
     /// includes the platform defaults and everything inherited — is
     /// `bindable`.
     func list(req: Request) async throws -> RoleListResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         guard let ownerType = req.query[String.self, at: "ownerType"],
             let ownerId = req.query[String.self, at: "ownerId"]
         else {
@@ -214,7 +214,7 @@ struct RoleController: RouteCollection {
 
     /// GET /api/iam/roles/:roleID
     func get(req: Request) async throws -> RoleDTO {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         let role = try await find(req)
         // Platform rows are the seeded defaults: public knowledge, and the
         // same content `bindable` and the catalog already hand out.
@@ -226,7 +226,7 @@ struct RoleController: RouteCollection {
 
     /// POST /api/iam/roles
     func create(req: Request) async throws -> Response {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let payload = try req.content.decode(CreateRoleRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .role)
         try await owner.requireExists(on: req.db)
@@ -260,7 +260,7 @@ struct RoleController: RouteCollection {
 
     /// PATCH /api/iam/roles/:roleID
     func update(req: Request) async throws -> RoleDTO {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let existing = try await find(req)
         try requireUnmanaged(existing)
         guard let owner = try owner(of: existing), let id = existing.id else {
@@ -307,7 +307,7 @@ struct RoleController: RouteCollection {
 
     /// DELETE /api/iam/roles/:roleID
     func delete(req: Request) async throws -> HTTPStatus {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let role = try await find(req)
         try requireUnmanaged(role)
         guard let owner = try owner(of: role), let id = role.id else {
@@ -347,7 +347,7 @@ struct RoleController: RouteCollection {
     /// declared as such rather than tripping the default-deny middleware's
     /// "mutating handler forgot its check" assertion.
     func validate(req: Request) async throws -> ValidateRoleResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         req.markRowScopedAuthorization()
         let payload = try req.content.decode(ValidateRoleRequest.self)
         let id = payload.id ?? UUID()
@@ -358,7 +358,7 @@ struct RoleController: RouteCollection {
 
     /// GET /api/iam/roles/bindable?nodeType=&nodeId=
     func bindable(req: Request) async throws -> BindableRolesResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         guard let nodeType = req.query[String.self, at: "nodeType"],
             let nodeId = req.query[String.self, at: "nodeId"]
         else {
@@ -378,7 +378,7 @@ struct RoleController: RouteCollection {
     /// The action vocabulary, generated from the registry. Authenticated only:
     /// it describes the software, not any deployment's policy.
     func actions(req: Request) async throws -> ActionCatalogResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         return Self.actionCatalog()
     }
 

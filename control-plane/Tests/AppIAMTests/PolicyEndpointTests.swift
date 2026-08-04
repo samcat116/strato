@@ -328,10 +328,66 @@ final class PolicyEndpointTests {
                 },
                 afterResponse: { res in
                     #expect(res.status == .forbidden)
+                    // The mirror of the role suite's assertion: both APIs refuse
+                    // through the same `IAMPolicySetOwner` gate with the same
+                    // 403, so the wording is the only thing that distinguishes
+                    // a correctly wired `kind` from a swapped one.
+                    #expect(res.body.string.contains("Managing policies requires admin on the policy's owner"))
                 })
 
             let stored = try await IAMPolicy.query(on: app.db).count()
             #expect(stored == 0)
+        }
+    }
+
+    @Test("A platform-owned policy cannot be created through the API")
+    func platformOwnedCreationIsRejected() async throws {
+        try await withApp { app, fixture in
+            try await app.test(
+                .POST, "/api/iam/policies",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    try req.content.encode(
+                        self.createBody(
+                            name: "fake-default", ownerType: .platform,
+                            ownerId: IAMRoleDefinition.platformOwnerID,
+                            cedarText: self.permitText(
+                                user: fixture.user.id!, action: "vm:read", project: fixture.project.id!)))
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Authored policies are owned by an organization or a project"))
+                })
+
+            let stored = try await IAMPolicy.query(on: app.db).count()
+            #expect(stored == 0)
+        }
+    }
+
+    /// The wire-string owner path (`?ownerType=&ownerId=`), which the shared
+    /// owner type now parses for both APIs.
+    @Test("Listing policies for an owner type or id the API cannot own is a 400")
+    func listRejectsUnusableOwners() async throws {
+        try await withApp { app, fixture in
+            try await app.test(
+                .GET, "/api/iam/policies?ownerType=platform&ownerId=\(IAMRoleDefinition.platformOwnerID)",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Authored policies are owned by an organization or a project"))
+                })
+
+            try await app.test(
+                .GET, "/api/iam/policies?ownerType=organization&ownerId=not-a-uuid",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Policy owner id must be a UUID"))
+                })
         }
     }
 

@@ -18,16 +18,12 @@ struct SiteController: RouteCollection {
         sites.delete(":siteId", "agents", ":agentId", use: removeAgent)
     }
 
-    /// Site topology is infrastructure, same trust level as agent management:
-    /// moving an agent between sites or re-pointing the network controller
-    /// changes which node authors a site's whole SDN. Delegated to the owning
-    /// org (manage_agents / site#manage); system admins retain full access.
-    private func requireUser(_ req: Request) throws -> User {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        return user
-    }
+    // MARK: - Authorization
+    //
+    // Site topology is infrastructure, same trust level as agent management:
+    // moving an agent between sites or re-pointing the network controller
+    // changes which node authors a site's whole SDN. Delegated to the owning
+    // org (manage_agents / site#manage); system admins retain full access.
 
     /// The (resourceType, id) pair naming the scope's owning node for
     /// permission checks against the IAM hierarchy.
@@ -165,7 +161,7 @@ struct SiteController: RouteCollection {
 
     /// Every site the caller may read, by name, ready for slicing.
     func visibleSites(req: Request) async throws -> [SiteResponse] {
-        _ = try requireUser(req)
+        _ = try req.auth.require(User.self)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
         var query = Site.query(on: req.db).sort(\.$name).sort(\.$id)

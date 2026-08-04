@@ -159,7 +159,7 @@ enum RoleStore {
         createdBy: UUID?,
         on db: any Database
     ) async throws -> IAMRoleDefinition {
-        guard IAMRoleOwnerType.creatable.contains(ownerType) else {
+        guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw RoleError.uncreatableOwnerType(ownerType.rawValue)
         }
         let role = IAMRoleDefinition(

@@ -1,6 +1,38 @@
 import Fluent
 import Vapor
 
+/// What a policy-set row's owner type means to the API and the database, kept
+/// with the owner rather than on the wire enum in `IAMRoleDefinition`: the enum
+/// declares the stored vocabulary, and this is the behaviour roles and authored
+/// policies read off it.
+extension IAMRoleOwnerType {
+    /// The owner types a create may name. Platform rows are the deployment's
+    /// own policy — the seeded defaults reconciled by `RoleRegistrySync` and the
+    /// tier-1 permits, which are code — so nothing creates one over HTTP, and a
+    /// request that asks to is told so rather than having its owner quietly
+    /// coerced.
+    static let creatableOwners: Set<IAMRoleOwnerType> = [.organization, .project]
+
+    /// Whether an owner of this type with this id is a row that exists.
+    ///
+    /// The single place the owner types are resolved to tables: roles and
+    /// authored policies both refuse an owner that isn't there, and a new owner
+    /// type joining the enum has exactly one switch to answer for. Platform is
+    /// never a real row — it is the zero-UUID sentinel
+    /// (`IAMRoleDefinition.platformOwnerID`), not something an owner lookup can
+    /// find — so it answers false and the caller's "no such owner" applies.
+    func ownerExists(id: UUID, on db: any Database) async throws -> Bool {
+        switch self {
+        case .organization:
+            return try await Organization.find(id, on: db) != nil
+        case .project:
+            return try await Project.find(id, on: db) != nil
+        case .platform:
+            return false
+        }
+    }
+}
+
 /// The owner of a policy-set row — a role definition (issue #605) or an
 /// authored policy (issue #606) — as both halves it is used as: the store's
 /// `(ownerType, ownerID)` pair and the tree node the gates run on.
@@ -61,9 +93,14 @@ struct IAMPolicySetOwner {
     let id: UUID
     let kind: Kind
 
+    /// The tree node the gates run on.
+    ///
+    /// Every creatable owner type has a node type, and the platform sentinel —
+    /// which has none — never reaches here: the wire and create inits refuse
+    /// it, and both `owner(of:)` readers screen it off a stored row before
+    /// building one of these. The fallback is what an owner type added to the
+    /// enum without a `nodeType` would degrade to, not a case in flight today.
     var node: IAMNode {
-        // Every creatable owner type has a node type; the platform sentinel is
-        // refused before this is reached.
         IAMNode(type: type.nodeType ?? .organization, id: id)
     }
 
@@ -77,7 +114,7 @@ struct IAMPolicySetOwner {
     /// typed counterpart of the wire-string init below, for a body that already
     /// decoded its owner type.
     init(creating type: IAMRoleOwnerType, id: UUID, kind: Kind) throws {
-        guard IAMRoleOwnerType.creatable.contains(type) else {
+        guard IAMRoleOwnerType.creatableOwners.contains(type) else {
             throw kind.uncreatableOwnerType(type.rawValue)
         }
         self.init(type: type, id: id, kind: kind)
@@ -86,7 +123,7 @@ struct IAMPolicySetOwner {
     /// Parse an owner off the wire, refusing a type this API cannot own.
     init(type: String, id: String, kind: Kind) throws {
         guard let ownerType = IAMRoleOwnerType(rawValue: type),
-            IAMRoleOwnerType.creatable.contains(ownerType)
+            IAMRoleOwnerType.creatableOwners.contains(ownerType)
         else {
             throw kind.uncreatableOwnerType(type)
         }

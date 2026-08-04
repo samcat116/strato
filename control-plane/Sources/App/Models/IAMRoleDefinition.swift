@@ -12,13 +12,6 @@ enum IAMRoleOwnerType: String, Codable, Sendable, CaseIterable {
     case organization
     case project
 
-    /// The owner types the role and authored-policy APIs accept. Platform rows
-    /// are the deployment's own policy — the seeded defaults reconciled by
-    /// `RoleRegistrySync` and the tier-1 permits, which are code — so nothing
-    /// creates one over HTTP, and a request that asks to is told so rather than
-    /// having its owner quietly coerced.
-    static let creatable: Set<IAMRoleOwnerType> = [.organization, .project]
-
     /// The IAM tree node type an owner scopes to; nil for platform rows,
     /// which apply everywhere.
     var nodeType: IAMNodeType? {
@@ -26,25 +19,6 @@ enum IAMRoleOwnerType: String, Codable, Sendable, CaseIterable {
         case .platform: return nil
         case .organization: return .organization
         case .project: return .project
-        }
-    }
-
-    /// Whether an owner of this type with this id is a row that exists.
-    ///
-    /// The single place the owner types are resolved to tables: roles and
-    /// authored policies both refuse an owner that isn't there, and a new
-    /// owner type joining this enum has exactly one switch to answer for.
-    /// Platform is never a real row — it is the zero-UUID sentinel
-    /// (`IAMRoleDefinition.platformOwnerID`), not something an owner lookup can
-    /// find — so it answers false and the caller's "no such owner" applies.
-    func ownerExists(id: UUID, on db: any Database) async throws -> Bool {
-        switch self {
-        case .organization:
-            return try await Organization.find(id, on: db) != nil
-        case .project:
-            return try await Project.find(id, on: db) != nil
-        case .platform:
-            return false
         }
     }
 }

@@ -187,7 +187,7 @@ enum PolicyStore {
         enabled: Bool,
         on db: any Database
     ) async throws -> IAMPolicy {
-        guard IAMRoleOwnerType.creatable.contains(ownerType) else {
+        guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
         }
         let policy = IAMPolicy(

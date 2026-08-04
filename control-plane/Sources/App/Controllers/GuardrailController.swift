@@ -179,7 +179,7 @@ struct GuardrailController: RouteCollection {
     /// inherited from above. They intersect; the effective set is the whole
     /// list, not the nearest entry.
     func list(req: Request) async throws -> GuardrailListResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         guard let nodeType = req.query[String.self, at: "nodeType"],
             let nodeId = req.query[String.self, at: "nodeId"]
         else {
@@ -206,7 +206,7 @@ struct GuardrailController: RouteCollection {
 
     /// GET /api/iam/guardrails/:guardrailID
     func get(req: Request) async throws -> GuardrailDTO {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         let guardrail = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(guardrail), write: false, req: req)
         return try await dto(guardrail, on: req.db)
@@ -214,7 +214,7 @@ struct GuardrailController: RouteCollection {
 
     /// POST /api/iam/guardrails
     func create(req: Request) async throws -> Response {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let payload = try req.content.decode(CreateGuardrailRequest.self)
         let node = try IAMNode(resourceType: payload.nodeType, resourceId: payload.nodeId)
         try await requirePolicyAdmin(on: node, write: true, req: req)
@@ -278,7 +278,7 @@ struct GuardrailController: RouteCollection {
 
     /// PATCH /api/iam/guardrails/:guardrailID
     func update(req: Request) async throws -> GuardrailWriteResponse {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let existing = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(existing), write: true, req: req)
 
@@ -322,7 +322,7 @@ struct GuardrailController: RouteCollection {
 
     /// DELETE /api/iam/guardrails/:guardrailID
     func delete(req: Request) async throws -> HTTPStatus {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let guardrail = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(guardrail), write: true, req: req)
 

@@ -116,7 +116,7 @@ struct PolicyController: RouteCollection {
 
     /// GET /api/iam/policies?ownerType=&ownerId=
     func list(req: Request) async throws -> PolicyListResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         guard let ownerType = req.query[String.self, at: "ownerType"],
             let ownerId = req.query[String.self, at: "ownerId"]
         else {
@@ -131,7 +131,7 @@ struct PolicyController: RouteCollection {
 
     /// GET /api/iam/policies/:policyID
     func get(req: Request) async throws -> PolicyDTO {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         let policy = try await find(req)
         try await owner(of: policy).requirePolicyAdmin(write: false, req: req)
         return try PolicyDTO(policy)
@@ -139,7 +139,7 @@ struct PolicyController: RouteCollection {
 
     /// POST /api/iam/policies
     func create(req: Request) async throws -> Response {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let payload = try req.content.decode(CreatePolicyRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .policy)
         try await owner.requireExists(on: req.db)
@@ -179,7 +179,7 @@ struct PolicyController: RouteCollection {
 
     /// PATCH /api/iam/policies/:policyID
     func update(req: Request) async throws -> PolicyDTO {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let existing = try await find(req)
         let owner = try owner(of: existing)
         try await owner.requirePolicyAdmin(write: true, req: req)
@@ -236,7 +236,7 @@ struct PolicyController: RouteCollection {
 
     /// DELETE /api/iam/policies/:policyID
     func delete(req: Request) async throws -> HTTPStatus {
-        let user = try req.requireUser()
+        let user = try req.auth.require(User.self)
         let policy = try await find(req)
         try await owner(of: policy).requirePolicyAdmin(write: true, req: req)
         guard let id = policy.id else {
@@ -264,7 +264,7 @@ struct PolicyController: RouteCollection {
     /// default-deny middleware does not read a POST that evaluates nothing as a
     /// handler that forgot its check.
     func validate(req: Request) async throws -> ValidatePolicyResponse {
-        _ = try req.requireUser()
+        _ = try req.auth.require(User.self)
         req.markRowScopedAuthorization()
         let payload = try req.content.decode(ValidatePolicyRequest.self)
         // Containment is checked against the owner the editor is writing for,
@@ -378,9 +378,20 @@ struct PolicyController: RouteCollection {
         return policy
     }
 
+    /// The owner of a stored policy.
+    ///
+    /// The platform sentinel is screened off here rather than coerced: it has
+    /// no node to gate on, so building an owner from one would gate the request
+    /// against `Organization::"00000000-…"` — an org that cannot exist, which
+    /// denies for the wrong reason. `PolicyStore.create` refuses platform, so
+    /// such a row is unreachable today; this keeps it a loud `500` if one ever
+    /// appears rather than a silently mis-scoped check. Roles say the same
+    /// thing by returning nil (a platform *role* is a real, readable row).
     private func owner(of policy: IAMPolicy) throws -> IAMPolicySetOwner {
-        guard let type = policy.owner else {
-            throw Abort(.internalServerError, reason: "Policy row names an unknown owner type '\(policy.ownerType)'")
+        guard let type = policy.owner, type != .platform else {
+            throw Abort(
+                .internalServerError,
+                reason: "Policy row names an owner type that cannot own a policy: '\(policy.ownerType)'")
         }
         return IAMPolicySetOwner(type: type, id: policy.ownerID, kind: .policy)
     }
