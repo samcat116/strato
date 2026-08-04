@@ -1,0 +1,59 @@
+<domain type='kvm'>
+  <name>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</name>
+  <uuid>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</uuid>
+  <memory unit='KiB'>524288</memory>
+  <currentMemory unit='KiB'>524288</currentMemory>
+  <vcpu placement='static'>1</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <kernel>/var/lib/strato/images/vmlinuz</kernel>
+    <initrd>/var/lib/strato/images/initrd.img</initrd>
+    <cmdline>root=/dev/vda1 ro console=ttyS0,115200 console=tty0 console=ttyAMA0,115200 console=hvc0</cmdline>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough' check='none'/>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/disk.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+      <boot order='1'/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/strato/volumes/data.qcow2'/>
+      <target dev='vdb' bus='virtio'/>
+      <boot order='2'/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/strato/volumes/reference.raw'/>
+      <target dev='vdc' bus='virtio'/>
+      <readonly/>
+    </disk>
+    <controller type='virtio-serial' index='0'/>
+    <serial type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/serial.sock'/>
+      <target port='0'/>
+    </serial>
+    <console type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/console.sock'/>
+      <target type='virtio' port='0'/>
+    </console>
+    <channel type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/qga.sock'/>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <video>
+      <model type='none'/>
+    </video>
+    <memballoon model='virtio' freePageReporting='on'/>
+  </devices>
+</domain>

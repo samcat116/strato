@@ -328,6 +328,24 @@ extension ResourceOperation {
             return operation
         }
     }
+
+    /// The resource's operation history, newest first — what the `GET
+    /// /<resource>/:id/operations` handlers return once their own permission
+    /// check has produced the id. The query is identical for every resource
+    /// kind, so it lives here rather than once per controller.
+    static func recent(
+        resourceKind: OperationResourceKind,
+        resourceID: UUID,
+        limit: Int,
+        on db: Database
+    ) async throws -> [ResourceOperation] {
+        try await ResourceOperation.query(on: db)
+            .filter(\.$resourceKind == resourceKind)
+            .filter(\.$resourceID == resourceID)
+            .sort(\.$createdAt, .descending)
+            .limit(limit)
+            .all()
+    }
 }
 
 // MARK: - Response DTO

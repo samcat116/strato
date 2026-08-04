@@ -180,12 +180,8 @@ struct SandboxController: RouteCollection {
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
-        let operations = try await ResourceOperation.query(on: req.db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sandboxID)
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-            .all()
+        let operations = try await ResourceOperation.recent(
+            resourceKind: .sandbox, resourceID: sandboxID, limit: limit, on: req.db)
 
         return operations.map { OperationResponse(from: $0) }
     }
