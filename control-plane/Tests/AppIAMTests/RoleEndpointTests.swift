@@ -413,6 +413,38 @@ final class RoleEndpointTests {
                 },
                 afterResponse: { res in
                     #expect(res.status == .forbidden)
+                    // The wording, not just the status: roles and policies share
+                    // one gate (`IAMPolicySetOwner`) whose only per-API job is to
+                    // say which of the two refused, and both refuse with a 403 —
+                    // so a mis-wired `kind` shows up here or nowhere.
+                    #expect(res.body.string.contains("Managing roles requires admin on the role's owner"))
+                })
+        }
+    }
+
+    /// The wire-string owner path (`?ownerType=&ownerId=`), which the shared
+    /// owner type now parses for both APIs.
+    @Test("Listing roles for an owner type or id the API cannot own is a 400")
+    func listRejectsUnusableOwners() async throws {
+        try await withApp { app, fixture in
+            try await app.test(
+                .GET, "/api/iam/roles?ownerType=platform&ownerId=\(IAMRoleDefinition.platformOwnerID)",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Roles are owned by an organization or a project"))
+                })
+
+            try await app.test(
+                .GET, "/api/iam/roles?ownerType=organization&ownerId=not-a-uuid",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Role owner id must be a UUID"))
                 })
         }
     }
