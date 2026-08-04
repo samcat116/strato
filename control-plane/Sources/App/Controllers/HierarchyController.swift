@@ -14,10 +14,6 @@ struct HierarchyController: RouteCollection {
             org.get("resources", use: getAllResources)
             org.get("resources", "summary", use: getResourceSummary)
 
-            // Bulk operations
-            org.post("merge", use: mergeOrganizations)
-            org.post("bulk-transfer", use: bulkTransferResources)
-
             // Search and navigation
             org.get("search", use: searchHierarchy)
             org.get("path", ":entityType", ":entityID", use: getEntityPath)
@@ -268,59 +264,6 @@ struct HierarchyController: RouteCollection {
             entityType: entityType,
             organizationId: organizationID,
             pathComponents: pathComponents
-        )
-    }
-
-    // MARK: - Bulk Operations
-
-    func mergeOrganizations(req: Request) async throws -> MergeOrganizationsResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let mergeRequest = try req.content.decode(MergeOrganizationsRequest.self)
-
-        // Verify user has admin access to both organizations
-        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-        try await OrganizationAccessService.requireAdmin(
-            organizationID: mergeRequest.sourceOrganizationId, on: req)
-
-        guard let targetOrg = try await Organization.find(organizationID, on: req.db),
-            let sourceOrg = try await Organization.find(mergeRequest.sourceOrganizationId, on: req.db)
-        else {
-            throw Abort(.notFound, reason: "Organization not found")
-        }
-
-        return try await HierarchyMaintenanceService.performOrganizationMerge(
-            sourceOrg: sourceOrg,
-            targetOrg: targetOrg,
-            mergeRequest: mergeRequest,
-            on: req.db
-        )
-    }
-
-    func bulkTransferResources(req: Request) async throws -> BulkTransferResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let transferRequest = try req.content.decode(BulkTransferRequest.self)
-
-        // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        return try await HierarchyMaintenanceService.performBulkTransfer(
-            organizationID: organizationID,
-            transferRequest: transferRequest,
-            on: req.db
         )
     }
 
