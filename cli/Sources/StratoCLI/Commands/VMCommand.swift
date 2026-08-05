@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct VMCommand: AsyncParsableCommand {
@@ -21,17 +22,14 @@ struct VMCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let page: Page<VM> = try await environment.makeClient()
-                    .get("/api/vms", query: [("limit", String(listPageLimit))])
-                let vms = page.items
+                let vms = try await environment.makeClient()
+                    .listVMs(query: .init(limit: listPageLimit)).ok.body.json.items
                 try printResult(vms, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "status", "cpu", "memory", "disk", "created"])
                     for vm in vms {
                         table.addRow([
-                            formatUUID(vm.id), vm.name, vm.status,
-                            vm.cpu.map(String.init) ?? "",
-                            vm.memoryFormatted ?? "",
-                            vm.diskFormatted ?? "",
+                            vm.id ?? "", vm.name, vm.status.rawValue,
+                            String(vm.cpu), vm.memoryFormatted, vm.diskFormatted,
                             formatDate(vm.createdAt),
                         ])
                     }
@@ -52,18 +50,18 @@ struct VMCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let vm: VM = try await environment.makeClient().get("/api/vms/\(id)")
+                let vm = try await environment.makeClient().getVM(path: .init(vmID: id)).ok.body.json
                 try printResult(vm, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", formatUUID(vm.id)])
+                    table.addRow(["id", vm.id ?? ""])
                     table.addRow(["name", vm.name])
-                    table.addRow(["description", vm.description ?? ""])
-                    table.addRow(["status", vm.status])
-                    table.addRow(["image", vm.image ?? ""])
-                    table.addRow(["project", formatUUID(vm.projectId)])
-                    table.addRow(["cpu", vm.cpu.map(String.init) ?? ""])
-                    table.addRow(["memory", vm.memoryFormatted ?? ""])
-                    table.addRow(["disk", vm.diskFormatted ?? ""])
+                    table.addRow(["description", vm.description])
+                    table.addRow(["status", vm.status.rawValue])
+                    table.addRow(["image", vm.image])
+                    table.addRow(["project", vm.projectId ?? ""])
+                    table.addRow(["cpu", String(vm.cpu)])
+                    table.addRow(["memory", vm.memoryFormatted])
+                    table.addRow(["disk", vm.diskFormatted])
                     table.addRow(["created", formatDate(vm.createdAt)])
                     return table
                 }
@@ -120,13 +118,14 @@ struct VMCommand: AsyncParsableCommand {
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                 }
 
-                let request = CreateVMRequest(
-                    name: name, description: description, imageId: image,
-                    projectId: project ?? env.context.project,
-                    environment: environment, cpu: cpu, memory: memory, disk: disk,
-                    networkId: network, sshPublicKey: sshPublicKey, userData: nil
-                )
-                let operation: ResourceOperation = try await client.post("/api/vms", body: request)
+                let operation = try await client.createVM(
+                    body: .json(
+                        .init(
+                            name: name, description: description, imageId: image,
+                            projectId: project ?? env.context.project,
+                            environment: environment, cpu: cpu, memory: memory, disk: disk,
+                            networkId: network, sshPublicKey: sshPublicKey))
+                ).accepted.body.json
                 try await handleOperation(
                     operation, client: client, noWait: noWait, format: global.output,
                     successMessage: "VM '\(name)' created.")
@@ -149,7 +148,7 @@ struct VMCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let operation: ResourceOperation = try await client.delete("/api/vms/\(id)")
+                let operation = try await client.deleteVM(path: .init(vmID: id)).accepted.body.json
                 try await handleOperation(
                     operation, client: client, noWait: noWait, format: global.output,
                     successMessage: "VM \(id) deleted.")
@@ -158,9 +157,14 @@ struct VMCommand: AsyncParsableCommand {
     }
 }
 
-/// One lifecycle action (`POST /api/vms/:id/<verb>`) as a reusable command.
+/// One VM lifecycle action, as the generated operation that performs it. Each
+/// verb is its own operation in the spec, so the action is a function rather
+/// than a path fragment.
+typealias VMAction = @Sendable (any APIProtocol, String) async throws -> ResourceOperation
+
+/// One lifecycle action as a reusable command.
 protocol VMActionCommand: AsyncParsableCommand {
-    static var verb: String { get }
+    static var action: VMAction { get }
     static var pastTense: String { get }
     var global: GlobalOptions { get }
     var id: String { get }
@@ -172,7 +176,7 @@ extension VMActionCommand {
         try await runHandlingCLIErrors {
             let env = try CLIEnvironment.resolve(global)
             let client = env.makeClient()
-            let operation: ResourceOperation = try await client.post("/api/vms/\(id)/\(Self.verb)")
+            let operation = try await Self.action(client, id)
             try await handleOperation(
                 operation, client: client, noWait: noWait, format: global.output,
                 successMessage: "VM \(id) \(Self.pastTense).")
@@ -183,7 +187,7 @@ extension VMActionCommand {
 extension VMCommand {
     struct Start: VMActionCommand {
         static let configuration = CommandConfiguration(abstract: "Start a virtual machine.")
-        static let verb = "start"
+        static let action: VMAction = { try await $0.startVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "started"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -192,7 +196,7 @@ extension VMCommand {
 
     struct Stop: VMActionCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a virtual machine.")
-        static let verb = "stop"
+        static let action: VMAction = { try await $0.stopVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "stopped"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -201,7 +205,7 @@ extension VMCommand {
 
     struct Reboot: VMActionCommand {
         static let configuration = CommandConfiguration(abstract: "Reboot a virtual machine.")
-        static let verb = "restart"
+        static let action: VMAction = { try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "rebooted"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -210,7 +214,7 @@ extension VMCommand {
 
     struct Pause: VMActionCommand {
         static let configuration = CommandConfiguration(abstract: "Pause a virtual machine.")
-        static let verb = "pause"
+        static let action: VMAction = { try await $0.pauseVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "paused"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -219,7 +223,7 @@ extension VMCommand {
 
     struct Resume: VMActionCommand {
         static let configuration = CommandConfiguration(abstract: "Resume a paused virtual machine.")
-        static let verb = "resume"
+        static let action: VMAction = { try await $0.resumeVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "resumed"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String

@@ -37,6 +37,7 @@ jobs:
       shared: ${{ steps.filter.outputs.shared }}
       cli: ${{ steps.filter.outputs.cli }}
       api_client: ${{ steps.filter.outputs.api_client }}
+      openapi_spec: ${{ steps.filter.outputs.openapi_spec }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       install_script: ${{ steps.filter.outputs.install_script }}
       workflow: ${{ steps.filter.outputs.workflow }}
@@ -70,6 +71,11 @@ jobs:
             # control plane — a spec-only change still has to rebuild it.
             api_client:
               - 'clients/swift/**'
+            # The spec on its own. Consumers of the generated client (the CLI,
+            # issue #779) need to rebuild when it changes, but not for every
+            # unrelated control-plane source edit that `cp_backend` matches.
+            openapi_spec:
+              - 'control-plane/Sources/App/openapi.yaml'
             firecracker:
               - 'SwiftFirecracker/**'
             # The node install script and its shell-level tests.
@@ -343,8 +349,15 @@ jobs:
         working-directory: agent
         run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/agent" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
+      # Gated on the API client and the spec too (issue #779): the CLI is built
+      # against the generated `StratoAPIClient`, so a breaking change to
+      # `control-plane/Sources/App/openapi.yaml` has to fail the CLI build and
+      # not just the client's. `openapi_spec` rather than `cp_backend`: only the
+      # spec can break this build, and the CLI now runs the generator plugin
+      # over a 15k-line document — no reason to charge every control-plane PR
+      # for it.
       - name: Build CLI
-        if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
+        if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.openapi_spec == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
         run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/cli" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct OperationCommand: AsyncParsableCommand {
@@ -20,7 +21,8 @@ struct OperationCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let operation: ResourceOperation = try await environment.makeClient().get("/api/operations/\(id)")
+                let operation = try await environment.makeClient()
+                    .getOperation(path: .init(operationID: id)).ok.body.json
                 try printOperation(operation, format: global.output)
             }
         }
@@ -42,7 +44,7 @@ struct OperationCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let client = environment.makeClient()
-                let operation: ResourceOperation = try await client.get("/api/operations/\(id)")
+                let operation = try await client.getOperation(path: .init(operationID: id)).ok.body.json
                 let final = try await OperationWaiter(timeout: timeout).wait(for: operation, client: client)
                 try printOperation(final, format: global.output)
             }
@@ -54,10 +56,10 @@ private func printOperation(_ operation: ResourceOperation, format: OutputFormat
     switch format {
     case .table:
         var table = TextTable(headers: ["field", "value"])
-        table.addRow(["id", formatUUID(operation.id)])
-        table.addRow(["kind", operation.kind])
-        table.addRow(["status", operation.status])
-        table.addRow(["resource", "\(operation.resourceKind ?? "") \(formatUUID(operation.resourceId))"])
+        table.addRow(["id", operation.id ?? ""])
+        table.addRow(["kind", operation.kind.rawValue])
+        table.addRow(["status", operation.status.rawValue])
+        table.addRow(["resource", "\(operation.resourceKind.rawValue) \(operation.resourceId)"])
         table.addRow(["error", operation.error ?? ""])
         table.addRow(["created", formatDate(operation.createdAt)])
         table.addRow(["completed", formatDate(operation.completedAt)])
