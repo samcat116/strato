@@ -73,8 +73,13 @@ struct ResourceOperationCoordinator {
         /// to the observed-state applier.
         case placement(@Sendable (any Database) async throws -> Void)
         /// Resolve the operation locally without agent teardown (offline/
-        /// unplaced delete): run the removal work, then record the verdict here.
-        case directResolution(@Sendable (any Database) async throws -> Void)
+        /// unplaced delete): run the removal work, then record the verdict here
+        /// — but only if the work reports it finished. Returning `false` leaves
+        /// the operation `pending` for whoever still owes cleanup (a finalizer
+        /// another participant holds), with the stuck-operation sweep as the
+        /// backstop; recording success there would tell the user a resource is
+        /// gone while its row is still standing.
+        case directResolution(@Sendable (any Database) async throws -> Bool)
     }
 
     /// Wraps a dispatch-work failure with a locating prefix so it reads well in
@@ -202,7 +207,7 @@ struct ResourceOperationCoordinator {
                     guard let current = try await ResourceOperation.find(operationID, on: db),
                         current.status == .pending
                     else { return }
-                    try await work(db)
+                    guard try await work(db) else { return }
                     await recordVerdict(operationID: operationID, as: .succeeded, error: nil, on: app)
                 } catch {
                     await recordVerdict(

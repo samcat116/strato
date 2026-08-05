@@ -298,6 +298,24 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 - New mutation endpoints return **202 Accepted** with the operation, not 200
   with the resource.
 
+**Deletion and finalizers**
+- A delete path must not remove a row. It marks desired `.absent`, stamps
+  `finalizers`, and lets `ResourceFinalizerService.clear` reap when the list
+  empties. A new `delete(on: db)` on a VM or sandbox outside
+  `FinalizableResource.reap` is blocking.
+- Stamp **before** the mark: `stampForDeletion` reads whether the resource is
+  already terminating, and a re-stamp after the flip resurrects tokens their
+  participants have already cleared.
+- A new participant must be idempotent, crash-safe, and order-independent.
+  `sweepOrphanedTerminatingResources` retries the *reap*, but nothing retries a
+  participant's own work — if its trigger doesn't repeat, it needs one.
+- Clear a token with the atomic `array_remove` path, never by reading
+  `finalizers`, mutating, and saving — two replicas doing that lose one of the
+  updates and resurrect a token nothing will clear again.
+- A delete path must report whether the row is actually gone. Recording a
+  `succeeded` verdict on a `.held` outcome tells the user a resource is deleted
+  while its row is still standing.
+
 **Multi-replica**
 - Valkey **fails open**. Any new use must degrade to correct-but-slower, never
   to incorrect. Agents converge via the periodic sync even with Valkey down.

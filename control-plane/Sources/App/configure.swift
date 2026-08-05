@@ -730,6 +730,11 @@ public func configure(_ app: Application) async throws {
     // a grant that looks live in every listing and confers nothing.
     app.migrations.add(RejectConditionedRoleBindings())
 
+    // STR-144: the agent-confirmed tombstone dance generalizes into finalizers
+    // — a list of outstanding cleanup participants that keeps a deleted row
+    // alive until the last one clears its token.
+    app.migrations.add(AddFinalizersToWorkloads())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
