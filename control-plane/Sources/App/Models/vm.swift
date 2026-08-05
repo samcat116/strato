@@ -44,6 +44,23 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    // Convergence progress mirrored from the agent's observed-state report
+    // (STR-142). Purely observed and written only by `ObservedStateApplier`:
+    // `convergencePhase` is the agent's human-readable current step, non-nil
+    // only while it is actively converging toward a newer generation;
+    // `lastError` and `failedGeneration` are its most recent convergence
+    // failure and the generation that produced it, both cleared by the report
+    // that follows a successful convergence. Projected as the API's
+    // `conditions` block.
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
+    @OptionalField(key: "last_error")
+    var lastError: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
     /// The VM's DNS label (issue #770) — the leftmost label of the name it
     /// registers under in the primary zone of each network it has a NIC on.
     ///
@@ -519,6 +536,12 @@ struct VMDetailResponse: Content {
     /// `SecurityGroupService.enforcementByVM` from the same realizer lookup
     /// that gates attach/detach, so the two can never disagree.
     let securityGroupsEnforced: Bool?
+    /// How far the VM is from the state the API was last asked to put it in
+    /// (STR-142), derived from the generation pair and the agent's reported
+    /// convergence progress. A client can refetch the VM until
+    /// `conditions.converged` instead of polling the operation a mutation
+    /// returned.
+    let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -564,6 +587,7 @@ struct VMDetailResponse: Content {
         self.balloonTarget = vm.balloonTarget
         self.balloonTargetFormatted = vm.balloonTarget.map(VMDetailResponse.formatSize)
         self.guestMemoryBalloonActualBytes = vm.guestMemoryBalloonActualBytes
+        self.conditions = vm.conditions
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
     }

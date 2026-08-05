@@ -70,6 +70,15 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
+- **Conditions** — the `conditions` block VM and sandbox API responses carry:
+  *converged* / *targetGeneration* / *observedGeneration* / *phase* /
+  *degraded*. Derived on read, never stored, and never written by a mutation —
+  it restates the reconciliation loop's own state, so refetching a resource
+  until `converged` is the alternative to polling its **resource operation**.
+- **Degraded** — the last convergence attempt that failed (its error and the
+  generation that produced it), carried until something converges. Deliberately
+  independent of `targetGeneration`: a degraded condition naming an older
+  generation is a failure a newer mutation is already retrying.
 
 ## Cross-replica coordination
 

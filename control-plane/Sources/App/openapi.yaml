@@ -8600,6 +8600,7 @@ components:
         - disk
         - diskFormatted
         - networkInterfaces
+        - conditions
       properties:
         id:
           type: string
@@ -8669,12 +8670,70 @@ components:
             author the ACLs at all; either way the attached groups filter
             nothing until an operator fixes it. Absent means the VM is
             unplaced, so there is no realizer to judge yet.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+    ResourceConditions:
+      type: object
+      description: >-
+        How far a resource is from the state the API was last asked to put it
+        in. Derived on read from the resource's own generation counters and the
+        convergence progress its agent reports — polling this block is the
+        supported alternative to polling the operation a mutation returned.
+      required: [converged, targetGeneration, observedGeneration]
+      properties:
+        converged:
+          type: boolean
+          description: >-
+            Whether the owning agent has confirmed converging to
+            `targetGeneration` *and* what it observes satisfies the desired
+            state. Always false while a delete is in flight: a deletion is
+            confirmed by the workload's absence from the agent's report, which
+            removes the resource rather than converging it.
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the resource is trying to reach — what the last mutation bumped it to.
+        observedGeneration:
+          type: integer
+          format: int64
+          description: >-
+            The newest generation the owning agent has confirmed converging to.
+            0 means no agent has ever confirmed this resource.
+        phase:
+          type: string
+          description: >-
+            The agent's human-readable current step (e.g. "downloading image"),
+            present only while it is actively working toward
+            `targetGeneration`. Absent does not mean idle — an unplaced
+            resource, or one whose agent is offline, reports no phase either.
+        degraded:
+          allOf:
+            - $ref: "#/components/schemas/DegradedCondition"
+          description: >-
+            The last convergence attempt that failed, or absent if the most
+            recent attempt succeeded. Can be present alongside a newer
+            `targetGeneration` while a retry is in flight.
+    DegradedCondition:
+      type: object
+      description: Why a resource is not converging, and since when.
+      required: [reason, sinceGeneration]
+      properties:
+        reason:
+          type: string
+          description: The agent's error from the failed attempt, verbatim.
+        sinceGeneration:
+          type: integer
+          format: int64
+          description: >-
+            The generation whose convergence produced `reason`. Compare with
+            `targetGeneration` to tell a failure of the state currently being
+            pursued from one a newer mutation has already superseded.
     VMStatus:
       type: string
       description: The observed VM state (tolerant decoding; unknown values map to Unknown).
@@ -8840,6 +8899,7 @@ components:
         - memory
         - env
         - status
+        - conditions
       properties:
         id:
           type: string
@@ -8898,6 +8958,8 @@ components:
           items:
             type: string
             format: uuid
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time

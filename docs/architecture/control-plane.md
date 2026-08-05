@@ -208,6 +208,20 @@ budget (`OperationResourceKind.completionBudgetSeconds` in
 `Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
 the one imperative exception: it awaits a correlated agent response.
 
+**The same derivation is projected onto the resource** as a `conditions` block
+(`Models/ResourceConditions.swift`, STR-142) — converged / targetGeneration /
+observedGeneration / phase / degraded — so a client can refetch the VM or
+sandbox instead of polling an operation. Nothing stores it: `converged` is
+`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status)`, the
+same test `completeIfPending` runs, and `phase`/`degraded` read the
+`convergence_phase` / `last_error` / `failed_generation` columns that
+`ObservedStateApplier` mirrors from each report (clearing them when an attempt
+finally succeeds). This is stage 1 of
+[ADR 0001](/adr/0001-declarative-agent-protocol); the operations API is
+unchanged, and the stuck-operation sweep still has no conditions counterpart,
+so a resource whose agent goes silent reads as unconverged with no `degraded`
+reason until the sweep fails its operation.
+
 **Resource list endpoints page by default** (issue #700): every list (VMs,
 sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
 enrollments, sites, users, images, snapshots, quotas) returns a
@@ -384,7 +398,10 @@ what makes the test harness safe.
   `desiredStatus`, `generation`, `observedGeneration`, with helpers
   `setDesiredStatus` (bumps generation), `isConverged`, and
   `revertDesiredToObserved()` (called when an operation fails so unachieved
-  intent doesn't replay).
+  intent doesn't replay). Alongside it they mirror the agent's reported
+  convergence progress — `convergencePhase`, `lastError`, `failedGeneration`
+  — which only `ObservedStateApplier` writes and only the `conditions`
+  projection reads.
 - `ResourceOperation` has a plain `resource_id` column, deliberately **not**
   a foreign key, so delete operations survive the resource row's removal.
 - Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),

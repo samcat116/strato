@@ -492,9 +492,22 @@ struct ObservedStateApplier {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
+        // Mirror the report's convergence progress onto the row (STR-142) so
+        // the API can project it as the VM's `conditions` block. Recorded on
+        // both the converging and settled paths — the phase only exists on the
+        // former, and the error pair has to be *cleared* on the latter.
+        var changed = vm.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
+            if changed {
+                try await vm.save(on: db)
+            }
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
@@ -505,7 +518,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > vm.observedGeneration {
             vm.observedGeneration = observed.observedGeneration
             changed = true
@@ -755,12 +767,25 @@ struct ObservedStateApplier {
             return
         }
 
+        // A report lists everything the agent is converging or has failed to
+        // converge, so an omitted VM has no progress to report at all — most
+        // often because the agent restarted and lost its in-memory view. Drop
+        // whatever it last said, rather than leave `conditions` claiming a
+        // download that nothing is doing (STR-142).
+        let convergenceCleared = vm.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
+
         // Same established-state rule as the heartbeat reconciliation: only
         // states that assert live agent presence are safe to escalate on
         // absence. (`.created` may be mid-create on an agent that hasn't
         // received the sync yet.) The reconcile loop will re-create the VM on
         // its next sync; if it succeeds, a later report restores the status.
-        guard vm.status.assertsAgentPresence else { return }
+        guard vm.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await vm.save(on: db)
+            }
+            return
+        }
 
         let previous = vm.status
         vm.setStatus(.error)
@@ -787,8 +812,19 @@ struct ObservedStateApplier {
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
+        // Convergence progress for the `conditions` block (STR-142) — same
+        // contract as VMs, recorded on both paths for the same reasons.
+        var changed = sandbox.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
+            if changed {
+                try await sandbox.save(on: db)
+            }
             app.logger.debug(
                 "Sandbox converging on agent",
                 metadata: [
@@ -799,7 +835,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > sandbox.observedGeneration {
             sandbox.observedGeneration = observed.observedGeneration
             changed = true
@@ -898,11 +933,21 @@ struct ObservedStateApplier {
             return
         }
 
+        // Nothing to report means no progress to report — same rationale as
+        // the VM path (STR-142).
+        let convergenceCleared = sandbox.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
+
         // Only escalate established sandboxes: a never-confirmed row
         // (observedGeneration 0) may be mid-create on an agent that hasn't
         // received the sync yet, and non-presence-asserting states are owned
         // by the sweep.
-        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else { return }
+        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await sandbox.save(on: db)
+            }
+            return
+        }
 
         let previous = sandbox.status
         sandbox.setStatus(.error)
