@@ -1,18 +1,34 @@
 # ADR 0002: Ceph/RBD for distributed block storage
 
-- **Status:** Accepted
-- **Date:** 2026-08-05
-- **Deciders:** Sam Schmitt
-- **Scope:** agent-side storage backend, volume placement, per-site cluster
+- **Status**: Accepted
+- **Date**: 2026-08-05
+- **Deciders**: Sam Schmitt
+- **Scope**: agent-side storage backend, volume placement, per-site cluster
   deployment
-- **Supersedes:** the ZFS + DRBD design previously in
+- **Supersedes**: the ZFS + DRBD design; that design previously occupied
   [`docs/architecture/distributed-storage.md`](../architecture/distributed-storage.md),
-  which that document now replaces with the Ceph design.
-- **Builds on:** [ADR 0001](./0001-declarative-agent-protocol.md) — storage
+  which now carries the Ceph design instead.
+- **Builds on**: [ADR 0001](./0001-declarative-agent-protocol.md) — storage
   daemon roles and volume lifecycle are expressed as desired state under the
   durable-noun rule, not as imperative RPCs or `ResourceOperation` rows.
-- **Affects:** STR-9 (roadmap umbrella), STR-10, STR-11, STR-12, STR-13,
+  **ADR 0001 is still `Proposed`**, so that dependency is directional, not
+  settled: if 0001 is not adopted, the storage work still holds, but cluster
+  progress would need an operations-table home after all and the volume
+  sequencing note below becomes moot. Adopting 0001 is the assumption
+  everything here is sequenced against.
+- **Affects**: STR-9 (roadmap umbrella), STR-10, STR-11, STR-12, STR-13,
   STR-31
+
+## Summary
+
+Replace the per-volume DRBD mirror with a Ceph cluster per `Site`, using RBD
+as the volume data path and cephadm for deployment. Volumes stop being
+pinned to an agent, which is the precondition for live migration and for
+stateful workloads on managed Kubernetes. Agents split into Ceph *clients*
+and cluster *members*, so pointing a site at an existing external cluster
+ships before any orchestration exists. The `local` pool remains the default
+and stays supported indefinitely; sites below roughly three nodes with real
+disks keep it permanently.
 
 ## Context
 
@@ -79,12 +95,31 @@ Specifically:
    sits above cephadm's, which is itself level-triggered and idempotent.
 4. **The `local` pool remains the default** and stays supported
    indefinitely. Ceph is opt-in per site.
-5. **`StoragePool` gains a `ceph` mode.** The phase-1 model survives;
-   `VolumeReplica` narrows to `local` pools, because a Ceph volume has no
-   per-copy placement for Strato to track.
+5. **`StoragePool` gains a `ceph` mode, and loses its unimplemented ones.**
+   The phase-1 model survives, but the fields that only ever described the
+   DRBD design go with it: mode becomes `{ local, ceph }`, the `replicated`
+   case and the `zfs` backing are removed, and `VolumeReplica` narrows to
+   `local` pools because a Ceph volume has no per-copy placement for Strato
+   to track. Leaving `replicated` in place would leave a selectable mode
+   whose reachability rule is true for Ceph and false for anything that
+   exists.
 6. **Bring-your-own-Ceph is a first-class configuration**, not a
    compatibility afterthought: pointing a site's pool at an existing
    external cluster uses the same client path as an orchestrated one.
+7. **Tenant isolation is a cephx design decision made up front, not
+   later.** One pool and one `client.strato` identity per site would give
+   every client agent a key that reads and writes every volume in the site,
+   across every project and organization. RBD namespaces with per-project
+   cephx users (`profile rbd namespace=…`) are the mitigation, and the
+   namespace is fixed when an image is created — so deferring this means
+   migrating every image later. See "What this costs".
+8. **Storage controller and network controller are designated
+   independently, and may be the same agent.** On a single- or dual-node
+   site they inevitably will be. They are separate designations because
+   their eligibility bars differ (OVN authorship vs cephadm plus a
+   container runtime), and where a site has two eligible members they
+   should prefer different nodes, since co-location concentrates two
+   admin-grade credentials on one host.
 
 ## Consequences
 
@@ -127,6 +162,31 @@ Specifically:
   higher-value target than an ordinary hypervisor node.
 - Ceph's cephx is a second authentication system alongside SPIFFE/SPIRE.
   They do not federate; keyrings are secrets the control plane distributes.
+  Strato has **no secret-reference indirection today** — the closest
+  comparable secret, `OIDCProvider.clientSecret`, is a plain column — so
+  "the control plane stores a reference, never the key" is a property that
+  has to be built, not one that can be assumed.
+- **A per-agent key widens the blast radius of a compromised node.** Today
+  an agent can reach only the volumes it physically hosts. With one pool
+  and one cephx identity per site, any client agent's key reads and writes
+  *every volume in that site*, across projects and organizations — a
+  strictly worse position than the design replaces. RBD namespaces plus
+  per-project cephx users (`profile rbd namespace=…`) close it, and because
+  an image's namespace is fixed at create time, this has to be decided
+  before the first volume is created rather than retrofitted.
+- **Volume I/O moves onto the underlay, and that traffic is outside
+  SPIFFE's coverage.** Today it never leaves the host. Ceph's msgr2
+  `secure` mode (and separating the public from the cluster network) is the
+  answer, and it is far cheaper to turn on at bootstrap than to retrofit
+  onto a running cluster.
+- **Quota and actual consumption stop tracking each other in both
+  directions.** `QuotaUsageAggregator` sums *provisioned* volume, snapshot,
+  and checkpoint bytes, and `QuotaEnforcementService` admits creates
+  against that total. RBD clones consume only their own writes, so a
+  project can be at quota while using almost nothing; conversely Ceph's
+  near-full is a cluster-wide property cutting across every project in the
+  site, so a site can be unable to accept writes while every project is
+  under quota.
 
 ### What we give up from the DRBD design
 

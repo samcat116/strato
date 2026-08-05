@@ -1,10 +1,9 @@
 # Distributed Storage (Proposed)
 
 > **Status: design proposal, partially implemented.** The phase-1 data model
-> (`StoragePool` + `VolumeReplica`, issue #349) has shipped; everything from
-> "Data model" onward that is marked NEW has not. Current behavior is in
-> [`storage.md`](./storage.md) — today every volume is host-local and pinned
-> to a single agent.
+> (`StoragePool` + `VolumeReplica`, issue #349) has shipped. Nothing else in
+> this document has. Current behavior is in [`storage.md`](./storage.md) —
+> today every volume is host-local and pinned to a single agent.
 >
 > The choice of Ceph, and the reversal of the earlier ZFS + DRBD design, is
 > recorded in [ADR 0002](../adr/0002-ceph-for-distributed-block-storage.md).
@@ -74,10 +73,13 @@ extends that model rather than replacing it.
 
 ```
 StoragePool  (modified)
-  mode: { local, replicated, ceph }   // NEW: ceph
+  mode: { local, ceph }               // `replicated` REMOVED (see below)
+  backing: { filesystem }             // `zfs` REMOVED (see below)
+  memberAgentIds: [String]            // local pools only; ceph uses siteId
   siteId: UUID?                       // NEW — ceph pools are site-scoped
   cephClusterId: UUID?                // NEW
   cephPoolName: String?               // NEW — the RBD pool within the cluster
+  cephNamespace: String?              // NEW — per-project RBD namespace
 
 CephCluster  (NEW)
   id, siteId
@@ -104,14 +106,57 @@ Postgres would produce a second, always-stale copy of the cluster's own map.
 Replica *health* for a Ceph pool is a cluster-level property (`CephCluster.health`),
 not a per-volume one.
 
-`mode: replicated` becomes vestigial. It was the ZFS/DRBD mode and nothing
-ever implemented it; it should be removed rather than left as a trap.
+### What the phase-1 fields mean now
+
+Three fields on `StoragePool` were shaped by the DRBD design and need
+explicit dispositions, or phase-2 implementers will each guess differently:
+
+- **`mode: replicated` is removed.** Nothing ever implemented it, and its
+  `agentCanReach` branch ("any member agent reaches it") is true for Ceph
+  and false for anything that exists — a selectable mode that silently
+  misbehaves. Removal is not free: `mode` is a Fluent `@Enum` column, so it
+  needs an `updateEnum().deleteCase("replicated")` migration and a check
+  that no row carries it.
+- **`backing: zfs` is removed** for the same reason and by the same
+  argument — it exists solely to describe "ZFS datasets (replicated
+  pools)". `filesystem` is the only backing a `local` pool has; a Ceph pool
+  does not use the field at all.
+- **`replicationFactor` is not authoritative for Ceph.** Durability is a
+  property of the Ceph pool (`ceph osd pool get <pool> size`), set on the
+  cluster, and mirroring it into `StoragePool` would create a second copy
+  that drifts. Read it as *observed* onto `CephCluster`; on `StoragePool`
+  it survives only as the `local`-pool constant 1, and should be removed
+  along with `replicated` if nothing else reads it.
+- **`memberAgentIds` stays, but does not gate Ceph pools.** For a `local`
+  pool it is the eligibility list (empty = unrestricted). For a Ceph pool,
+  `siteId` plus the Ceph-client capability decides, and `memberAgentIds` is
+  not consulted.
+
+### Naming, and the `storagePath` coupling
 
 The volume's RBD image name follows the existing invariant that **the agent
-owns naming**: the agent reports the image it created (`strato-<site>/vol-<uuid>`)
-in its create response, and the control plane stores that string in the
-field it already uses for the volume's location and passes it back verbatim.
-No new column, and delete still works from IDs alone.
+owns naming**: the agent reports the image it created
+(`<pool>/<namespace>/vol-<uuid>`) and the control plane stores and replays
+that string verbatim. Delete still works from IDs alone.
+
+But "no new column, we reuse the existing location field" understates the
+coupling, and this is the sharpest piece of hidden work in phase 2:
+
+- **`Volume.storagePath` is paired with `hypervisorId` at every reader.**
+  `VolumeController` guards resize, snapshot, and clone with
+  `guard volume.hypervisorId != nil, volume.storagePath != nil`
+  (`VolumeController.swift:591`, `:656`, `:753`). For a Ceph volume
+  `hypervisorId` is meaningless — un-pinning it is the entire point — so
+  either those guards relax to pool-aware reachability, or a synthetic
+  agent id gets written just to satisfy them. Relax them.
+- **`VolumeSpec.storagePath` is documented on the wire as "Host path of the
+  volume as previously reported by the owning agent"**
+  (`shared/Sources/StratoShared/VMSpec.swift:203`). Putting a `pool/image`
+  string in it makes `pool.mode` the only discriminator between two
+  incompatible meanings of one field — exactly the untyped-path problem the
+  sum-type refactor below exists to delete. **The typed attachment should
+  carry the RBD coordinates end to end** rather than smuggling them through
+  a path-shaped field.
 
 `StoragePool.agentCanReach` gains its third case: for `.ceph`, an agent
 reaches the pool if it is a configured client of the pool's cluster —
@@ -136,18 +181,22 @@ guest ── virtio-blk ── Firecracker ─────┤
   attached, not a new hypervisor driver.
 - **Firecracker** has no librbd, so the agent maps the image with krbd
   (`rbd map` → `/dev/rbdN`) and hands Firecracker the resulting block
-  device. Images that may be mapped by the kernel client must be created
-  with a conservative feature set (`layering`, and `exclusive-lock` only
-  where the running kernel supports it) — the kernel RBD client lags librbd
-  on features like `object-map`, `fast-diff`, and `deep-flatten`, and a
-  `map` of an image using them simply fails. Pools intended for Firecracker
-  should therefore pin image features at create time rather than relying on
-  the cluster default.
+  device. The kernel RBD client lags librbd on features, and a `map` of an
+  image using an unsupported one fails outright, so images that may be
+  mapped must pin their feature set at create time rather than inheriting
+  the cluster default. Concretely: enable `layering` and `exclusive-lock`
+  (kernel ≥ 4.9); disable `object-map`, `fast-diff`, `deep-flatten`, and
+  `journaling`, none of which krbd supports.
 - **`exclusive-lock` matters for correctness**, not just features: it is
   what prevents two hosts from writing the same image, and its cooperative
   hand-off is what makes live migration safe. Enable it for QEMU images.
 
-## `StorageBackend` and typed attachments
+## `StorageBackend` and disk attachments as a sum type
+
+> Named carefully: [`storage.md`](./storage.md) already has a "Typed disk
+> attachments" section describing the *shipped* `DiskAttachment` (host path
+> + `DiskFormat`) as the typed attachment. This section is about turning
+> that struct into a sum type, which is a different change.
 
 The agent-side protocol (`agent/Sources/StratoAgentCore/StorageBackend.swift`)
 survives largely intact — create, delete, resize, snapshot, clone, and info
@@ -245,6 +294,45 @@ of an operable system:
 - **Upgrades** — `ceph orch upgrade start --image <version>` is staged and
   resumable; cluster version belongs alongside the existing agent
   auto-update story (`agent-updates.md`).
+
+## Security boundaries
+
+Three of these are decisions that are cheap now and expensive later, so
+they belong in the design rather than in an implementation's judgement.
+
+**Tenant isolation: one namespace per project, decided up front.** The
+naive shape — one RBD pool and one `client.strato` identity per site —
+hands every client agent a key that reads and writes every volume in the
+site, across projects and organizations. That is *worse* than today, where
+a compromised agent reaches only the volumes it physically hosts. The
+mitigation is RBD namespaces with per-project cephx users
+(`profile rbd pool=<pool> namespace=<project>`), which is why
+`StoragePool.cephNamespace` appears in the data model above. **An image's
+namespace is fixed when it is created**, so retrofitting means migrating
+every image — this cannot be a follow-up.
+
+**Keyring storage.** `CephCluster.keyringSecretRef` is written above as a
+reference rather than a key, but Strato has no secret-reference
+indirection today (the nearest comparable secret, `OIDCProvider.clientSecret`,
+is a plain column). Either build the indirection or store the key and say
+so; a `…SecretRef` field name that dereferences to a plain column is worse
+than an honest one.
+
+**Wire encryption.** Volume I/O currently never leaves the host. After
+this it crosses the site underlay, which SPIFFE does not cover — agent
+mTLS secures the control channel, not RADOS traffic. Enable msgr2 `secure`
+mode at bootstrap and separate the public network from the cluster
+network; both are far cheaper to set at bootstrap than to retrofit onto a
+cluster carrying data.
+
+**Quota is not capacity.** `QuotaUsageAggregator` sums *provisioned* bytes
+and `QuotaEnforcementService` admits creates against that total. RBD
+clones consume only their own writes, so a project can sit at quota while
+using nearly nothing; and near-full is a cluster-wide property spanning
+every project in the site, so a site can refuse writes while every project
+is under quota. Keep charging provisioned bytes — it is the predictable
+number for tenants — but treat cluster capacity as a separate admission
+check rather than assuming quota implies headroom.
 
 ## What the existing orchestration seams do now
 
@@ -375,13 +463,16 @@ Each phase is independently useful. The ordering principle is that the
 **client path and the orchestration path are separable**, and the client
 path is where all the value is.
 
-1. **Typed disk attachments.** Replace path-carrying `DiskAttachment`,
-   thread it through the hypervisor drivers and volume wire messages, bump
-   the wire version with capability gating. Pure refactor, no Ceph.
+1. **Disk attachments as a sum type.** Replace the path-carrying
+   `DiskAttachment`, thread it through the hypervisor drivers and volume
+   wire messages, bump the wire version with capability gating. Pure
+   refactor, no Ceph.
 2. **Bring-your-own-Ceph client path.** `StoragePool.ceph` + `CephCluster`
    pointing at an existing cluster; `CephRBDStorageBackend`; QEMU `rbd`
-   blockdev; agent advertises the Ceph-client capability. **Volumes stop
-   being agent-pinned here** — this alone unblocks #353 and #626.
+   blockdev; agent advertises the Ceph-client capability; per-project RBD
+   namespaces and the relaxed `hypervisorId`/`storagePath` guards.
+   **Volumes stop being agent-pinned here** — this alone unblocks #353 and
+   #626.
 3. **Device inventory.** `StorageDevice` reporting and operator marking.
    Prerequisite for anything orchestrated.
 4. **Orchestrated cluster per site.** Storage-controller designation,
