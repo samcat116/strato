@@ -367,7 +367,40 @@ public enum WireProtocol {
     /// logs such agents at `notice` so the fleet's remaining exposure is
     /// legible during a rollout, rather than the version silently meaning
     /// nothing.
-    public static let currentVersion = 25
+    ///
+    /// Version 26: instance metadata (STR-48). `DesiredVMState` gains an
+    /// optional `metadata: InstanceMetadata` — hostname, placement, NICs, SSH
+    /// keys, user/vendor data, tags, and a phase-3 identity policy — which the
+    /// agent serves to the guest from the link-local metadata address instead
+    /// of baking it into a boot-time seed ISO. Riding the sync is the whole
+    /// point: the store inherits level-triggering, generation guards, and
+    /// replay safety, so an operator's edit propagates on the next sync with
+    /// no new control loop and nothing in the payload that can expire.
+    ///
+    /// Additive and tolerant on the wire — the key simply isn't there from an
+    /// older control plane, and an older agent ignores one it can't decode a
+    /// struct into — but absence is *asymmetric* in the `networks` (v3) /
+    /// `sandboxes` (v5) sense rather than the harmless `desiredAgentUpdate`
+    /// (v7) sense, so it needs a gate on each side for a different reason:
+    ///
+    /// - **Agent side**, `supportsInstanceMetadata(_:)` is what keeps nil from
+    ///   being read as an instruction. From a v26+ control plane nil is
+    ///   authoritative ("nothing to serve", drop what you hold); from an older
+    ///   one it means the sender has never heard of metadata, and treating
+    ///   that as authoritative would empty every VM's metadata store the
+    ///   moment a control plane is rolled back.
+    /// - **Control-plane side**, the same gate lets sync assembly omit the
+    ///   field for pre-v26 agents (the v20 `securityGroups` pattern) rather
+    ///   than serializing a payload the receiver provably discards.
+    ///
+    /// What the gate deliberately does NOT do is refuse placement, unlike
+    /// v18/v23. A pre-v26 agent still provisions the guest from the seed ISO
+    /// exactly as it does today — the metadata service is additive to that
+    /// path, not yet a replacement for it — so a VM landing on an old agent
+    /// loses mutability, not its ability to boot. That changes when the seed
+    /// ISO is retired, and retiring it is what will make a placement gate
+    /// load-bearing.
+    public static let currentVersion = 26
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -638,6 +671,22 @@ public enum WireProtocol {
     /// so an operator upgrading a fleet knows which hosts are still armed.
     public static func supportsWorkloadTombstones(_ version: Int) -> Bool {
         version >= workloadTombstoneMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks `DesiredVMState.metadata`
+    /// (see `currentVersion` version 26 notes).
+    public static let instanceMetadataMinimumVersion = 26
+
+    /// Whether a peer at `version` understands instance metadata on the sync.
+    ///
+    /// Agent-side this decides whether an absent `metadata` field *means*
+    /// anything: from a v26+ control plane nil is authoritative (serve
+    /// nothing), from an older one it is silence and the agent must leave the
+    /// VM's metadata alone — the `supportsNetworkSync` reading of an absent
+    /// list, for the same reason. Control-plane-side it lets sync assembly
+    /// omit the field for agents that would discard it.
+    public static func supportsInstanceMetadata(_ version: Int) -> Bool {
+        version >= instanceMetadataMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
