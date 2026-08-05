@@ -1,0 +1,19 @@
+docs/adr/0001-declarative-agent-protocol.md
+  s_4b4e15d47f42e3::t_9416506aeb48f1 1-353
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d75aaae990820ef2df6fcafe0676f04b4fd2c3f5",
+  "prompts": {},
+  "sessions": {
+    "s_4b4e15d47f42e3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3432ea04-0589-44c9-8e87-4e123604da2a",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
