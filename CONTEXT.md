@@ -59,8 +59,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
   mutation: the **actor** that asked for it, the resource it acted on (kind,
   id, and name snapshot), the mutation kind, the **target generation**, and
   the org/project it happened in. Written in the mutation's own transaction,
-  never updated, never swept, no retention. It is the durable attribution
-  record; `resource_operations.user_id` is the transitional one, and mutations
+  never updated, never swept, no retention — the immutability enforced by a
+  trigger, not just by convention. It is the durable attribution record;
+  `resource_operations.user_id` is the transitional one, and mutations
   dual-write both until the operations table retires (ADR 0001).
 
 - **Actor** — who performed a mutation, as a *principal type plus id*

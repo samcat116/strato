@@ -309,6 +309,14 @@ extension ResourceOperation {
             // delete's completion event has nothing left to resolve against
             // once the row is removed (PR #668 review). It is the operation's
             // webhook delivery context and, below, the event's.
+            //
+            // These three stamp independently: a resource whose project has no
+            // organization records its project and name with a nil
+            // `organization_id`, where the earlier all-or-nothing capture left
+            // all three nil. Delivery is unchanged — the only reader,
+            // `WebhookEvents.enqueueOperationCompletion`, guards on
+            // `organizationID` — but a future reader of `projectID` should
+            // know it can be set on a row that has no deliverable context.
             var scope = try await ResourceEvent.scope(of: resourceKind, id: resourceID, on: db)
             operation.organizationID = scope.organizationID
             operation.projectID = scope.projectID

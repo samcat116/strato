@@ -9,7 +9,7 @@ import Vapor
 /// expiry sweep). Deliberately its own enum rather than a reuse: an audit
 /// trail has to keep decoding rows written long before the current schema,
 /// while `IAMPrincipalType` is free to follow the Cedar schema.
-enum ResourceEventActorType: String, Codable, CaseIterable, Sendable {
+enum MutationActorType: String, Codable, CaseIterable, Sendable {
     case user
     case serviceAccount = "service_account"
     case workload
@@ -23,7 +23,7 @@ enum ResourceEventActorType: String, Codable, CaseIterable, Sendable {
 /// #495) — this names the principal's type alongside its id, and carries no id
 /// at all for the system actor.
 struct MutationActor: Sendable, Equatable {
-    let type: ResourceEventActorType
+    let type: MutationActorType
 
     /// The principal's row id: a user, a service account, or a workload
     /// registration. Nil for `.system`, which is not a row.
@@ -76,7 +76,7 @@ final class ResourceEvent: Model, @unchecked Sendable {
     var id: UUID?
 
     @Enum(key: "actor_type")
-    var actorType: ResourceEventActorType
+    var actorType: MutationActorType
 
     @OptionalField(key: "actor_id")
     var actorID: UUID?
@@ -126,10 +126,10 @@ extension ResourceEvent {
     /// attribution record — an all-or-nothing context would drop exactly the
     /// events that are hardest to reconstruct later.
     struct Scope: Sendable, Equatable {
-        var organizationID: UUID?
-        var projectID: UUID?
-        var resourceName: String?
-        var generation: Int64?
+        var organizationID: UUID? = nil
+        var projectID: UUID? = nil
+        var resourceName: String? = nil
+        var generation: Int64? = nil
     }
 
     /// Reads a resource's current scope. Callers recording a mutation must
@@ -165,14 +165,25 @@ extension ResourceEvent {
     /// applying a mutation can refresh just this: the generation is the only
     /// part of the scope a mutation moves, and the rest has to be read while
     /// the row is certain to still exist.
+    ///
+    /// Projected to the one column rather than a `find`: this runs in every
+    /// lifecycle mutation's transaction, and `vms` is a wide row to fetch for
+    /// a single `Int64`. Only `generation` may be read off the returned model
+    /// — no other property was selected.
     static func generation(
         of kind: OperationResourceKind, id: UUID, on db: any Database
     ) async throws -> Int64? {
         switch kind {
         case .virtualMachine:
-            return try await VM.find(id, on: db)?.generation
+            return try await VM.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
         case .sandbox:
-            return try await Sandbox.find(id, on: db)?.generation
+            return try await Sandbox.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
         }
     }
 

@@ -142,6 +142,47 @@ final class ResourceEventTests {
         }
     }
 
+    @Test("Sandbox create appends its own event, like the VM create path it mirrors")
+    func sandboxCreateAppendsEvent() async throws {
+        try await withEventTestApp { app, user, org, project, _, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "event-sandbox-net", project: project)
+
+            struct CreateSandboxBody: Content {
+                let name: String
+                let projectId: UUID?
+                let image: String
+                let cpus: Int?
+                let memory: Int64?
+                let networkId: UUID?
+            }
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSandboxBody(
+                        name: "created-sandbox", projectId: project.id,
+                        image: "ghcr.io/acme/worker:v1", cpus: 1, memory: Int64(1) << 30,
+                        networkId: try network.requireID()))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let created = try #require(
+                try await Sandbox.query(on: app.db).filter(\.$name == "created-sandbox").first())
+            let event = try #require(
+                try await self.events(for: try created.requireID(), on: app.db)
+                    .first { $0.mutation == .create })
+            #expect(event.actorType == .user)
+            #expect(event.actorID == user.id)
+            #expect(event.resourceKind == .sandbox)
+            #expect(event.resourceName == "created-sandbox")
+            #expect(event.organizationID == org.id)
+            #expect(event.projectID == project.id)
+            #expect(event.targetGeneration == created.generation)
+        }
+    }
+
     @Test("An unattended sweep records the system actor, not a user that does not exist")
     func systemActorRecorded() async throws {
         try await withEventTestApp { app, _, _, project, _, _ in
@@ -182,11 +223,26 @@ final class ResourceEventTests {
                 #expect(res.status == .accepted)
             }
 
+            var removed = false
             for _ in 0..<100 {
-                if try await VM.find(vmID, on: app.db) == nil { break }
+                if try await VM.find(vmID, on: app.db) == nil {
+                    removed = true
+                    break
+                }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            guard removed else {
+                let operation = try await ResourceOperation.query(on: app.db)
+                    .filter(\.$resourceID == vmID)
+                    .first()
+                Issue.record(
+                    """
+                    VM \(vmID) was still present after 5s, so the delete never resolved; \
+                    operation status \(operation?.status.rawValue ?? "<none>") \
+                    error \(operation?.error ?? "<none>")
+                    """)
+                return
+            }
 
             // Nothing resolves against the VM row any more, so everything the
             // trail needs had to be snapshotted at mutation time.
@@ -217,6 +273,58 @@ final class ResourceEventTests {
             }
 
             #expect(try await self.events(for: vmID, on: app.db).isEmpty)
+        }
+    }
+
+    @Test("A mutation that throws after the operation insert appends nothing either")
+    func failedMutationAppendsNothing() async throws {
+        try await withEventTestApp { app, user, _, _, vm, _ in
+            let vmID = try vm.requireID()
+
+            struct MutationFailure: Error {}
+
+            // The other half of "the trail cannot disagree with what applied":
+            // the 409 guard rejects before anything is written, but a mutation
+            // that throws *after* the operation row is inserted relies on the
+            // transaction rolling both the operation and the event back.
+            await #expect(throws: MutationFailure.self) {
+                _ = try await ResourceOperation.begin(
+                    .boot, resourceKind: .virtualMachine, resourceID: vmID,
+                    userID: try user.requireID(), on: app.db
+                ) { db in
+                    vm.setDesiredStatus(.running)
+                    try await vm.save(on: db)
+                    throw MutationFailure()
+                }
+            }
+
+            #expect(try await self.events(for: vmID, on: app.db).isEmpty)
+            #expect(try await ResourceOperation.query(on: app.db).filter(\.$resourceID == vmID).count() == 0)
+            #expect(try await VM.find(vmID, on: app.db)?.generation == 0)
+        }
+    }
+
+    @Test("A machine principal round-trips through the actor columns")
+    func machinePrincipalActorRoundTrips() async throws {
+        try await withEventTestApp { app, _, _, _, vm, _ in
+            let vmID = try vm.requireID()
+
+            // Unreachable until STR-15 widens the mutation endpoints, so these
+            // raw values would otherwise sit behind a `CHECK` untested —
+            // `service_account` being the one whose raw value differs from its
+            // case name, which is the shape a typo takes.
+            let serviceAccountID = UUID()
+            let workloadID = UUID()
+            try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: vmID,
+                actor: .serviceAccount(serviceAccountID), on: app.db)
+            try await ResourceEvent.record(
+                .shutdown, resourceKind: .virtualMachine, resourceID: vmID,
+                actor: .workload(workloadID), on: app.db)
+
+            let recorded = try await self.events(for: vmID, on: app.db)
+            #expect(recorded.map(\.actorType) == [.serviceAccount, .workload])
+            #expect(recorded.map(\.actorID) == [serviceAccountID, workloadID])
         }
     }
 }

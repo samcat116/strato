@@ -215,7 +215,8 @@ transaction: the acting principal (type *and* id, so it is not restricted to
 users the way `resource_operations.user_id` is), the resource kind/id/name,
 the mutation kind, the target generation, and the org/project it happened in.
 Rows are never updated and never swept — there is no retention policy, because
-an audit trail that admits edits is not one. `ResourceOperation.begin` covers
+an audit trail that admits edits is not one, and a `BEFORE UPDATE OR DELETE`
+trigger enforces that rather than trusting every future caller. `ResourceOperation.begin` covers
 every mutation except VM and sandbox `create`, whose retrying transactions own
 their own inserts and so append their own events.
 
