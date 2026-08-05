@@ -159,10 +159,11 @@ The canonical mutation path (`Controllers/VMController.swift`):
 3. **One transaction** (with constraint-failure retry for IPAM races):
    quota reservation → VM row → `setDesiredStatus(.shutdown)` (bumps
    `generation`) → NIC rows with IPAM-allocated addresses → a
-   **`ResourceOperation`** row (`pending`) → the creator's role binding on
+   **`ResourceOperation`** row (`pending`) → a **`ResourceEvent`** row (the
+   append-only attribution record) → the creator's role binding on
    the new VM (`RoleBindingService.grant` — an explicit, revocable grant,
    transactional with the resource it protects). The desired-state change,
-   the operation, and the grant commit atomically.
+   the operation, the event, and the grant commit atomically.
 4. The handler returns **202 Accepted** with the operation; the client polls
    `/api/operations/:id`.
 5. The rest happens off-request on `app.backgroundTasks`: scheduling,
@@ -207,6 +208,16 @@ stuck-operation sweep is the backstop, failing operations past their per-kind
 budget (`OperationResourceKind.completionBudgetSeconds` in
 `Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
 the one imperative exception: it awaits a correlated agent response.
+
+**Attribution outlives the operation** (ADR 0001 stage 2). Every mutation that
+writes an operation row also appends a `resource_events` row in the same
+transaction: the acting principal (type *and* id, so it is not restricted to
+users the way `resource_operations.user_id` is), the resource kind/id/name,
+the mutation kind, the target generation, and the org/project it happened in.
+Rows are never updated and never swept — there is no retention policy, because
+an audit trail that admits edits is not one. `ResourceOperation.begin` covers
+every mutation except VM and sandbox `create`, whose retrying transactions own
+their own inserts and so append their own events.
 
 **Resource list endpoints page by default** (issue #700): every list (VMs,
 sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
@@ -387,6 +398,8 @@ what makes the test harness safe.
   intent doesn't replay).
 - `ResourceOperation` has a plain `resource_id` column, deliberately **not**
   a foreign key, so delete operations survive the resource row's removal.
+  `ResourceEvent` goes further: *every* id on it is foreign-key-free, since
+  the audit row has to outlive both the resource and the principal it names.
 - Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),
   and never query live models in a migration — snapshot the columns in a
   private model instead. Migration ordering in `configure.swift` matters when

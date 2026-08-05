@@ -715,10 +715,15 @@ works for a machine principal. The async-mutation endpoints do not:
 initiator, and operation visibility falls back to "the initiator may read it"
 once the resource row is gone. A machine principal has no user id to put
 there, so those handlers refuse with a 403 naming the reason rather than
-recording a misleading initiator. Widening them needs a principal-typed
-initiator column (`principal_type` alongside `user_id`) plus the matching
-change to the initiator-fallback check — a schema change deliberately kept
-out of this one.
+recording a misleading initiator.
+
+Half of what widening them needs now exists: `resource_events` (ADR 0001
+stage 2) records every mutation against a principal-typed **actor** — type
+plus id, with no id at all for the system actor — and is the attribution
+record intended to outlive the operations table. What remains is threading
+the request principal into `ResourceOperation.begin` instead of deriving the
+actor from `user_id`, and the matching change to operation visibility's
+initiator fallback.
 
 Off by default (`SPIFFE_JWT_SVID_AUTH_ENABLED`): it widens the credential
 surface from mTLS-only to bearer tokens accepted, which is an operator's

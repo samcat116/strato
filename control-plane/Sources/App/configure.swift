@@ -730,6 +730,12 @@ public func configure(_ app: Application) async throws {
     // a grant that looks live in every listing and confers nothing.
     app.migrations.add(RejectConditionedRoleBindings())
 
+    // ADR 0001 stage 2 (STR-143): the append-only mutation audit trail.
+    // Mutations dual-write it alongside their operation row, so attribution
+    // and the operation lifecycle can be separated before the operations
+    // table itself is retired.
+    app.migrations.add(CreateResourceEvent())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.

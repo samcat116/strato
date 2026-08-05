@@ -55,6 +55,20 @@ use in code, tests, docs, and review. Architecture-level maps live in
   Both controllers and the sweep drive operations through its small interface
   instead of re-spelling the begin/dispatch/verdict sequence per handler.
 
+- **Resource event** — one append-only `resource_events` row describing a
+  mutation: the **actor** that asked for it, the resource it acted on (kind,
+  id, and name snapshot), the mutation kind, the **target generation**, and
+  the org/project it happened in. Written in the mutation's own transaction,
+  never updated, never swept, no retention. It is the durable attribution
+  record; `resource_operations.user_id` is the transitional one, and mutations
+  dual-write both until the operations table retires (ADR 0001).
+
+- **Actor** — who performed a mutation, as a *principal type plus id*
+  (`user` / `service_account` / `workload` / `system`) rather than the plain
+  user id an operation row carries. `system` is the control plane acting with
+  no principal behind it — the sandbox expiry sweep — and is the one actor
+  with no id, because it is not a row.
+
 - **AgentDispatch** — the seam the coordinator depends on to reach agents
   (`agentIsOnline`, `syncDesiredState`, `performOperationAwaitingResponse`).
   Production adapter: `AgentService`. Test adapter: an in-memory fake, so the

@@ -593,6 +593,13 @@ struct VMController: RouteCollection {
                     let operation = ResourceOperation(vmID: vmID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
+                    // The create's attribution record (ADR 0001, stage 2).
+                    // Appended here rather than by `ResourceOperation.begin`,
+                    // because the retrying IPAM transaction owns this insert.
+                    try await ResourceEvent.record(
+                        .create, resourceKind: .virtualMachine, resourceID: vmID,
+                        actor: .user(userID), on: db)
+
                     // The creator's explicit, revocable binding on the VM, in
                     // the create transaction — the authoritative grant Cedar
                     // evaluates (issue #477).
