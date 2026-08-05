@@ -41,7 +41,7 @@ struct InstanceMetadataTests {
         vendorData: "#cloud-config\nruncmd: [echo strato]\n",
         tags: ["role": "web", "tier": "frontend"],
         identity: IdentityPolicy(
-            spiffeID: "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)",
+            spiffeId: "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)",
             audiences: ["strato", "vault"],
             ttlSeconds: 3600
         )
@@ -117,7 +117,7 @@ struct InstanceMetadataTests {
     @Test("Identity policy round-trips (phase 3 shape)")
     func identityPolicyRoundTrip() throws {
         let identity = try #require(roundTrip(Self.metadata).identity)
-        #expect(identity.spiffeID == "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)")
+        #expect(identity.spiffeId == "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)")
         #expect(identity.audiences == ["strato", "vault"])
         #expect(identity.ttlSeconds == 3600)
     }
@@ -160,18 +160,35 @@ struct InstanceMetadataTests {
         #expect(try encodedKeys(desiredState(metadata: Self.metadata)).contains("metadata"))
     }
 
+    @Test("An explicit null metadata decodes to nil, like an absent key")
+    func desiredVMStateExplicitNullMetadata() throws {
+        // The mirror image of the case above: a producer that writes the key
+        // with a null must not fail the decode and take the whole sync — and
+        // with it every VM on the receiving agent — down with it.
+        let object = try JSONSerialization.jsonObject(with: encodeJSON(desiredState(metadata: nil)))
+        var fields = try #require(object as? [String: Any])
+        fields["metadata"] = NSNull()
+        let withNull = try JSONSerialization.data(withJSONObject: fields)
+
+        let reparsed = try #require(JSONSerialization.jsonObject(with: withNull) as? [String: Any])
+        #expect(reparsed["metadata"] is NSNull)
+        #expect(try decodeJSON(DesiredVMState.self, from: withNull).metadata == nil)
+    }
+
     @Test("Metadata carrying only its identifying keys decodes to empty collections")
     func metadataTolerantCollectionDecoding() throws {
         // Forward tolerance within the type: a sender that omits collections it
         // has nothing to put in must not fail the whole sync for that agent.
         let minimal = """
-            {"instanceId":"\(Fixtures.uuidA.uuidString)","hostname":"web-01",
-             "projectId":"\(Fixtures.uuidB.uuidString)"}
+            {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)"}
             """
         let decoded = try decodeJSON(InstanceMetadata.self, from: minimal)
         #expect(decoded.nics.isEmpty)
         #expect(decoded.sshAuthorizedKeys.isEmpty)
         #expect(decoded.tags.isEmpty)
+        // A VM predating `VM.hostname` (issue #770) has none, and nothing here
+        // may invent one — it would disagree with the VM's DNS zone.
+        #expect(decoded.hostname == nil)
         #expect(decoded.environment == nil)
         #expect(decoded.region == nil)
         #expect(decoded.availabilityZone == nil)
@@ -183,13 +200,54 @@ struct InstanceMetadataTests {
         #expect(decoded.identity == nil)
     }
 
-    @Test("Metadata without an identifying key fails rather than describing nothing")
+    @Test("Metadata without an identifying id fails rather than describing nothing")
     func metadataRequiresIdentifyingKeys() {
-        let noHostname = """
-            {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)"}
+        // The required set is deliberately just the two ids — a missing one
+        // throws out of the whole DesiredStateMessage — but metadata that
+        // cannot say which instance or project it describes is not metadata.
+        for incomplete in [
+            #"{"projectId":"\#(Fixtures.uuidB.uuidString)"}"#,
+            #"{"instanceId":"\#(Fixtures.uuidA.uuidString)"}"#,
+        ] {
+            #expect(throws: (any Error).self) {
+                _ = try decodeJSON(InstanceMetadata.self, from: incomplete)
+            }
+        }
+    }
+
+    @Test("A metadata NIC carrying only its identifying keys decodes to empty DNS")
+    func metadataNICTolerantDecoding() throws {
+        // The `dnsServers` branch of the hand-written decoder: a round trip
+        // encodes the key as `[]`, so only JSON that genuinely omits it
+        // exercises the fallback the custom `init(from:)` exists for.
+        let minimal = """
+            {"deviceName":"net0","macAddress":"52:54:00:12:34:56",
+             "networkId":"\(Fixtures.uuidA.uuidString)","networkName":"default"}
             """
+        let decoded = try decodeJSON(MetadataNIC.self, from: minimal)
+        #expect(decoded.deviceName == "net0")
+        #expect(decoded.dnsServers.isEmpty)
+        #expect(decoded.domainName == nil)
+        #expect(decoded.ipAddress == nil)
+        #expect(decoded.ipv4CIDR == nil)
+        #expect(decoded.mtu == nil)
+    }
+
+    @Test("An identity policy carrying only its SPIFFE ID decodes to no audiences")
+    func identityPolicyTolerantDecoding() throws {
+        let decoded = try decodeJSON(
+            IdentityPolicy.self, from: #"{"spiffeId":"spiffe://strato/vm/1"}"#)
+        #expect(decoded.spiffeId == "spiffe://strato/vm/1")
+        // Empty means none: a guest asking for an audience outside the list is
+        // refused, so the fallback must not be mistaken for "any".
+        #expect(decoded.audiences.isEmpty)
+        #expect(decoded.ttlSeconds == nil)
+    }
+
+    @Test("An identity policy naming no SPIFFE ID fails rather than authorizing nothing")
+    func identityPolicyRequiresSpiffeId() {
         #expect(throws: (any Error).self) {
-            _ = try decodeJSON(InstanceMetadata.self, from: noHostname)
+            _ = try decodeJSON(IdentityPolicy.self, from: #"{"audiences":["strato"]}"#)
         }
     }
 

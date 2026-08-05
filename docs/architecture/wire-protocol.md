@@ -328,7 +328,21 @@ The rest of the package is vocabulary used on both sides:
   process in the guest that can reach the link-local address reads every field,
   so adding one hands it to unprivileged guest code. Placement detail is
   carried unconditionally and the renderer — not the model or the assembler —
-  decides whether a given project's guests are told where they run.
+  decides whether a given project's guests are told where they run. Only
+  `instanceId`/`projectId` are required keys: `DesiredVMState` decodes
+  synthesized, so a missing required key inside `metadata` throws out of the
+  whole `DesiredStateMessage` and stops that agent converging on everything.
+
+  `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
+  paths. That is deliberate — the agent must serve exactly what the last sync
+  said, with no fetch that can fail after a sync was applied — and the bound is
+  the 16 MiB frame, since a sync must fit in one whole. The sync already
+  carries a 64 KiB-capped `VMSpec.userData` per VM for the seed ISO, so this
+  duplicates it for the length of the migration (~128 KiB/VM worst case, ~64
+  KiB once the seed path is retired), putting the ceiling at roughly 130 VMs
+  per host all at the user-data cap. If it ever needs moving, the lever is an
+  IMDS-specific limit below `CloudInitUserDataFormat.maxBytes`, not a second
+  transport.
 - **`HypervisorType`** (`HypervisorTypes.swift`) — `qemu` / `firecracker`,
   the driver-registry key. `HypervisorSupport` and `HypervisorCapabilities`
   describe what each agent probed at registration (acceleration, pause,

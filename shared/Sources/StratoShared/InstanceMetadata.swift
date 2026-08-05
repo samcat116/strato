@@ -28,14 +28,48 @@ import Foundation
 /// *to the guest*. Every field is readable by any process inside the VM that
 /// can reach the link-local address, so this is a publication boundary, not an
 /// internal DTO: adding a field here hands it to unprivileged guest code.
+///
+/// ## Size on the wire
+///
+/// `userData`/`vendorData` are carried inline, which is the one place this
+/// value cuts against the grain of `DesiredVMState`: `imageInfo` deliberately
+/// carries *paths* the agent fetches rather than content, to keep the sync
+/// small. Inline is the deliberate call here, and the bound is worth stating,
+/// because a sync is a full snapshot re-pushed on a timer (~60s to dirty
+/// agents, ~10 minutes to all) rather than a one-shot create payload.
+///
+/// The sync already carries a `CloudInitUserDataFormat.maxBytes`-capped
+/// `VMSpec.userData` per VM — that is what the agent builds the seed ISO from.
+/// This value duplicates it (and `sshAuthorizedKeys`) for the length of the
+/// migration, taking the per-VM worst case from ~64 KiB to ~128 KiB before
+/// JSON escaping inflates it further; retiring the seed ISO deletes the spec
+/// copy and returns it to ~64 KiB. The hard ceiling is the 16 MiB frame both
+/// ends set, which a sync must fit in whole — an oversized frame does not
+/// degrade partially, it stops that agent converging on everything it hosts.
+/// Reaching it takes on the order of 130 VMs on one host all at the user-data
+/// cap, or ~250 once the spec copy is gone.
+///
+/// Making these references would not move that ceiling while the spec copy
+/// exists, and it would cost the property the whole design rests on — the
+/// agent serves exactly what the last sync said, with no fetch that can fail
+/// after a sync was applied. If the ceiling ever does need moving, the lever
+/// is an IMDS-specific limit below `maxBytes`, not a second transport.
 public struct InstanceMetadata: Codable, Sendable, Equatable {
     /// The VM's id — the same UUID as `DesiredVMState.vmId`, restated here so a
     /// renderer never has to reach outside the metadata it was handed.
     public let instanceId: UUID
-    /// The VM's hostname, as the control plane records it. Also the name the VM
-    /// registers under in its network's primary DNS zone (see
-    /// `docs/architecture/dns.md`), so the two must not drift.
-    public let hostname: String
+    /// The VM's DNS label, when it has one — also the name it registers under
+    /// in its network's primary DNS zone (see `docs/architecture/dns.md`), so
+    /// the two must not drift.
+    ///
+    /// Optional because `VM.hostname` is (issue #770): VMs predating the column
+    /// have none, and nothing on this side may invent one. A slugified `name`
+    /// is precisely the lossy derivation the stored column exists to avoid, and
+    /// a hostname fabricated here would disagree with the zone — breaking the
+    /// no-drift invariant above in the one case it was written for. So the
+    /// renderer decides what an unset hostname looks like, exactly as with
+    /// `environment`, and a hostname-less VM still gets all the rest of this.
+    public let hostname: String?
     /// The project owning the VM. Renderers expose it as the tenancy
     /// identifier (EC2's account/owner slot); it is never an authorization
     /// input — the IMDS serves whichever guest can reach it.
@@ -89,7 +123,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
 
     public init(
         instanceId: UUID,
-        hostname: String,
+        hostname: String? = nil,
         projectId: UUID,
         environment: String? = nil,
         region: String? = nil,
@@ -117,15 +151,20 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
 
     // Custom decode so the collections tolerate absence, matching `VMSpec`:
     // a control plane that omits an empty list yields []/[:] rather than
-    // failing the whole sync for that agent. Identity, environment, placement,
-    // and the two data documents are `Optional` and so tolerate absence
-    // already. `encode(to:)` stays synthesized; the three identifying keys
-    // remain required, because metadata that cannot say which instance it
-    // describes is not metadata.
+    // failing the whole sync for that agent. Everything else is `Optional` and
+    // so tolerates absence already. `encode(to:)` stays synthesized.
+    //
+    // Only the two ids are required, and that is deliberately as narrow as it
+    // can be: `DesiredVMState` decodes synthesized, so a `metadata` object
+    // missing a required key throws out of the *entire* `DesiredStateMessage`
+    // and the receiving agent stops converging on every VM it hosts — the
+    // blast radius `wire-protocol.md` calls out for strictly-decoded enums.
+    // Metadata that cannot say which instance and project it describes is not
+    // metadata; anything beyond that is not worth that failure mode.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         instanceId = try c.decode(UUID.self, forKey: .instanceId)
-        hostname = try c.decode(String.self, forKey: .hostname)
+        hostname = try c.decodeIfPresent(String.self, forKey: .hostname)
         projectId = try c.decode(UUID.self, forKey: .projectId)
         environment = try c.decodeIfPresent(String.self, forKey: .environment)
         region = try c.decodeIfPresent(String.self, forKey: .region)
@@ -275,7 +314,7 @@ public struct IdentityPolicy: Codable, Sendable, Equatable {
     /// The SPIFFE ID the instance may be issued documents for, e.g.
     /// `spiffe://strato/project/<uuid>/vm/<uuid>`. Authored by the control
     /// plane; the agent never derives or extends it.
-    public let spiffeID: String
+    public let spiffeId: String
     /// Audiences the IMDS may mint JWT-SVIDs for. Empty means none — a guest
     /// asking for an audience outside this list is refused rather than served
     /// a token nothing will accept.
@@ -285,18 +324,18 @@ public struct IdentityPolicy: Codable, Sendable, Equatable {
     /// "unbounded"; an identity document with no expiry is never the intent.
     public let ttlSeconds: Int?
 
-    public init(spiffeID: String, audiences: [String] = [], ttlSeconds: Int? = nil) {
-        self.spiffeID = spiffeID
+    public init(spiffeId: String, audiences: [String] = [], ttlSeconds: Int? = nil) {
+        self.spiffeId = spiffeId
         self.audiences = audiences
         self.ttlSeconds = ttlSeconds
     }
 
     // Tolerates an absent `audiences`, matching the rest of the metadata
-    // collections; `spiffeID` stays required, since a policy that names no
+    // collections; `spiffeId` stays required, since a policy that names no
     // identity authorizes nothing.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        spiffeID = try c.decode(String.self, forKey: .spiffeID)
+        spiffeId = try c.decode(String.self, forKey: .spiffeId)
         audiences = try c.decodeIfPresent([String].self, forKey: .audiences) ?? []
         ttlSeconds = try c.decodeIfPresent(Int.self, forKey: .ttlSeconds)
     }
