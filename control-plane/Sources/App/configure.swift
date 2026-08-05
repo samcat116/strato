@@ -735,6 +735,11 @@ public func configure(_ app: Application) async throws {
     // resource table it checks against, so it wants them in their final shape.
     app.migrations.add(DeleteOrphanedResourceRoleBindings())
 
+    // One-time sweep of the project paths folder moves left stale (STR-114).
+    // Also runs late: it recomputes derived data over the folder and project
+    // tables, so it wants them in their final shape.
+    app.migrations.add(RebuildDriftedHierarchyPaths())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

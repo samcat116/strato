@@ -138,6 +138,15 @@ The important ones to know when navigating `Services/`:
 - Hierarchy/reporting: `OrganizationAccessService` (the org list filter used
   by list endpoints), `HierarchyTreeBuilder` and friends,
   `QuotaUsageService`/`QuotaComplianceService`, `ProjectStatsService`.
+- **`HierarchyMaintenanceService`** — backs the system-admin-only
+  `GET /api/hierarchy/validate` and `POST /api/hierarchy/repair`. The org tree
+  is stored twice: as relational parent links and as the materialized `path` /
+  `depth` each folder and project carries. The links are the source of truth
+  (authorization walks them), so validation re-derives every path from them and
+  reports the rows that disagree, plus parent cycles and missing parents;
+  `repairOptions.rebuildPaths` rewrites what it found. Drift is otherwise
+  invisible — a folder move that rewrote only descendant *folders* left the
+  projects beneath naming an ancestor they no longer had (STR-114).
 
 ## Request lifecycle: `POST /api/vms`
 
