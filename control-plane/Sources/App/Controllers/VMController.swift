@@ -927,12 +927,26 @@ struct VMController: RouteCollection {
                         "Deleting VM record without agent teardown; agent is offline",
                         metadata: ["vm_id": .string(vmID.uuidString)])
                 }
+                let outcome: ResourceFinalizerService.ClearOutcome
                 do {
-                    try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app)
+                    outcome = try await ResourceFinalizerService.clear(
+                        .agentAbsent, from: vm, on: db, app: app)
                 } catch {
                     throw ResourceOperationCoordinator.WorkError(
                         "Failed to delete VM record: \(error.localizedDescription)")
                 }
+                // Another participant still owes cleanup: the delete is under
+                // way, not done, so the operation stays pending rather than
+                // reporting a removal that has not happened.
+                if case .held(let remaining) = outcome {
+                    app.logger.info(
+                        "VM delete is waiting on finalizers other than the agent's",
+                        metadata: [
+                            "vm_id": .string(vmID.uuidString),
+                            "finalizers": .string(remaining.joined(separator: ",")),
+                        ])
+                }
+                return outcome.isRemoved
             }
 
         let operation = try await req.resourceOperationCoordinator.perform(

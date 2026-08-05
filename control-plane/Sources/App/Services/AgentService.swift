@@ -921,6 +921,12 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Reap workloads whose finalizers all cleared but whose row
+                    // outlived the process that owed the removal (STR-144).
+                    await sweepOrphanedTerminatingResources()
+
+                    try self.checkTickPreconditions()
+
                     // Delete sandboxes past their TTL, and reap terminal
                     // sandbox records past the retention window (issue #424).
                     await sweepExpiredSandboxes()
@@ -1204,6 +1210,81 @@ actor AgentService {
             }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
+        }
+    }
+
+    /// How long a terminating workload may sit with every finalizer cleared
+    /// before this sweep reaps it. Generous on purpose: the delete path's own
+    /// reap follows its finalizer clear by milliseconds, so anything this old
+    /// lost the process that owed it (crash, drain, OOM kill) rather than
+    /// being slow.
+    static let orphanedTerminatingBudgetSeconds: TimeInterval = 60
+
+    /// Reaps workloads whose finalizers all cleared but whose row survived
+    /// (STR-144). Clearing a token and removing the row are two commits; a
+    /// crash between them leaves a terminating row with an empty list, which
+    /// still holds quota and still appears in listings.
+    ///
+    /// Participants with a repeating trigger heal themselves — every
+    /// observed-state report re-drives `agent.absent`. This is the backstop for
+    /// the ones that do not: the offline/unplaced direct path is a one-shot
+    /// background task, and the sandbox expiry sweep's deletions are unattended,
+    /// so without this a drained replica could strand a row with nobody left to
+    /// notice. It is also what lets a future participant be added without each
+    /// one inventing its own retry.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepOrphanedTerminatingResources() async {
+        guard !isShutDown, !app.didShutdown else { return }
+        // Cluster-singleton like the other sweeps: the reap claim would make
+        // concurrent passes safe anyway, but there is no reason to pay for
+        // every replica scanning.
+        guard await app.coordination.acquireSweepLock("orphaned_terminating") else { return }
+
+        let db = app.db
+        let cutoff = Date().addingTimeInterval(-Self.orphanedTerminatingBudgetSeconds)
+
+        do {
+            // `finalizers` is filtered in Swift, not SQL: Fluent cannot express
+            // array cardinality, and the scanned set is only workloads that
+            // have been terminating for at least a minute — normally empty.
+            let vms = try await VM.query(on: db)
+                .filter(\.$desiredStatus == .absent)
+                .filterAged(before: cutoff, by: \.$updatedAt, fallingBackTo: \.$createdAt)
+                .all()
+            await reapOrphanedTerminating(vms.filter { $0.finalizers.isEmpty }, kind: "VM", on: db)
+
+            let sandboxes = try await Sandbox.query(on: db)
+                .filter(\.$desiredStatus == .absent)
+                .filterAged(before: cutoff, by: \.$updatedAt, fallingBackTo: \.$createdAt)
+                .all()
+            await reapOrphanedTerminating(
+                sandboxes.filter { $0.finalizers.isEmpty }, kind: "sandbox", on: db)
+        } catch {
+            app.logger.error("Orphaned-terminating sweep failed: \(error)")
+        }
+    }
+
+    /// Drives one kind's orphans through the ordinary clear path — clearing an
+    /// already-cleared token on an empty list reaps — so the sweep shares the
+    /// reap claim and per-kind teardown instead of re-spelling either.
+    private func reapOrphanedTerminating<R: FinalizableResource>(
+        _ resources: [R], kind: String, on db: any Database
+    ) async {
+        for resource in resources {
+            guard let id = resource.id else { continue }
+            do {
+                let outcome = try await ResourceFinalizerService.clear(
+                    .agentAbsent, from: resource, on: db, app: app)
+                guard case .reaped = outcome else { continue }
+                app.logger.warning(
+                    "Reaped a terminating \(kind) whose row outlived its last finalizer",
+                    metadata: ["resourceId": .string(id.uuidString)])
+            } catch {
+                app.logger.error(
+                    "Failed to reap orphaned terminating \(kind): \(error)",
+                    metadata: ["resourceId": .string(id.uuidString)])
+            }
         }
     }
 

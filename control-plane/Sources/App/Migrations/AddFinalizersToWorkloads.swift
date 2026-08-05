@@ -19,23 +19,21 @@ struct AddFinalizersToWorkloads: AsyncMigration {
     private static let column = "finalizers"
 
     func prepare(on database: any Database) async throws {
-        // Postgres spells an empty array `'{}'` (the `agents.hypervisors`
-        // precedent).
-        let emptyArrayDefault =
-            (database as? any SQLDatabase)?.dialect.name == "postgresql"
-            ? "DEFAULT '{}'"
-            : "DEFAULT '[]'"
-
+        // Postgres-only, deliberately unbranched: the SQLite backend is gone,
+        // and `ResourceFinalizerService` clears tokens with `array_remove`, so
+        // a column created under any other dialect would be one no participant
+        // could ever clear. `'{}'` is how Postgres spells an empty array (the
+        // `agents.hypervisors` precedent).
         for schema in [VM.schema, Sandbox.schema] {
             try await database.schema(schema)
                 .field(
                     .init(stringLiteral: Self.column), .array(of: .string), .required,
-                    .custom(emptyArrayDefault)
+                    .custom("DEFAULT '{}'")
                 )
                 .update()
         }
 
-        guard let sql = database as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        guard let sql = database as? any SQLDatabase else { return }
         for schema in [VM.schema, Sandbox.schema] {
             try await sql.raw(
                 """

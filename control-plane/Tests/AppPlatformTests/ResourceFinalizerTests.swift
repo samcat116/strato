@@ -1,5 +1,6 @@
 import AppTestSupport
 import Fluent
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -192,9 +193,9 @@ final class ResourceFinalizerTests {
             #expect(held.finalizers == [Self.foreign.rawValue])
 
             // The last participant clears, and the row goes with it.
-            let removed = try await ResourceFinalizerService.clear(
+            let outcome = try await ResourceFinalizerService.clear(
                 Self.foreign, from: held, on: app.db, app: app)
-            #expect(removed)
+            #expect(outcome == .reaped)
             #expect(try await VM.find(vmID, on: app.db) == nil)
         }
     }
@@ -209,15 +210,16 @@ final class ResourceFinalizerTests {
 
             let first = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: vm, on: app.db, app: app)
-            #expect(first)
+            #expect(first == .reaped)
             #expect(try await VM.find(vmID, on: app.db) == nil)
 
             // The participant's trigger repeats (every observed-state report
             // omits a torn-down VM), so a second clear against a reaped row
-            // must be a quiet no-op.
+            // must be a quiet no-op — and must not claim a second removal, or
+            // the direct path would report a delete it did not perform.
             let second = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: vm, on: app.db, app: app)
-            #expect(!second)
+            #expect(second == .alreadyGone)
         }
     }
 
@@ -229,9 +231,9 @@ final class ResourceFinalizerTests {
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
 
-            let removed = try await ResourceFinalizerService.clear(
+            let outcome = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: vm, on: app.db, app: app)
-            #expect(!removed)
+            #expect(outcome == .notTerminating)
 
             let alive = try #require(try await VM.find(vmID, on: app.db))
             #expect(alive.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
@@ -246,12 +248,161 @@ final class ResourceFinalizerTests {
             vm.setDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
-            let removed = try await ResourceFinalizerService.clear(
+            let outcome = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: vm, on: app.db, app: app)
-            #expect(!removed)
+            #expect(outcome == .held([Self.foreign.rawValue]))
 
             let held = try #require(try await VM.find(vmID, on: app.db))
             #expect(held.finalizers == [Self.foreign.rawValue])
+        }
+    }
+
+    @Test("A terminating row left with an empty list by a crash reaps on the next clear")
+    func emptyListLeftByACrashReapsOnTheNextClear() async throws {
+        try await withFinalizerApp { app, _, _, vm, _ in
+            let vmID = try vm.requireID()
+
+            // Exactly the state a crash between the token's commit and the
+            // row's leaves behind — the case the two-commit design leans on.
+            vm.finalizers = []
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+
+            let outcome = try await ResourceFinalizerService.clear(
+                .agentAbsent, from: vm, on: app.db, app: app)
+            #expect(outcome == .reaped)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+        }
+    }
+
+    // MARK: - The direct path (offline agent)
+
+    @Test("An offline agent's VM is reaped by the direct path and the operation succeeds")
+    func offlineAgentDirectPathReaps() async throws {
+        try await withFinalizerApp { app, _, _, vm, token in
+            // Placed on an agent that was never registered: online lookup
+            // fails, so DELETE takes the direct path rather than state sync.
+            vm.hypervisorId = UUID().uuidString
+            try await vm.save(on: app.db)
+            let vmID = try vm.requireID()
+
+            try await app.test(.DELETE, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+            let operation = try #require(try await self.deleteOperation(for: vmID, on: app.db))
+            #expect(operation.status == .succeeded)
+        }
+    }
+
+    @Test("The direct path leaves the operation pending while another finalizer holds the row")
+    func offlineAgentDirectPathLeavesOperationPendingWhenHeld() async throws {
+        try await withFinalizerApp { app, _, _, vm, token in
+            vm.hypervisorId = UUID().uuidString
+            vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            let vmID = try vm.requireID()
+
+            try await app.test(.DELETE, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+
+            // Force-clearing the agent's token does not finish the delete, so
+            // the operation must not claim it did.
+            let held = try #require(try await VM.find(vmID, on: app.db))
+            #expect(held.finalizers == [Self.foreign.rawValue])
+            let operation = try #require(try await self.deleteOperation(for: vmID, on: app.db))
+            #expect(operation.status == .pending)
+        }
+    }
+
+    // MARK: - The orphan backstop
+
+    @Test("The sweep reaps a terminating row whose finalizers all cleared")
+    func sweepReapsOrphanedTerminatingRows() async throws {
+        try await withFinalizerApp { app, _, _, vm, _ in
+            let vmID = try vm.requireID()
+            vm.finalizers = []
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
+
+            await app.agentService.sweepOrphanedTerminatingResources()
+
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+        }
+    }
+
+    @Test("The sweep leaves a row that still owes a finalizer, however old")
+    func sweepLeavesHeldRowsAlone() async throws {
+        try await withFinalizerApp { app, _, _, vm, _ in
+            let vmID = try vm.requireID()
+            vm.finalizers = [Self.foreign.rawValue]
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
+
+            await app.agentService.sweepOrphanedTerminatingResources()
+
+            let held = try #require(try await VM.find(vmID, on: app.db))
+            #expect(held.finalizers == [Self.foreign.rawValue])
+        }
+    }
+
+    @Test("The sweep leaves a live row alone, however old")
+    func sweepLeavesLiveRowsAlone() async throws {
+        try await withFinalizerApp { app, _, _, vm, _ in
+            let vmID = try vm.requireID()
+            try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
+
+            await app.agentService.sweepOrphanedTerminatingResources()
+
+            #expect(try await VM.find(vmID, on: app.db) != nil)
+        }
+    }
+
+    // MARK: - Migration
+
+    @Test("The migration backfills agent.absent onto deletions already in flight")
+    func migrationBackfillsInFlightDeletions() async throws {
+        try await withFinalizerApp { app, _, project, placedAndTerminating, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let unplacedAndTerminating = try await builder.createVM(name: "unplaced", project: project)
+            let placedAndLive = try await builder.createVM(name: "live", project: project)
+
+            placedAndTerminating.hypervisorId = UUID().uuidString
+            placedAndTerminating.setDesiredStatus(.absent)
+            try await placedAndTerminating.save(on: app.db)
+            unplacedAndTerminating.setDesiredStatus(.absent)
+            try await unplacedAndTerminating.save(on: app.db)
+            placedAndLive.hypervisorId = UUID().uuidString
+            try await placedAndLive.save(on: app.db)
+
+            // Drop the column and re-add it, so the rows above are exactly what
+            // an upgrade finds: deletions in flight, written before finalizers
+            // existed. This is the one piece that fails *silently* if the
+            // desired-status raw value ever drifts from the predicate.
+            let migration = AddFinalizersToWorkloads()
+            try await migration.revert(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            let placed = try #require(try await VM.find(placedAndTerminating.id, on: app.db))
+            #expect(placed.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+
+            // Nothing has to confirm a teardown that never reached an agent.
+            let unplaced = try #require(try await VM.find(unplacedAndTerminating.id, on: app.db))
+            #expect(unplaced.finalizers.isEmpty)
+
+            let live = try #require(try await VM.find(placedAndLive.id, on: app.db))
+            #expect(live.finalizers.isEmpty)
         }
     }
 
@@ -280,5 +431,54 @@ final class ResourceFinalizerTests {
 
             #expect(try await Sandbox.find(sandboxID, on: app.db) == nil)
         }
+    }
+
+    @Test("The expiry sweep stamps finalizers like a user-initiated delete")
+    func expirySweepStampsFinalizers() async throws {
+        try await withFinalizerApp { app, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let sandbox = try await builder.createSandbox(name: "expiring-sbx", project: project)
+            // Online agent, so the sweep takes the state-sync path and the row
+            // waits for the agent's confirmation rather than going directly.
+            try await self.placeOnAgent(app: app, sandbox: sandbox)
+            let sandboxID = try sandbox.requireID()
+
+            sandbox.ttlSeconds = 60
+            sandbox.createdAt = Date().addingTimeInterval(-120)
+            try await sandbox.save(on: app.db)
+
+            await app.agentService.sweepExpiredSandboxes()
+
+            let terminating = try #require(try await Sandbox.find(sandboxID, on: app.db))
+            #expect(terminating.desiredStatus == .absent)
+            #expect(terminating.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func deleteOperation(for resourceID: UUID, on db: any Database) async throws
+        -> ResourceOperation?
+    {
+        try await ResourceOperation.query(on: db)
+            .filter(\.$resourceID == resourceID)
+            .filter(\.$kind == .delete)
+            .first()
+    }
+
+    /// Ages a row's `updatedAt` past a sweep's budget. Raw SQL because Fluent
+    /// stamps `updatedAt` on every save, so it cannot be backdated through the
+    /// model the way `createdAt` can.
+    private func backdate<M: Model>(
+        _ type: M.Type, id: UUID, bySeconds seconds: TimeInterval, on db: any Database
+    ) async throws {
+        let sql = try #require(db as? any SQLDatabase)
+        try await sql.raw(
+            """
+            UPDATE \(ident: M.schema)
+            SET updated_at = \(bind: Date().addingTimeInterval(-seconds))
+            WHERE id = \(bind: id)
+            """
+        ).run()
     }
 }

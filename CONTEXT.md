@@ -93,7 +93,13 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Reap** — removing the row and everything that goes with it (external
   cleanup, IAM bindings, quota, placement reservation) once the last finalizer
   clears. `ResourceFinalizerService.clear` is the single entry point;
-  `FinalizableResource.reap` is the per-kind teardown.
+  `FinalizableResource.reap` is the per-kind teardown, which claims the row so
+  exactly one of two racing clears reports the removal.
+
+- **Orphaned terminating resource** — a terminating row whose finalizers all
+  cleared but whose removal never happened (a crash or drain between the two
+  commits). `sweepOrphanedTerminatingResources` is the cluster-singleton
+  backstop that reaps them, so no participant has to invent its own retry.
 
 ## Cross-replica coordination
 

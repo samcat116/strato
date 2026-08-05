@@ -23,11 +23,15 @@ protocol FinalizableResource: Model where IDValue == UUID {
     var isTerminating: Bool { get }
 
     /// Everything that must happen when the last finalizer clears: external
-    /// cleanup first, then the row and the accounting that goes with it. Must
-    /// tolerate running again after a crash partway through — the row is what
-    /// records that it ran, so anything before the row's own removal can be
-    /// repeated.
-    static func reap(_ resource: Self, on db: any Database, app: Application) async throws
+    /// cleanup first, then the row and the accounting that goes with it.
+    ///
+    /// Returns whether *this* call removed the row. Two clears can decide to
+    /// reap concurrently — the applier on one replica racing the direct path on
+    /// another — so the implementation claims the row inside its transaction
+    /// (`reapClaim`) and the loser returns false rather than logging a removal
+    /// it did not perform. Everything before the claim must tolerate running
+    /// twice; the row is what records that the teardown finished.
+    static func reap(_ resource: Self, on db: any Database, app: Application) async throws -> Bool
 }
 
 /// The finalizer bookkeeping shared by every terminating resource: stamping
@@ -35,6 +39,32 @@ protocol FinalizableResource: Model where IDValue == UUID {
 /// against other participants and other replicas — reaping the row when it was
 /// the last one.
 enum ResourceFinalizerService {
+
+    /// What one `clear` did. Distinguishing these matters to callers: a
+    /// deletion is only complete on `.reaped`/`.alreadyGone`, and `.held` is
+    /// the one case where a row legitimately outlives its clear.
+    enum ClearOutcome: Sendable, Equatable {
+        /// The last token cleared and this call removed the row.
+        case reaped
+        /// The row was already gone — another participant, or another replica,
+        /// reaped it first.
+        case alreadyGone
+        /// Tokens remain; these are they.
+        case held([String])
+        /// The resource is not terminating, so there was nothing to clear.
+        case notTerminating
+
+        /// Whether the resource is now absent from the database, however it got
+        /// that way. This is what a caller deciding "is the delete done?"
+        /// should ask — not `== .reaped`, which is only true for the winner of
+        /// a race.
+        var isRemoved: Bool {
+            switch self {
+            case .reaped, .alreadyGone: return true
+            case .held, .notTerminating: return false
+            }
+        }
+    }
 
     /// The tokens a fresh deletion of `resource` stamps. A resource with no
     /// agent has nothing to confirm, so it stamps nothing and reaps on the
@@ -53,28 +83,31 @@ enum ResourceFinalizerService {
     }
 
     /// Idempotently clears `token` from a terminating resource, reaping the row
-    /// when it was the last one outstanding. Returns whether the row was
-    /// removed.
+    /// when it was the last one outstanding.
     ///
     /// The removal is a single `array_remove` statement rather than a
     /// read-modify-write: two participants clearing concurrently — on two
     /// replicas, in any order — would otherwise lose one of the updates and
-    /// resurrect a token nothing will ever clear again.
+    /// resurrect a token nothing will ever clear again. The statement returns
+    /// the authoritative post-update list, which is also what the in-memory
+    /// model is set to, so a later `save` on the same instance cannot write
+    /// back a stale list and undo that guarantee.
     ///
-    /// Clearing the token and reaping the row are two commits, not one. A crash
-    /// in between leaves a terminating row with an empty list, which the
+    /// Clearing the token and reaping the row are two commits. A crash in
+    /// between leaves a terminating row with an empty list, which the
     /// participant's next trigger reaps: clearing an already-cleared token
-    /// still reaps an empty list. That is the whole reason a participant is
-    /// required to have a repeating trigger — for `agent.absent`, every
-    /// observed-state report that omits the workload.
+    /// still reaps an empty list. For `agent.absent` that trigger is every
+    /// observed-state report omitting the workload; for the one-shot direct
+    /// path it is `sweepOrphanedTerminatingResources`, the backstop that also
+    /// covers any future participant whose trigger does not repeat.
     @discardableResult
     static func clear<R: FinalizableResource>(
         _ token: ResourceFinalizer,
         from resource: R,
         on db: any Database,
         app: Application
-    ) async throws -> Bool {
-        guard resource.isTerminating else { return false }
+    ) async throws -> ClearOutcome {
+        guard resource.isTerminating else { return .notTerminating }
         let id = try resource.requireID()
 
         guard let sql = db as? any SQLDatabase else {
@@ -86,17 +119,17 @@ enum ResourceFinalizerService {
             UPDATE \(ident: R.schema)
             SET finalizers = array_remove(finalizers, \(bind: token.rawValue))
             WHERE id = \(bind: id)
-            RETURNING coalesce(array_length(finalizers, 1), 0) AS remaining
+            RETURNING finalizers
             """
-        ).first(decoding: Remaining.self)
+        ).first(decoding: RemainingFinalizers.self)
 
-        // No row: another replica already reaped it. Nothing to do, and
-        // nothing to report as removed — whoever removed it logged it.
-        guard let row else { return false }
+        guard let row else { return .alreadyGone }
 
-        resource.finalizers.removeAll { $0 == token.rawValue }
+        // The post-update list from the database, not a hand-computed one: this
+        // instance may be saved later, and the row may have changed under it.
+        resource.finalizers = row.finalizers
 
-        guard row.remaining == 0 else { return false }
+        guard row.finalizers.isEmpty else { return .held(row.finalizers) }
 
         // Shutdown's drain cancels the background tasks the direct-deletion
         // path runs on, and `reap` opens a transaction on a database that is
@@ -105,14 +138,28 @@ enum ResourceFinalizerService {
         // verdict recording bails on a drained application anyway.
         try Task.checkCancellation()
 
-        try await R.reap(resource, on: db, app: app)
-        return true
+        return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
-    /// `RETURNING` reads the post-update row, so `remaining` is what is left
-    /// *after* this participant's token is gone.
-    private struct Remaining: Decodable {
-        let remaining: Int
+    /// Claims the right to reap `id` inside `tx`, returning false when another
+    /// writer already removed the row. `SELECT … FOR UPDATE` holds the row lock
+    /// for the rest of the transaction, so a concurrent reap blocks here and
+    /// then finds nothing — which is what makes "this call removed the row"
+    /// exactly true for one of them.
+    static func reapClaim<R: FinalizableResource>(
+        _ type: R.Type, id: UUID, in tx: any Database
+    ) async throws -> Bool {
+        guard let sql = tx as? any SQLDatabase else {
+            throw FinalizerError.unsupportedDatabase
+        }
+        return try await sql.raw(
+            "SELECT id FROM \(ident: R.schema) WHERE id = \(bind: id) FOR UPDATE"
+        ).first() != nil
+    }
+
+    /// The post-update finalizer list, read back from `RETURNING`.
+    private struct RemainingFinalizers: Decodable {
+        let finalizers: [String]
     }
 
     enum FinalizerError: Error, CustomStringConvertible {
@@ -132,21 +179,28 @@ enum ResourceFinalizerService {
 extension VM: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
-    static func reap(_ vm: VM, on db: any Database, app: Application) async throws {
+    static func reap(_ vm: VM, on db: any Database, app: Application) async throws -> Bool {
         let vmID = try vm.requireID()
 
-        // Bindings first, unlike the delete-then-revoke order the other
-        // controllers use: the revoke reads the VM's checkpoints, whose rows
-        // the delete below cascades away (STR-112).
-        try await db.transaction { db in
-            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
-            try await vm.delete(on: db)
-            try await QuotaEnforcementService.release(for: vm, on: db)
+        let reaped = try await db.transaction { tx in
+            guard try await ResourceFinalizerService.reapClaim(VM.self, id: vmID, in: tx) else {
+                return false
+            }
+            // Bindings first, unlike the delete-then-revoke order the other
+            // controllers use: the revoke reads the VM's checkpoints, whose
+            // rows the delete below cascades away (STR-112).
+            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: tx)
+            try await vm.delete(on: tx)
+            try await QuotaEnforcementService.release(for: vm, on: tx)
+            return true
         }
+
+        guard reaped else { return false }
 
         if let agentId = vm.hypervisorId {
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
         }
+        return true
     }
 }
 
@@ -155,24 +209,34 @@ extension VM: FinalizableResource {
 extension Sandbox: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
-    static func reap(_ sandbox: Sandbox, on db: any Database, app: Application) async throws {
+    static func reap(_ sandbox: Sandbox, on db: any Database, app: Application) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
 
         // Exported snapshot objects first: the snapshot rows cascade with the
-        // sandbox row below (issue #428).
+        // sandbox row below (issue #428). Outside the transaction because it is
+        // object-store I/O, so it can run twice — once per side of a reap race,
+        // or again after a crash. Deleting an already-deleted object is a
+        // no-op, which is what makes that safe.
         await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
 
-        // Bindings first, for the same reason the exported objects go first:
-        // the revoke reads the snapshot rows the delete cascades away
-        // (STR-112).
-        try await db.transaction { db in
-            try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
-            try await sandbox.delete(on: db)
-            try await QuotaEnforcementService.release(for: sandbox, on: db)
+        let reaped = try await db.transaction { tx in
+            guard try await ResourceFinalizerService.reapClaim(Sandbox.self, id: sandboxID, in: tx) else {
+                return false
+            }
+            // Bindings first, for the same reason the exported objects go
+            // first: the revoke reads the snapshot rows the delete cascades
+            // away (STR-112).
+            try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: tx)
+            try await sandbox.delete(on: tx)
+            try await QuotaEnforcementService.release(for: sandbox, on: tx)
+            return true
         }
+
+        guard reaped else { return false }
 
         if let agentId = sandbox.hypervisorId {
             await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
         }
+        return true
     }
 }

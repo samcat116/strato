@@ -848,15 +848,21 @@ struct SandboxController: RouteCollection {
     /// or offline cluster-wide) or that is being expired: nothing will ever
     /// confirm teardown, so the agent's finalizer is force-cleared, which reaps
     /// the row (exported snapshot objects, bindings, record, quota) since it is
-    /// the only participant. Wrapped by the coordinator's `.directResolution`
-    /// dispatch, which supplies the still-pending guard and records the
-    /// verdict. If the agent ever comes back still carrying the sandbox, its
-    /// observed-state report surfaces it for operator attention.
+    /// the only participant today. Returns whether the row is gone — false when
+    /// another participant still holds a finalizer, which keeps the operation
+    /// pending instead of reporting a removal that has not happened. Wrapped by
+    /// the coordinator's `.directResolution` dispatch, which supplies the
+    /// still-pending guard and records the verdict. If the agent ever comes
+    /// back still carrying the sandbox, its observed-state report surfaces it
+    /// for operator attention.
     ///
     /// Internal rather than private because the expiry sweep (issue #424)
     /// deletes down this same path, so a TTL-driven deletion releases quota
     /// exactly like a user-initiated one.
-    static func performDirectDeletion(sandbox: Sandbox, on db: any Database, app: Application) async throws {
+    @discardableResult
+    static func performDirectDeletion(
+        sandbox: Sandbox, on db: any Database, app: Application
+    ) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
         if sandbox.hypervisorId != nil {
             app.logger.warning(
@@ -864,11 +870,25 @@ struct SandboxController: RouteCollection {
                 metadata: ["sandbox_id": .string(sandboxID.uuidString)])
         }
 
+        let outcome: ResourceFinalizerService.ClearOutcome
         do {
-            try await ResourceFinalizerService.clear(.agentAbsent, from: sandbox, on: db, app: app)
+            outcome = try await ResourceFinalizerService.clear(
+                .agentAbsent, from: sandbox, on: db, app: app)
         } catch {
             throw ResourceOperationCoordinator.WorkError(
                 "Failed to delete sandbox record: \(error.localizedDescription)")
         }
+        // Another participant still owes cleanup: the delete is under way, not
+        // done, so the caller leaves the operation pending rather than
+        // reporting a removal that has not happened.
+        if case .held(let remaining) = outcome {
+            app.logger.info(
+                "Sandbox delete is waiting on finalizers other than the agent's",
+                metadata: [
+                    "sandbox_id": .string(sandboxID.uuidString),
+                    "finalizers": .string(remaining.joined(separator: ",")),
+                ])
+        }
+        return outcome.isRemoved
     }
 }

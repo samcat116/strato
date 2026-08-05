@@ -740,23 +740,25 @@ struct ObservedStateApplier {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            let removed = try await ResourceFinalizerService.clear(
-                .agentAbsent, from: vm, on: db, app: app)
-            guard removed else {
-                // Other participants still owe cleanup. Reported every report
+            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
+            case .reaped:
+                app.logger.info(
+                    "VM deletion confirmed by agent report; record removed",
+                    metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                // Other participants still owe cleanup. Logged on every report
                 // until they finish, so this stays at debug.
                 app.logger.debug(
                     "VM teardown confirmed by agent report; awaiting finalizers",
                     metadata: [
                         "vmId": .string(vmID.uuidString), "agentId": .string(agentId),
-                        "finalizers": .string(vm.finalizers.joined(separator: ",")),
+                        "finalizers": .string(remaining.joined(separator: ",")),
                     ])
-                return
+            case .alreadyGone, .notTerminating:
+                // Raced another reaper, or the row went between the query and
+                // here. Nothing to say: whoever removed it logged the removal.
+                break
             }
-
-            app.logger.info(
-                "VM deletion confirmed by agent report; record removed",
-                metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
             return
         }
 
@@ -884,21 +886,23 @@ struct ObservedStateApplier {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            let removed = try await ResourceFinalizerService.clear(
+            switch try await ResourceFinalizerService.clear(
                 .agentAbsent, from: sandbox, on: db, app: app)
-            guard removed else {
+            {
+            case .reaped:
+                app.logger.info(
+                    "Sandbox deletion confirmed by agent report; record removed",
+                    metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
                 app.logger.debug(
                     "Sandbox teardown confirmed by agent report; awaiting finalizers",
                     metadata: [
                         "sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId),
-                        "finalizers": .string(sandbox.finalizers.joined(separator: ",")),
+                        "finalizers": .string(remaining.joined(separator: ",")),
                     ])
-                return
+            case .alreadyGone, .notTerminating:
+                break
             }
-
-            app.logger.info(
-                "Sandbox deletion confirmed by agent report; record removed",
-                metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
             return
         }
 

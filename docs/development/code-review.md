@@ -306,13 +306,15 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 - Stamp **before** the mark: `stampForDeletion` reads whether the resource is
   already terminating, and a re-stamp after the flip resurrects tokens their
   participants have already cleared.
-- A new participant must be idempotent, crash-safe, and order-independent, and
-  must have something that retries it. `agent.absent` is retried by every
-  observed-state report; a participant with no repeating trigger needs a sweep
-  before it can be stamped, or it strands rows.
+- A new participant must be idempotent, crash-safe, and order-independent.
+  `sweepOrphanedTerminatingResources` retries the *reap*, but nothing retries a
+  participant's own work — if its trigger doesn't repeat, it needs one.
 - Clear a token with the atomic `array_remove` path, never by reading
   `finalizers`, mutating, and saving — two replicas doing that lose one of the
   updates and resurrect a token nothing will clear again.
+- A delete path must report whether the row is actually gone. Recording a
+  `succeeded` verdict on a `.held` outcome tells the user a resource is deleted
+  while its row is still standing.
 
 **Multi-replica**
 - Valkey **fails open**. Any new use must degrade to correct-but-slower, never

@@ -217,17 +217,25 @@ clears its own token from wherever it actually runs, and
 bindings, the record, quota, placement reservation
 (`FinalizableResource.reap`) — when the last token goes. The token is cleared
 with a single `array_remove`, never a read-modify-write, so two participants on
-two replicas cannot lose each other's update. Clearing the token and reaping the
-row are two commits: a crash in between leaves a terminating row with an empty
-list, which the participant's next trigger reaps, since clearing an
-already-cleared token still reaps an empty list. That is why every participant
-must have a repeating trigger.
+two replicas cannot lose each other's update, and the reap claims the row
+(`SELECT … FOR UPDATE`) inside its own transaction so exactly one of two racing
+clears reports the removal. Clearing the token and reaping the row are two
+commits: a crash in between leaves a terminating row with an empty list, which
+the participant's next trigger reaps, since clearing an already-cleared token
+still reaps an empty list. `agent.absent` re-triggers on every observed-state
+report; the one-shot direct path and unattended expiry deletions have no such
+trigger, so `sweepOrphanedTerminatingResources` (cluster-singleton, 60s budget)
+is the universal backstop — and the reason a new participant does not have to
+invent its own retry.
 
 The only participant today is the observed-state applier's confirmation of
 absence — the agent-confirmed tombstone dance, now expressed as one token among
 a list. Offline or unplaced workloads take the direct path, which force-clears
 `agent.absent` for the same reason it always deleted directly: a dead agent
-must not make its workloads undeletable. `ipam.release`, `dns.deregister`, and
+must not make its workloads undeletable. That path reports back whether the row
+is actually gone; when another participant still holds it, the delete operation
+stays `pending` rather than telling the client a workload is deleted while its
+row is standing. `ipam.release`, `dns.deregister`, and
 `fip.release` are named in the ADR but **not stamped**: each is a database
 cascade today (`vm_interface_addresses` CASCADE, zone contents derived on
 demand and never stored, `floating_ips.interface_id` SET NULL), and a token for
