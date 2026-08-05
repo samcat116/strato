@@ -28,8 +28,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
     level-triggered sync). The verdict is recorded immediately.
   - *placement* — background scheduling + placement + first sync (`create`).
     Records a failure verdict on error; success is deferred to the applier.
-  - *deletion* — nudge the agent when online (row removed once its report
-    confirms absence), else remove the record directly.
+  - *deletion* — nudge the agent when online (the row is reaped once its
+    report confirms absence clears the `agent.absent` finalizer), else clear
+    that finalizer directly.
 
 - **Verdict** — the terminal outcome recorded on the operation row
   (`succeeded` / `failed`). `recordVerdict` is the single choke point for the
@@ -70,6 +71,29 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
+
+## Deletion
+
+- **Terminating** — a resource whose `DELETE` has been accepted: desired state
+  is `.absent` and the row is still there. `DELETE` never removes a row.
+
+- **Finalizer** — one named cleanup participant a terminating resource still
+  owes, held as a token in its `finalizers` list (`ResourceFinalizer`, e.g.
+  `agent.absent`). Stamped in the same write that marks the resource absent.
+  A token this replica does not recognize holds the row exactly like one it
+  does — the replica that owns it will clear it.
+
+- **Participant** — the code that clears one token, from wherever it actually
+  runs. Every participant is **idempotent** (its trigger repeats), **crash-safe**
+  (a crash mid-cleanup leaves the token stamped and the step is retried), and
+  **independently retryable** (no participant depends on another's order). The
+  first and currently only one is the observed-state applier's confirmation of
+  absence, which clears `agent.absent`.
+
+- **Reap** — removing the row and everything that goes with it (external
+  cleanup, IAM bindings, quota, placement reservation) once the last finalizer
+  clears. `ResourceFinalizerService.clear` is the single entry point;
+  `FinalizableResource.reap` is the per-kind teardown.
 
 ## Cross-replica coordination
 

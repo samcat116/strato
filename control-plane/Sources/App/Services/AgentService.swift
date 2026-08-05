@@ -1425,6 +1425,10 @@ actor AgentService {
             ) { db in
                 try await SandboxController.requireSnapshotLineageDeletable(
                     for: sandboxID, on: db)
+                // Same stamp-then-mark order as the user-initiated delete: an
+                // expiry that races a user's DELETE must not re-stamp a token
+                // its participant already cleared.
+                ResourceFinalizerService.stampForDeletion(sandbox)
                 sandbox.setDesiredStatus(.absent)
                 try await sandbox.save(on: db)
             }

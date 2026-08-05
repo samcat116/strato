@@ -895,12 +895,15 @@ struct VMController: RouteCollection {
         let user = try req.requireActingUser("Mutating a VM")
         let vm = try await fetchVMWithPermission(req: req, permission: "delete")
 
-        // Deletion via state sync: desired becomes `.absent`, the agent tears
-        // the VM down on its next sync, and the row is removed only once a
-        // report confirms absence — so the delete survives restarts on both
-        // sides. Unassigned VMs and offline agents keep a direct database
-        // path: dead agents must not make their VMs undeletable, and there is
-        // no agent to confirm anything anyway.
+        // Deletion via state sync: desired becomes `.absent`, the VM is
+        // stamped with the finalizers its teardown owes, the agent tears the
+        // VM down on its next sync, and the row is removed only once the last
+        // finalizer clears — for a placed VM, the `agent.absent` token the
+        // observed-state report's confirmation of absence removes. So the
+        // delete survives restarts on both sides. Unassigned VMs and offline
+        // agents keep a direct path that force-clears that token: dead agents
+        // must not make their VMs undeletable, and there is no agent to
+        // confirm anything anyway.
         let vmID = try vm.requireID()
         let userID = try user.requireID()
         let app = req.application
@@ -911,9 +914,10 @@ struct VMController: RouteCollection {
             agentOnline = false
         }
 
-        // Offline/unassigned: remove the record directly without agent teardown.
-        // If the agent ever comes back still carrying the VM, its observed-state
-        // report surfaces it as an orphan for operator attention.
+        // Offline/unassigned: nothing will ever confirm teardown, so clear the
+        // agent's finalizer here — which reaps the row, since it is the only
+        // participant. If the agent ever comes back still carrying the VM, its
+        // observed-state report surfaces it as an orphan for operator attention.
         let strategy: ResourceOperationCoordinator.Strategy =
             agentOnline
             ? .stateSync
@@ -923,16 +927,8 @@ struct VMController: RouteCollection {
                         "Deleting VM record without agent teardown; agent is offline",
                         metadata: ["vm_id": .string(vmID.uuidString)])
                 }
-                // Delete the VM, then recompute its quotas from the remaining
-                // VMs, in one transaction so the reservation counters and the
-                // VM row stay consistent. The VM's IAM bindings go in the same
-                // transaction — they have no FK to the row (STR-112).
                 do {
-                    try await db.transaction { db in
-                        try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
-                        try await vm.delete(on: db)
-                        try await QuotaEnforcementService.release(for: vm, on: db)
-                    }
+                    try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app)
                 } catch {
                     throw ResourceOperationCoordinator.WorkError(
                         "Failed to delete VM record: \(error.localizedDescription)")
@@ -943,6 +939,10 @@ struct VMController: RouteCollection {
             .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
             hypervisorId: vm.hypervisorId, dispatch: strategy, on: req.db, app: app
         ) { @Sendable db in
+            // Stamp before the mark: `stampForDeletion` reads whether the VM
+            // is already terminating, and re-stamping a second DELETE would
+            // resurrect tokens their participants have already cleared.
+            ResourceFinalizerService.stampForDeletion(vm)
             vm.setDesiredStatus(.absent)
             try await vm.save(on: db)
         }
