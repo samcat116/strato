@@ -54,6 +54,21 @@ public struct DesiredVMState: Codable, Sendable {
     /// have the VM can materialize it. Download URLs are control-plane-relative
     /// paths fetched over SVID mTLS — no signature, so nothing here expires.
     public let imageInfo: ImageInfo?
+    /// What the VM's link-local metadata service should tell the guest about
+    /// itself (STR-48). Riding the sync is what makes the metadata store
+    /// level-triggered, generation-guarded, and replay-safe without a second
+    /// control loop or transport: an operator's edit lands on the next sync
+    /// instead of requiring the guest to be rebuilt around a new seed ISO.
+    ///
+    /// Optional so payloads from older control planes still decode and older
+    /// agents ignore it, matching `subnet6`/`dhcpEnabled`. Absence is
+    /// asymmetric, the `networks`/`sandboxes` hazard in miniature: from a
+    /// control plane that speaks the field (`supportsInstanceMetadata` on the
+    /// envelope's sender version) nil is authoritative — there is nothing to
+    /// serve, and an agent holding stale metadata must drop it — while from an
+    /// older one it means only "no opinion", and the agent leaves whatever it
+    /// serves alone rather than reading silence as an instruction.
+    public let metadata: InstanceMetadata?
 
     public init(
         vmId: UUID,
@@ -61,7 +76,8 @@ public struct DesiredVMState: Codable, Sendable {
         spec: VMSpec,
         desiredStatus: DesiredVMStatus,
         generation: Int64,
-        imageInfo: ImageInfo? = nil
+        imageInfo: ImageInfo? = nil,
+        metadata: InstanceMetadata? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -69,6 +85,7 @@ public struct DesiredVMState: Codable, Sendable {
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.imageInfo = imageInfo
+        self.metadata = metadata
     }
 }
 

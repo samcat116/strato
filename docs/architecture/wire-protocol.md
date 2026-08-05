@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 17), stamped on
+`WireProtocol.swift` holds the protocol version (currently 26), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -67,6 +67,7 @@ ad-hoc checks scattered through the code:
 | `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
 | `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
+| `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -142,6 +143,30 @@ shot: a future unknown mode fails the *whole* sync for that agent and stops it
 converging on everything, not just the VM that carried it. The version gate is
 what keeps that unreachable.
 
+Version 26 adds instance metadata (STR-48): an optional
+`DesiredVMState.metadata` carrying `InstanceMetadata` — hostname, placement,
+NICs, SSH keys, user and vendor data, tags, and a phase-3 `IdentityPolicy` —
+which the agent serves to the guest from the link-local metadata address
+(169.254.169.254) instead of baking it into a boot-time seed ISO. Putting it on
+the sync is the whole point of the design: the metadata store inherits
+level-triggering, generation guards, and replay safety from the machinery that
+already exists, so an operator's edit propagates on the next sync with no
+second control loop, no second transport, and nothing in the payload that can
+expire.
+
+Absence is asymmetric in the v3/v5 sense rather than the harmless v7 sense,
+which is why `supportsInstanceMetadata` gates both directions. Agent-side it
+decides whether a missing key *means* anything: from a v26+ control plane nil
+is authoritative ("nothing to serve" — drop stale metadata), from an older one
+it is silence, and reading silence as authoritative would empty every VM's
+store the moment a control plane is rolled back. Control-plane-side the same
+gate lets sync assembly omit the field for pre-v26 agents, the v20
+`securityGroups` pattern. What it deliberately does *not* do is refuse
+placement, unlike v18/v23: a pre-v26 agent still provisions guests from the
+seed ISO exactly as before, so a VM landing there loses mutable metadata, not
+its ability to boot. Retiring the seed ISO is what will make a placement gate
+load-bearing.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -199,9 +224,11 @@ design; the short version:
   `.created`, and `.absent` is only ever confirmed by the VM's omission from
   the observed set.
 - `DesiredVMState`: the VM's ID, pinned `hypervisorType`, full `VMSpec`,
-  desired status, a **generation** counter, and optional `imageInfo` whose
+  desired status, a **generation** counter, optional `imageInfo` whose
   download URLs are control-plane-relative paths the agent fetches over
-  SVID mTLS (issue #493) — nothing in them expires.
+  SVID mTLS (issue #493) — nothing in them expires — and optional `metadata`
+  (`InstanceMetadata`, v26+), the content the agent's link-local metadata
+  service serves to the guest.
 - `DesiredSandboxState` mirrors it for sandboxes (with an optional registry
   credential); `DesiredNetworkState` reconciles OVN logical networks
   (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP, and an
@@ -290,6 +317,32 @@ The rest of the package is vocabulary used on both sides:
   shared header-detection table: the control plane validates user data
   starts with a header cloud-init dispatches on, and the agent labels the
   payload's MIME part with the matching content type.
+- **`InstanceMetadata`** (`InstanceMetadata.swift`) — what a VM's link-local
+  metadata service tells the guest about itself (STR-48): instance/project
+  ids, hostname, environment, `region`/`availabilityZone` placement keys,
+  `MetadataNIC` entries (device name, MAC, network, address + prefix per
+  family, gateway, MTU, DNS), SSH keys, `userData`/`vendorData`, tags, and an
+  optional `IdentityPolicy` for phase-3 SPIFFE instance identity. It rides
+  `DesiredVMState` rather than a boot-time seed ISO so metadata is mutable and
+  converges like everything else. Treat it as a **publication boundary**: any
+  process in the guest that can reach the link-local address reads every field,
+  so adding one hands it to unprivileged guest code. Placement detail is
+  carried unconditionally and the renderer — not the model or the assembler —
+  decides whether a given project's guests are told where they run. Only
+  `instanceId`/`projectId` are required keys: `DesiredVMState` decodes
+  synthesized, so a missing required key inside `metadata` throws out of the
+  whole `DesiredStateMessage` and stops that agent converging on everything.
+
+  `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
+  paths. That is deliberate — the agent must serve exactly what the last sync
+  said, with no fetch that can fail after a sync was applied — and the bound is
+  the 16 MiB frame, since a sync must fit in one whole. The sync already
+  carries a 64 KiB-capped `VMSpec.userData` per VM for the seed ISO, so this
+  duplicates it for the length of the migration (~128 KiB/VM worst case, ~64
+  KiB once the seed path is retired), putting the ceiling at roughly 130 VMs
+  per host all at the user-data cap. If it ever needs moving, the lever is an
+  IMDS-specific limit below `CloudInitUserDataFormat.maxBytes`, not a second
+  transport.
 - **`HypervisorType`** (`HypervisorTypes.swift`) — `qemu` / `firecracker`,
   the driver-registry key. `HypervisorSupport` and `HypervisorCapabilities`
   describe what each agent probed at registration (acceleration, pause,
