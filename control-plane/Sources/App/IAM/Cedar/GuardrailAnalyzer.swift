@@ -12,7 +12,7 @@ import Vapor
 
 /// The "type" of request an analysis reasons over. SymCC answers one of these
 /// at a time, so the caller picks which ones can possibly matter — see
-/// `GuardrailWriteCheck` for how the enumeration is kept to a handful.
+/// `GuardrailWriteReport` for how the enumeration is kept to a handful.
 struct CedarRequestEnvironment: Hashable, Sendable {
     let principalType: CedarEntityType
     let action: String

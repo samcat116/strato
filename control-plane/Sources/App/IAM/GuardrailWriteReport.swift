@@ -2,20 +2,28 @@ import Fluent
 import Foundation
 import Vapor
 
-// IAM phase 7 (issue #484): the write-time ceiling check.
+// IAM phase 7 (issue #484): the write-time ceiling report.
 //
-// Before accepting a tier-3 binding, ask whether the grant it creates can
-// reach anything a tier-2 guardrail forbids. Eval-time enforcement stays —
-// attributes change after a binding exists — but a denial three days later
-// names no cause, and this is where the cause is still in front of the person
-// who created it (docs/architecture/iam.md, "The write-time ceiling check").
+// On a tier-3 binding write, ask which tier-2 ceilings narrow the grant it
+// creates, and say so in the response. Eval-time enforcement is what makes the
+// ceiling bite — a denial three days later names no cause, and this is where
+// the cause is still in front of the person who created it
+// (docs/architecture/iam.md, "The write-time ceiling report").
+//
+// **It reports; it does not refuse** (STR-110, issue #864). It used to refuse,
+// and the two rules disagreed: the evaluator subtracts the ceilinged actions
+// and leaves the rest of the grant working, while the write-time check refused
+// the whole binding over a single overlap. Since the seeded roles are broad action
+// groups, one `forbid vm:stop` on an organization made `operator`, `editor`
+// and `admin` ungrantable everywhere beneath it — an identical binding was
+// legal to hold and illegal to create. Ceilings only subtract, at both ends.
 //
 // The analysis runs only here, on binding and guardrail writes: rare, and
 // latency-tolerant in a way the request path is not.
 
-/// A binding about to be written, as the check sees it.
+/// A binding about to be written, as the report sees it.
 ///
-/// The check works over the role's action set, not the role's identity, so a
+/// The report works over the role's action set, not the role's identity, so a
 /// custom role reaches it the same way a seeded one does (issue #608): the
 /// `IAMRole` initializer expands the registry, and the general initializer
 /// takes an action set and a label directly.
@@ -25,7 +33,7 @@ struct ProposedBinding: Sendable {
     /// The full expanded action set the role grants — the overlap analysis's
     /// input.
     let roleActions: Set<String>
-    /// A human-readable name for the role, for logs and the refusal message.
+    /// A human-readable name for the role, for logs and the explanation.
     let roleLabel: String
     let node: IAMNode
 
@@ -57,100 +65,104 @@ struct ProposedBinding: Sendable {
     }
 }
 
-/// A ceiling the proposed grant would breach.
+/// What a grant write returns: the ceilings in force that narrow it.
 ///
-/// Renders as the `403` the design specifies: which guardrail, who set it, and
-/// why this grant runs into it. Naming all three is the entire difference
-/// between this and the eval-time denial.
-struct GuardrailViolation: Error, AbortError, Sendable {
-    /// `folder/engineering/no-prod-for-contractors` — the attach node and the
-    /// guardrail's name, so the reader knows where to go to change it.
-    let guardrail: String
-    /// `alice@acme (org admin)`, when the author is still resolvable.
-    let setBy: String?
-    /// What the grant does that the ceiling forbids, in the vocabulary the
-    /// ceiling was written in.
-    let explanation: String
-    /// A concrete request the grant would allow and the ceiling would forbid,
-    /// as the solver found it. Diagnostic rather than prose — it is what
-    /// distinguishes "the analysis says so" from "the analysis says so, here."
-    let counterexample: String?
-
-    var status: HTTPResponseStatus { .forbidden }
-
-    var reason: String {
-        var lines = ["GuardrailViolation", "  guardrail: \(guardrail)"]
-        if let setBy { lines.append("  set_by:    \(setBy)") }
-        lines.append("  reason:    \(explanation)")
-        return lines.joined(separator: "\n")
-    }
+/// Empty is the normal case, and means the grant is unconstrained where it was
+/// written. A non-empty list is not a failure — the binding exists and confers
+/// everything the listed ceilings do not take back.
+struct GrantWriteResponse: Content {
+    let ceilings: [GuardrailWriteReport.GrantCeiling]
 }
 
-/// Raised when the check itself could not run.
-///
-/// A `503`, not a `403`: the write is not being refused on its merits, it is
-/// being refused because the ceiling could not be checked. Failing closed is
-/// the deliberate posture — a deployment whose solver has gone missing stops
-/// accepting the writes this check guards rather than accepting them
-/// unchecked.
-struct GuardrailCheckUnavailable: Error, AbortError {
-    let detail: String
-
-    var status: HTTPResponseStatus { .serviceUnavailable }
-    var reason: String {
-        """
-        The write-time guardrail check could not run, so this policy write cannot be accepted: \(detail). \
-        Existing access is unaffected; guardrails are still enforced on every request.
-        """
-    }
-}
-
-enum GuardrailWriteCheck {
+enum GuardrailWriteReport {
 
     // MARK: - Binding writes
 
-    /// Throw if `binding` would grant past a ceiling in force at its node.
-    ///
-    /// Call inside the request handler, *before* opening the transaction that
-    /// writes the binding: the analysis spawns solver processes, and holding a
-    /// database transaction open across that is a cost with no benefit — a
-    /// concurrent guardrail write is caught by eval-time enforcement, which
-    /// never went away.
-    static func requireNoViolation(_ binding: ProposedBinding, req: Request) async throws {
-        let found = try await violations(
-            for: binding,
-            analyzer: req.application.guardrailAnalyzer,
-            on: req.db,
-            logger: req.logger
-        )
-        guard let first = found.first else { return }
-        req.logger.notice(
-            "Refused a role binding that breaches a guardrail",
-            metadata: [
-                "guardrail": .string(first.guardrail),
-                "role": .string(binding.roleLabel),
-                "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
-            ])
-        throw first
+    /// A ceiling that narrows a grant just written — the write-time half of
+    /// the `ceilinged` mark `who-can` shows on an existing one.
+    struct GrantCeiling: Content, Sendable {
+        /// `folder/engineering/no-prod-for-contractors` — the attach node and
+        /// the guardrail's name, so the reader knows where to go to change it.
+        let guardrail: String
+        /// `alice@acme (organization admin)`, when the author is still
+        /// resolvable.
+        let setBy: String?
+        /// What the grant does that the ceiling forbids, in the vocabulary the
+        /// ceiling was written in.
+        let explanation: String
+        /// The actions this ceiling takes back out of the role — the whole
+        /// point of reporting rather than refusing: one action of thirty-four,
+        /// not the grant.
+        let ceilingedActions: [String]
+        /// A concrete request the grant allows and the ceiling forbids, as the
+        /// solver found it. Diagnostic rather than prose — it is what
+        /// distinguishes "the analysis says so" from "the analysis says so,
+        /// here."
+        let counterexample: String?
     }
 
-    /// Every ceiling `binding` would breach.
+    /// The ceilings that narrow `binding`, or none if the analysis could not
+    /// run.
+    ///
+    /// Call from the request handler *after* the transaction that writes the
+    /// binding: the analysis spawns solver processes, holding a database
+    /// transaction open across that is a cost with no benefit, and nothing
+    /// here can change whether the write happens.
+    ///
+    /// Best-effort by design. Eval-time enforcement is exact and always in
+    /// force, so an absent or failing solver costs an explanation, never a
+    /// grant — the same posture the shadow report takes on a guardrail write,
+    /// and the opposite of the `503` this path returned while it still refused
+    /// writes.
+    static func ceilings(narrowing binding: ProposedBinding, req: Request) async -> [GrantCeiling] {
+        let found: [GrantCeiling]
+        do {
+            found = try await ceilings(
+                narrowing: binding,
+                analyzer: req.application.guardrailAnalyzer,
+                on: req.db,
+                logger: req.logger
+            )
+        } catch {
+            req.logger.error(
+                "Could not report the ceilings narrowing a role binding",
+                metadata: [
+                    "role": .string(binding.roleLabel),
+                    "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
+                    "error": .string("\(error)"),
+                ])
+            return []
+        }
+        for ceiling in found {
+            req.logger.notice(
+                "Granted a role binding a guardrail narrows",
+                metadata: [
+                    "guardrail": .string(ceiling.guardrail),
+                    "role": .string(binding.roleLabel),
+                    "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
+                    "ceilinged_actions": .string(ceiling.ceilingedActions.joined(separator: ", ")),
+                ])
+        }
+        return found
+    }
+
+    /// Every ceiling that narrows `binding`.
     ///
     /// All of them, not the first: removing one guardrail must not look like
-    /// it will unblock a grant the next one still stops — the same rule
+    /// it will free a grant the next one still narrows — the same rule
     /// `GuardrailStore.forbidding` follows at evaluation time.
-    static func violations(
-        for binding: ProposedBinding,
+    static func ceilings(
+        narrowing binding: ProposedBinding,
         analyzer: any GuardrailAnalyzer,
         on db: any Database,
         logger: Logger
-    ) async throws -> [GuardrailViolation] {
+    ) async throws -> [GrantCeiling] {
         let chain = try await IAMResourceTree.ancestors(of: binding.node, on: db)
         // Matcher-built ceilings only. An authored ceiling's principal side is
-        // free-form Cedar this check cannot resolve against the database — the
+        // free-form Cedar this report cannot resolve against the database — the
         // exactness that keeps the matcher path from inventing memberships the
-        // solver was never told about (see `applies`). Rather than refuse
-        // bindings on a symbolic guess, authored ceilings rely on eval-time
+        // solver was never told about (see `applies`). Rather than name a
+        // ceiling on a symbolic guess, authored ceilings rely on eval-time
         // enforcement, which is exact and always in force. The trade-off is an
         // authored ceiling gives no *write-time* explanation; the eval-time
         // denial still names it (#610).
@@ -159,9 +171,9 @@ enum GuardrailWriteCheck {
         guard !candidates.isEmpty else { return [] }
         let organizationID = chain.first(where: { $0.type == .organization })?.id
 
-        var violations: [GuardrailViolation] = []
+        var ceilings: [GrantCeiling] = []
         for guardrail in candidates {
-            // An unrenderable row breaches nothing here: it matches nobody in
+            // An unrenderable row narrows nothing here: it matches nobody in
             // the compiled set either, and the cache logs it loudly on every
             // rebuild. (`GuardrailStore.forbidding` makes the opposite,
             // fail-closed choice — see `GuardrailRendering` for why each
@@ -175,10 +187,10 @@ enum GuardrailWriteCheck {
                 let overlap = try await overlap(
                     between: binding, and: rendering, analyzer: analyzer, logger: logger)
             else { continue }
-            violations.append(
-                try await describe(guardrail, binding: binding, counterexample: overlap, on: db))
+            ceilings.append(
+                try await describe(guardrail, binding: binding, overlap: overlap, on: db))
         }
-        return violations
+        return ceilings
     }
 
     // MARK: - Guardrail writes
@@ -198,7 +210,7 @@ enum GuardrailWriteCheck {
         logger: Logger
     ) async throws -> [ShadowedBinding] {
         // Authored ceilings are not analyzed against existing bindings for the
-        // same reason they are skipped on binding writes (`violations`): their
+        // same reason they are skipped on binding writes (`ceilings`): their
         // free-form principal side cannot be resolved against the database, and
         // eval-time enforcement covers them. The shadow report is a matcher-path
         // courtesy — which is also why an unrenderable row reports nothing.
@@ -270,7 +282,7 @@ enum GuardrailWriteCheck {
     /// stays symbolic is what is genuinely open at write time — which resource
     /// beneath the node, which action in the role, which environment.
     ///
-    /// The group-binding cases are this check's own question, wider than the
+    /// The group-binding cases are this report's own question, wider than the
     /// rendering's "does this principal match": a group binding reaches the
     /// group's members, so the ceiling reaches the grant if it covers the
     /// group itself *or anyone in it*.
@@ -348,20 +360,29 @@ enum GuardrailWriteCheck {
 
     // MARK: - The symbolic side
 
+    /// What a ceiling takes out of a grant.
+    private struct Overlap {
+        /// The role's actions the ceiling's action scope covers — what it
+        /// subtracts, and everything else in the role still stands.
+        let actions: [String]
+        /// A concrete request the grant allows and the ceiling forbids.
+        let counterexample: String
+    }
+
     /// Ask the solver whether the grant and the ceiling can meet, and on what.
     ///
-    /// Returns the counterexample when they can, `nil` when they provably
-    /// cannot. A `nil` here is a proof, not an absence of evidence.
+    /// Returns the overlap when they can, `nil` when they provably cannot. A
+    /// `nil` here is a proof, not an absence of evidence.
     private static func overlap(
         between binding: ProposedBinding,
         and rendering: GuardrailRendering,
         analyzer: any GuardrailAnalyzer,
         logger: Logger
-    ) async throws -> String? {
+    ) async throws -> Overlap? {
         // The action side is decided here, over the finite registry: a role's
         // action set and a ceiling's patterns are both enumerable, so asking a
         // solver would be paying for an answer we already have.
-        let overlapping = binding.roleActions.filter { rendering.covers(action: $0) }
+        let overlapping = binding.roleActions.filter { rendering.covers(action: $0) }.sorted()
         guard !overlapping.isEmpty else { return nil }
 
         // What is left genuinely needs the solver: can a resource exist that
@@ -375,7 +396,7 @@ enum GuardrailWriteCheck {
         // is complete, not sampled: no ceiling is skipped for cost.
         let reachable = Set(CedarSchemaBuilder.descendantTypes(of: binding.node.type.cedarEntityType))
         var representatives: [CedarEntityType: String] = [:]
-        for action in overlapping.sorted() {
+        for action in overlapping {
             for type in CedarSchemaBuilder.resourceTypes(for: action)
             where reachable.contains(type) && representatives[type] == nil {
                 representatives[type] = action
@@ -387,7 +408,7 @@ enum GuardrailWriteCheck {
         // roles list contributes to the schema is one `Grants` field pair per
         // role, and neither policy rendered below reads `context.grants` — the
         // grant is written as the permit it amounts to. Building from the
-        // registry keeps the check off the database and deterministic.
+        // registry keeps the analysis off the database and deterministic.
         let schemaText = CedarSchemaBuilder.schemaText(roles: RoleDescriptor.seededDefaults())
         // The ceiling as the permit it scopes to — the rendering's
         // solver-facing projection, carrying the same action and resource
@@ -420,10 +441,12 @@ enum GuardrailWriteCheck {
                         "resource_type": .string(resourceType.rawValue),
                         "error": .string("\(error)"),
                     ])
-                throw GuardrailCheckUnavailable(detail: "\(error)")
+                throw error
             }
             if !analysis.holds {
-                return analysis.counterexample ?? "\(action) on \(resourceType.rawValue)"
+                return Overlap(
+                    actions: overlapping,
+                    counterexample: analysis.counterexample ?? "\(action) on \(resourceType.rawValue)")
             }
         }
         return nil
@@ -464,13 +487,13 @@ enum GuardrailWriteCheck {
 
     // MARK: - Rendering
 
-    /// Turn a breach into the response body the design specifies.
+    /// Turn a narrowed grant into the response body the design specifies.
     private static func describe(
         _ guardrail: Guardrail,
         binding: ProposedBinding,
-        counterexample: String?,
+        overlap: Overlap,
         on db: any Database
-    ) async throws -> GuardrailViolation {
+    ) async throws -> GrantCeiling {
         let node = guardrail.node
         let path: String
         if let node, let name = try await nodeName(node, on: db) {
@@ -488,11 +511,12 @@ enum GuardrailWriteCheck {
             setBy = "\(author.email) (\(authority))"
         }
 
-        return GuardrailViolation(
+        return GrantCeiling(
             guardrail: path,
             setBy: setBy,
             explanation: reasonText(guardrail, binding: binding),
-            counterexample: counterexample
+            ceilingedActions: overlap.actions,
+            counterexample: overlap.counterexample
         )
     }
 

@@ -105,8 +105,8 @@ struct WorkloadRegistrationController: RouteCollection {
 
     /// PUT /api/projects/:projectID/workload-grants/:registrationID — grant a
     /// registered workload a seeded role on the project, replacing any
-    /// existing one. Same gate and guardrail check as every other grant.
-    func setGrant(req: Request) async throws -> HTTPStatus {
+    /// existing one. Same gate and ceiling report as every other grant.
+    func setGrant(req: Request) async throws -> Response {
         let (project, registration) = try await loadGrantTarget(req)
         let projectID = try project.requireID()
         let registrationID = try registration.requireID()
@@ -125,13 +125,12 @@ struct WorkloadRegistrationController: RouteCollection {
             throw Abort(.badRequest, reason: "Workload registration belongs to a different organization")
         }
 
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .workload,
-                principalID: registrationID,
-                role: role,
-                node: IAMNode(type: .project, id: projectID)
-            ), req: req)
+        let proposed = ProposedBinding(
+            principalType: .workload,
+            principalID: registrationID,
+            role: role,
+            node: IAMNode(type: .project, id: projectID)
+        )
 
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
@@ -152,7 +151,9 @@ struct WorkloadRegistrationController: RouteCollection {
                 on: db
             )
         }
-        return .ok
+        return try await GrantWriteResponse(
+            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
+        ).encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/projects/:projectID/workload-grants/:registrationID

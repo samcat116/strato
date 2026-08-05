@@ -26,6 +26,7 @@ import {
   memberErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
+import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { OrganizationMember } from "@/types/api";
 
 interface MembersTableProps {
@@ -77,9 +78,13 @@ export function MembersTable({
 
     setPendingId(member.id);
     try {
-      await updateRole.mutateAsync({ userId: member.id, role });
+      const result = await updateRole.mutateAsync({ userId: member.id, role });
       toast.success(
         `Updated ${member.displayName || member.username} to ${role}`
+      );
+      warnAboutGrantCeilings(
+        result,
+        `${member.displayName || member.username}'s ${role} role`
       );
     } catch (error) {
       toast.error(memberErrorMessage(error, "Failed to update member role"));

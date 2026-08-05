@@ -31,7 +31,7 @@ import Vapor
 ///
 /// The rest carries over unchanged: `MemberRoleResolver` for the role
 /// vocabulary, `CrossOrgBindingGate` for external principals, and
-/// `GuardrailWriteCheck` for the write-time ceiling check.
+/// `GuardrailWriteReport` for the write-time ceiling report.
 struct OrganizationalUnitMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let folder = routes.grouped("api", "organizations", ":organizationID", "ous", ":ouID")
@@ -197,7 +197,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
 
     /// POST /api/organizations/:organizationID/ous/:ouID/members — grant a user
     /// a role on the folder.
-    func grant(req: Request) async throws -> HTTPStatus {
+    func grant(req: Request) async throws -> Response {
         let folder = try await requireFolder(req)
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
@@ -208,9 +208,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let targetUser = try await resolveUser(body, on: req)
         let userID = try targetUser.requireID()
 
-        // Optimistic: refuse a doomed grant before paying for the guardrail
-        // solver. `insertGrant` re-checks under the folder lock, which is the
-        // check that actually holds.
+        // Optimistic: refuse a doomed grant before taking the folder lock.
+        // `insertGrant` re-checks under it, which is the check that actually
+        // holds.
         try await requireNoExistingGrant(principalType: .user, principalID: userID, node: node, on: req.db)
 
         // A principal outside the folder's org needs the dedicated resource-side
@@ -219,18 +219,17 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .user, principalID: userID, node: node, req: req)
 
-        // A ceiling in force on this folder (or above it) may forbid what the
-        // grant would reach. Refuse now, with the reason, rather than leaving it
-        // to be discovered as a denial days later (#484) — and a folder grant
-        // reaches the whole subtree, so this is where it matters most.
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .user,
-                principalID: userID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        // A ceiling in force on this folder (or above it) may narrow what the
+        // grant reaches. Reported with the response rather than refused (#484,
+        // STR-110) — and a folder grant reaches the whole subtree, so this is
+        // where the explanation matters most.
+        let proposed = ProposedBinding(
+            principalType: .user,
+            principalID: userID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         try await insertGrant(
             principalType: .user, principalID: userID, roleID: role.id, node: node, req: req)
@@ -239,12 +238,14 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return .created
+        return try await GrantWriteResponse(
+            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
+        ).encodeResponse(status: .created, for: req)
     }
 
     /// PATCH /api/organizations/:organizationID/ous/:ouID/members/:userID —
     /// change a user's role on the folder.
-    func updateRole(req: Request) async throws -> HTTPStatus {
+    func updateRole(req: Request) async throws -> Response {
         let folder = try await requireFolder(req)
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
@@ -257,8 +258,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
             body.role, scopeNode: node, acceptsLegacyProjectRoles: false, on: req.db)
 
         // Optimistic 404, so a PATCH for a user who holds nothing here does not
-        // run the guardrail solver first. `replaceGrant` re-checks under the
-        // folder lock.
+        // take the folder lock first. `replaceGrant` re-checks under it.
         let holdsRole = try await RoleBindingService.activeBindings(
             principalType: .user, principalID: userID,
             nodeType: .organizationalUnit, nodeID: node.id, on: req.db)
@@ -271,17 +271,16 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .user, principalID: userID, node: node, req: req)
 
-        // Checked even though the user already holds a role here: the new role
+        // Reported even though the user already holds a role here: the new role
         // is a different grant, and widening viewer to editor is exactly the
-        // move a ceiling exists to stop.
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .user,
-                principalID: userID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        // move a ceiling bears on.
+        let proposed = ProposedBinding(
+            principalType: .user,
+            principalID: userID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         try await replaceGrant(
             principalType: .user, principalID: userID, roleID: role.id, node: node, req: req)
@@ -290,7 +289,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return .ok
+        return try await GrantWriteResponse(
+            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
+        ).encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/organizations/:organizationID/ous/:ouID/members/:userID —
@@ -309,7 +310,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
 
     /// POST /api/organizations/:organizationID/ous/:ouID/groups — grant a group
     /// a role on the folder.
-    func grantGroup(req: Request) async throws -> HTTPStatus {
+    func grantGroup(req: Request) async throws -> Response {
         let folder = try await requireFolder(req)
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
@@ -331,16 +332,15 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .group, principalID: body.groupID, node: node, req: req)
 
-        // A group grant reaches every member, so the ceiling check asks whether
+        // A group grant reaches every member, so the ceiling report asks whether
         // it covers the group or anyone in it (#484).
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .group,
-                principalID: body.groupID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        let proposed = ProposedBinding(
+            principalType: .group,
+            principalID: body.groupID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         try await insertGrant(
             principalType: .group, principalID: body.groupID, roleID: role.id, node: node, req: req)
@@ -349,7 +349,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
                 role: role.displayName, node: node, req: req)
         }
-        return .created
+        return try await GrantWriteResponse(
+            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
+        ).encodeResponse(status: .created, for: req)
     }
 
     /// DELETE /api/organizations/:organizationID/ous/:ouID/groups/:groupID —

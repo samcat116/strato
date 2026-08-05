@@ -3016,9 +3016,11 @@ paths:
       description: >-
         Organization admins only. The target user is looked up by email and must
         already exist; adding an existing member returns 409.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Organizations]
       requestBody:
         required: true
@@ -3028,11 +3030,14 @@ paths:
               $ref: "#/components/schemas/AddOrganizationMemberRequest"
       responses:
         "201":
-          description: The member was added. No response body.
+          description: The member was added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/members/{userID}:
@@ -3056,9 +3061,11 @@ paths:
       description: >-
         Organization admins only. Demoting the last remaining admin is rejected
         with 400.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Organizations]
       requestBody:
         required: true
@@ -3068,11 +3075,14 @@ paths:
               $ref: "#/components/schemas/UpdateOrganizationMemberRoleRequest"
       responses:
         "200":
-          description: The role was updated. No response body.
+          description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/organizations/{organizationID}/ous:
     parameters:
@@ -3302,7 +3312,7 @@ paths:
       summary: Grant a user a role on a folder
       description: >-
         Requires `iam:setPolicy` on the folder. Identify the user by `userID`
-        or `userEmail`. Returns an empty body.
+        or `userEmail`.
         The grant inherits down every folder, project, and resource beneath
         the folder, and keeps applying to projects added later.
         A principal may hold at most one role per folder; use `PATCH` to
@@ -3311,9 +3321,11 @@ paths:
         only by a caller who also holds `iam:grantExternal` on the folder;
         such cross-org grants are recorded with a distinct
         `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3324,10 +3336,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/ous/{ouID}/members/{userID}:
@@ -3350,9 +3365,11 @@ paths:
         Changing an organization-external user's role is a new cross-org
         grant: it requires `iam:grantExternal` on the folder and is recorded
         with a distinct `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3363,10 +3380,13 @@ paths:
       responses:
         "200":
           description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeFolderMember
@@ -3390,14 +3410,16 @@ paths:
       operationId: grantFolderGroup
       summary: Grant a group a role on a folder
       description: >-
-        Requires `iam:setPolicy` on the folder. Returns an empty body.
+        Requires `iam:setPolicy` on the folder.
         A group from another organization can be granted a role, but only by
         a caller who also holds `iam:grantExternal` on the folder; such
         cross-org grants are recorded with a distinct `iam.cross_org_grant`
         audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3408,10 +3430,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}:
@@ -4100,14 +4125,15 @@ paths:
       summary: Grant a user a role on a project
       description: >-
         Requires project admin. Identify the user by `userID` or `userEmail`.
-        Returns an empty body.
         A user outside the project's organization can be granted a role, but
         only by a caller who also holds `iam:grantExternal` on the project;
         such cross-org grants are recorded with a distinct
         `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4118,10 +4144,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/members/{userID}:
@@ -4138,13 +4167,15 @@ paths:
       operationId: updateProjectMemberRole
       summary: Change a user's role on a project
       description: >-
-        Requires project admin. Returns an empty body.
+        Requires project admin.
         Changing an organization-external user's role is a new cross-org
         grant: it requires `iam:grantExternal` on the project and is recorded
         with a distinct `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4155,10 +4186,13 @@ paths:
       responses:
         "200":
           description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeProjectMember
@@ -4180,14 +4214,16 @@ paths:
       operationId: grantProjectGroup
       summary: Grant a group a role on a project
       description: >-
-        Requires project admin. Returns an empty body.
+        Requires project admin.
         A group from another organization can be granted a role, but only by
         a caller who also holds `iam:grantExternal` on the project; such
         cross-org grants are recorded with a distinct `iam.cross_org_grant`
         audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4198,10 +4234,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/groups/{groupID}:
@@ -5191,9 +5230,9 @@ paths:
       summary: Grant the service account a role on its project
       description: >-
         Requires `iam:setPolicy` on the project. Replaces any existing project
-        role. Checked against the tier-2 guardrails in force on the node
-        before it is accepted: a grant that would reach past a ceiling is
-        refused with `403`, naming the guardrail, who set it, and why.
+        role. Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one, but every ceiling that narrows it
+        comes back in `ceilings`.
       tags: [Service Accounts]
       requestBody:
         required: true
@@ -5204,10 +5243,13 @@ paths:
       responses:
         "200":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: clearServiceAccountProjectRole
@@ -5357,8 +5399,9 @@ paths:
       description: >-
         Requires `iam:setPolicy` on the project. The registration must be a
         directly registered workload in the project's organization. Replaces
-        any existing role. Checked against the tier-2 guardrails in force on
-        the node before it is accepted.
+        any existing role. Analyzed against the tier-2 guardrails in force on
+        the node: the grant is never refused over one, but every ceiling that
+        narrows it comes back in `ceilings`.
       tags: [Service Accounts]
       requestBody:
         required: true
@@ -5369,10 +5412,13 @@ paths:
       responses:
         "200":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeProjectWorkloadGrant
@@ -8327,16 +8373,6 @@ components:
             $ref: "#/components/schemas/Error"
     Forbidden:
       description: The caller is authenticated but not authorized.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    GuardrailCheckUnavailable:
-      description: >-
-        The write-time guardrail check could not run, so the policy write was
-        not accepted. Deliberately fail-closed: a grant is never accepted
-        unchecked because the analyzer was unavailable. Existing access is
-        unaffected and guardrails remain enforced on every request.
       content:
         application/json:
           schema:
@@ -13808,6 +13844,55 @@ components:
           enum: [viewer, operator, editor, admin]
         node:
           $ref: "#/components/schemas/IAMNode"
+
+    IAMGrantWriteResponse:
+      type: object
+      description: >-
+        What a role grant returns: the tier-2 ceilings in force that narrow it.
+        The mirror of `shadowedBindings` on a guardrail write — there the
+        ceiling's author sees the grants it narrows, here the grant's author
+        sees the ceilings that narrow it.
+      required: [ceilings]
+      properties:
+        ceilings:
+          type: array
+          description: >-
+            Empty in the ordinary case, and empty when the symbolic analysis
+            could not run; the grant is written and enforced either way. A
+            non-empty list is not a failure — the binding confers everything
+            the listed ceilings do not take back.
+          items:
+            $ref: "#/components/schemas/IAMGrantCeiling"
+
+    IAMGrantCeiling:
+      type: object
+      required: [guardrail, explanation, ceilingedActions]
+      properties:
+        guardrail:
+          type: string
+          description: >-
+            `organization/Acme/no-prod-for-contractors` — the attach node and
+            the guardrail's name, so the reader knows where to go to change it.
+        setBy:
+          type: string
+          description: "`alice@acme (organization admin)`, when the author is still resolvable."
+        explanation:
+          type: string
+          description: >-
+            What the grant does that the ceiling forbids, in the vocabulary the
+            ceiling was written in.
+        ceilingedActions:
+          type: array
+          description: >-
+            The role's actions this ceiling takes back. Everything else in the
+            role is unaffected.
+          items:
+            type: string
+        counterexample:
+          type: string
+          description: >-
+            A concrete request the grant allows and the ceiling forbids, as the
+            solver found it.
 
     IAMGuardrailCreateRequest:
       type: object

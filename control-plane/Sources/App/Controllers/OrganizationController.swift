@@ -428,7 +428,7 @@ struct OrganizationController: RouteCollection {
         }
     }
 
-    func addMember(req: Request) async throws -> HTTPStatus {
+    func addMember(req: Request) async throws -> Response {
         guard let currentUser = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
@@ -479,16 +479,15 @@ struct OrganizationController: RouteCollection {
         )
         // Org admins (and any role granted by id/name) get a binding on the org
         // node; bare membership maps to no binding — and with no binding there
-        // is nothing for a ceiling to be checked against (#484).
-        if resolved.bindingRoleID != nil {
-            try await GuardrailWriteCheck.requireNoViolation(
-                ProposedBinding(
-                    principalType: .user,
-                    principalID: targetUser.id!,
-                    roleActions: resolved.actions,
-                    roleLabel: resolved.label,
-                    node: node
-                ), req: req)
+        // is nothing for a ceiling to narrow (#484).
+        let proposed = resolved.bindingRoleID.map { _ in
+            ProposedBinding(
+                principalType: .user,
+                principalID: targetUser.id!,
+                roleActions: resolved.actions,
+                roleLabel: resolved.label,
+                node: node
+            )
         }
 
         let actorID = currentUser.id
@@ -507,7 +506,17 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        return .created
+        return try await GrantWriteResponse(ceilings: await ceilings(narrowing: proposed, req: req))
+            .encodeResponse(status: .created, for: req)
+    }
+
+    /// The ceilings narrowing a binding this write created, or none when it
+    /// created no binding (bare membership).
+    private func ceilings(
+        narrowing proposed: ProposedBinding?, req: Request
+    ) async -> [GuardrailWriteReport.GrantCeiling] {
+        guard let proposed else { return [] }
+        return await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
@@ -560,7 +569,7 @@ struct OrganizationController: RouteCollection {
         return .noContent
     }
 
-    func updateMemberRole(req: Request) async throws -> HTTPStatus {
+    func updateMemberRole(req: Request) async throws -> Response {
         guard let currentUser = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
@@ -612,17 +621,17 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        // Only the direction that *adds* a binding needs checking; dropping to
-        // bare membership takes access away, which no ceiling objects to.
-        if resolved.bindingRoleID != nil {
-            try await GuardrailWriteCheck.requireNoViolation(
-                ProposedBinding(
-                    principalType: .user,
-                    principalID: userID,
-                    roleActions: resolved.actions,
-                    roleLabel: resolved.label,
-                    node: node
-                ), req: req)
+        // Only the direction that *adds* a binding has anything to report;
+        // dropping to bare membership takes access away, which no ceiling
+        // bears on.
+        let proposed = resolved.bindingRoleID.map { _ in
+            ProposedBinding(
+                principalType: .user,
+                principalID: userID,
+                roleActions: resolved.actions,
+                roleLabel: resolved.label,
+                node: node
+            )
         }
 
         let previousRole = membership.role
@@ -655,7 +664,8 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        return .ok
+        return try await GrantWriteResponse(ceilings: await ceilings(narrowing: proposed, req: req))
+            .encodeResponse(status: .ok, for: req)
     }
 
     // MARK: - Org role resolution (issue #608)

@@ -19,7 +19,7 @@ import Vapor
 ///   org membership are database facts a solver would otherwise have to guess).
 ///
 /// These used to be three renderings in three files — `CedarPolicyAssembler`,
-/// `GuardrailWriteCheck`, `GuardrailStore` — agreeing only because they shared
+/// `GuardrailWriteReport`, `GuardrailStore` — agreeing only because they shared
 /// two clause builders and a stack of cross-referencing comments. Here they
 /// are projections of one representation: the row is parsed once, every
 /// projection reads the same parsed value, and each side of the row (action,

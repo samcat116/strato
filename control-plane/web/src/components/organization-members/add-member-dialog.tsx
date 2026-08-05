@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { useAddMember, memberErrorMessage } from "@/lib/hooks";
 import { toast } from "sonner";
+import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 
 interface AddMemberDialogProps {
   orgId: string;
@@ -57,8 +58,9 @@ export function AddMemberDialog({
     }
 
     try {
-      await addMember.mutateAsync({ userEmail: trimmed, role });
+      const result = await addMember.mutateAsync({ userEmail: trimmed, role });
       toast.success(`Added ${trimmed} to the organization`);
+      warnAboutGrantCeilings(result, `${trimmed}'s ${role} role`);
       handleClose();
     } catch (error) {
       toast.error(memberErrorMessage(error, "Failed to add member"));
