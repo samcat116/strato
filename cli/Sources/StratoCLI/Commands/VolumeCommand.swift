@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct VolumeCommand: AsyncParsableCommand {
@@ -18,16 +19,15 @@ struct VolumeCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let page: Page<Volume> = try await environment.makeClient()
-                    .get("/api/volumes", query: [("limit", String(listPageLimit))])
-                let volumes = page.items
+                let volumes = try await environment.makeClient()
+                    .listVolumes(query: .init(limit: listPageLimit)).ok.body.json.items
                 try printResult(volumes, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "size", "type", "status", "attached vm"])
                     for volume in volumes {
                         table.addRow([
-                            formatUUID(volume.id), volume.name,
-                            volume.sizeFormatted ?? "", volume.volumeType ?? "",
-                            volume.status ?? "", formatUUID(volume.vmId),
+                            volume.id ?? "", volume.name,
+                            volume.sizeFormatted, volume.volumeType.rawValue,
+                            volume.status.rawValue, volume.vmId ?? "",
                         ])
                     }
                     return table
@@ -47,17 +47,18 @@ struct VolumeCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let volume: Volume = try await environment.makeClient().get("/api/volumes/\(id)")
+                let volume = try await environment.makeClient()
+                    .getVolume(path: .init(volumeId: id)).ok.body.json
                 try printResult(volume, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", formatUUID(volume.id)])
+                    table.addRow(["id", volume.id ?? ""])
                     table.addRow(["name", volume.name])
-                    table.addRow(["description", volume.description ?? ""])
-                    table.addRow(["size", volume.sizeFormatted ?? ""])
-                    table.addRow(["format", volume.format ?? ""])
-                    table.addRow(["type", volume.volumeType ?? ""])
-                    table.addRow(["status", volume.status ?? ""])
-                    table.addRow(["attached vm", formatUUID(volume.vmId)])
+                    table.addRow(["description", volume.description])
+                    table.addRow(["size", volume.sizeFormatted])
+                    table.addRow(["format", volume.format.rawValue])
+                    table.addRow(["type", volume.volumeType.rawValue])
+                    table.addRow(["status", volume.status.rawValue])
+                    table.addRow(["attached vm", volume.vmId ?? ""])
                     table.addRow(["created", formatDate(volume.createdAt)])
                     return table
                 }
@@ -85,15 +86,15 @@ struct VolumeCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
-                let request = CreateVolumeRequest(
-                    name: name, description: description,
-                    projectId: project ?? env.context.project,
-                    sizeGB: size, format: nil, volumeType: nil
-                )
-                let volume: Volume = try await env.makeClient().post("/api/volumes", body: request)
+                let volume = try await env.makeClient().createVolume(
+                    body: .json(
+                        .init(
+                            name: name, description: description,
+                            projectId: project ?? env.context.project, sizeGB: size))
+                ).ok.body.json
                 switch global.output {
                 case .table:
-                    print("Volume '\(volume.name)' created (\(formatUUID(volume.id))).")
+                    print("Volume '\(volume.name)' created (\(volume.id ?? "")).")
                 case .json:
                     print(try renderJSON(volume))
                 }
@@ -112,7 +113,7 @@ struct VolumeCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                try await environment.makeClient().deleteExpectingNoContent("/api/volumes/\(id)")
+                _ = try await environment.makeClient().deleteVolume(path: .init(volumeId: id)).noContent
                 print("Volume \(id) deleted.")
             }
         }

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct NetworkCommand: AsyncParsableCommand {
@@ -18,19 +19,16 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let page: Page<Network> = try await environment.makeClient()
-                    .get("/api/networks", query: [("limit", String(listPageLimit))])
-                let networks = page.items
+                let networks = try await environment.makeClient()
+                    .listNetworks(query: .init(limit: listPageLimit)).ok.body.json.items
                 try printResult(networks, format: global.output) {
-                    var table = TextTable(
-                        headers: ["id", "name", "subnet", "gateway", "dhcp", "attached", "default"])
+                    var table = TextTable(headers: ["id", "name", "subnet", "gateway", "dhcp", "attached"])
                     for network in networks {
                         table.addRow([
-                            formatUUID(network.id), network.name, network.subnet,
+                            network.id ?? "", network.name, network.subnet,
                             network.gateway ?? "",
-                            (network.dhcpEnabled ?? false) ? "yes" : "no",
-                            network.attachedInterfaceCount.map(String.init) ?? "",
-                            (network.isDefault ?? false) ? "yes" : "",
+                            network.dhcpEnabled ? "yes" : "no",
+                            String(network.attachedInterfaceCount),
                         ])
                     }
                     return table
@@ -50,17 +48,20 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let network: Network = try await environment.makeClient().get("/api/networks/\(id)")
+                let network = try await environment.makeClient()
+                    .getNetwork(path: .init(networkId: id)).ok.body.json
                 try printResult(network, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", formatUUID(network.id)])
+                    table.addRow(["id", network.id ?? ""])
                     table.addRow(["name", network.name])
                     table.addRow(["subnet", network.subnet])
                     table.addRow(["gateway", network.gateway ?? ""])
                     table.addRow(["ipv6 subnet", network.subnet6 ?? ""])
-                    table.addRow(["dhcp", (network.dhcpEnabled ?? false) ? "enabled" : "disabled"])
-                    table.addRow(["attached NICs", network.attachedInterfaceCount.map(String.init) ?? ""])
-                    table.addRow(["default", (network.isDefault ?? false) ? "yes" : "no"])
+                    table.addRow(["dhcp", network.dhcpEnabled ? "enabled" : "disabled"])
+                    table.addRow(["dns servers", network.dnsServers.joined(separator: ", ")])
+                    table.addRow(["domain name", network.domainName ?? ""])
+                    table.addRow(["primary dns zone", network.primaryDnsZoneId ?? ""])
+                    table.addRow(["attached NICs", String(network.attachedInterfaceCount)])
                     table.addRow(["created", formatDate(network.createdAt)])
                     return table
                 }
@@ -99,15 +100,16 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
-                let request = CreateNetworkRequest(
-                    name: name, subnet: subnet, gateway: gateway,
-                    projectId: project ?? env.context.project, dhcpEnabled: dhcp,
-                    dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName
-                )
-                let network: Network = try await env.makeClient().post("/api/networks", body: request)
+                let network = try await env.makeClient().createNetwork(
+                    body: .json(
+                        .init(
+                            name: name, subnet: subnet, gateway: gateway,
+                            projectId: project ?? env.context.project, dhcpEnabled: dhcp,
+                            dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName))
+                ).ok.body.json
                 switch global.output {
                 case .table:
-                    print("Network '\(network.name)' created (\(formatUUID(network.id))).")
+                    print("Network '\(network.name)' created (\(network.id ?? "")).")
                 case .json:
                     print(try renderJSON(network))
                 }
@@ -143,14 +145,15 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let request = UpdateNetworkRequest(
-                    dnsServers: dnsServers.isEmpty ? nil : dnsServers,
-                    domainName: domainName,
-                    primaryDnsZoneId: primaryDnsZone,
-                    clearPrimaryDnsZone: clearPrimaryDnsZone ? true : nil
-                )
-                let network: Network = try await environment.makeClient()
-                    .put("/api/networks/\(id)", body: request)
+                let network = try await environment.makeClient().updateNetwork(
+                    path: .init(networkId: id),
+                    body: .json(
+                        .init(
+                            dnsServers: dnsServers.isEmpty ? nil : dnsServers,
+                            domainName: domainName,
+                            primaryDnsZoneId: primaryDnsZone,
+                            clearPrimaryDnsZone: clearPrimaryDnsZone ? true : nil))
+                ).ok.body.json
                 switch global.output {
                 case .table:
                     print("Network '\(network.name)' updated.")
@@ -172,7 +175,7 @@ struct NetworkCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                try await environment.makeClient().deleteExpectingNoContent("/api/networks/\(id)")
+                _ = try await environment.makeClient().deleteNetwork(path: .init(networkId: id)).noContent
                 print("Network \(id) deleted.")
             }
         }

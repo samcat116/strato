@@ -43,11 +43,10 @@ struct Login: AsyncParsableCommand {
             let flow = DeviceFlow(serverURL: serverURL)
             let authorization = try await flow.start(clientName: clientName, scopes: scopes)
 
-            let url = authorization.verificationUriComplete ?? authorization.verificationUri
             print("To sign in, visit:\n")
-            print("    \(url)\n")
+            print("    \(authorization.verificationUriComplete)\n")
             print("and enter the code: \(authorization.userCode)\n")
-            Browser.open(url)
+            Browser.open(authorization.verificationUriComplete)
             print("Waiting for approval in the browser...")
 
             let token = try await flow.pollForToken(authorization)
@@ -56,7 +55,7 @@ struct Login: AsyncParsableCommand {
                 StoredCredentials(
                     accessToken: token.accessToken,
                     refreshToken: token.refreshToken,
-                    expiresAt: token.expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
+                    expiresAt: Date().addingTimeInterval(TimeInterval(token.expiresIn))
                 ),
                 for: contextName
             )

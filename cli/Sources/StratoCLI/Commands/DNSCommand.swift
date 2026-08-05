@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 /// `strato dns` — zones, their attachment to networks, and authored records
@@ -33,21 +34,18 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    var query = [("limit", String(listPageLimit))]
-                    if let project = project ?? environment.context.project {
-                        query.append(("project_id", project))
-                    }
-                    let page: Page<DNSZone> = try await environment.makeClient()
-                        .get("/api/dns-zones", query: query)
-                    try printResult(page.items, format: global.output) {
+                    let zones = try await environment.makeClient().listDNSZones(
+                        query: .init(
+                            projectId: project ?? environment.context.project, limit: listPageLimit)
+                    ).ok.body.json.items
+                    try printResult(zones, format: global.output) {
                         var table = TextTable(headers: ["id", "name", "networks", "primary for", "records"])
-                        for zone in page.items {
-                            let attached = zone.networks ?? []
+                        for zone in zones {
                             table.addRow([
-                                formatUUID(zone.id), zone.name,
-                                attached.map(\.networkName).joined(separator: ","),
-                                attached.filter(\.isPrimary).map(\.networkName).joined(separator: ","),
-                                zone.recordCount.map(String.init) ?? "",
+                                zone.id, zone.name,
+                                zone.networks.map(\.networkName).joined(separator: ","),
+                                zone.networks.filter(\.isPrimary).map(\.networkName).joined(separator: ","),
+                                String(zone.recordCount),
                             ])
                         }
                         return table
@@ -67,14 +65,15 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    let zone: DNSZone = try await environment.makeClient().get("/api/dns-zones/\(id)")
+                    let zone = try await environment.makeClient()
+                        .getDNSZone(path: .init(zoneId: id)).ok.body.json
                     try printResult(zone, format: global.output) {
                         var table = TextTable(headers: ["field", "value"])
-                        table.addRow(["id", formatUUID(zone.id)])
+                        table.addRow(["id", zone.id])
                         table.addRow(["name", zone.name])
                         table.addRow(["description", zone.description ?? ""])
-                        table.addRow(["records", zone.recordCount.map(String.init) ?? ""])
-                        for attachment in zone.networks ?? [] {
+                        table.addRow(["records", String(zone.recordCount)])
+                        for attachment in zone.networks {
                             table.addRow([
                                 attachment.isPrimary ? "network (primary)" : "network",
                                 attachment.networkName,
@@ -104,13 +103,15 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let env = try CLIEnvironment.resolve(global)
-                    let request = CreateDNSZoneRequest(
-                        name: name, description: description,
-                        projectId: project ?? env.context.project)
-                    let zone: DNSZone = try await env.makeClient().post("/api/dns-zones", body: request)
+                    let zone = try await env.makeClient().createDNSZone(
+                        body: .json(
+                            .init(
+                                name: name, description: description,
+                                projectId: project ?? env.context.project))
+                    ).ok.body.json
                     switch global.output {
                     case .table:
-                        print("DNS zone '\(zone.name)' created (\(formatUUID(zone.id))).")
+                        print("DNS zone '\(zone.name)' created (\(zone.id)).")
                     case .json:
                         print(try renderJSON(zone))
                     }
@@ -129,7 +130,7 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    try await environment.makeClient().deleteExpectingNoContent("/api/dns-zones/\(id)")
+                    _ = try await environment.makeClient().deleteDNSZone(path: .init(zoneId: id)).noContent
                     print("DNS zone \(id) deleted.")
                 }
             }
@@ -153,9 +154,10 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    let request = AttachDNSZoneRequest(networkId: network, primary: primary ? true : nil)
-                    let zone: DNSZone = try await environment.makeClient()
-                        .post("/api/dns-zones/\(id)/networks", body: request)
+                    let zone = try await environment.makeClient().attachDNSZoneToNetwork(
+                        path: .init(zoneId: id),
+                        body: .json(.init(networkId: network, primary: primary ? true : nil))
+                    ).ok.body.json
                     switch global.output {
                     case .table:
                         let role = primary ? "attached as primary" : "attached"
@@ -181,8 +183,8 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    try await environment.makeClient()
-                        .deleteExpectingNoContent("/api/dns-zones/\(id)/networks/\(network)")
+                    _ = try await environment.makeClient()
+                        .detachDNSZoneFromNetwork(path: .init(zoneId: id, networkId: network)).noContent
                     print("Zone \(id) detached from network \(network).")
                 }
             }
@@ -201,14 +203,14 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    let assembled: AssembledDNSZone = try await environment.makeClient()
-                        .get("/api/dns-zones/\(id)/recordset")
+                    let assembled = try await environment.makeClient()
+                        .getDNSZoneRecordSet(path: .init(zoneId: id)).ok.body.json
                     try printResult(assembled, format: global.output) {
                         var table = TextTable(headers: ["name", "type", "ttl", "origin", "values"])
                         for record in assembled.records {
                             table.addRow([
-                                record.name, record.type, String(record.ttl), record.origin,
-                                record.values.joined(separator: " "),
+                                record.name, record._type.rawValue, String(record.ttl),
+                                record.origin.rawValue, record.values.joined(separator: " "),
                             ])
                         }
                         return table
@@ -239,14 +241,15 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    let page: Page<DNSRecord> = try await environment.makeClient()
-                        .get("/api/dns-zones/\(zone)/records", query: [("limit", String(listPageLimit))])
-                    try printResult(page.items, format: global.output) {
+                    let records = try await environment.makeClient()
+                        .listDNSRecords(path: .init(zoneId: zone), query: .init(limit: listPageLimit))
+                        .ok.body.json.items
+                    try printResult(records, format: global.output) {
                         var table = TextTable(headers: ["id", "name", "type", "ttl", "view", "value"])
-                        for record in page.items {
+                        for record in records {
                             table.addRow([
-                                formatUUID(record.id), record.fqdn ?? record.name, record.type,
-                                record.ttl.map(String.init) ?? "", record.view ?? "", record.value,
+                                record.id, record.fqdn, record._type.rawValue,
+                                String(record.ttl), record.view.rawValue, record.value,
                             ])
                         }
                         return table
@@ -284,16 +287,22 @@ struct DNSCommand: AsyncParsableCommand {
                     // Both enums are case-normalized here so `--type a` and
                     // `--view Internal` behave the same way; the wire format
                     // spells types upper and views lower.
-                    let request = CreateDNSRecordRequest(
-                        name: name, type: type.uppercased(), value: value, ttl: ttl,
-                        view: view?.lowercased())
-                    let record: DNSRecord = try await environment.makeClient()
-                        .post("/api/dns-zones/\(zone)/records", body: request)
+                    let recordType = try specEnum(
+                        Components.Schemas.DNSRecordType.self, from: type.uppercased(), flag: "--type")
+                    let recordView = try view.map {
+                        try specEnum(
+                            Components.Schemas.DNSRecordView.self, from: $0.lowercased(), flag: "--view")
+                    }
+                    let record = try await environment.makeClient().createDNSRecord(
+                        path: .init(zoneId: zone),
+                        body: .json(
+                            .init(name: name, _type: recordType, value: value, ttl: ttl, view: recordView))
+                    ).ok.body.json
                     switch global.output {
                     case .table:
                         print(
-                            "Record \(record.type) \(record.fqdn ?? record.name) → \(record.value) "
-                                + "created (\(formatUUID(record.id))).")
+                            "Record \(record._type.rawValue) \(record.fqdn) → \(record.value) "
+                                + "created (\(record.id)).")
                     case .json:
                         print(try renderJSON(record))
                     }
@@ -315,11 +324,23 @@ struct DNSCommand: AsyncParsableCommand {
             func run() async throws {
                 try await runHandlingCLIErrors {
                     let environment = try CLIEnvironment.resolve(global)
-                    try await environment.makeClient()
-                        .deleteExpectingNoContent("/api/dns-zones/\(zone)/records/\(id)")
+                    _ = try await environment.makeClient()
+                        .deleteDNSRecord(path: .init(zoneId: zone, recordId: id)).noContent
                     print("Record \(id) deleted.")
                 }
             }
         }
     }
+}
+
+/// Turns a free-form flag value into one of the spec's enum cases, failing
+/// with the accepted values rather than letting the server reject it.
+private func specEnum<Value: RawRepresentable & CaseIterable>(
+    _ type: Value.Type, from raw: String, flag: String
+) throws -> Value where Value.RawValue == String {
+    guard let value = Value(rawValue: raw) else {
+        let accepted = Value.allCases.map(\.rawValue).joined(separator: ", ")
+        throw CLIError.config("Invalid \(flag) value '\(raw)'. Accepted values: \(accepted).")
+    }
+    return value
 }

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct ImageCommand: AsyncParsableCommand {
@@ -22,17 +23,17 @@ struct ImageCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let projectID = try resolveProject(project, environment: environment)
-                let page: Page<Image> = try await environment.makeClient()
-                    .get("/api/projects/\(projectID)/images", query: [("limit", String(listPageLimit))])
-                let images = page.items
+                let images = try await environment.makeClient()
+                    .listImages(path: .init(projectID: projectID), query: .init(limit: listPageLimit))
+                    .ok.body.json.items
                 try printResult(images, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "format", "arch", "size", "status", "created"])
                     for image in images {
                         table.addRow([
-                            formatUUID(image.id), image.name, image.format ?? "",
-                            image.architecture ?? "", image.sizeFormatted ?? "",
-                            image.status ?? "", formatDate(image.createdAt),
+                            image.id ?? "", image.name, image.format.rawValue,
+                            image.architecture.rawValue, image.sizeFormatted,
+                            image.status.rawValue, formatDate(image.createdAt),
                         ])
                     }
                     return table
@@ -56,17 +57,17 @@ struct ImageCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let projectID = try resolveProject(project, environment: environment)
-                let image: Image = try await environment.makeClient()
-                    .get("/api/projects/\(projectID)/images/\(id)")
+                let image = try await environment.makeClient()
+                    .getImage(path: .init(projectID: projectID, imageID: id)).ok.body.json
                 try printResult(image, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", formatUUID(image.id)])
+                    table.addRow(["id", image.id ?? ""])
                     table.addRow(["name", image.name])
-                    table.addRow(["description", image.description ?? ""])
-                    table.addRow(["format", image.format ?? ""])
-                    table.addRow(["architecture", image.architecture ?? ""])
-                    table.addRow(["size", image.sizeFormatted ?? ""])
-                    table.addRow(["status", image.status ?? ""])
+                    table.addRow(["description", image.description])
+                    table.addRow(["format", image.format.rawValue])
+                    table.addRow(["architecture", image.architecture.rawValue])
+                    table.addRow(["size", image.sizeFormatted])
+                    table.addRow(["status", image.status.rawValue])
                     table.addRow(["created", formatDate(image.createdAt)])
                     return table
                 }
@@ -89,8 +90,8 @@ struct ImageCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let projectID = try resolveProject(project, environment: environment)
-                try await environment.makeClient()
-                    .deleteExpectingNoContent("/api/projects/\(projectID)/images/\(id)")
+                _ = try await environment.makeClient()
+                    .deleteImage(path: .init(projectID: projectID, imageID: id)).noContent
                 print("Image \(id) deleted.")
             }
         }

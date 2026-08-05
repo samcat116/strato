@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 /// Options shared by every command that talks to a control plane.
@@ -69,18 +70,21 @@ struct CLIEnvironment {
         )
     }
 
-    func makeClient() -> APIClient {
-        APIClient(baseURL: serverURL, contextName: contextName, credentialStore: credentialStore)
+    func makeClient() -> any APIProtocol {
+        StratoClient.authenticated(
+            serverURL: serverURL, contextName: contextName, credentialStore: credentialStore)
     }
 }
 
 /// Prints a `CLIError` to stderr and exits nonzero; other errors bubble up to
-/// ArgumentParser's default handling.
+/// ArgumentParser's default handling. Errors thrown by a generated operation
+/// arrive wrapped in the runtime's `ClientError`, so they are unwrapped first.
 func runHandlingCLIErrors(_ body: () async throws -> Void) async throws {
     do {
         try await body()
-    } catch let error as CLIError {
-        FileHandle.standardError.write(Data("Error: \(error.description)\n".utf8))
+    } catch {
+        guard let cliError = CLIError.from(error) else { throw error }
+        FileHandle.standardError.write(Data("Error: \(cliError.description)\n".utf8))
         throw ExitCode.failure
     }
 }

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct AgentCommand: AsyncParsableCommand {
@@ -18,17 +19,16 @@ struct AgentCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let page: Page<Agent> = try await environment.makeClient()
-                    .get("/api/agents", query: [("limit", String(listPageLimit))])
-                let agents = page.items
+                let agents = try await environment.makeClient()
+                    .listAgents(query: .init(limit: listPageLimit)).ok.body.json.items
                 try printResult(agents, format: global.output) {
                     var table = TextTable(
                         headers: ["id", "name", "hostname", "version", "arch", "online", "last heartbeat"])
                     for agent in agents {
                         table.addRow([
-                            agent.id.uuidString.lowercased(), agent.name, agent.hostname ?? "",
-                            agent.version ?? "", agent.architecture ?? "",
-                            (agent.isOnline ?? false) ? "yes" : "no",
+                            agent.id, agent.name, agent.hostname,
+                            agent.version, agent.architecture?.rawValue ?? "",
+                            agent.isOnline ? "yes" : "no",
                             formatDate(agent.lastHeartbeat),
                         ])
                     }
@@ -49,16 +49,17 @@ struct AgentCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let agent: Agent = try await environment.makeClient().get("/api/agents/\(id)")
+                let agent = try await environment.makeClient()
+                    .getAgent(path: .init(agentId: id)).ok.body.json
                 try printResult(agent, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", agent.id.uuidString.lowercased()])
+                    table.addRow(["id", agent.id])
                     table.addRow(["name", agent.name])
-                    table.addRow(["hostname", agent.hostname ?? ""])
-                    table.addRow(["version", agent.version ?? ""])
-                    table.addRow(["architecture", agent.architecture ?? ""])
-                    table.addRow(["os", agent.operatingSystem ?? ""])
-                    table.addRow(["online", (agent.isOnline ?? false) ? "yes" : "no"])
+                    table.addRow(["hostname", agent.hostname])
+                    table.addRow(["version", agent.version])
+                    table.addRow(["architecture", agent.architecture?.rawValue ?? ""])
+                    table.addRow(["os", agent.operatingSystem?.rawValue ?? ""])
+                    table.addRow(["online", agent.isOnline ? "yes" : "no"])
                     table.addRow(["last heartbeat", formatDate(agent.lastHeartbeat)])
                     table.addRow(["registered", formatDate(agent.createdAt)])
                     return table
@@ -82,8 +83,9 @@ struct AgentCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Owning folder (organizational unit) id.")
         var folder: String?
 
+        // Required by the API: every enrolled agent joins an availability zone.
         @Option(name: .long, help: "Site id to place the agent in.")
-        var site: String?
+        var site: String
 
         @Option(name: .long, help: "Hours before the enrollment expires.")
         var expiresIn: Int?
@@ -98,19 +100,17 @@ struct AgentCommand: AsyncParsableCommand {
                             + "or set an organization on the context.")
                 }
 
-                let request = CreateAgentEnrollmentRequest(
-                    agentName: name, expirationHours: expiresIn, siteId: site,
-                    organizationId: organizationId, organizationalUnitId: folder
-                )
-                let enrollment: AgentEnrollment = try await env.makeClient()
-                    .post("/api/agent-enrollments", body: request)
+                let enrollment = try await env.makeClient().createAgentEnrollment(
+                    body: .json(
+                        .init(
+                            agentName: name, expirationHours: expiresIn, siteId: site,
+                            organizationId: organizationId, organizationalUnitId: folder))
+                ).ok.body.json
 
                 switch global.output {
                 case .table:
                     print("Enrollment for '\(enrollment.agentName)' created.")
-                    if let expiresAt = enrollment.expiresAt {
-                        print("Expires: \(formatDate(expiresAt))")
-                    }
+                    print("Expires: \(formatDate(enrollment.expiresAt))")
                     print("\nRun this on the new node:\n")
                     print("    \(enrollment.bootstrapCommand)")
                 case .json:

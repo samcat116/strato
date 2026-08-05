@@ -1,4 +1,5 @@
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 /// Prints a decoded API value as a table (built by `table`) or JSON,
@@ -20,16 +21,12 @@ func formatDate(_ date: Date?) -> String {
     return formatter.string(from: date)
 }
 
-func formatUUID(_ id: UUID?) -> String {
-    id?.uuidString.lowercased() ?? ""
-}
-
 /// Handles a 202 mutation response: waits for the operation to finish
 /// (default) or prints its id and returns (`--no-wait`). A failed operation
 /// throws `CLIError.operationFailed`, which exits nonzero.
 func handleOperation(
     _ operation: ResourceOperation,
-    client: APIClient,
+    client: any APIProtocol,
     noWait: Bool,
     format: OutputFormat,
     successMessage: String
@@ -37,8 +34,8 @@ func handleOperation(
     if noWait {
         switch format {
         case .table:
-            let id = operation.id.map { $0.uuidString.lowercased() } ?? "unknown"
-            print("Accepted: operation \(id) (\(operation.kind)) is \(operation.status).")
+            let id = operation.id ?? "unknown"
+            print("Accepted: operation \(id) (\(operation.kind.rawValue)) is \(operation.status.rawValue).")
             print("Track it with 'strato operation wait \(id)'.")
         case .json:
             print(try renderJSON(operation))

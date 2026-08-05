@@ -343,8 +343,12 @@ jobs:
         working-directory: agent
         run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/agent" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
+      # Gated on the API client and the spec too (issue #779): the CLI is built
+      # against the generated `StratoAPIClient`, so a breaking change to
+      # `control-plane/Sources/App/openapi.yaml` has to fail the CLI build and
+      # not just the client's.
       - name: Build CLI
-        if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.workflow == 'true') }}
+        if: ${{ !cancelled() && (needs.changes.outputs.cli == 'true' || needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: cli
         run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/cli" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
