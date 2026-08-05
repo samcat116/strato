@@ -124,8 +124,8 @@ extension Project {
 
     /// The materialized path a project carries beneath a parent whose own
     /// materialized path is `parentPath` — a folder's `path`, or
-    /// ``organizationPath(_:)`` for a project attached straight to the
-    /// organization.
+    /// ``OrganizationalUnit/organizationPath(_:)`` for a project attached
+    /// straight to the organization.
     ///
     /// Split out from ``buildPath(on:)`` so callers that already hold the parent
     /// path (the folder-move rewrite, the hierarchy validator) derive it the same

@@ -343,10 +343,28 @@ final class OrganizationalUnitTests {
             #expect(!movedDirect.path.contains(engineering.id!.uuidString))
             #expect(!movedInfra.path.contains(engineering.id!.uuidString))
             #expect(movedInfra.path.contains(research.id!.uuidString))
+            #expect(movedPlatform.depth == 1)
+            #expect(movedDeep.depth == 2)
 
             // ...and the validator agrees the tree is consistent afterwards.
-            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
-            #expect(issues.isEmpty)
+            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db).isEmpty)
+
+            // Move it again, this time to the top level: the depth shift is what
+            // the descendants' rewrite derives rather than re-walking for.
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(platform.id!)/move") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(MoveOrganizationalUnitRequest(newParentOuId: nil))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let rootPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.db))
+            let rootDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.db))
+            #expect(rootPlatform.depth == 0)
+            #expect(rootDeep.depth == 1)
+            #expect(rootPlatform.path == "/\(testOrganization.id!.uuidString)/\(platform.id!.uuidString)")
+            #expect(rootDeep.path == "\(rootPlatform.path)/\(deep.id!.uuidString)")
+            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db).isEmpty)
         }
     }
 

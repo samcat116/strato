@@ -162,8 +162,9 @@ final class HierarchyMaintenanceTests {
                 let report = try res.content.decode(HierarchyRepairResponse.self)
                 #expect(report.repairedIssues.isEmpty)
                 #expect(report.remainingIssues.count == 1)
-                // Nothing was selected, so nothing failed.
-                #expect(report.success)
+                // A request that asked for nothing does not report a healthy
+                // tree: `success` describes the tree, not the request.
+                #expect(!report.success)
             }
 
             let project = try #require(try await Project.find(fx.project.id!, on: app.db))
@@ -192,13 +193,75 @@ final class HierarchyMaintenanceTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let report = try res.content.decode(HierarchyRepairResponse.self)
-                #expect(report.success)
                 #expect(report.repairedIssues.map(\.issueId) == [fx.project.id!])
                 #expect(report.remainingIssues.map(\.entityId) == [other.id!])
+                // The unselected issue still stands, so the tree is not healthy.
+                #expect(!report.success)
             }
 
             let untouched = try #require(try await Project.find(other.id!, on: app.db))
             #expect(untouched.path == otherDrifted)
+        }
+    }
+
+    @Test("Repair that leaves an unrepairable issue standing does not report success")
+    func repairWithUnrepairableIssueIsNotSuccess() async throws {
+        try await withApp { app, builder, fx in
+            // A cycle in one branch of the org, drift in another: the drift is
+            // repairable, the cycle is not, and a caller polling `success` must
+            // not see green while the cycle stands.
+            let left = try await builder.createOU(name: "left", description: "", organization: fx.organization)
+            let right = try await builder.createOU(
+                name: "right", description: "", organization: fx.organization, parentOU: left)
+            left.$parentOU.id = right.id
+            try await left.save(on: app.db)
+
+            let correct = fx.project.path
+            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
+            try await fx.project.save(on: app.db)
+
+            try await app.test(.POST, "/api/hierarchy/repair") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
+                try req.content.encode(
+                    HierarchyRepairRequest(repairAll: true, repairOptions: .init(rebuildPaths: true)))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let report = try res.content.decode(HierarchyRepairResponse.self)
+                #expect(report.repairedIssues.map(\.issueId) == [fx.project.id!])
+                #expect(!report.success)
+                #expect(report.remainingIssues.allSatisfy { $0.type == "circular_reference" })
+                #expect(Set(report.remainingIssues.map(\.entityId)) == Set([left.id!, right.id!]))
+            }
+
+            // The repairable half still got repaired.
+            let project = try #require(try await Project.find(fx.project.id!, on: app.db))
+            #expect(project.path == correct)
+        }
+    }
+
+    @Test("A project attached to neither a folder nor an organization is reported as orphaned")
+    func parentlessProjectIsReported() async throws {
+        try await withApp { app, _, fx in
+            // Reachable: both columns are nullable and no check constraint
+            // forbids the pair, so only `Project.validate()` stands in the way.
+            fx.project.$organizationalUnit.id = nil
+            fx.project.$organization.id = nil
+            try await fx.project.save(on: app.db)
+
+            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
+            #expect(issues.count == 1)
+            let issue = try #require(issues.first)
+            #expect(issue.type == "orphaned_resource")
+            #expect(issue.severity == "critical")
+            #expect(issue.entityType == "project")
+            #expect(issue.entityId == fx.project.id)
+            #expect(!issue.autoRepairable)
+
+            // Nothing to derive a path from, so a full repair leaves it alone.
+            let report = try await HierarchyMaintenanceService.performHierarchyRepair(
+                repairRequest: .init(repairAll: true, repairOptions: .init(rebuildPaths: true)), on: app.db)
+            #expect(report.repairedIssues.isEmpty)
+            #expect(!report.success)
         }
     }
 

@@ -18,7 +18,11 @@ import Fluent
 ///
 /// Both entry points scan every organization — they back system-admin-only
 /// endpoints and drift is not org-scoped — so they read the folder and project
-/// tables whole, once, and derive everything else in memory.
+/// tables whole, once, and derive everything else in memory. That is the cost
+/// ceiling to know about: every folder and every project in the installation is
+/// materialized in one process, and a repair does it twice (once to find, once
+/// to report what remains). Chunking per organization would only move the loop,
+/// so it stays whole until an installation is large enough for that to hurt.
 struct HierarchyMaintenanceService {
     static func findHierarchyIssues(on db: Database) async throws -> [HierarchyIssue] {
         try await scan(on: db).issues
@@ -70,11 +74,11 @@ struct HierarchyMaintenanceService {
             return repaired
         }
 
-        // Re-derive from the database rather than subtracting what was repaired:
-        // the report should describe the tree as it now stands.
+        // A deliberate second full pass, not a subtraction of what was repaired:
+        // the report describes the tree as it now stands, which is the only form
+        // a caller can act on. It costs a second scan of both tables — including
+        // in `RebuildDriftedHierarchyPaths`, which pays for it once at boot.
         let remaining = try await findHierarchyIssues(on: db)
-        let remainingIDs = Set(remaining.map(\.id))
-        let unresolved = selected.filter { remainingIDs.contains($0.id) }
 
         var summary = "Repaired \(repaired.count) of \(scan.issues.count) issues; \(remaining.count) remain."
         if !repairRequest.repairOptions.rebuildPaths && scan.issues.contains(where: { $0.autoRepairable }) {
@@ -82,7 +86,11 @@ struct HierarchyMaintenanceService {
         }
 
         return HierarchyRepairResponse(
-            success: unresolved.isEmpty,
+            // The tree is healthy, not merely "every repair we were asked for
+            // applied" — the latter is true of a request that asked for nothing
+            // and of a tree whose only remaining issue is one nothing can repair,
+            // which is exactly when a caller polling this must not see green.
+            success: remaining.isEmpty,
             repairedIssues: repaired,
             remainingIssues: remaining,
             summary: summary
@@ -129,6 +137,13 @@ struct HierarchyMaintenanceService {
         // Memoized over the parent chain: a folder's expectation is the same
         // whichever descendant asked for it, and a chain that loops is a cycle
         // for every folder on it.
+        //
+        // The asymmetry in what gets cached is load-bearing, not an oversight:
+        // the `.cycle` returned from the `seen` hit is a statement about the
+        // chain currently being walked, so it is *not* cached, while the
+        // `.cycle` each frame propagates upward is a property of that folder, so
+        // it is. Caching the first would poison the entry for a folder that only
+        // appears mid-walk.
         var expectations: [UUID: Expectation] = [:]
         func expectation(for folderID: UUID, seen: Set<UUID>) -> Expectation {
             if let cached = expectations[folderID] { return cached }
@@ -192,6 +207,14 @@ struct HierarchyMaintenanceService {
                         autoRepairable: false
                     ))
             case .severed:
+                // Unreachable while the schema holds: `parent_ou_id` is a
+                // foreign key with `onDelete: .cascade`, so deleting a parent
+                // takes its children with it rather than severing them, and the
+                // scan loads every folder. Kept as defense against that
+                // constraint being dropped — a severed chain is fail-open for
+                // guardrails (see `iam.md`), so it should be reported loudly
+                // rather than discovered later.
+                //
                 // Only the folder whose own parent is missing is reported: every
                 // folder below it is severed as a consequence, and naming them
                 // all buries the one break an operator has to fix.
@@ -216,6 +239,9 @@ struct HierarchyMaintenanceService {
 
             let parentPath: String
             if let folderID = project.$organizationalUnit.id {
+                // Unreachable for the same reason as the folder case above:
+                // `organizational_unit_id` cascades. Defense against a dropped
+                // constraint, not a live shape.
                 guard foldersByID[folderID] != nil else {
                     scan.issues.append(
                         HierarchyIssue(
@@ -238,6 +264,9 @@ struct HierarchyMaintenanceService {
             } else if let organizationID = project.$organization.id {
                 parentPath = OrganizationalUnit.organizationPath(organizationID)
             } else {
+                // This one is live: both columns are nullable and the check
+                // constraint that would forbid the pair was never added, so only
+                // `Project.validate()` stands between the API and such a row.
                 scan.issues.append(
                     HierarchyIssue(
                         id: projectID,

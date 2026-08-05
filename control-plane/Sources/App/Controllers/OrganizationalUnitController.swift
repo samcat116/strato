@@ -354,6 +354,7 @@ struct OrganizationalUnitController: RouteCollection {
         // Update the OU and everything materializing a path beneath it in one
         // transaction: a half-rewritten subtree is drift no reader can detect.
         let previousPath = ou.path
+        let previousDepth = ou.depth
         let newDepth = try await Self.calculateDepth(parentOU: newParent, on: req.db)
         try await req.db.transaction { db in
             ou.$parentOU.id = moveRequest.newParentOuId
@@ -361,7 +362,8 @@ struct OrganizationalUnitController: RouteCollection {
             ou.path = try await ou.buildPath(on: db)
             try await ou.save(on: db)
 
-            try await Self.updateSubtreePaths(of: ou, previousPath: previousPath, on: db)
+            try await Self.updateSubtreePaths(
+                of: ou, previousPath: previousPath, previousDepth: previousDepth, on: db)
         }
 
         // Get counts for response
@@ -560,6 +562,19 @@ struct OrganizationalUnitController: RouteCollection {
     /// Descendant folders are matched on the path the folder carried *before* the
     /// move: the moved row is already saved with its new path, but its
     /// descendants still extend the old one — that is exactly what this rewrites.
+    /// Which is also the whole rewrite: a descendant's path is `previousPath`
+    /// followed by its own suffix, so swapping the prefix and shifting the depth
+    /// by the same delta the moved folder took is a pure in-memory derivation.
+    /// Re-deriving each row from its parent chain instead would cost two walks
+    /// per descendant — one `find` per level each for the path and the depth —
+    /// with the whole subtree's rows locked for the duration.
+    ///
+    /// Matching on the *stored* path means this rewrites only the part of the
+    /// subtree that is already self-consistent: a descendant folder whose own
+    /// path had drifted would be skipped, and its projects with it. The move path
+    /// assumes folder paths are consistent; `GET /api/hierarchy/validate` is what
+    /// catches a violation, and `RebuildDriftedHierarchyPaths` clears any backlog
+    /// at boot.
     ///
     /// Projects are matched by parent folder id instead, and the set includes the
     /// moved folder itself: a project directly under it extends the path that
@@ -567,13 +582,16 @@ struct OrganizationalUnitController: RouteCollection {
     /// come from the folder paths already in memory rather than a re-read per
     /// project.
     private static func updateSubtreePaths(
-        of ou: OrganizationalUnit, previousPath: String, on db: Database
+        of ou: OrganizationalUnit, previousPath: String, previousDepth: Int, on db: Database
     ) async throws {
         let descendants = try await OrganizationalUnit.descendants(ofPath: previousPath, on: db)
 
+        let depthDelta = ou.depth - previousDepth
         for descendant in descendants {
-            descendant.path = try await descendant.buildPath(on: db)
-            descendant.depth = try await descendant.calculateDepth(on: db)
+            // The query selected on this prefix, so the drop is always the old
+            // path and nothing else.
+            descendant.path = ou.path + descendant.path.dropFirst(previousPath.count)
+            descendant.depth += depthDelta
             try await descendant.save(on: db)
         }
 

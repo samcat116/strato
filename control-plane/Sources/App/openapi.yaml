@@ -11464,7 +11464,7 @@ components:
       properties:
         repairAll:
           type: boolean
-          default: false
+          description: Repair every issue the scan finds. Defaults to false; omit it and name `specificIssues` instead.
         specificIssues:
           type: array
           nullable: true
@@ -11474,23 +11474,25 @@ components:
             format: uuid
         repairOptions:
           type: object
+          description: Which repairs to apply. Every option defaults to false, so an omitted one is not attempted.
           properties:
             fixCircularReferences:
               type: boolean
-              default: false
+              description: Not implemented; a cycle is reported but never repaired. Defaults to false.
             rebuildPaths:
               type: boolean
-              default: false
-              description: Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`.
+              description: >-
+                Rewrite the drifted `path` / `depth` of folders and projects
+                reported as `broken_path`. Defaults to false.
             removeOrphanedResources:
               type: boolean
-              default: false
+              description: Not implemented. Defaults to false.
             adjustQuotas:
               type: boolean
-              default: false
+              description: Not implemented. Defaults to false.
             createMissingDefaults:
               type: boolean
-              default: false
+              description: Not implemented. Defaults to false.
 
     HierarchyRepairReport:
       type: object
@@ -11498,6 +11500,11 @@ components:
       properties:
         success:
           type: boolean
+          description: >-
+            True when the tree carries no issues at all afterwards — not merely
+            that the requested repairs applied. A request that asked for nothing,
+            or one that leaves an unrepairable issue such as a parent cycle
+            standing, reports false with the detail in `remainingIssues`.
         repairedIssues:
           type: array
           items:

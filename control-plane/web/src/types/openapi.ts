@@ -6702,27 +6702,26 @@ export interface components {
         };
         /** @description Every field is optional and defaults to off, so one repair can be requested on its own. */
         HierarchyRepairRequest: {
-            /** @default false */
-            repairAll: boolean;
+            /** @description Repair every issue the scan finds. Defaults to false; omit it and name `specificIssues` instead. */
+            repairAll?: boolean;
             /** @description Issue ids to repair when `repairAll` is false. */
             specificIssues?: string[] | null;
+            /** @description Which repairs to apply. Every option defaults to false, so an omitted one is not attempted. */
             repairOptions?: {
-                /** @default false */
-                fixCircularReferences: boolean;
-                /**
-                 * @description Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`.
-                 * @default false
-                 */
-                rebuildPaths: boolean;
-                /** @default false */
-                removeOrphanedResources: boolean;
-                /** @default false */
-                adjustQuotas: boolean;
-                /** @default false */
-                createMissingDefaults: boolean;
+                /** @description Not implemented; a cycle is reported but never repaired. Defaults to false. */
+                fixCircularReferences?: boolean;
+                /** @description Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`. Defaults to false. */
+                rebuildPaths?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                removeOrphanedResources?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                adjustQuotas?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                createMissingDefaults?: boolean;
             };
         };
         HierarchyRepairReport: {
+            /** @description True when the tree carries no issues at all afterwards — not merely that the requested repairs applied. A request that asked for nothing, or one that leaves an unrepairable issue such as a parent cycle standing, reports false with the detail in `remainingIssues`. */
             success: boolean;
             repairedIssues: {
                 /** Format: uuid */
