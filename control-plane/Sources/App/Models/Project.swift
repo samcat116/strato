@@ -104,27 +104,34 @@ extension Project {
 extension Project {
     /// Builds the path string for this project based on its hierarchy
     func buildPath(on db: Database) async throws -> String {
-        var pathComponents: [String] = []
+        var parentPath = ""
 
         // If project belongs to an OU, get the OU's path
         if let ouId = self.$organizationalUnit.id {
             if let ou = try await OrganizationalUnit.find(ouId, on: db) {
-                // Remove trailing OU ID from path as we'll add project ID
-                let ouPath = ou.path
-                let pathParts = ouPath.split(separator: "/").map(String.init)
-                pathComponents = pathParts
+                parentPath = ou.path
             }
         } else if let orgId = self.$organization.id {
             // Direct organization child
-            pathComponents.append(orgId.uuidString)
+            parentPath = OrganizationalUnit.organizationPath(orgId)
         }
 
-        // Add project ID if available
-        if let projectId = self.id {
-            pathComponents.append(projectId.uuidString)
+        guard let projectId = self.id else {
+            return parentPath.isEmpty ? "/" : parentPath
         }
+        return Project.path(under: parentPath, projectID: projectId)
+    }
 
-        return "/" + pathComponents.joined(separator: "/")
+    /// The materialized path a project carries beneath a parent whose own
+    /// materialized path is `parentPath` — a folder's `path`, or
+    /// ``organizationPath(_:)`` for a project attached straight to the
+    /// organization.
+    ///
+    /// Split out from ``buildPath(on:)`` so callers that already hold the parent
+    /// path (the folder-move rewrite, the hierarchy validator) derive it the same
+    /// way instead of re-reading the parent row per project.
+    static func path(under parentPath: String, projectID: UUID) -> String {
+        "\(parentPath)/\(projectID.uuidString)"
     }
 
     /// Gets the root organization ID for this project

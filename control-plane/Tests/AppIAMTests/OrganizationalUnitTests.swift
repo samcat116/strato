@@ -303,6 +303,53 @@ final class OrganizationalUnitTests {
         }
     }
 
+    @Test("Move OU rewrites the paths of descendant projects")
+    func testMoveOURewritesProjectPaths() async throws {
+        try await withOUTestApp { app, testUser, testOrganization, authToken in
+            let builder = TestDataBuilder(db: app.db)
+
+            // engineering > platform > deep, with a project on `platform` and one
+            // on `deep`, then move `platform` under `research` (issue #871).
+            let engineering = try await builder.createOU(
+                name: "engineering", description: "", organization: testOrganization)
+            let research = try await builder.createOU(
+                name: "research", description: "", organization: testOrganization)
+            let platform = try await builder.createOU(
+                name: "platform", description: "", organization: testOrganization, parentOU: engineering)
+            let deep = try await builder.createOU(
+                name: "deep", description: "", organization: testOrganization, parentOU: platform)
+
+            let direct = try await builder.createProject(name: "direct", description: "", ou: platform)
+            let infra = try await builder.createProject(name: "infra", description: "", ou: deep)
+            #expect(direct.path.contains(engineering.id!.uuidString))
+            #expect(infra.path.contains(engineering.id!.uuidString))
+
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(platform.id!)/move") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(MoveOrganizationalUnitRequest(newParentOuId: research.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let movedPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.db))
+            let movedDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.db))
+            let movedDirect = try #require(try await Project.find(direct.id!, on: app.db))
+            let movedInfra = try #require(try await Project.find(infra.id!, on: app.db))
+
+            // Every project path extends its parent folder's, and nothing below
+            // the moved subtree still names the folder it left.
+            #expect(movedDirect.path == "\(movedPlatform.path)/\(direct.id!.uuidString)")
+            #expect(movedInfra.path == "\(movedDeep.path)/\(infra.id!.uuidString)")
+            #expect(!movedDirect.path.contains(engineering.id!.uuidString))
+            #expect(!movedInfra.path.contains(engineering.id!.uuidString))
+            #expect(movedInfra.path.contains(research.id!.uuidString))
+
+            // ...and the validator agrees the tree is consistent afterwards.
+            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
+            #expect(issues.isEmpty)
+        }
+    }
+
     // MARK: - Update OU Tests
 
     @Test("Update OU details")

@@ -3743,8 +3743,11 @@ paths:
       operationId: validateHierarchy
       summary: Report hierarchy integrity issues
       description: >-
-        System-admin only. Scans every organization for circular references,
-        broken materialized paths, orphaned resources, and quota violations.
+        System-admin only. Scans every organization for materialized `path` /
+        `depth` values that disagree with the relational parent chain, for
+        parent cycles, and for folders and projects whose parent row is
+        missing. The relational links are the source of truth; the paths are
+        the derived copy that can drift.
       tags: [Organizations]
       responses:
         "200":
@@ -3759,7 +3762,11 @@ paths:
     post:
       operationId: repairHierarchy
       summary: Repair hierarchy integrity issues
-      description: System-admin only. Applies the requested repairs and reports what was fixed and what remains.
+      description: >-
+        System-admin only. Applies the requested repairs and reports what was
+        fixed and what remains. Only `repairOptions.rebuildPaths` does anything
+        today: it rewrites the drifted `path` / `depth` of the folders and
+        projects `validate` reports as `broken_path`.
       tags: [Organizations]
       requestBody:
         required: true
@@ -11425,6 +11432,10 @@ components:
         id:
           type: string
           format: uuid
+          description: >-
+            The id of the entity the issue is about. An entity carries at most
+            one issue, so this is stable across calls and can be replayed into
+            `HierarchyRepairRequest.specificIssues`.
         type:
           type: string
           enum: [circular_reference, broken_path, orphaned_resource, quota_violation]
@@ -11449,10 +11460,11 @@ components:
 
     HierarchyRepairRequest:
       type: object
-      required: [repairAll, repairOptions]
+      description: Every field is optional and defaults to off, so one repair can be requested on its own.
       properties:
         repairAll:
           type: boolean
+          default: false
         specificIssues:
           type: array
           nullable: true
@@ -11462,18 +11474,23 @@ components:
             format: uuid
         repairOptions:
           type: object
-          required: [fixCircularReferences, rebuildPaths, removeOrphanedResources, adjustQuotas, createMissingDefaults]
           properties:
             fixCircularReferences:
               type: boolean
+              default: false
             rebuildPaths:
               type: boolean
+              default: false
+              description: Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`.
             removeOrphanedResources:
               type: boolean
+              default: false
             adjustQuotas:
               type: boolean
+              default: false
             createMissingDefaults:
               type: boolean
+              default: false
 
     HierarchyRepairReport:
       type: object

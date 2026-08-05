@@ -2748,7 +2748,7 @@ export interface paths {
         };
         /**
          * Report hierarchy integrity issues
-         * @description System-admin only. Scans every organization for circular references, broken materialized paths, orphaned resources, and quota violations.
+         * @description System-admin only. Scans every organization for materialized `path` / `depth` values that disagree with the relational parent chain, for parent cycles, and for folders and projects whose parent row is missing. The relational links are the source of truth; the paths are the derived copy that can drift.
          */
         get: operations["validateHierarchy"];
         put?: never;
@@ -2770,7 +2770,7 @@ export interface paths {
         put?: never;
         /**
          * Repair hierarchy integrity issues
-         * @description System-admin only. Applies the requested repairs and reports what was fixed and what remains.
+         * @description System-admin only. Applies the requested repairs and reports what was fixed and what remains. Only `repairOptions.rebuildPaths` does anything today: it rewrites the drifted `path` / `depth` of the folders and projects `validate` reports as `broken_path`.
          */
         post: operations["repairHierarchy"];
         delete?: never;
@@ -6682,7 +6682,10 @@ export interface components {
             };
         };
         HierarchyIssue: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description The id of the entity the issue is about. An entity carries at most one issue, so this is stable across calls and can be replayed into `HierarchyRepairRequest.specificIssues`.
+             */
             id: string;
             /** @enum {string} */
             type: "circular_reference" | "broken_path" | "orphaned_resource" | "quota_violation";
@@ -6697,15 +6700,25 @@ export interface components {
             suggestedFix?: string | null;
             autoRepairable: boolean;
         };
+        /** @description Every field is optional and defaults to off, so one repair can be requested on its own. */
         HierarchyRepairRequest: {
+            /** @default false */
             repairAll: boolean;
             /** @description Issue ids to repair when `repairAll` is false. */
             specificIssues?: string[] | null;
-            repairOptions: {
+            repairOptions?: {
+                /** @default false */
                 fixCircularReferences: boolean;
+                /**
+                 * @description Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`.
+                 * @default false
+                 */
                 rebuildPaths: boolean;
+                /** @default false */
                 removeOrphanedResources: boolean;
+                /** @default false */
                 adjustQuotas: boolean;
+                /** @default false */
                 createMissingDefaults: boolean;
             };
         };

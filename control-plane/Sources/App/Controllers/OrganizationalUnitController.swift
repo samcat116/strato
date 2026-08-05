@@ -136,7 +136,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Calculate depth and path
-        let depth = try await calculateDepth(parentOU: parentOU, on: req.db)
+        let depth = try await Self.calculateDepth(parentOU: parentOU, on: req.db)
 
         // Create OU
         let ou = OrganizationalUnit(
@@ -351,16 +351,18 @@ struct OrganizationalUnitController: RouteCollection {
             newParent = parent
         }
 
-        // Update OU
+        // Update the OU and everything materializing a path beneath it in one
+        // transaction: a half-rewritten subtree is drift no reader can detect.
         let previousPath = ou.path
-        ou.$parentOU.id = moveRequest.newParentOuId
-        ou.depth = try await calculateDepth(parentOU: newParent, on: req.db)
-        ou.path = try await ou.buildPath(on: req.db)
+        let newDepth = try await Self.calculateDepth(parentOU: newParent, on: req.db)
+        try await req.db.transaction { db in
+            ou.$parentOU.id = moveRequest.newParentOuId
+            ou.depth = newDepth
+            ou.path = try await ou.buildPath(on: db)
+            try await ou.save(on: db)
 
-        try await ou.save(on: req.db)
-
-        // Update paths for all descendants
-        try await updateDescendantPaths(previousPath: previousPath, on: req.db)
+            try await Self.updateSubtreePaths(of: ou, previousPath: previousPath, on: db)
+        }
 
         // Get counts for response
         let childOuCount = try await OrganizationalUnit.query(on: req.db)
@@ -471,7 +473,7 @@ struct OrganizationalUnitController: RouteCollection {
 
     // MARK: - Helper Methods
 
-    private func calculateDepth(parentOU: OrganizationalUnit?, on db: Database) async throws -> Int {
+    private static func calculateDepth(parentOU: OrganizationalUnit?, on db: Database) async throws -> Int {
         if let parent = parentOU {
             return parent.depth + 1
         }
@@ -552,18 +554,47 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     /// Rewrites the materialized `path` (and `depth`) of everything beneath a
-    /// folder that has just moved.
+    /// folder that has just moved — descendant folders *and* the projects hanging
+    /// off any of them.
     ///
-    /// Matched on the path the folder carried *before* the move: the moved row
-    /// is already saved with its new path, but its descendants still extend the
-    /// old one — that is exactly what this rewrites.
-    private func updateDescendantPaths(previousPath: String, on db: Database) async throws {
+    /// Descendant folders are matched on the path the folder carried *before* the
+    /// move: the moved row is already saved with its new path, but its
+    /// descendants still extend the old one — that is exactly what this rewrites.
+    ///
+    /// Projects are matched by parent folder id instead, and the set includes the
+    /// moved folder itself: a project directly under it extends the path that
+    /// just changed, so leaving it out would strand it (issue #871). Their paths
+    /// come from the folder paths already in memory rather than a re-read per
+    /// project.
+    private static func updateSubtreePaths(
+        of ou: OrganizationalUnit, previousPath: String, on db: Database
+    ) async throws {
         let descendants = try await OrganizationalUnit.descendants(ofPath: previousPath, on: db)
 
         for descendant in descendants {
             descendant.path = try await descendant.buildPath(on: db)
             descendant.depth = try await descendant.calculateDepth(on: db)
             try await descendant.save(on: db)
+        }
+
+        let folderPaths = Dictionary(
+            ([ou] + descendants).compactMap { folder in folder.id.map { ($0, folder.path) } },
+            uniquingKeysWith: { first, _ in first })
+        guard !folderPaths.isEmpty else { return }
+
+        let projects = try await Project.query(on: db)
+            .filter(\.$organizationalUnit.$id ~~ Array(folderPaths.keys))
+            .all()
+        for project in projects {
+            guard let projectID = project.id,
+                let folderID = project.$organizationalUnit.id,
+                let folderPath = folderPaths[folderID]
+            else { continue }
+
+            let newPath = Project.path(under: folderPath, projectID: projectID)
+            guard newPath != project.path else { continue }
+            project.path = newPath
+            try await project.save(on: db)
         }
     }
 }
