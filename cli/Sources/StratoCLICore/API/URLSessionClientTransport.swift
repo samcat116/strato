@@ -57,7 +57,12 @@ public struct URLSessionClientTransport: ClientTransport {
         var prefix = components.percentEncodedPath
         while prefix.hasSuffix("/") { prefix.removeLast() }
         components.percentEncodedPath = prefix + requestComponents.percentEncodedPath
-        components.percentEncodedQuery = requestComponents.percentEncodedQuery
+        // Query items on the server URL are kept rather than replaced: exotic,
+        // but dropping something the user configured would be silent.
+        let query = [components.percentEncodedQuery, requestComponents.percentEncodedQuery]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        components.percentEncodedQuery = query.isEmpty ? nil : query.joined(separator: "&")
         guard let url = components.url else {
             throw CLIError.network("Could not build a request URL from \(baseURL.absoluteString)")
         }

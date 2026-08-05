@@ -38,10 +38,19 @@ final class MockTransport: ClientTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private var queue: [ScriptedResponse]
+    /// Answers a request from its content instead of from the queue. Needed
+    /// wherever requests are concurrent, since arrival order is then undefined.
+    private let handler: (@Sendable (RecordedRequest) -> ScriptedResponse)?
     private var requests: [RecordedRequest] = []
 
     init(responses: [ScriptedResponse]) {
         self.queue = responses
+        self.handler = nil
+    }
+
+    init(handler: @escaping @Sendable (RecordedRequest) -> ScriptedResponse) {
+        self.queue = []
+        self.handler = handler
     }
 
     func send(
@@ -49,7 +58,7 @@ final class MockTransport: ClientTransport, @unchecked Sendable {
     ) async throws -> (HTTPResponse, HTTPBody?) {
         var collected: Data?
         if let body { collected = try await Data(collecting: body, upTo: 1024 * 1024) }
-        let next = try dequeue(recording: RecordedRequest(request: request, body: collected))
+        let next = try respond(to: RecordedRequest(request: request, body: collected))
 
         var headerFields = HTTPFields()
         if !next.body.isEmpty {
@@ -63,10 +72,11 @@ final class MockTransport: ClientTransport, @unchecked Sendable {
 
     /// NSLock use lives in a synchronous helper: Swift 6 forbids holding a
     /// lock across an async function's suspension points.
-    private func dequeue(recording request: RecordedRequest) throws -> ScriptedResponse {
+    private func respond(to request: RecordedRequest) throws -> ScriptedResponse {
         lock.lock()
         defer { lock.unlock() }
         requests.append(request)
+        if let handler { return handler(request) }
         guard !queue.isEmpty else {
             struct ExhaustedScript: Error {}
             throw ExhaustedScript()

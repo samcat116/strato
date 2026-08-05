@@ -40,8 +40,10 @@ struct DeviceFlowTests {
         let request = try #require(transport.recordedRequests.first)
         #expect(request.path == "/oauth/device_authorization")
         #expect(request.request.headerFields[.contentType] == "application/x-www-form-urlencoded")
-        #expect(request.bodyText.contains("client_name=test"))
-        #expect(request.bodyText.contains("scope=read"))
+        // Asserted whole: form encoding moved out of hand-written code and into
+        // the generated client, so this is the assertion that still covers it.
+        // The generator spells a space as `+`.
+        #expect(request.bodyText == "client_name=test+host&scope=read+write")
     }
 
     @Test("poll rides out pending and slow_down, then succeeds")
@@ -108,7 +110,7 @@ struct DeviceFlowTests {
 
         let request = try #require(transport.recordedRequests.first)
         #expect(request.path == "/oauth/revoke")
-        #expect(request.bodyText.contains("token=rt_abc"))
+        #expect(request.bodyText == "token=rt_abc")
     }
 }
 

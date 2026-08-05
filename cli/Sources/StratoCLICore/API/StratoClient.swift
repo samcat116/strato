@@ -15,6 +15,14 @@ public enum StratoClient {
     /// A client for one context: signs each request with the context's stored
     /// access token, rotates the pair once on a 401 and replays, and raises a
     /// `CLIError` for any other non-2xx response.
+    ///
+    /// - Important: because every non-2xx response is raised as an error before
+    ///   the generated code decodes it, the failure cases of an operation's
+    ///   `Output` — `.badRequest`, `.notFound`, `.forbidden`, and the rest — are
+    ///   unreachable through this client. That is what lets a call site read
+    ///   `.ok`/`.accepted` directly; a `switch` written over those cases would
+    ///   silently never fire. Catch `CLIError.api` and read its `status`
+    ///   instead.
     public static func authenticated(
         serverURL: URL,
         contextName: String,

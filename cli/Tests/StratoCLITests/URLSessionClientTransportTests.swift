@@ -35,4 +35,12 @@ struct URLSessionClientTransportTests {
             request: request(path: "/api/vms"))
         #expect(url.absoluteString == "https://strato.example.com/api/vms")
     }
+
+    @Test("A query string on the server URL is kept alongside the operation's")
+    func testServerURLQueryIsPreserved() throws {
+        let url = try URLSessionClientTransport.url(
+            baseURL: URL(string: "https://strato.example.com/?tenant=acme")!,
+            request: request(path: "/api/vms?limit=500"))
+        #expect(url.absoluteString == "https://strato.example.com/api/vms?tenant=acme&limit=500")
+    }
 }

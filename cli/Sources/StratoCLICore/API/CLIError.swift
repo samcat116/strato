@@ -39,13 +39,28 @@ public enum CLIError: Error, CustomStringConvertible, Sendable {
 }
 
 extension CLIError {
-    /// Recovers the CLI error behind whatever a generated operation threw.
+    /// The module `swift-openapi-runtime` builds as. See `from(_:)`.
+    private static let runtimeModule = "OpenAPIRuntime"
+
+    /// Recovers the CLI error behind whatever a generated operation threw, or
+    /// `nil` for an error that is none of the API layer's business and should
+    /// keep bubbling — a failed file read, ArgumentParser's own `ExitCode`.
     ///
-    /// `swift-openapi-runtime` wraps everything a middleware, transport, or
-    /// decoder throws in a `ClientError`, so the errors our middlewares raise
-    /// arrive buried. Anything that is not one of ours means the response did
-    /// not match the spec this binary was generated from — the drift signal
-    /// the generated client exists to produce.
+    /// Two shapes arrive from the generated client:
+    ///
+    /// - Anything a middleware, transport, or decoder throws during the send is
+    ///   wrapped in a `ClientError`, so the errors our middlewares raise arrive
+    ///   buried one level down.
+    /// - The `.ok`/`.accepted`/`.noContent` accessors throw *after* a
+    ///   successful send — an undocumented status is not a transport failure —
+    ///   so that error is raised in the caller's frame, unwrapped. The runtime
+    ///   keeps its error type internal (1.12.0 has no public equivalent), so it
+    ///   is recognized by originating module instead: anything the runtime
+    ///   raises outside the send path means the response did not match the spec
+    ///   this binary was generated from.
+    ///
+    /// Either way the result is the drift signal the generated client exists to
+    /// produce, rather than a mystery.
     public static func from(_ error: any Error) -> CLIError? {
         switch error {
         case let cliError as CLIError:
@@ -56,7 +71,9 @@ extension CLIError {
                 "The server's response to '\(clientError.operationID)' did not match the API contract "
                     + "(\(clientError.causeDescription)).")
         default:
-            return nil
+            guard String(reflecting: type(of: error)).hasPrefix("\(runtimeModule).") else { return nil }
+            let detail = String(describing: error).prefix(200)
+            return .unexpectedResponse("The server returned a response the API contract does not describe (\(detail)).")
         }
     }
 }

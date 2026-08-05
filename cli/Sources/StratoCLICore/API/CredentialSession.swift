@@ -65,12 +65,24 @@ public actor CredentialSession {
         let output = try await tokenEndpoint.oauthToken(
             body: .urlEncodedForm(.init(grantType: .refreshToken, refreshToken: credentials.refreshToken)))
 
-        guard case .ok(let ok) = output else {
-            // A rejected refresh means the session is revoked, expired, or was
-            // rotated elsewhere — stale credentials are useless now.
+        let ok: Operations.OauthToken.Output.Ok
+        switch output {
+        case .ok(let response):
+            ok = response
+        case .badRequest:
+            // The server *rejected* the grant: the session is revoked, expired,
+            // or was rotated elsewhere. Stale credentials are useless now.
             try? store.delete(for: contextName)
             cached = nil
             throw CLIError.notLoggedIn("Your session for context '\(contextName)' has expired or been revoked.")
+        case .undocumented(let statusCode, _):
+            // Anything else is the endpoint being unreachable, not a verdict on
+            // the grant — a proxy 502 during a control-plane rollout, say. The
+            // credentials stay on disk so the next invocation can retry rather
+            // than sending the user back through the browser device flow.
+            throw CLIError.api(
+                status: statusCode,
+                message: "Could not refresh the session for context '\(contextName)'.")
         }
 
         let token = try ok.body.json
