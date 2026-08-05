@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 import StratoAPIClient
 import StratoCLICore
@@ -49,6 +50,37 @@ func handleOperation(
         print(successMessage)
     case .json:
         print(try renderJSON(final))
+    }
+}
+
+/// One lifecycle action on a resource, as the generated operation that
+/// performs it. Each verb is its own operation in the spec, so the action is a
+/// function rather than a path fragment.
+typealias ResourceAction = @Sendable (any APIProtocol, String) async throws -> ResourceOperation
+
+/// One lifecycle action (start/stop/reboot/...) as a reusable command. A
+/// conformer supplies the generated operation to call plus the wording of the
+/// success message; the shared `run()` does the rest.
+protocol ResourceActionCommand: AsyncParsableCommand {
+    /// The resource as it appears in the success message, e.g. "VM".
+    static var resourceLabel: String { get }
+    static var action: ResourceAction { get }
+    static var pastTense: String { get }
+    var global: GlobalOptions { get }
+    var id: String { get }
+    var noWait: Bool { get }
+}
+
+extension ResourceActionCommand {
+    func run() async throws {
+        try await runHandlingCLIErrors {
+            let env = try CLIEnvironment.resolve(global)
+            let client = env.makeClient()
+            let operation = try await Self.action(client, id)
+            try await handleOperation(
+                operation, client: client, noWait: noWait, format: global.output,
+                successMessage: "\(Self.resourceLabel) \(id) \(Self.pastTense).")
+        }
     }
 }
 

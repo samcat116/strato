@@ -134,9 +134,10 @@ struct SandboxCommand: AsyncParsableCommand {
         }
     }
 
-    struct Start: SandboxActionCommand {
+    struct Start: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Start a sandbox.")
-        static let action: SandboxAction = {
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
             try await $0.startSandbox(path: .init(sandboxID: $1)).accepted.body.json
         }
         static let pastTense = "started"
@@ -145,9 +146,10 @@ struct SandboxCommand: AsyncParsableCommand {
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Stop: SandboxActionCommand {
+    struct Stop: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a sandbox.")
-        static let action: SandboxAction = {
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
             try await $0.stopSandbox(path: .init(sandboxID: $1)).accepted.body.json
         }
         static let pastTense = "stopped"
@@ -156,38 +158,15 @@ struct SandboxCommand: AsyncParsableCommand {
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Restart: SandboxActionCommand {
+    struct Restart: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Restart a sandbox.")
-        static let action: SandboxAction = {
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
             try await $0.restartSandbox(path: .init(sandboxID: $1)).accepted.body.json
         }
         static let pastTense = "restarted"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "Sandbox id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
-    }
-}
-
-/// One sandbox lifecycle action, as the generated operation that performs it.
-typealias SandboxAction = @Sendable (any APIProtocol, String) async throws -> ResourceOperation
-
-protocol SandboxActionCommand: AsyncParsableCommand {
-    static var action: SandboxAction { get }
-    static var pastTense: String { get }
-    var global: GlobalOptions { get }
-    var id: String { get }
-    var noWait: Bool { get }
-}
-
-extension SandboxActionCommand {
-    func run() async throws {
-        try await runHandlingCLIErrors {
-            let env = try CLIEnvironment.resolve(global)
-            let client = env.makeClient()
-            let operation = try await Self.action(client, id)
-            try await handleOperation(
-                operation, client: client, noWait: noWait, format: global.output,
-                successMessage: "Sandbox \(id) \(Self.pastTense).")
-        }
     }
 }

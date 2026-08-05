@@ -157,73 +157,51 @@ struct VMCommand: AsyncParsableCommand {
     }
 }
 
-/// One VM lifecycle action, as the generated operation that performs it. Each
-/// verb is its own operation in the spec, so the action is a function rather
-/// than a path fragment.
-typealias VMAction = @Sendable (any APIProtocol, String) async throws -> ResourceOperation
-
-/// One lifecycle action as a reusable command.
-protocol VMActionCommand: AsyncParsableCommand {
-    static var action: VMAction { get }
-    static var pastTense: String { get }
-    var global: GlobalOptions { get }
-    var id: String { get }
-    var noWait: Bool { get }
-}
-
-extension VMActionCommand {
-    func run() async throws {
-        try await runHandlingCLIErrors {
-            let env = try CLIEnvironment.resolve(global)
-            let client = env.makeClient()
-            let operation = try await Self.action(client, id)
-            try await handleOperation(
-                operation, client: client, noWait: noWait, format: global.output,
-                successMessage: "VM \(id) \(Self.pastTense).")
-        }
-    }
-}
-
 extension VMCommand {
-    struct Start: VMActionCommand {
+    struct Start: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Start a virtual machine.")
-        static let action: VMAction = { try await $0.startVM(path: .init(vmID: $1)).accepted.body.json }
+        static let resourceLabel = "VM"
+        static let action: ResourceAction = { try await $0.startVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "started"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Stop: VMActionCommand {
+    struct Stop: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a virtual machine.")
-        static let action: VMAction = { try await $0.stopVM(path: .init(vmID: $1)).accepted.body.json }
+        static let resourceLabel = "VM"
+        static let action: ResourceAction = { try await $0.stopVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "stopped"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Reboot: VMActionCommand {
+    struct Reboot: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Reboot a virtual machine.")
-        static let action: VMAction = { try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json }
+        static let resourceLabel = "VM"
+        static let action: ResourceAction = { try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "rebooted"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Pause: VMActionCommand {
+    struct Pause: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Pause a virtual machine.")
-        static let action: VMAction = { try await $0.pauseVM(path: .init(vmID: $1)).accepted.body.json }
+        static let resourceLabel = "VM"
+        static let action: ResourceAction = { try await $0.pauseVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "paused"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Resume: VMActionCommand {
+    struct Resume: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Resume a paused virtual machine.")
-        static let action: VMAction = { try await $0.resumeVM(path: .init(vmID: $1)).accepted.body.json }
+        static let resourceLabel = "VM"
+        static let action: ResourceAction = { try await $0.resumeVM(path: .init(vmID: $1)).accepted.body.json }
         static let pastTense = "resumed"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
