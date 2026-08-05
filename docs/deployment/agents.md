@@ -218,10 +218,11 @@ rather than by convention.
 All three binaries are **stripped** before packaging — debug symbols were most
 of the download. That means a crash on a node yields addresses rather than
 function names if you enable the Swift backtracer (`SWIFT_BACKTRACE=enable=yes`
-in the unit) — build from the release's `gitSHA`, which `strato-agent
---version` and `agent-manifest.json` both report, when you need symbols. The
-published container images are not stripped, so the same crash inside
-`docker compose` still symbolicates.
+in the unit). Build from the release's `gitSHA` — which `strato-agent
+--version` and `agent-manifest.json` both report — to read the code that
+crashed; mapping those addresses back onto a rebuild needs debug artifacts,
+which releases do not publish today. The published container images are not
+stripped, so the same crash under `docker compose` still symbolicates.
 
 ### agent-manifest.json
 

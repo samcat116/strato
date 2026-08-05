@@ -637,6 +637,9 @@ jobs:
           for f in release/strato-control-plane release/strato-agent release/strato; do
             before=$(wc -c < "$f")
             strip "$f"
+            # Measured before the macOS re-sign below, so the numbers report
+            # the strip itself rather than strip minus a few KB of signature.
+            after=$(wc -c < "$f")
             case "${{ matrix.asset_name }}" in
               strato-macos-*)
                 # strip rewrites the Mach-O, and an Apple Silicon binary whose
@@ -648,11 +651,18 @@ jobs:
                 codesign --force --sign - "$f"
                 ;;
             esac
-            echo "stripped ${f##*/}: ${before} -> $(wc -c < "$f") bytes"
+            echo "stripped ${f##*/}: ${before} -> ${after} bytes"
           done
-          # Smoke-test one stripped binary: the CLI's --version needs no
-          # config or services, and a strip that broke the executable (or, on
-          # macOS, its signature) fails here rather than in someone's install.
+          # Smoke-test the two binaries whose --version short-circuits in
+          # ArgumentParser before any config or service handling, so a strip
+          # that broke an executable — or, on macOS, its signature — fails the
+          # release here rather than on someone's node. The agent is the one
+          # that matters: its self-update probes a staged binary with
+          # --version before swapping it in, but install.sh executes nothing
+          # before starting the unit, so a fresh install has no other guard.
+          # Not strato-control-plane: the Vapor executable falls through to
+          # `serve` and would go looking for Postgres.
+          release/strato-agent --version
           release/strato --version
 
           tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent strato
