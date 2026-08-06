@@ -44,6 +44,12 @@ struct DesiredStateAssembler {
         } else {
             agent = nil
         }
+        // The agent's site, loaded here rather than inside
+        // `networkAssemblyScope` because two things need it now: topology
+        // authority, and the `region` every VM's instance metadata carries. One
+        // row read either way — `find` of a nil id queries nothing, so a
+        // site-less agent still reads none.
+        let site = try await Site.find(agent?.$site.id, on: db)
         let vms = try await VM.query(on: db)
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
@@ -64,7 +70,7 @@ struct DesiredStateAssembler {
             .all()
 
         let scope = try await networkAssemblyScope(
-            agentId: agentId, agent: agent, ownVMs: vms, ownSandboxes: sandboxes, on: db)
+            agentId: agentId, agent: agent, site: site, ownVMs: vms, ownSandboxes: sandboxes, on: db)
 
         // DHCP/DNS config lives on the logical-network row. Query exactly the
         // union used by local workload specs and authoritative topology.
@@ -86,7 +92,7 @@ struct DesiredStateAssembler {
         // for older agents rather than sent-and-ignored, so a nil on the wire
         // means exactly one thing on the receiving side: "the sender has no
         // opinion", which is what keeps a rollback from sweeping live ports.
-        let sendMetadata =
+        let sendMetadataPort =
             agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
         let securityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
@@ -96,19 +102,45 @@ struct DesiredStateAssembler {
             securityGroupsByInterface = [:]
         }
 
+        // Instance metadata (STR-51): what each VM's link-local metadata
+        // service *serves*, as distinct from `sendMetadataPort` above, which is
+        // whether the agent can realize the port it is served *on* (STR-49).
+        // Two protocol versions because they shipped separately, and an agent
+        // can speak either without the other. Omitted entirely for pre-v26
+        // agents — they decode and discard it — following the v20
+        // `securityGroups` pattern, and unlike v18/v23 this gates only the
+        // field, never placement: an old agent still provisions its guests from
+        // the seed ISO, so a VM there loses mutable metadata, not its ability
+        // to boot.
+        let sendInstanceMetadata =
+            agent.map { WireProtocol.supportsInstanceMetadata($0.wireProtocolVersion ?? 0) } ?? true
+        // Placement describes the receiving agent, not the VM, so it is
+        // resolved once for the whole sync. The site's *name* names the coarse
+        // half, not its advisory `regionCode`: that slug is operator-optional,
+        // so falling back to the name would make the field's namespace depend
+        // on whether someone filled it in. A site-less agent (the legacy
+        // single-node model) simply has no region to report; whether a guest is
+        // *told* either half is the renderer's call, not this one.
+        let region = site?.name
+        let availabilityZone = agent?.name
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
             let image = vm.sourceImage
+            // Resolved once and handed to both consumers: the spec's NIC list
+            // and the metadata the guest reads are then the same list, and an
+            // under-fetched NIC is logged once for this VM rather than once per
+            // consumer — which would read as two NICs having gone missing.
+            let resolvedInterfaces = VMSpecBuilder.resolvedInterfaces(
+                from: vm.networkInterfaces, networks: networksByID, logger: app.logger)
             let spec = VMSpecBuilder.buildVMSpecWithVolumes(
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
-                networkInterfaces: vm.networkInterfaces,
-                networks: networksByID,
+                resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadata: sendMetadata,
-                logger: app.logger
+                sendsMetadataPort: sendMetadataPort
             )
 
             // Image download info lets the agent materialize a VM it doesn't
@@ -142,6 +174,13 @@ struct DesiredStateAssembler {
                     metadata: ["vmId": .string(vmId.uuidString)])
             }
 
+            let metadata =
+                sendInstanceMetadata
+                ? InstanceMetadata.build(
+                    vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
+                    region: region, availabilityZone: availabilityZone)
+                : nil
+
             entries.append(
                 DesiredVMState(
                     vmId: vmId,
@@ -149,7 +188,8 @@ struct DesiredStateAssembler {
                     spec: spec,
                     desiredStatus: vm.desiredStatus,
                     generation: vm.generation,
-                    imageInfo: imageInfo
+                    imageInfo: imageInfo,
+                    metadata: metadata
                 ))
         }
 
@@ -192,7 +232,7 @@ struct DesiredStateAssembler {
                     dnsServers: network.dnsServers,
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
-                    metadataEnabled: sendMetadata ? network.metadataEnabled : nil,
+                    metadataEnabled: sendMetadataPort ? network.metadataEnabled : nil,
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId]
                 )
@@ -278,7 +318,7 @@ struct DesiredStateAssembler {
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
-                sendsMetadata: sendMetadata)
+                sendsMetadataPort: sendMetadataPort)
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
@@ -560,6 +600,7 @@ struct DesiredStateAssembler {
     private func networkAssemblyScope(
         agentId: String,
         agent: Agent?,
+        site: Site?,
         ownVMs: [VM],
         ownSandboxes: [Sandbox],
         on db: any Database
@@ -569,10 +610,16 @@ struct DesiredStateAssembler {
         var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
 
+        // `site` is loaded by the caller, which also names the metadata's
+        // region. Today's only caller resolves it from this same `$site.id`, so
+        // the equality below cannot fail; it is here so a future caller that
+        // resolves a site some other way can't grant this agent topology
+        // authority over a site that isn't its own. A mismatch falls through to
+        // the legacy per-node scope, which is what a missing row already does.
         guard let agent,
             let agentUUID = agent.id,
             let siteID = agent.$site.id,
-            let site = try await Site.find(siteID, on: db)
+            let site, site.id == siteID
         else {
             return NetworkAssemblyScope(
                 networkIDs: ownReferences,
@@ -762,9 +809,7 @@ struct DesiredStateAssembler {
                 let vm = vmsByID[interface.$vm.id],
                 let vmId = vm.id
             else { continue }
-            let ordered = vm.networkInterfaces.sorted {
-                ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName)
-            }
+            let ordered = vm.networkInterfaces.inDeviceOrder
             guard let nicIndex = ordered.firstIndex(where: { $0.id == interface.id }),
                 let logicalIP = ordered[nicIndex].ipv4Address?.address
             else {

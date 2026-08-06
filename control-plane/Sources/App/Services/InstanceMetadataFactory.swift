@@ -1,0 +1,108 @@
+import Foundation
+import StratoShared
+import Vapor
+
+extension InstanceMetadata {
+    /// Assembles what one VM's link-local metadata service should tell the
+    /// guest about itself (STR-51), for `DesiredVMState.metadata`.
+    ///
+    /// Everything here comes from rows the desired-state assembly has already
+    /// loaded — the VM, its eager-loaded NICs with addresses, and the indexes
+    /// the assembly builds once per sync — because this runs for every VM of
+    /// every agent on every sync: a query added here is a fleet-wide load
+    /// multiplier, not a per-VM cost. `region`/`availabilityZone` are passed in
+    /// for the same reason; they describe the *receiving agent*, which the
+    /// assembly resolves once.
+    ///
+    /// `resolvedInterfaces` is the VM's NICs already paired with their networks
+    /// by `VMSpecBuilder.resolvedInterfaces` — taken rather than resolved here
+    /// so the caller resolves once and hands the *same* list to the VM spec,
+    /// which is what makes the two lists agree by construction instead of by
+    /// both happening to pass the same network map. Nothing here is
+    /// authorization input and nothing may expire: this is a publication
+    /// boundary (any process in the guest that reaches the link-local address
+    /// reads all of it) carried on a sync that must stay valid however long it
+    /// takes to arrive.
+    ///
+    /// `vendorData`, `tags`, and `identity` are passed explicitly at their
+    /// empty values rather than defaulted, because each is a decision about
+    /// what the platform publishes to guests: Strato has no provisioning
+    /// document of its own yet, no VM tag storage exists, and no VM may be
+    /// vended a SPIFFE identity until phase 3. When tags land, that is the one
+    /// line here that changes.
+    static func build(
+        vm: VM,
+        vmId: UUID,
+        resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
+        region: String?,
+        availabilityZone: String?
+    ) -> InstanceMetadata {
+        InstanceMetadata(
+            instanceId: vmId,
+            // Nil for VMs predating `VM.hostname` (issue #770). Deliberately
+            // not derived from `name`: a slug is the lossy derivation the
+            // stored column exists to avoid, and it would disagree with the
+            // records the VM's DNS zone assembles from the same column.
+            hostname: vm.hostname,
+            projectId: vm.$project.id,
+            // `VM.environment` is a non-optional column, but an empty string is
+            // "unset", not an environment named "": the renderer decides what
+            // an unset environment looks like and cannot if it is handed one.
+            environment: vm.environment.isEmpty ? nil : vm.environment,
+            region: region,
+            availabilityZone: availabilityZone,
+            // The very list the VM spec's NICs are built from, so the guest
+            // matches an entry here to a link by MAC and an operator reading
+            // both sees one list.
+            nics: resolvedInterfaces.map {
+                MetadataNIC.build(interface: $0.interface, network: $0.network)
+            },
+            // The same single key the spec carries. Duplicated deliberately
+            // (see `InstanceMetadata.sshAuthorizedKeys`): the spec copy
+            // provisions at boot, this copy is what a running guest re-reads
+            // after an operator rotates it.
+            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
+            userData: vm.userData,
+            vendorData: nil,
+            tags: [:],
+            identity: nil
+        )
+    }
+}
+
+extension MetadataNIC {
+    /// One NIC as the guest is told about it. Addressing comes from the
+    /// per-family address rows (`addresses` must be eager-loaded), carried as
+    /// address + prefix length rather than the dotted netmask `NetworkSpec`
+    /// still sends for old agents — that is the form both renderer targets
+    /// want, and the dotted form is derivable from it.
+    ///
+    /// The DHCP/DNS fields come from the network row rather than the NIC
+    /// because that is where they live; carrying them at all is what lets the
+    /// IMDS tell a guest everything the seed ISO's static network config used
+    /// to on networks where DHCP is off.
+    static func build(interface: VMNetworkInterface, network: LogicalNetwork) -> MetadataNIC {
+        let ipv4 = interface.ipv4Address
+        let ipv6 = interface.ipv6Address
+        return MetadataNIC(
+            deviceName: interface.deviceName,
+            macAddress: interface.macAddress,
+            // From the NIC's foreign key, not `network.id`: the same value by
+            // construction — the caller looked the row up by it — but
+            // non-optional.
+            networkId: interface.logicalNetworkID,
+            networkName: network.name,
+            ipAddress: ipv4?.address,
+            prefixLength: ipv4?.prefixLength,
+            // The allocation's gateway, the same source `NetworkSpec` uses, so
+            // the two never disagree about a NIC's next hop.
+            gateway: ipv4?.gateway,
+            ipv6Address: ipv6?.address,
+            ipv6PrefixLength: ipv6?.prefixLength,
+            gateway6: ipv6?.gateway,
+            mtu: interface.mtu,
+            dnsServers: network.dnsServers,
+            domainName: network.domainName
+        )
+    }
+}
