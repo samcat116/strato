@@ -20,4 +20,39 @@ extension Request {
 
         return vm
     }
+
+    /// Resolve a VM named in a *request body* — the attach endpoints' second
+    /// resource — answering `404` for both "no such VM" and "you may not
+    /// `permission` this VM", so the two are indistinguishable (issue #881).
+    ///
+    /// Use this, not `authorizedVM(_:permission:)`, whenever the id came from
+    /// the body of a request addressed to some *other* resource (a volume, a
+    /// security group, a floating IP). The distinction matters because of who
+    /// is asking: a caller who reaches `/api/vms/{id}` has been handed that id
+    /// as the subject of the request and a `403` tells them nothing they could
+    /// not infer from the route, whereas a caller who may pass any id in a body
+    /// can sweep ids and read `404` vs `403` as an existence oracle for VMs in
+    /// projects they cannot see. The lookup necessarily precedes the check, so
+    /// the only way to close that is to answer the same thing either way.
+    ///
+    /// The cost is deliberate and was weighed once for the whole API rather
+    /// than per handler: an authenticated caller who can *see* a VM but lacks
+    /// `permission` on it now gets `404` from these endpoints instead of `403`,
+    /// which is less informative than it could be for them. `404` is the choice
+    /// because it is the answer already given to a resource outside the
+    /// caller's reach elsewhere — `LogicalNetworkService.resolveForWorkloadCreate`
+    /// for networks, VM create's `securityGroupIds` for groups.
+    ///
+    /// Refusals that *follow* this call may still be more specific: having
+    /// cleared the check, the caller can already see the VM, so a containment
+    /// or state refusal discloses nothing (the ordering rule `ProjectContainment`
+    /// documents).
+    func reachableVM(_ vmID: UUID, permission: String) async throws -> VM {
+        guard let vm = try await VM.find(vmID, on: db),
+            try await can(permission, on: "virtual_machine", id: vm.id?.uuidString ?? "")
+        else {
+            throw Abort(.notFound, reason: "VM \(vmID) not found")
+        }
+        return vm
+    }
 }

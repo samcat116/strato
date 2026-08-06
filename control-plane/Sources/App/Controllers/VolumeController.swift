@@ -364,17 +364,10 @@ struct VolumeController: RouteCollection {
                 reason: "Volume cannot be attached in status '\(volume.status.rawValue)'. Must be 'available'")
         }
 
-        // Fetch the VM
-        guard let vm = try await VM.find(request.vmId, on: req.db) else {
-            throw Abort(.notFound, reason: "VM not found")
-        }
-
-        // Attaching changes the VM, so the caller needs update on it too.
-        let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
-
-        guard hasVMPermission else {
-            throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
-        }
+        // Attaching changes the VM, so the caller needs update on it too. An
+        // unreachable VM is answered as absent whether it is missing or merely
+        // forbidden — see `reachableVM` (issue #881).
+        let vm = try await req.reachableVM(request.vmId, permission: "update")
 
         // Permission on both sides isn't enough: a caller holding rights in two
         // projects could otherwise move a volume's data across the project

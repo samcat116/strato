@@ -1267,6 +1267,20 @@ Two enforcement details worth naming:
 - **Unmatched paths return 403, not 404**: a request outside every route
   class is denied by the middleware before Vapor's router can 404 it. A
   deliberate default-deny consequence (and mild enumeration hardening).
+- **A resource named in a request *body* answers 404 for both "absent" and
+  "forbidden"** (issue #881). The subject of a route (`/api/vms/{id}`) keeps
+  the ordinary split — the caller was handed that id, and a `403` there tells
+  them nothing the route did not. But an id a caller may put in *any* body —
+  volume, security-group, and floating-IP attach all take a `vmId` — is
+  sweepable, and the lookup necessarily precedes the check, so `404` vs `403`
+  would be an existence oracle over another project's resources. Those sites
+  go through `Request.reachableVM(_:permission:)`; the same rule already
+  governs `LogicalNetworkService.resolveForWorkloadCreate` and VM create's
+  `securityGroupIds`, which scope the lookup to the caller's project and
+  report plain not-found. The cost is that a caller who can *see* a VM but
+  lacks `update` on it reads `404` from those three endpoints. Refusals
+  *behind* the check may still be specific — see the ordering rule in
+  `ProjectContainment`. Pinned by `VMAttachTargetDisclosureTests`.
 
 #### The request-scoped cache (shipped with #686, extended by #735)
 
