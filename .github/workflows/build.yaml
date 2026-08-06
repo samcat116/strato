@@ -40,6 +40,7 @@ jobs:
       openapi_spec: ${{ steps.filter.outputs.openapi_spec }}
       firecracker: ${{ steps.filter.outputs.firecracker }}
       install_script: ${{ steps.filter.outputs.install_script }}
+      compose_scripts: ${{ steps.filter.outputs.compose_scripts }}
       homebrew: ${{ steps.filter.outputs.homebrew }}
       workflow: ${{ steps.filter.outputs.workflow }}
       ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
@@ -79,10 +80,18 @@ jobs:
               - 'control-plane/Sources/App/openapi.yaml'
             firecracker:
               - 'SwiftFirecracker/**'
-            # The node install script and its shell-level tests, plus the
-            # compose-side E2E setup scripts linted by the same job.
+            # The node install script and its shell-level tests.
             install_script:
               - 'deploy/agent/**'
+            # The compose-side E2E setup scripts, linted by the same job as
+            # install.sh. A separate filter, not a second pattern under
+            # `install_script`: with `predicate-quantifier: every` a file has to
+            # match ALL of a filter's patterns, and nothing is under both
+            # deploy/agent/ and deploy/compose/ — so pairing them made the
+            # filter unmatchable rather than broader, silently skipping the job
+            # for every PR that only touched a script. Same trap `ci_scripts`
+            # documents below. OR across the two lives in the job's `if:`.
+            compose_scripts:
               - 'deploy/compose/*.sh'
             # The Homebrew formula template. Its render/push scripts live under
             # .github/scripts, which `ci_scripts` already covers — the job below
@@ -135,7 +144,7 @@ jobs:
   install-script:
     name: Shell Scripts
     needs: changes
-    if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.compose_scripts == 'true' || needs.changes.outputs.workflow == 'true'
     # These provision hypervisor hosts, edit /etc/libvirt/qemu.conf in place, and
     # `rm -rf` VM state as root; their helpers are only reachable by running
     # them, and nothing else in CI touches shell. Cheap enough to keep honest.
