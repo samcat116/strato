@@ -1074,10 +1074,10 @@ struct OIDCController: RouteCollection {
         on db: Database
     ) async throws {
         // The default role now spans the unified vocabulary: still `member` or
-        // `admin`, but also an IAM role name or a role id owned at or above the
-        // org. Resolving it here rejects a bad id or an out-of-scope role up
-        // front, so the login path's lenient resolver is only ever the
-        // after-the-fact (role deleted since) safety net.
+        // `admin`, but also an IAM role name or a role owned at or above the
+        // org, by id or by name. Resolving it here rejects a bad id or an
+        // out-of-scope role up front, so the login path's lenient resolver is
+        // only ever the after-the-fact (role deleted since) safety net.
         if let defaultRole = defaultRole {
             do {
                 _ = try await MemberRoleResolver.resolveOrganizationRole(

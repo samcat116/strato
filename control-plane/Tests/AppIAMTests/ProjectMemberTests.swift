@@ -342,6 +342,154 @@ final class ProjectMemberTests {
         }
     }
 
+    // MARK: - Granting a custom role by name (STR-111)
+
+    @Test("Granting by a project-owned role's name binds that role")
+    func grantByProjectOwnedRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            let role = try await makeRole(
+                name: "vm-restarter", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:restart"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "vm-restarter"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            // The name resolves to the same row the id would have: mirror row
+            // and binding both store the role id.
+            let member = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .first()
+            #expect(member?.role == role.id!.uuidString)
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+            #expect(bindings.map(\.role) == [role.id!.uuidString])
+        }
+    }
+
+    @Test("An org-owned role's name is grantable on a project beneath it")
+    func grantByInheritedRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            let role = try await makeRole(
+                name: "auditor", ownerType: .organization, ownerID: project.$organization.id!,
+                actions: ["vm:read"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "auditor"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+            #expect(bindings.map(\.role) == [role.id!.uuidString])
+        }
+    }
+
+    @Test("A name owned outside the chain resolves to nothing, not to that role")
+    func grantByOutOfScopeRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Name Org")
+            _ = try await makeRole(
+                name: "foreign", ownerType: .organization, ownerID: otherOrg.id!,
+                actions: ["vm:read"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "foreign"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("Invalid role 'foreign'"))
+            }
+
+            let count = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .count()
+            #expect(count == 0)
+        }
+    }
+
+    @Test("A name two bindable roles share is a 400 naming both ids")
+    func grantByAmbiguousRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            // Names are unique per owner, so the org and the project beneath it
+            // can each define "deployer" — and neither is the obvious pick.
+            let orgRole = try await makeRole(
+                name: "deployer", ownerType: .organization, ownerID: project.$organization.id!,
+                actions: ["vm:read"], on: app.db)
+            let projectRole = try await makeRole(
+                name: "deployer", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:start"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "deployer"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("ambiguous"))
+                #expect(res.body.string.contains(orgRole.id!.uuidString))
+                #expect(res.body.string.contains(projectRole.id!.uuidString))
+            }
+
+            let count = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .count()
+            #expect(count == 0)
+        }
+    }
+
+    @Test("A custom role named 'viewer' does not shadow the seeded viewer")
+    func fixedVocabularyWinsOverCustomName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            _ = try await makeRole(
+                name: "viewer", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:delete"], on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "viewer"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            // "viewer" still means the seeded viewer; the project's own role of
+            // that name is reachable by id.
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+            #expect(bindings.map(\.role) == [IAMRole.viewer.seededID.uuidString])
+        }
+    }
+
     @Test("Granting by an out-of-scope role UUID is a 400 naming the mismatch")
     func grantByRoleUUIDOutOfScope() async throws {
         try await withApp { app, project, _, target, _, token in

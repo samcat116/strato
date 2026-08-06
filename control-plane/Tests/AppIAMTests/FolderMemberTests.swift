@@ -589,6 +589,36 @@ struct FolderMemberTests {
         }
     }
 
+    @Test("An org-owned role's name is grantable on a folder beneath it (STR-111)")
+    func grantByOrgOwnedRoleName() async throws {
+        try await withFixture { app, fixture in
+            let roleID = UUID()
+            let role = IAMRoleDefinition(
+                id: roleID,
+                name: "vm-restarter",
+                ownerType: .organization,
+                ownerID: try fixture.org.requireID(),
+                cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read", "vm:restart"]),
+                actions: ["vm:read", "vm:restart"],
+                managed: false
+            )
+            try await role.save(on: app.db)
+
+            try await app.test(.POST, try membersPath(fixture)) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
+                try req.content.encode(
+                    OrganizationalUnitMemberController.GrantMemberRequest(
+                        userEmail: fixture.target.email, userID: nil, role: "vm-restarter"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+
+            let roles = try await folderRoles(
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+            #expect(roles == [roleID.uuidString])
+        }
+    }
+
     @Test("Deleting a folder takes its grants with it")
     func deletingFolderRevokesItsBindings() async throws {
         try await withFixture { app, fixture in

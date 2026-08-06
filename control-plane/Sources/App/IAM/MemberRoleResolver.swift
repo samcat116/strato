@@ -5,17 +5,24 @@ import Vapor
 /// Resolves the `role` string the member endpoints accept onto a concrete
 /// role-definition row, across the unified vocabulary (issue #608).
 ///
-/// Three input shapes, tried in order:
+/// Four input shapes, tried in order:
 ///  1. a role **UUID** — an `iam_roles` row id, validated live and in-scope;
 ///  2. an **IAM role name** (`viewer`/`operator`/`editor`/`admin`) — mapped to
 ///     the seeded row's fixed id;
 ///  3. a **legacy relational name** — the project vocabulary (`admin`/`member`/
-///     `viewer`), mapped exactly as `IAMRole.fromProjectRole` always has.
+///     `viewer`), mapped exactly as `IAMRole.fromProjectRole` always has;
+///  4. a **custom role's name**, resolved in the scope `GET /api/iam/roles/
+///     bindable` publishes it in (STR-111).
 ///
-/// The first two shapes are the general path shared by project and org members;
-/// the legacy shape is project-only (org membership keeps its own literal
-/// `admin`/`member` semantics, handled by the controller before it reaches the
-/// resolver).
+/// The fixed vocabulary is tried before the custom names on purpose: `viewer`
+/// and `member` mean what they have always meant, whatever a deployment names
+/// its own roles (names are unique per owner, so an org may well define a
+/// `viewer` of its own — reachable by id).
+///
+/// Shapes 1, 2 and 4 are the general path shared by project, folder and org
+/// members; the legacy shape is project-only (org membership keeps its own
+/// literal `admin`/`member` semantics, handled by the controller before it
+/// reaches the resolver).
 enum MemberRoleResolver {
     /// A resolved role: the row id to store, the name to display, and the
     /// action set the guardrail write-check needs.
@@ -63,12 +70,48 @@ enum MemberRoleResolver {
             return resolved(IAMRole.fromProjectRole(projectRole))
         }
 
-        let legacyHint = acceptsLegacyProjectRoles ? ", or a legacy project role (admin/member/viewer)" : ""
+        // A custom role's name, scoped exactly the way `bindable` scopes it —
+        // the listing offers names, so the write path takes the names it
+        // offers (STR-111).
+        if let role = try await resolveBindableName(raw, scopeNode: scopeNode, on: db) {
+            return role
+        }
+
+        let legacyHint = acceptsLegacyProjectRoles ? ", a legacy project role (admin/member/viewer)," : ""
         throw Abort(
             .badRequest,
             reason:
-                "Invalid role '\(raw)': expected a role id, an IAM role name (viewer/operator/editor/admin)\(legacyHint)."
+                "Invalid role '\(raw)': expected a role id, an IAM role name (viewer/operator/editor/admin)\(legacyHint) or the name of a role bindable on this \(scopeNode.type.rawValue)."
         )
+    }
+
+    /// Resolve a name against the roles bindable at `scopeNode` — the same set
+    /// `GET /api/iam/roles/bindable` answers with. Nil when no bindable role
+    /// carries the name; a name carried by two of them is refused outright.
+    ///
+    /// Ambiguity is possible because names are unique per owner, not globally:
+    /// an org and a project beneath it can each define `deployer`. Picking one
+    /// would grant access the caller never chose, so both ids are named and
+    /// the caller re-sends the one it meant.
+    private static func resolveBindableName(
+        _ raw: String, scopeNode: IAMNode, on db: any Database
+    ) async throws -> Resolved? {
+        let chain = try await IAMResourceTree.ancestors(of: scopeNode, on: db)
+        let matches = try await RoleStore.bindable(named: raw, along: chain, on: db)
+        guard let first = matches.first else { return nil }
+        guard matches.count == 1 else {
+            let candidates =
+                matches
+                .compactMap { role in role.id.map { "\($0) (owned by \(role.ownerType) \(role.ownerID))" } }
+                .sorted()
+                .joined(separator: ", ")
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Role name '\(raw)' is ambiguous on this \(scopeNode.type.rawValue): it names \(matches.count) bindable roles — \(candidates). Grant by role id instead."
+            )
+        }
+        return Resolved(id: try first.requireID(), displayName: first.name, actions: Set(first.actions))
     }
 
     private static func resolved(_ role: IAMRole) -> Resolved {
@@ -96,8 +139,8 @@ enum MemberRoleResolver {
     /// Legacy `admin`/`member` keep their literal semantics: stored verbatim,
     /// `admin` carrying the admin binding and `member` none, so the last-admin
     /// guards continue to key on the literal. Everything else — an IAM role
-    /// name or an org-owned role id — resolves through `resolve`, scoped to the
-    /// org, and stores the role id.
+    /// name, or an org-owned role by id or by name — resolves through
+    /// `resolve`, scoped to the org, and stores the role id.
     ///
     /// The seeded admin role — reachable by IAM name or by its well-known id —
     /// *is* the org-admin membership under another name, so it is stored as the

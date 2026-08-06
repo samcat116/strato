@@ -10913,15 +10913,26 @@ components:
           type: string
           description: Email address of an existing user to add.
         role:
-          type: string
-          description: The organization role to grant (`admin` grants an admin role binding).
+          $ref: "#/components/schemas/OrganizationMemberRole"
+
+    OrganizationMemberRole:
+      type: string
+      description: >-
+        The organization role to grant: `member` (bare membership) or `admin`
+        (an admin role binding), a seeded IAM role name
+        (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org
+        named by id or by name — every name
+        `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed
+        names above win over a custom role that shares one, which stays
+        grantable by id; a name two bindable roles share is a `400` naming
+        both ids.
 
     UpdateOrganizationMemberRoleRequest:
       type: object
       required: [role]
       properties:
         role:
-          type: string
+          $ref: "#/components/schemas/OrganizationMemberRole"
 
     FolderDetail:
       type: object
@@ -11097,10 +11108,13 @@ components:
     FolderRole:
       type: string
       description: >-
-        The role to grant on the folder: a role id, or a seeded role name
-        (`viewer`/`operator`/`editor`/`admin`). A role id must name a role
-        owned at or above the folder. The legacy project vocabulary
-        (`member`) is not accepted here.
+        The role to grant on the folder: a role id, a seeded role name
+        (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role
+        bindable here — every name `GET /api/iam/roles/bindable` lists for this
+        folder is accepted. Either form must name a role owned at or above the
+        folder. A seeded name always wins over a custom role of the same name,
+        and a name two bindable roles share is a `400` naming both ids. The
+        legacy project vocabulary (`member`) is not accepted here.
 
     GrantFolderMemberRequest:
       type: object
@@ -12025,8 +12039,15 @@ components:
 
     ProjectRole:
       type: string
-      description: A role grant on a project.
-      enum: [admin, member, viewer]
+      description: >-
+        A role grant on a project. Written as a role id, a seeded IAM role name
+        (`viewer`/`operator`/`editor`/`admin`), a legacy project role
+        (`admin`/`member`/`viewer`), or the name of a custom role bindable on
+        the project — every name `GET /api/iam/roles/bindable` lists for it is
+        accepted. The fixed names win over a custom role that shares one, which
+        stays grantable by id; a name two bindable roles share is a `400`
+        naming both ids. Read back, it is always a role id (member listings
+        carry the display name alongside).
 
     GrantProjectMemberRequest:
       type: object
@@ -14813,8 +14834,8 @@ components:
           type: string
           description: >-
             Admin-only. Organization role for newly provisioned users when no
-            claim matches: `member`, `admin`, an IAM role name, or a role id
-            bindable at the org.
+            claim matches: `member`, `admin`, an IAM role name, or a role
+            bindable at the org named by id or by name.
         createdAt:
           type: string
           format: date-time
@@ -14877,7 +14898,8 @@ components:
         defaultRole:
           type: string
           description: >-
-            `member`, `admin`, an IAM role name, or a role id bindable at the org.
+            `member`, `admin`, an IAM role name, or a role bindable at the org
+            named by id or by name.
 
     UpdateOIDCProviderRequest:
       type: object
@@ -14928,7 +14950,8 @@ components:
         defaultRole:
           type: string
           description: >-
-            `member`, `admin`, an IAM role name, or a role id bindable at the org.
+            `member`, `admin`, an IAM role name, or a role bindable at the org
+            named by id or by name.
 
     OIDCProviderTestResult:
       type: object

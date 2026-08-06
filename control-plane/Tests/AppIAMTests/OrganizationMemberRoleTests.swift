@@ -158,6 +158,44 @@ final class OrganizationMemberRoleTests {
         }
     }
 
+    @Test("An org-owned role's name binds that role (STR-111)")
+    func orgOwnedRoleName() async throws {
+        try await withApp { app, org, _, token, target in
+            let role = try await makeRole(
+                name: "vm-restarter", ownerType: .organization, ownerID: org.id!,
+                actions: ["vm:read", "vm:restart"], on: app.db)
+            try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["userEmail": target.email, "role": "vm-restarter"])
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+            let m = try await membership(target.id!, org.id!, on: app.db)
+            #expect(m?.role == role.id!.uuidString)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [role.id!.uuidString])
+        }
+    }
+
+    @Test("A custom role named 'member' does not shadow legacy membership")
+    func customRoleNamedMemberDoesNotShadowLegacy() async throws {
+        try await withApp { app, org, _, token, target in
+            _ = try await makeRole(
+                name: "member", ownerType: .organization, ownerID: org.id!,
+                actions: ["vm:read", "vm:delete"], on: app.db)
+            try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["userEmail": target.email, "role": "member"])
+            } afterResponse: { res in
+                #expect(res.status == .created)
+            }
+            // Still bare membership: the literal keeps its meaning, and the
+            // org's own "member" role stays reachable by id.
+            let m = try await membership(target.id!, org.id!, on: app.db)
+            #expect(m?.role == "member")
+            #expect(try await orgBindings(target.id!, org.id!, on: app.db).isEmpty)
+        }
+    }
+
     @Test("A role owned by another org is a 400 naming the mismatch")
     func foreignRoleUUIDOutOfScope() async throws {
         try await withApp { app, org, _, token, target in

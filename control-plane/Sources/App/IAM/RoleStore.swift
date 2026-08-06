@@ -111,9 +111,31 @@ enum RoleStore {
     /// project and everything beneath it and nowhere else — the same
     /// containment the chain already expresses for bindings and ceilings.
     static func bindable(along chain: [IAMNode], on db: any Database) async throws -> [IAMRoleDefinition] {
+        try await bindableQuery(along: chain, on: db).sort(\.$name).all()
+    }
+
+    /// The bindable roles at a node carrying a given name — the write path's
+    /// half of `bindable`, so a name that listing just handed out is a name a
+    /// grant can be written with (STR-111).
+    ///
+    /// Plural because a name is unique only within its owner: two owners on
+    /// one chain can each define `deployer`, and picking one silently would be
+    /// a grant nobody asked for. The caller decides — `MemberRoleResolver`
+    /// refuses and names the candidates.
+    static func bindable(
+        named name: String, along chain: [IAMNode], on db: any Database
+    ) async throws -> [IAMRoleDefinition] {
+        try await bindableQuery(along: chain, on: db).filter(\.$name == name).sort(\.$name).all()
+    }
+
+    /// The owner predicate both `bindable` forms share: platform rows, plus
+    /// the rows owned by an organization or project on the chain.
+    private static func bindableQuery(
+        along chain: [IAMNode], on db: any Database
+    ) -> QueryBuilder<IAMRoleDefinition> {
         let organizationIDs = chain.filter { $0.type == .organization }.map(\.id)
         let projectIDs = chain.filter { $0.type == .project }.map(\.id)
-        return try await IAMRoleDefinition.query(on: db)
+        return IAMRoleDefinition.query(on: db)
             .group(.or) { anyOwner in
                 anyOwner.filter(\.$ownerType == IAMRoleOwnerType.platform.rawValue)
                 if !organizationIDs.isEmpty {
@@ -129,8 +151,6 @@ enum RoleStore {
                     }
                 }
             }
-            .sort(\.$name)
-            .all()
     }
 
     /// How many live bindings name this role — what makes a delete a `409`.
