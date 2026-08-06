@@ -68,6 +68,11 @@ per-kind budget). Operation rows deliberately have no foreign key to the
 resource, so delete operations survive the row's removal. The frontend
 polls operations to a terminal state and refreshes the affected list.
 
+The same transaction appends a `resource_events` row — who mutated what, to
+which target generation — an append-only trail that is never updated and
+never swept, with a database trigger enforcing it. It is where mutation
+attribution lives once operation rows stop being the record (ADR 0001).
+
 ## Multi-replica control plane
 
 Multiple control-plane replicas are supported. PostgreSQL is the only

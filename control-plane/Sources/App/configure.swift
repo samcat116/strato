@@ -730,6 +730,12 @@ public func configure(_ app: Application) async throws {
     // a grant that looks live in every listing and confers nothing.
     app.migrations.add(RejectConditionedRoleBindings())
 
+    // ADR 0001 stage 2 (STR-143): the append-only mutation audit trail.
+    // Mutations dual-write it alongside their operation row, so attribution
+    // and the operation lifecycle can be separated before the operations
+    // table itself is retired.
+    app.migrations.add(CreateResourceEvent())
+
     // STR-144: the agent-confirmed tombstone dance generalizes into finalizers
     // — a list of outstanding cleanup participants that keeps a deleted row
     // alive until the last one clears its token.

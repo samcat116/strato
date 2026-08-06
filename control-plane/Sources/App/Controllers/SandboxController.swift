@@ -483,6 +483,21 @@ struct SandboxController: RouteCollection {
                         sandboxID: sandboxID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
+                    // The create's attribution record (ADR 0001, stage 2), for
+                    // the reason the VM create path appends its own: the
+                    // retrying transaction owns this insert, not
+                    // `ResourceOperation.begin`. Scope passed, not resolved,
+                    // for the same reason it is there.
+                    try await ResourceEvent.record(
+                        .create, resourceKind: .sandbox, resourceID: sandboxID,
+                        actor: .user(userID),
+                        scope: ResourceEvent.Scope(
+                            organizationID: try await project.getRootOrganizationId(on: db),
+                            projectID: projectId,
+                            resourceName: sandbox.name,
+                            generation: sandbox.generation),
+                        on: db)
+
                     // IAM dual-write (issue #477): the creator's binding on the
                     // sandbox, in the create transaction (see the VM path).
                     try await RoleBindingService.grant(
