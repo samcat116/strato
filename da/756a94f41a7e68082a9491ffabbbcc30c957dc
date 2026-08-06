@@ -1,0 +1,22 @@
+docs/architecture/sandboxes.md
+  s_f1005ef32ad32d::t_63be7b94139d7a 11-20,22,24,41-42,44-75,77,80,94,125,149-208,210-274,276-347,350,355,411,430,434,438,444,451,475-476,478,483,487-499,523,526-530,549,575,578,588-589,616-618,645,647,694-818
+docs/architecture/networking.md
+  s_f1005ef32ad32d::t_f497d6fb549d82 295-297
+  s_f1005ef32ad32d::t_6e341919815151 380-383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "da756a94f41a7e68082a9491ffabbbcc30c957dc",
+  "prompts": {},
+  "sessions": {
+    "s_f1005ef32ad32d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6f034dd-372e-441b-a604-ba0e687c3986",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
