@@ -298,6 +298,22 @@ actor FirecrackerService: HypervisorService {
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
     }
 
+    /// See `HypervisorService.reclaimVMDirectory`. Same directory `deleteVM`
+    /// removes: the rootfs materialized at create, plus anything else this
+    /// driver wrote under it. The API socket is the client's, in its own socket
+    /// directory, and is not this method's to remove.
+    func reclaimVMDirectory(vmId: String) async {
+        guard vmManagers[vmId] == nil else {
+            // The caller's evidence contradicts what this service knows. Refuse
+            // rather than unlink the rootfs of a VM it is still driving.
+            logger.error(
+                "Refusing to reclaim the directory of a VM with a live control session",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
+    }
+
     func getVMStatus(vmId: String) async throws -> VMStatus {
         // An absent entry means this service does not manage the VM at all; report
         // that honestly instead of fabricating `.shutdown` (see QEMUService).
@@ -480,6 +496,11 @@ actor FirecrackerService: HypervisorService {
 
     func deleteVM(vmId: String) async throws {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
+    }
+
+    func reclaimVMDirectory(vmId: String) async {
+        // This stub never created a VM here, so there is nothing on the host to
+        // reclaim — and unlike the calls above, cleanup has no failure to report.
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {

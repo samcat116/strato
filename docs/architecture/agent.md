@@ -102,8 +102,9 @@ VM in the cgroup with it (issue #522).
 
 `HypervisorProtocol.swift` defines `protocol HypervisorService: Actor` —
 create/boot/shutdown/reboot/pause/resume/delete, status/info queries,
-console endpoints, disk hot-(de)attach, `reservedResources()`, and an
-opt-in `adoptVM` for orphan re-adoption.
+console endpoints, disk hot-(de)attach, `reservedResources()`, an
+opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
+delete path that has no session to tear down (below).
 
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
@@ -548,6 +549,35 @@ drain sets `allow_bulk_teardown` in the agent config. Ordinary `.absent`
 deletes — the ones someone asked for through the API, with an operation row
 and an audit trail — are deliberately not counted, so normal bulk deletes are
 unaffected.
+
+### Deleting a VM with no live session
+
+A delete normally converges through the driver's `deleteVM`, which tears the
+hypervisor process down and then removes `<vm_storage_dir>/<vmId>` whole —
+boot disk, cloud-init ISO, UEFI varstore, TPM state, sockets (#969). Two
+deletes never reach that removal, and both used to leave the directory on the
+host permanently (STR-179):
+
+- **An orphan that cannot be re-adopted.** `reconcileDelete` re-adopts first,
+  so a surviving process is really destroyed rather than abandoned. When
+  re-adoption answers `adoptionTargetGone` instead — the process is confirmed
+  gone — the delete drops the manifest entry, tears down networking, and calls
+  the driver's `reclaimVMDirectory`, because that entry was the last record on
+  the host that the VM ever existed. Every other adoption failure is
+  ambiguous (the VM may be alive and merely unreachable), and those keep the
+  older contract: release the entry, log, and leave the files for manual
+  cleanup.
+- **A VM the driver holds no session for.** `QEMUService.deleteVM` used to
+  throw `vmNotFound` and leave the directory behind on every retry. It now
+  asks the deterministic QMP socket whether anything is still running from
+  that directory: a socket that answers gets `quit` (so the delete converges),
+  one that is absent or refuses proves there is nothing to tear down, and only
+  a connect that hangs is ambiguous enough to fail the delete and be retried
+  by the next sync.
+
+Directories leaked before this are not reclaimed by either path. A startup
+sweep would have to distinguish a leaked directory from one belonging to a
+running VM whose manifest entry is missing, which needs its own design.
 
 ## Sandboxes on the agent
 

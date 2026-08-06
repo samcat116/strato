@@ -113,6 +113,25 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Parameter vmId: The VM identifier
     func deleteVM(vmId: String) async throws
 
+    /// Removes what the VM left on this host, for a delete that has no session
+    /// to tear down (STR-179).
+    ///
+    /// `deleteVM` is the normal route and reclaims the same state on its way
+    /// out. This is for the one path that cannot reach it: an orphan whose
+    /// re-adoption reported the hypervisor process *gone*, so there is nothing
+    /// to destroy — while its boot disk, cloud-init ISO and the rest of its
+    /// directory are still on the host. That delete then drops the VM's
+    /// manifest entry, the last thing on the host that knows the VM was ever
+    /// here, so anything left behind is leaked for good.
+    ///
+    /// Callers must hold that evidence: this unlinks the disk a live guest
+    /// would still be running from. Best-effort and non-throwing — the delete
+    /// releases the manifest entry either way, so a failure here is loud in
+    /// the log rather than something a caller can act on — and a backend with
+    /// nothing on disk implements it as a no-op.
+    /// - Parameter vmId: The VM identifier
+    func reclaimVMDirectory(vmId: String) async
+
     /// Gets the current status of a VM
     /// - Parameter vmId: The VM identifier
     /// - Returns: The current VM status

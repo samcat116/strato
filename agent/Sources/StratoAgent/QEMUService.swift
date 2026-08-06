@@ -468,23 +468,17 @@ actor QEMUService: HypervisorService {
     }
 
     func deleteVM(vmId: String) async throws {
-        guard let qemuManager = activeVMs[vmId] else {
-            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
-        }
-
         logger.info("Deleting QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Destroy VM (network attachments are torn down by the agent's
-        // NetworkOrchestrator after this returns)
-        try await controlled("qmp-destroy", vmId: vmId) {
-            try await qemuManager.destroy()
+        if let qemuManager = activeVMs[vmId] {
+            // Destroy VM (network attachments are torn down by the agent's
+            // NetworkOrchestrator after this returns)
+            try await controlled("qmp-destroy", vmId: vmId) {
+                try await qemuManager.destroy()
+            }
+        } else {
+            try await destroyWithoutSession(vmId: vmId)
         }
-
-        // Stop the VM's swtpm, if it has one. Unconditional rather than gated
-        // on the spec's machine profile: a re-adopted VM has no spec here, and
-        // stopping is a no-op when no swtpm is running.
-        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
-        await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
@@ -495,16 +489,100 @@ actor QEMUService: HypervisorService {
         vmConsoleSocketPaths.removeValue(forKey: vmId)
         vmSerialSocketPaths.removeValue(forKey: vmId)
 
+        // Safe at this point: both branches above either left the host with no
+        // QEMU process for this VM or threw, so nothing can still be running
+        // from the disk this unlinks.
+        await reclaimVMDirectory(vmId: vmId)
+
+        logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
+    }
+
+    /// Leaves the host with no QEMU process for `vmId` when this service holds
+    /// no control session for it, so `deleteVM` can go on to reclaim its
+    /// directory.
+    ///
+    /// The agent deletes from its own manifest, which can name a VM this
+    /// service has no handle for: the manifest is durable and this service's
+    /// session table is not, so any divergence between the two arrives here.
+    /// Answering it with `vmNotFound` was wrong twice over — the delete never
+    /// converged, and it left the VM's directory on the host on every retry
+    /// (STR-179).
+    ///
+    /// The deterministic QMP socket outlives the session and answers the only
+    /// question a delete actually needs: is a process still running from that
+    /// directory? A socket that connects belongs to a live QEMU, and `quit`
+    /// over it is a real teardown, so the delete converges instead of giving
+    /// up. A socket that is absent or refuses a connection merely outlived its
+    /// process — nothing to tear down. Only a connect that neither succeeds nor
+    /// fails is ambiguous, and that one throws: unlinking a live guest's disk
+    /// reclaims no space (the process holds the inode open) and leaves it
+    /// running from a file no operator can find.
+    private func destroyWithoutSession(vmId: String) async throws {
+        let socketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            logger.info(
+                "Deleting a VM with no control session and no QMP socket; nothing to tear down",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+
+        let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
+        do {
+            // Same bound as re-adoption, for the same reason: a stale socket
+            // can accept a connection and then never speak (issue #516).
+            _ = try await StageBudget.run(
+                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt-for-delete", onTimeout: .abandon
+            ) {
+                try await adopted.connect()
+            }
+        } catch is StageBudgetError {
+            throw HypervisorServiceError.timeout(
+                "connecting to VM \(vmId) over \(socketPath) to delete it exceeded \(StageBudget.adoptionSeconds)s")
+        } catch {
+            logger.info(
+                "VM has no live QEMU behind its QMP socket; deleting what it left on this host",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "socket": .string(socketPath),
+                    "error": .string(error.localizedDescription),
+                ])
+            return
+        }
+
+        logger.warning(
+            "Deleting a VM whose QEMU is alive but had no session on this agent",
+            metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+        try await controlled("qmp-destroy", vmId: vmId) {
+            try await adopted.destroy()
+        }
+    }
+
+    /// See `HypervisorService.reclaimVMDirectory`. `deleteVM` finishes through
+    /// here too, so what a QEMU VM leaves on the host has one description.
+    func reclaimVMDirectory(vmId: String) async {
+        guard activeVMs[vmId] == nil else {
+            // The caller's evidence contradicts what this service knows. Refuse
+            // rather than unlink the disk of a guest it is still driving.
+            logger.error(
+                "Refusing to reclaim the directory of a VM with a live control session",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+
+        // Stop the VM's swtpm, if it has one. Unconditional rather than gated
+        // on the spec's machine profile: a re-adopted VM has no spec here, and
+        // stopping is a no-op when no swtpm is running. It is also a separate
+        // process from QEMU, so a dead VM's swtpm can still be running — and
+        // its state lives in the directory removed below.
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
+        await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
+
         // Everything else the VM owns on this host lives in its own directory —
         // the boot disk, the cloud-init ISO, the UEFI varstore, the TPM state,
         // and every socket — so remove the directory whole. Naming files one at
         // a time is what leaked the boot disk on every delete (#969), and it
         // covers a re-adopted VM's files too, which this process never recorded.
-        // Safe here: the QEMU process is confirmed gone (the destroy above
-        // throws otherwise) and swtpm has been stopped.
         VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
-
-        logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
 
     /// Returns the console socket path for a VM

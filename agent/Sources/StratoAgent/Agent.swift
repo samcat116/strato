@@ -3731,29 +3731,85 @@ extension Agent: ReconcileActuator {
             operation: "resize")
     }
 
+    /// What re-adopting an orphan told a delete about the VM's hypervisor
+    /// process — which is what decides whether the delete may take the VM's
+    /// files with it.
+    private enum OrphanDeleteAdoption: Equatable {
+        /// The session is back, so the delete runs the normal driver path and
+        /// the driver reclaims everything itself.
+        case adopted
+        /// Adoption reported the process no longer exists. There is nothing to
+        /// tear down and nothing running from the VM's disks — the one outcome
+        /// that makes removing its directory safe.
+        case processGone
+        /// Adoption failed without settling the question: no driver for the
+        /// VM's backend on this host, a re-adoption handshake that timed out, a
+        /// backend that cannot re-adopt at all. The VM may still be running, so
+        /// its files stay put under the manual-cleanup contract.
+        case indeterminate
+    }
+
+    /// Re-adopts an orphan that is being deleted, classifying a failure by
+    /// whether it proves the hypervisor process is gone. The distinction is the
+    /// whole point: `try?` here discarded it, and the resulting delete could
+    /// never tell a confirmed-dead VM (reclaim its directory) from a live one
+    /// this agent simply cannot reach (leave it alone).
+    private func adoptOrphanForDelete(
+        vmId: String, entry: VMManifestEntry, service: (any HypervisorService)?
+    ) async -> OrphanDeleteAdoption {
+        guard let service else { return .indeterminate }
+        do {
+            _ = try await service.adoptVM(vmId: vmId, spec: entry.spec)
+            return .adopted
+        } catch HypervisorServiceError.adoptionTargetGone(let reason) {
+            logger.info(
+                "Orphaned VM being deleted has no live hypervisor process",
+                metadata: ["vmId": .string(vmId), "reason": .string(reason)])
+            return .processGone
+        } catch {
+            logger.warning(
+                "Could not re-adopt an orphaned VM to delete it",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            return .indeterminate
+        }
+    }
+
     private func reconcileDelete(_ item: ReconcileWorkItem) async throws {
         // Orphan with no live session: try to re-adopt first so the surviving
         // hypervisor process is actually torn down instead of leaking. If the
-        // session cannot be reattached (pre-deterministic-socket VM, dead
-        // process), fall back to releasing the manifest entry — the same
-        // manual-cleanup contract as the imperative path.
+        // session cannot be reattached, fall back to releasing the manifest
+        // entry, reclaiming as much as the failure proves is safe to reclaim.
         if managedVMs[item.vmId] == nil, let entry = orphanedVMs[item.vmId] {
-            if let service = getHypervisorService(for: entry.hypervisorType),
-                (try? await service.adoptVM(vmId: item.vmId, spec: entry.spec)) != nil
-            {
-                managedVMs[item.vmId] = entry
-            } else {
+            let service = getHypervisorService(for: entry.hypervisorType)
+            let adoption = await adoptOrphanForDelete(vmId: item.vmId, entry: entry, service: service)
+            guard adoption == .adopted else {
+                // Reclaim before releasing the manifest entry, not after: that
+                // entry is the only record on this host that the VM was ever
+                // here, so a crash between the two must leave the record
+                // standing rather than the files (STR-179). A replayed delete
+                // re-reclaims harmlessly.
+                if adoption == .processGone, let service {
+                    // Nothing is running from this VM's disks, so its whole
+                    // directory — boot disk included — goes with it.
+                    await service.reclaimVMDirectory(vmId: item.vmId)
+                    logger.info(
+                        "Deleting an orphaned VM whose hypervisor process was already gone; its files are reclaimed",
+                        metadata: ["vmId": .string(item.vmId)])
+                } else {
+                    logger.warning(
+                        "Deleted orphaned VM from manifest; any surviving hypervisor process and the VM's files must be cleaned up manually",
+                        metadata: ["vmId": .string(item.vmId)])
+                }
+
                 orphanedVMs.removeValue(forKey: item.vmId)
                 persistManifest()
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
                     vmId: item.vmId, count: entry.spec.networks.count)
-                logger.warning(
-                    "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
-                    metadata: ["vmId": .string(item.vmId)])
                 return
             }
+            managedVMs[item.vmId] = entry
         }
 
         guard let entry = managedVMs[item.vmId] else {
