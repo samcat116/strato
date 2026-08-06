@@ -284,7 +284,9 @@ private func launchAgent(options: AgentOptions) async throws {
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         simulation: finalSimulation,
         spiffeConfig: config.spiffe,
-        teardownGuard: config.teardownGuard
+        teardownGuard: config.teardownGuard,
+        desiredStatePull: config.wantsDesiredStatePull,
+        desiredStateFullRefetchInterval: config.desiredStateFullRefetchInterval
     )
 
     // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful

@@ -176,6 +176,68 @@ struct AgentWebSocketIntegrationTests {
         }
     }
 
+    /// An agent that declared pull mode drives itself off the long-poll, so
+    /// pushing to it as well would assemble its whole sync a second time and
+    /// write it to a socket that is not reading desired state (STR-146).
+    @Test("A pull-mode agent is skipped by the periodic desired-state pass")
+    func pullModeAgentSkipsPeriodicSync() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "pulling-agent"
+            let org = try await self.makeOrg(app: app)
+            try await AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID())
+            ).save(on: app.db)
+
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            client.send(try encodeRegister(agentName: agentName, pullsDesiredState: true))
+            #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+
+            // Not even the forced backstop pass, which pushes to every other
+            // locally socketed agent regardless of dirtiness.
+            await app.agentService.syncDesiredStateToAllAgents(force: true)
+            try await client.expectNoEnvelope(for: .milliseconds(250))
+
+            try await client.close()
+        }
+    }
+
+    /// The version gate is not sufficient on its own: an agent that speaks v29
+    /// but was pinned back to push mode by config must keep being pushed to.
+    @Test("An agent that speaks the pull version but does not claim it is still pushed to")
+    func capableButPushModeAgentStillPushed() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "pinned-push-agent"
+            let org = try await self.makeOrg(app: app)
+            try await AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID())
+            ).save(on: app.db)
+
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            client.send(try encodeRegister(agentName: agentName, pullsDesiredState: false))
+            #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+            try await client.expectDesiredStateSync()
+
+            await app.agentService.syncDesiredStateToAllAgents(force: true)
+            try await client.expectDesiredStateSync()
+
+            try await client.close()
+        }
+    }
+
     @Test("Periodic desired-state scheduling does not wait on a wedged registry")
     func periodicSyncLeavesRegistryIOOffTick() async throws {
         try await withRunningApp { app, port in
@@ -598,7 +660,8 @@ private func withTimeout<T: Sendable>(
 /// sending as a WebSocket text frame.
 private func encodeRegister(
     agentName: String,
-    protocolVersion: Int = WireProtocol.currentVersion
+    protocolVersion: Int = WireProtocol.currentVersion,
+    pullsDesiredState: Bool? = nil
 ) throws -> String {
     let message = AgentRegisterMessage(
         agentId: agentName,
@@ -613,7 +676,8 @@ private func encodeRegister(
             totalDisk: Int64(100 * 1024 * 1024 * 1024),
             availableDisk: Int64(100 * 1024 * 1024 * 1024)
         ),
-        protocolVersion: protocolVersion
+        protocolVersion: protocolVersion,
+        pullsDesiredState: pullsDesiredState
     )
     let envelope = try MessageEnvelope(message: message)
     let data = try WireProtocol.makeEncoder().encode(envelope)

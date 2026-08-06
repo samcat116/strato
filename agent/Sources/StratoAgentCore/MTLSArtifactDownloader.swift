@@ -55,6 +55,21 @@ public struct MTLSArtifactDownloader: Sendable {
 
         public static let production = Timeouts(
             connect: .seconds(10), read: .minutes(2), request: .hours(12))
+
+        /// Budgets for the desired-state long-poll (STR-146). A parked poll
+        /// delivers no bytes at all until the control plane decides to answer,
+        /// so `read` — an *idle* ceiling — has to clear the server's whole hold
+        /// window or the client kills its own request every time nothing
+        /// changed. Both values are the server's 45s window plus headroom for
+        /// the assembly that follows a doorbell; `request` is the outer bound
+        /// for the same reason.
+        ///
+        /// Deliberately not `production`: sharing that profile would work today
+        /// (2 minutes clears 45 seconds) and break silently the moment either
+        /// value moved, with the symptom being a poll loop that hammers the
+        /// control plane rather than an error.
+        public static let longPoll = Timeouts(
+            connect: .seconds(10), read: .seconds(75), request: .seconds(90))
     }
 
     let tlsConfigurationProvider: TLSConfigurationProvider
@@ -219,6 +234,80 @@ public struct MTLSArtifactDownloader: Sendable {
             throw failure
         } catch {
             throw DownloadFailure(reason: "upload stream failed: \(error)", isTransient: true)
+        }
+    }
+
+    /// `DesiredStatePoller.Fetcher` adapter (STR-146): one mTLS GET that the
+    /// control plane may park for its hold window before answering.
+    ///
+    /// Unlike the streaming adapters this buffers the whole body — a
+    /// desired-state sync is one JSON document sized by the agent's own
+    /// workload count, not a multi-gigabyte image — and returns `304` as an
+    /// ordinary outcome rather than a failure, because "nothing changed" is
+    /// the *expected* answer for a converged agent.
+    ///
+    /// `maximumBodyBytes` is a guard against a malformed or hostile response
+    /// filling agent memory; it is far above any real sync.
+    @Sendable
+    public func poll(url: URL, ifNoneMatch: String?, maximumBodyBytes: Int = 64 << 20) async throws
+        -> DesiredStatePollResponse
+    {
+        var configuration = HTTPClient.Configuration()
+        do {
+            configuration.tlsConfiguration = try await tlsConfigurationProvider()
+        } catch {
+            throw DownloadFailure(
+                reason: "no SVID available for mTLS poll: \(error)", isTransient: false)
+        }
+        configuration.timeout.connect = timeouts.connect
+        configuration.timeout.read = timeouts.read
+        configuration.connectionPool.retryConnectionEstablishment = false
+
+        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
+        do {
+            let response = try await pollWithClient(
+                client, url: url, ifNoneMatch: ifNoneMatch, maximumBodyBytes: maximumBodyBytes)
+            try await client.shutdown()
+            return response
+        } catch {
+            try? await client.shutdown()
+            throw error
+        }
+    }
+
+    private func pollWithClient(
+        _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int
+    ) async throws -> DesiredStatePollResponse {
+        var request = HTTPClientRequest(url: url.absoluteString)
+        if let ifNoneMatch {
+            request.headers.add(name: "If-None-Match", value: ifNoneMatch)
+        }
+
+        let response: HTTPClientResponse
+        do {
+            response = try await client.execute(
+                request, deadline: .now() + timeouts.request, logger: logger)
+        } catch {
+            throw DownloadFailure(reason: "poll request failed: \(error)", isTransient: true)
+        }
+
+        let etag = response.headers.first(name: "ETag")
+        guard response.status == .ok || response.status == .notModified else {
+            let transient =
+                response.status.code >= 500 || response.status.code == 408 || response.status.code == 429
+            throw DownloadFailure(
+                reason: "poll rejected: HTTP \(response.status.code)", isTransient: transient)
+        }
+        guard response.status == .ok else {
+            return DesiredStatePollResponse(status: response.status.code, etag: etag, body: Data())
+        }
+
+        do {
+            let buffer = try await response.body.collect(upTo: maximumBodyBytes)
+            return DesiredStatePollResponse(
+                status: response.status.code, etag: etag, body: Data(buffer.readableBytesView))
+        } catch {
+            throw DownloadFailure(reason: "poll body read failed: \(error)", isTransient: true)
         }
     }
 

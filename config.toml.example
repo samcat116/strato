@@ -222,6 +222,30 @@ log_level = "info"
 # Optional - defaults to false
 # allow_bulk_teardown = false
 
+# Desired-state transport
+#
+# By default the agent fetches its desired state from the control plane's
+# long-poll endpoint (GET /agent/desired-state on the same SVID-mTLS listener
+# that serves image downloads) rather than waiting for the control plane to push
+# it. The WebSocket is still dialed and still carries consoles, exec, log
+# forwarding, heartbeats, and observed state — only desired state moves.
+#
+# Set this to false to pin the agent to pushed syncs. It falls back to pushes
+# automatically against a control plane too old to serve the endpoint, so this
+# only exists to hold an agent back during a rollout.
+# Optional - defaults to true
+# desired_state_pull = true
+
+# How often the agent must fetch without an If-None-Match validator, in seconds.
+#
+# Most fetches are conditional so the control plane can park them and answer 304.
+# That is a bandwidth optimization; this interval is the correctness invariant
+# behind it. Past it the next fetch carries no validator at all and the control
+# plane must answer with the full payload, which bounds how long any conceivable
+# ETag bug could leave this host stranded on stale desired state.
+# Optional - defaults to 300
+# desired_state_full_refetch_seconds = 300
+
 # OVN chassis bootstrap (Linux, network_mode = "ovn" only)
 #
 # ovn-controller only works once the local Open vSwitch carries the chassis

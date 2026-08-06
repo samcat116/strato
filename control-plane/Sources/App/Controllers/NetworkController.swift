@@ -521,7 +521,7 @@ struct NetworkController: RouteCollection {
         // on their next renew. Level-triggered and cluster-wide, so a network
         // shared across agents converges everywhere; a lost nudge is caught by
         // the periodic sync timer.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Network updated",

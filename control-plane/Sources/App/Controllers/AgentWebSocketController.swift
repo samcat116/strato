@@ -620,7 +620,7 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             // Advertise which replica holds this agent's socket so other
-            // replicas can route sync nudges here (issue #261). Refreshed
+            // replicas can forward imperative RPCs here (issue #261). Refreshed
             // by every heartbeat; a crashed replica's claim expires by TTL.
             Task {
                 await req.application.replicaBridge.recordRoute(agentKey: agentKey)
