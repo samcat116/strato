@@ -275,6 +275,20 @@ public struct NetworkSpec: Codable, Sendable {
     /// legacy traffic keeps flowing. When present the list is never empty —
     /// the control plane enforces the ≥1-group invariant.
     public let securityGroupIds: [UUID]?
+    /// Whether this NIC's network publishes the instance metadata service.
+    ///
+    /// The same setting travels on `DesiredNetworkState.metadataEnabled`, which
+    /// is what authors the OVN `localport`; this per-NIC copy is what reaches
+    /// the *chassis* side. A sited agent that is not its site's network
+    /// controller receives an empty `networks` list (it may not author
+    /// topology), yet it still has to materialize the metadata address in a
+    /// local namespace for its own guests — so the only input it has is its own
+    /// workloads' specs. Same shape as `securityGroupIds`, which is per-NIC for
+    /// the same "this host owns it even without topology authority" reason.
+    ///
+    /// Nil ≙ a control plane that predates the field; the agent converges
+    /// nothing rather than reading silence as "tear down".
+    public let metadataEnabled: Bool?
 
     public init(
         network: String,
@@ -291,7 +305,8 @@ public struct NetworkSpec: Codable, Sendable {
         dnsServers: [String] = [],
         domainName: String? = nil,
         leaseTime: Int? = nil,
-        securityGroupIds: [UUID]? = nil
+        securityGroupIds: [UUID]? = nil,
+        metadataEnabled: Bool? = nil
     ) {
         self.network = network
         self.networkId = networkId
@@ -308,13 +323,14 @@ public struct NetworkSpec: Codable, Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.securityGroupIds = securityGroupIds
+        self.metadataEnabled = metadataEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
-        case securityGroupIds
+        case securityGroupIds, metadataEnabled
     }
 
     /// Tolerates specs from an older control plane that predates the DHCP fields:
@@ -339,6 +355,7 @@ public struct NetworkSpec: Codable, Sendable {
         self.domainName = try container.decodeIfPresent(String.self, forKey: .domainName)
         self.leaseTime = try container.decodeIfPresent(Int.self, forKey: .leaseTime)
         self.securityGroupIds = try container.decodeIfPresent([UUID].self, forKey: .securityGroupIds)
+        self.metadataEnabled = try container.decodeIfPresent(Bool.self, forKey: .metadataEnabled)
     }
 }
 

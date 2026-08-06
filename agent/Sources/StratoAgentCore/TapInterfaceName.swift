@@ -59,6 +59,18 @@ public func sandboxNICDeviceNames(sandboxId: String, nicIndex: Int) -> SandboxNI
     )
 }
 
+/// The host-side name of the OVS internal interface that terminates a network's
+/// metadata `localport` on this chassis (STR-49).
+///
+/// The logical switch port's name (`lsp-<uuid>-metadata`) cannot be reused: at
+/// 41 characters it is far past `IFNAMSIZ`. Same digest scheme as the TAP and
+/// veth names, so it survives an agent restart and teardown can rederive it with
+/// no persisted state. There is exactly one such device per network per chassis,
+/// so there is no NIC index to mix in.
+public func metadataInterfaceName(networkId: String) -> String {
+    interfaceName(prefix: "mdp", workloadId: networkId, nicIndex: 0)
+}
+
 /// `<prefix>` + 12 hex chars of the FNV-1a digest of the NIC's identity. NIC 0
 /// digests the bare workload id (the historical input, so pre-multi-NIC devices
 /// are still found); later NICs mix the index in.

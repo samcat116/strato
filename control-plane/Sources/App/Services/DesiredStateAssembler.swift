@@ -82,6 +82,12 @@ struct DesiredStateAssembler {
         // the attach API refuses new attachments against such agents.
         let sendSecurityGroups =
             agent.map { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) } ?? true
+        // Whether this agent understands the metadata port (STR-49). Omitted
+        // for older agents rather than sent-and-ignored, so a nil on the wire
+        // means exactly one thing on the receiving side: "the sender has no
+        // opinion", which is what keeps a rollback from sweeping live ports.
+        let sendMetadata =
+            agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
         let securityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
             securityGroupsByInterface = try await nicSecurityGroupMemberships(
@@ -101,6 +107,7 @@ struct DesiredStateAssembler {
                 networkInterfaces: vm.networkInterfaces,
                 networks: networksByID,
                 securityGroupsByInterface: securityGroupsByInterface,
+                sendsMetadata: sendMetadata,
                 logger: app.logger
             )
 
@@ -185,6 +192,7 @@ struct DesiredStateAssembler {
                     dnsServers: network.dnsServers,
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
+                    metadataEnabled: sendMetadata ? network.metadataEnabled : nil,
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId]
                 )
@@ -269,7 +277,8 @@ struct DesiredStateAssembler {
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
-                network: interface.flatMap { networksByID[$0.logicalNetworkID] })
+                network: interface.flatMap { networksByID[$0.logicalNetworkID] },
+                sendsMetadata: sendMetadata)
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,

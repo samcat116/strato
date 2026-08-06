@@ -21,6 +21,7 @@ import {
   parseDhcpForm,
   type DhcpFormState,
 } from "./dhcp-fields";
+import { MetadataField } from "./metadata-field";
 
 interface EditNetworkDialogProps {
   network: Network | null;
@@ -80,6 +81,7 @@ function EditNetworkForm({
   const [gateway, setGateway] = useState(network.gateway ?? "");
   const [enableIpv6, setEnableIpv6] = useState(false);
   const [dhcp, setDhcp] = useState<DhcpFormState>(() => dhcpFormFrom(network));
+  const [metadataEnabled, setMetadataEnabled] = useState(network.metadataEnabled);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,6 +95,7 @@ function EditNetworkForm({
         // generates a ULA /64 and re-syncs agents.
         ipv6Enabled: enableIpv6 ? true : undefined,
         ...parseDhcpForm(dhcp),
+        metadataEnabled,
       });
       toast.success(`Network "${network.name}" updated`);
       onOpenChange(false);
@@ -157,6 +160,11 @@ function EditNetworkForm({
             </div>
           )}
           <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
+          <MetadataField
+            value={metadataEnabled}
+            onChange={setMetadataEnabled}
+            disabled={isLoading}
+          />
         </div>
         <DialogFooter>
           <Button

@@ -73,6 +73,18 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Field(key: "external_access")
     var externalAccess: Bool
 
+    /// When true, agents publish the link-local instance metadata service to
+    /// this network's guests — an OVN `localport` on the network's logical
+    /// switch, terminated in a per-network namespace on every chassis running
+    /// one of its NICs (STR-49).
+    ///
+    /// An opt-*out*, defaulting true: the metadata service replaces the
+    /// boot-time seed ISO rather than supplementing it. Editing it deliberately
+    /// does **not** bump `generation` — the metadata port converges
+    /// level-triggered on every network reconcile, exactly like the DHCP rows.
+    @Field(key: "metadata_enabled")
+    var metadataEnabled: Bool
+
     /// Monotonic counter bumped whenever a change alters how agents realize the
     /// network's L3 (subnet, gateway, or external access). Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
@@ -129,6 +141,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         domainName: String? = nil,
         leaseTime: Int? = nil,
         externalAccess: Bool = true,
+        metadataEnabled: Bool = true,
         generation: Int = 1,
         siteID: UUID? = nil
     ) {
@@ -146,6 +159,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
+        self.metadataEnabled = metadataEnabled
         self.generation = generation
     }
 
@@ -218,6 +232,9 @@ struct CreateNetworkRequest: Content {
     let leaseTime: Int?
     /// Whether the network gets outbound SNAT to the host uplink. Defaults true.
     let externalAccess: Bool?
+    /// Whether the network publishes the instance metadata service to its
+    /// guests. Defaults true — an opt-out, not an opt-in.
+    let metadataEnabled: Bool?
     /// Site to pin the network to; its VMs then only place on that site's
     /// agents, where the shared OVN deployment spans it across nodes.
     let siteId: UUID?
@@ -228,7 +245,8 @@ struct CreateNetworkRequest: Content {
         name: String, subnet: String, gateway: String? = nil, subnet6: String? = nil,
         gateway6: String? = nil, ipv6Enabled: Bool? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil, externalAccess: Bool? = nil, siteId: UUID? = nil
+        leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
+        siteId: UUID? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -242,6 +260,7 @@ struct CreateNetworkRequest: Content {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
+        self.metadataEnabled = metadataEnabled
         self.siteId = siteId
     }
 }
@@ -269,6 +288,9 @@ struct UpdateNetworkRequest: Content {
     let leaseTime: Int?
     /// Toggle outbound SNAT. Re-synced to agents, which add/remove the SNAT rule.
     let externalAccess: Bool?
+    /// Toggle the instance metadata service. Re-synced to agents, which create
+    /// or delete the network's metadata port and namespaces.
+    let metadataEnabled: Bool?
     /// The zone this network's VMs auto-register into. Must already be
     /// attached to the network. Send `clearPrimaryDnsZone: true` to unset it —
     /// a JSON `null` is indistinguishable from an omitted field here.
@@ -279,7 +301,7 @@ struct UpdateNetworkRequest: Content {
         name: String? = nil, subnet: String? = nil, gateway: String? = nil,
         subnet6: String? = nil, gateway6: String? = nil, ipv6Enabled: Bool? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil, externalAccess: Bool? = nil,
+        leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
         primaryDnsZoneId: UUID? = nil, clearPrimaryDnsZone: Bool? = nil
     ) {
         self.name = name
@@ -293,6 +315,7 @@ struct UpdateNetworkRequest: Content {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
+        self.metadataEnabled = metadataEnabled
         self.primaryDnsZoneId = primaryDnsZoneId
         self.clearPrimaryDnsZone = clearPrimaryDnsZone
     }
@@ -312,6 +335,7 @@ struct NetworkResponse: Content {
     let domainName: String?
     let leaseTime: Int?
     let externalAccess: Bool
+    let metadataEnabled: Bool
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
@@ -332,6 +356,7 @@ struct NetworkResponse: Content {
         self.domainName = network.domainName
         self.leaseTime = network.leaseTime
         self.externalAccess = network.externalAccess
+        self.metadataEnabled = network.metadataEnabled
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.createdAt = network.createdAt
