@@ -33,6 +33,11 @@ public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable 
     /// Recorded in the manifest by a previous incarnation of the agent; its
     /// backing process may still be running but is not attached.
     case orphaned
+    /// In the manifest, but in a form this build cannot route to a backend —
+    /// an unrecognized hypervisor type, an undecodable spec (STR-138). Enough
+    /// is known to say a workload exists under this id, which is enough to
+    /// refuse to create it a second time; nothing more can be done to it here.
+    case quarantined
 }
 
 public typealias VMPresence = WorkloadPresence<VMStatus>
@@ -236,6 +241,15 @@ public struct TeardownGuard: Sendable, Equatable {
 /// level-triggered syncs will re-drive any step whose effect was not yet
 /// observed.
 public protocol ReconcileActuator: Sendable {
+    /// Whether the presence snapshots below are a complete account of this
+    /// host (STR-138).
+    ///
+    /// False means the agent cannot enumerate its own workloads — its durable
+    /// manifest could not be read — so an id's absence from `observedPresence`
+    /// means "unknown", not "not here". The reconciler converges nothing at
+    /// all in that state: creating a workload it cannot rule out already
+    /// running would point a second hypervisor process at a live disk image.
+    func presenceIsComplete() async -> Bool
     /// Snapshot of every VM present on this host (managed + orphaned).
     func observedPresence() async -> [String: VMPresence]
     /// The sizing each managed VM is actually running with, so the planner
@@ -272,6 +286,10 @@ public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedErro
 /// conformances) stay source-compatible; the reconciler only calls these when
 /// a sync plans sandbox work.
 extension ReconcileActuator {
+    /// Actuators that don't model an unreadable inventory always know what
+    /// they hold — the test mocks and the pre-STR-138 conformances.
+    public func presenceIsComplete() async -> Bool { true }
+
     public func observedSandboxPresence() async -> [String: SandboxPresence] { [:] }
 
     /// Actuators that cannot report per-VM sizing simply never have a resize
@@ -475,6 +493,31 @@ public actor Reconciler {
     /// `WireProtocol.supportsSandboxSync(senderVersion)`.
     public func apply(_ message: DesiredStateMessage, includeSandboxes: Bool = false) async {
         let tombstones = message.tombstones ?? []
+
+        // An agent that cannot enumerate its own workloads converges nothing
+        // (STR-138). Every item this sync could plan rests on the presence
+        // snapshot being an account of the host: absence would read as
+        // "create it", and a create against a workload that is in fact still
+        // running opens a second writer on its disk image. Refusing to
+        // converge is strictly safer than converging against a host we can't
+        // see, and it is not silent — the report carries the condition and the
+        // host advertises no capacity, so nothing new lands here either.
+        guard await actuator.presenceIsComplete() else {
+            logger.error(
+                "Ignoring desired-state sync: this host's workloads are unknown, so nothing can be converged against them",
+                metadata: [
+                    "syncId": .string(message.syncId),
+                    "desiredVMs": .stringConvertible(message.vms.count),
+                ])
+            // Nothing can be held against a host we cannot see, and last
+            // sync's held set describes a reality we no longer observe.
+            if !unrecognized.isEmpty {
+                unrecognized = []
+                await actuator.convergenceDidChange()
+            }
+            return
+        }
+
         let presentVMs = await actuator.observedPresence()
         var plan = Self.plan(
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
@@ -921,6 +964,13 @@ public actor Reconciler {
                 // actuator falls back to manifest-only removal if the
                 // session cannot be reconnected.
                 steps = entry.wantsAbsent ? [.delete] : [.adopt]
+            case .quarantined:
+                // Nothing routes here — not a create (it exists), not a
+                // delete (there is no backend to ask), not an adopt. The
+                // generation is deliberately not recorded either: this agent
+                // has not converged the entry and must not claim it has, so a
+                // build that *can* route it picks the work up where it is.
+                continue
             case nil:
                 if entry.wantsAbsent {
                     steps = []  // already absent; just record the generation
@@ -943,6 +993,19 @@ public actor Reconciler {
         var unrecognized: [UnrecognizedWorkload] = []
         for (id, presence) in present where !desiredIds.contains(id) {
             let applied = lastApplied[id] ?? 0
+            if presence == .quarantined {
+                // Reported, never torn down — not even under a tombstone. A
+                // teardown needs a backend to perform it, and the whole reason
+                // this entry is quarantined is that this build cannot name
+                // one. Reporting it is what lets an operator see that the host
+                // is holding something no agent here can act on.
+                guard let workloadId = UUID(uuidString: id) else { continue }
+                unrecognized.append(
+                    UnrecognizedWorkload(
+                        kind: kind, workloadId: workloadId, observedGeneration: applied,
+                        status: "quarantined"))
+                continue
+            }
             guard let tombstone = tombstonesById[id] else {
                 // Held. A workload whose id isn't a UUID cannot be named on
                 // the wire, so it can never be reported — and therefore never
@@ -953,6 +1016,7 @@ public actor Reconciler {
                 switch presence {
                 case .managed(let observed): status = Desired.describe(observed)
                 case .orphaned: status = "orphaned"
+                case .quarantined: status = "quarantined"
                 }
                 unrecognized.append(
                     UnrecognizedWorkload(

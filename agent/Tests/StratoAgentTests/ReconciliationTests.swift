@@ -59,6 +59,10 @@ struct ReconciliationTests {
     /// updating its own presence map on each action.
     private actor MockActuator: ReconcileActuator {
         var presence: [String: VMPresence]
+        /// False models an agent whose durable manifest could not be read, so
+        /// `presence` is empty because the host's contents are unknown
+        /// (STR-138).
+        var presenceComplete = true
         /// What each managed VM is running with, diffed against the desired
         /// spec to plan resizes (issue #568).
         var sizing: [String: VMSizing] = [:]
@@ -79,6 +83,14 @@ struct ReconciliationTests {
 
         func setAdoptedStatus(_ status: VMStatus) {
             adoptedStatus = status
+        }
+
+        func presenceIsComplete() -> Bool {
+            presenceComplete
+        }
+
+        func setPresenceComplete(_ complete: Bool) {
+            presenceComplete = complete
         }
 
         func observedPresence() -> [String: VMPresence] {
@@ -317,6 +329,82 @@ struct ReconciliationTests {
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .running) == [.shutdown])
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .created) == [])
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .paused) == [.shutdown])
+    }
+
+    // MARK: - Unknown host contents (STR-138)
+
+    @Test("A sync arriving while the manifest is unreadable converges nothing")
+    func unknownPresenceConvergesNothing() async {
+        let vmId = UUID()
+        // Empty presence because the agent cannot read its own manifest — not
+        // because the host is idle. Planning `.create` here would point a
+        // second hypervisor process at a disk image the first one still has
+        // open.
+        let actuator = MockActuator()
+        await actuator.setPresenceComplete(false)
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(Self.sync([Self.desired(vmId, status: .running, generation: 3)]))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let performed = await actuator.performed
+        #expect(performed.isEmpty)
+        // And the generation is not recorded: this agent has not converged the
+        // entry and must not claim it has, so a repaired host picks the work up.
+        let generation = await reconciler.observedGeneration(for: vmId.uuidString)
+        #expect(generation == 0)
+    }
+
+    @Test("A tombstone is not honored either while the host's contents are unknown")
+    func unknownPresenceIgnoresTombstones() async {
+        let vmId = UUID()
+        let actuator = MockActuator(presence: [vmId.uuidString: .managed(.running)])
+        await actuator.setPresenceComplete(false)
+        let reconciler = makeReconciler(actuator)
+
+        let tombstone = DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 9)
+        await reconciler.apply(Self.sync([], tombstones: [tombstone]))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await reconciler.unrecognizedWorkloads().isEmpty)
+    }
+
+    @Test("A quarantined workload is never created, deleted, or adopted")
+    func quarantinedWorkloadIsUntouchable() {
+        let vmId = UUID()
+        // The entry exists — something is running under this id — but this
+        // build cannot name the backend that owns it.
+        let plan = Reconciler.plan(
+            desired: [Self.desired(vmId, status: .running, generation: 7)],
+            present: [vmId.uuidString: .quarantined],
+            lastApplied: [:]
+        )
+        #expect(plan.items.isEmpty)
+
+        let deleting = Reconciler.plan(
+            desired: [Self.desired(vmId, status: .absent, generation: 7)],
+            present: [vmId.uuidString: .quarantined],
+            lastApplied: [:]
+        )
+        #expect(deleting.items.isEmpty)
+    }
+
+    @Test("A quarantined workload no sync lists is reported, never torn down")
+    func quarantinedWorkloadIsReportedNotTornDown() {
+        let vmId = UUID()
+        let tombstone = DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 4)
+        let plan = Reconciler.plan(
+            desired: [],
+            present: [vmId.uuidString: .quarantined],
+            lastApplied: [:],
+            tombstones: [tombstone]
+        )
+        // Even an explicit teardown authorization cannot be acted on: there is
+        // no backend to ask, which is the whole reason the entry is quarantined.
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.map(\.status) == ["quarantined"])
+        #expect(plan.unrecognized[0].workloadId == vmId)
     }
 
     // MARK: - Reconciler end to end
