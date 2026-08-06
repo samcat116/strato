@@ -121,23 +121,37 @@ struct VMSpecBuilder {
     /// missing entries emit nil (unmanaged), which is also the default so
     /// callers that predate security groups — and tests — need not fetch it.
     ///
-    /// `sendsMetadata` gates `metadataEnabled` on the receiving agent's protocol
+    /// `sendsMetadataPort` gates `metadataEnabled` on the receiving agent's protocol
     /// version, exactly as `securityGroupsByInterface` is gated by its caller.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadata: Bool = true,
+        sendsMetadataPort: Bool = true,
         logger: Logger? = nil
     ) -> [NetworkSpec] {
-        resolvedInterfaces(from: interfaces, networks: networks, logger: logger)
-            .map { interface, network in
-                NetworkSpec.build(
-                    interface: interface,
-                    network: network,
-                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
-                    sendsMetadata: sendsMetadata)
-            }
+        networkSpecs(
+            fromResolved: resolvedInterfaces(from: interfaces, networks: networks, logger: logger),
+            securityGroupsByInterface: securityGroupsByInterface,
+            sendsMetadataPort: sendsMetadataPort)
+    }
+
+    /// The same, for a caller that resolved the NICs itself — the sync, which
+    /// hands one resolution to both the spec and the VM's instance metadata so
+    /// the two lists agree by construction and an under-fetched NIC is logged
+    /// once rather than once per consumer.
+    static func networkSpecs(
+        fromResolved resolved: [(interface: VMNetworkInterface, network: LogicalNetwork)],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true
+    ) -> [NetworkSpec] {
+        resolved.map { interface, network in
+            NetworkSpec.build(
+                interface: interface,
+                network: network,
+                securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
+                sendsMetadataPort: sendsMetadataPort)
+        }
     }
 
     /// Legacy single-disk volume list from `vm.diskPath`.
@@ -201,8 +215,24 @@ struct VMSpecBuilder {
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadata: Bool = true,
+        sendsMetadataPort: Bool = true,
         logger: Logger? = nil
+    ) -> VMSpec {
+        buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: volumes,
+            resolvedInterfaces: resolvedInterfaces(
+                from: networkInterfaces, networks: networks, logger: logger),
+            securityGroupsByInterface: securityGroupsByInterface,
+            sendsMetadataPort: sendsMetadataPort)
+    }
+
+    /// The same, for a caller holding an already-resolved NIC list (see
+    /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
+    static func buildVMSpecWithVolumes(
+        from vm: VM, image: Image?, volumes: [Volume],
+        resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -230,9 +260,9 @@ struct VMSpecBuilder {
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: volumes,
             networks: networkSpecs(
-                from: networkInterfaces, networks: networks,
+                fromResolved: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadata: sendsMetadata, logger: logger),
+                sendsMetadataPort: sendsMetadataPort),
             console: ConsoleSpec(
                 console: vm.consoleMode, serial: vm.serialMode,
                 // nil, not an explicit `.headless`, so the key is omitted

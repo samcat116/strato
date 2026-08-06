@@ -14,13 +14,15 @@ extension InstanceMetadata {
     /// for the same reason; they describe the *receiving agent*, which the
     /// assembly resolves once.
     ///
-    /// `networks` maps logical-network id → its row, exactly as
-    /// `VMSpecBuilder.networkSpecs` consumes it; `vm.networkInterfaces` and
-    /// their `addresses` must be eager-loaded. Nothing here is authorization
-    /// input and nothing may expire: this is a publication boundary (any
-    /// process in the guest that reaches the link-local address reads all of
-    /// it) carried on a sync that must stay valid however long it takes to
-    /// arrive.
+    /// `resolvedInterfaces` is the VM's NICs already paired with their networks
+    /// by `VMSpecBuilder.resolvedInterfaces` — taken rather than resolved here
+    /// so the caller resolves once and hands the *same* list to the VM spec,
+    /// which is what makes the two lists agree by construction instead of by
+    /// both happening to pass the same network map. Nothing here is
+    /// authorization input and nothing may expire: this is a publication
+    /// boundary (any process in the guest that reaches the link-local address
+    /// reads all of it) carried on a sync that must stay valid however long it
+    /// takes to arrive.
     ///
     /// `vendorData`, `tags`, and `identity` are passed explicitly at their
     /// empty values rather than defaulted, because each is a decision about
@@ -31,10 +33,9 @@ extension InstanceMetadata {
     static func build(
         vm: VM,
         vmId: UUID,
-        networks: [UUID: LogicalNetwork],
+        resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         region: String?,
-        availabilityZone: String?,
-        logger: Logger? = nil
+        availabilityZone: String?
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -50,13 +51,12 @@ extension InstanceMetadata {
             environment: vm.environment.isEmpty ? nil : vm.environment,
             region: region,
             availabilityZone: availabilityZone,
-            // Same resolver as the VM spec's NIC list, so the two agree on
-            // order and on which NICs exist by construction rather than by
-            // convention — the guest matches an entry here to a link by MAC,
-            // but an operator reading both sees one list.
-            nics: VMSpecBuilder.resolvedInterfaces(
-                from: vm.networkInterfaces, networks: networks, logger: logger
-            ).map { MetadataNIC.build(interface: $0.interface, network: $0.network) },
+            // The very list the VM spec's NICs are built from, so the guest
+            // matches an entry here to a link by MAC and an operator reading
+            // both sees one list.
+            nics: resolvedInterfaces.map {
+                MetadataNIC.build(interface: $0.interface, network: $0.network)
+            },
             // The same single key the spec carries. Duplicated deliberately
             // (see `InstanceMetadata.sshAuthorizedKeys`): the spec copy
             // provisions at boot, this copy is what a running guest re-reads

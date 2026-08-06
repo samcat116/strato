@@ -230,6 +230,22 @@ final class DesiredStateAssemblerTests {
         }
     }
 
+    @Test("An empty environment column publishes as unset, not as an environment named \"\"")
+    func metadataEmptyEnvironmentIsUnset() async throws {
+        try await withAssemblerApp { app, _, project in
+            // `VM.environment` is a non-optional column, so "unset" can only
+            // arrive as an empty string. The renderer decides what an unset
+            // environment looks like, and it cannot if it is handed one.
+            let agentId = try await self.registerAgent(app: app, named: "env-agent")
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "env-vm", onAgent: agentId, environment: "")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
+            #expect(metadata.environment == nil)
+        }
+    }
+
     @Test("Metadata is omitted entirely for pre-v26 agents")
     func metadataOmittedForOldAgents() async throws {
         try await withAssemblerApp { app, _, project in
@@ -248,6 +264,57 @@ final class DesiredStateAssemblerTests {
             // The VM itself still syncs — only the metadata is withheld.
             #expect(entry.spec.cpus == vm.cpu)
         }
+    }
+
+    // MARK: - The shared NIC resolution
+
+    /// The spec's NIC list and the metadata's come from one
+    /// `VMSpecBuilder.resolvedInterfaces`, which is what makes them agree — a
+    /// guest whose metadata lists a NIC its spec doesn't has no way to tell
+    /// which is right. The under-fetch path is where they could once have
+    /// diverged, and it is unreachable through `assemble` (the FK guarantees
+    /// the network row and the assembly always fetches it), so it is exercised
+    /// directly with a deliberately short `networks` map.
+    @Test("A NIC whose network wasn't loaded drops out of the spec and the metadata alike")
+    func unloadedNetworkDropsFromBothLists() throws {
+        let vm = VM(
+            name: "drop-vm", description: "d", image: "img", projectID: UUID(),
+            environment: "production", cpu: 2, memory: 1 << 31, disk: 1 << 34)
+        vm.id = UUID()
+
+        let loadedNetwork = LogicalNetwork(
+            id: UUID(), name: "loaded", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
+            projectID: vm.$project.id)
+        let missingNetworkID = UUID()
+
+        func nic(_ device: String, order: Int, network: UUID, mac: String) -> VMNetworkInterface {
+            let interface = VMNetworkInterface(
+                id: UUID(), vmID: vm.id!, logicalNetworkID: network, macAddress: mac,
+                deviceName: device, orderIndex: order)
+            interface.$addresses.value = []
+            return interface
+        }
+        // The middle NIC is the one whose row wasn't loaded, so a drop that
+        // shifted the survivors would be visible in the order below.
+        let interfaces = [
+            nic("net0", order: 0, network: loadedNetwork.id!, mac: "00:0c:29:00:01:00"),
+            nic("net1", order: 1, network: missingNetworkID, mac: "00:0c:29:00:01:01"),
+            nic("net2", order: 2, network: loadedNetwork.id!, mac: "00:0c:29:00:01:02"),
+        ]
+
+        let resolved = VMSpecBuilder.resolvedInterfaces(
+            from: interfaces, networks: [loadedNetwork.id!: loadedNetwork])
+        #expect(resolved.map(\.interface.deviceName) == ["net0", "net2"])
+
+        let spec = VMSpecBuilder.buildVMSpecWithVolumes(
+            from: vm, image: nil, volumes: [], resolvedInterfaces: resolved)
+        let metadata = InstanceMetadata.build(
+            vm: vm, vmId: vm.id!, resolvedInterfaces: resolved,
+            region: "dc-drop", availabilityZone: "drop-agent")
+
+        #expect(metadata.nics.map(\.deviceName) == ["net0", "net2"])
+        #expect(spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))
+        #expect(!metadata.nics.contains { $0.networkId == missingNetworkID })
     }
 
     // MARK: - Shape
