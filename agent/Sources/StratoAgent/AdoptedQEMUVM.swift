@@ -1,5 +1,8 @@
 import Foundation
 import Logging
+import NIOCore
+import NIOPosix
+import StratoAgentCore
 import StratoShared
 
 #if canImport(SwiftQEMU)
@@ -140,9 +143,15 @@ actor AdoptedQEMUVM: QEMUVMHandle {
         try await destroy(terminationTimeout: QEMUProcess.defaultTerminationTimeout)
     }
 
-    /// Force quit. There is no child-process handle here, so `quit` over QMP is
-    /// the only lever — nothing to escalate to, which is why the termination
-    /// timeout is accepted for protocol conformance and then unused.
+    /// Force quit, returning only once the process is confirmed gone.
+    ///
+    /// There is no child-process handle here, so `quit` over QMP is the only
+    /// lever — nothing to escalate to. What `terminationTimeout` bounds is
+    /// therefore not an escalation but the wait for the exit: `quit` itself
+    /// cannot report one. It legitimately errors on the *success* path (QEMU
+    /// can exit before it replies), so its failure is swallowed — and callers
+    /// act on this return by unlinking the VM's disk (STR-179), which a guest
+    /// still running would keep executing from unlinked inodes.
     func destroy(terminationTimeout: Duration) async throws {
         if isConnected {
             do {
@@ -153,8 +162,39 @@ actor AdoptedQEMUVM: QEMUVMHandle {
             try? await qmp.disconnect()
             isConnected = false
         }
-        // The adopting side owns the deterministic socket file's cleanup.
+        try await waitForExit(within: terminationTimeout)
+        // The adopting side owns the deterministic socket file's cleanup. Only
+        // once the process is gone: unlinking it while QEMU still holds the
+        // listener would make every later probe fail for the wrong reason.
         try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    /// Waits for the QEMU process behind `socketPath` to exit.
+    ///
+    /// The listening socket is the evidence: a connect succeeds only while a
+    /// process holds it, and is refused (or the path is gone, QEMU unlinks it
+    /// on the way out) the moment one does not. Deliberately a bare connect
+    /// with no QMP negotiation — whether the peer still speaks the protocol is
+    /// a different question from whether it exists, and a wedged QEMU that
+    /// answers neither is exactly the case this must not read as dead.
+    private func waitForExit(within timeout: Duration) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while await Self.socketIsListening(path: socketPath) {
+            guard ContinuousClock.now < deadline else {
+                throw HypervisorServiceError.timeout(
+                    "QEMU behind \(socketPath) was still running \(timeout) after quit")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private static func socketIsListening(path: String) async -> Bool {
+        let bootstrap = ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+        guard let channel = try? await bootstrap.connect(unixDomainSocketPath: path).get() else {
+            return false
+        }
+        try? await channel.close().get()
+        return true
     }
 
     func getStatus() async throws -> QEMUVMStatus {

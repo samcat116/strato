@@ -508,21 +508,31 @@ actor QEMUService: HypervisorService {
     /// converged, and it left the VM's directory on the host on every retry
     /// (STR-179).
     ///
-    /// The deterministic QMP socket outlives the session and answers the only
-    /// question a delete actually needs: is a process still running from that
-    /// directory? A socket that connects belongs to a live QEMU, and `quit`
-    /// over it is a real teardown, so the delete converges instead of giving
-    /// up. A socket that is absent or refuses a connection merely outlived its
-    /// process — nothing to tear down. Only a connect that neither succeeds nor
-    /// fails is ambiguous, and that one throws: unlinking a live guest's disk
-    /// reclaims no space (the process holds the inode open) and leaves it
-    /// running from a file no operator can find.
+    /// The deterministic QMP socket outlives the session and is the closest
+    /// thing to an answer for the only question a delete actually needs: is a
+    /// process still running from that directory? A socket that connects
+    /// belongs to a live QEMU, and `quit` over it is a real teardown (confirmed
+    /// by `AdoptedQEMUVM.destroy`, which returns only once the process is
+    /// gone), so the delete converges instead of giving up. A socket that
+    /// refuses a connection outlived its process — nothing to tear down. Only a
+    /// connect that neither succeeds nor fails is ambiguous enough to throw:
+    /// unlinking a live guest's disk reclaims no space (the process holds the
+    /// inode open) and leaves it running from a file no operator can find.
+    ///
+    /// The weak case is a socket that is *absent*, which strictly says nothing
+    /// about the process — it is the normal trace of a QEMU that exited and
+    /// unlinked it, but it also describes a live VM created before
+    /// deterministic sockets (issue #260), and a socket inside the very
+    /// directory about to be removed can go missing for other reasons too. It
+    /// is treated as "gone" for the same reason `OrphanDeleteAdoption` does,
+    /// and logged loudly because it is the one removal here with no positive
+    /// evidence behind it.
     private func destroyWithoutSession(vmId: String) async throws {
         let socketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
         guard FileManager.default.fileExists(atPath: socketPath) else {
-            logger.info(
-                "Deleting a VM with no control session and no QMP socket; nothing to tear down",
-                metadata: ["vmId": .string(vmId)])
+            logger.warning(
+                "Deleting a VM with no control session and no QMP socket; assuming nothing is left to tear down",
+                metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
             return
         }
 
