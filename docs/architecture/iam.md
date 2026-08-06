@@ -1,63 +1,18 @@
 # IAM: Cedar-based Authorization
 
-**Status:** design accepted 2026-07-16; migration complete. Phases 1–6 have
-shipped: the embedded [Cedar](https://www.cedarpolicy.com/) evaluator is the
-authoritative — and only — authorization engine, and SpiceDB is deleted
-(#483). This document is the decision record for that replacement and for the
-IAM design around it. Where something is marked **INVARIANT**, it is
-load-bearing: violating it breaks properties the rest of the design depends
-on.
+The embedded [Cedar](https://www.cedarpolicy.com/) evaluator is the
+authoritative — and only — authorization engine; there is no external
+authorization service. This document is how authorization works: the
+invariants, the three policy tiers, roles and guardrails, identity, the
+evaluator's integration points, and the caches around it. Where something is
+marked **INVARIANT**, it is load-bearing: violating it breaks properties the
+rest of the design depends on.
 
 The shipped system is summarized in the AuthZ section of
-[overview](./overview.md); this document records why it is shaped the way it
-is and the migration that produced it.
-
-## Why we replaced SpiceDB
-
-Strato's authorization model is **hierarchical and attribute-hungry, not
-relational**. Access derives from walking *up* a shallow tree (resource →
-project → folder → org). There is no user-to-user sharing graph and no
-arbitrary resource-to-resource reference graph — the Zanzibar use case SpiceDB
-is built for is one we don't have.
-
-The concrete failures that motivated the decision were found in the
-then-deployed SpiceDB schema (`spicedb/schema.zed`, deleted with #483):
-
-1. **Nested-folder admins did not inherit downward.** `inherited_admin =
-   parent->manage_organization + parent->inherited_admin` never includes the
-   parent folder's direct `admin` relation, so an admin of a parent folder had
-   no rights over child folders or the projects beneath them. (In the
-   SpiceDB schema the folder type was named `organizational_unit`.)
-2. **Every org member could view every project**, via `inherited_member`
-   chaining through `view_organization = admin + member`.
-
-Both are hand-rolled recursion bugs. In Cedar, hierarchy inheritance is a
-language primitive (`in` is reflexive and transitive on both principal and
-resource), so neither bug is expressible.
-
-Cedar additionally gives us what SpiceDB structurally cannot:
-
-- **Decidable, statically analyzable policies.** The guardrail mechanism below
-  depends on answering "does policy set A permit anything policy set B
-  forbids?" offline. The open-source
-  [`cedar-policy-symcc`](https://crates.io/crates/cedar-policy-symcc) crate
-  compiles policy sets to SMT and decides subsumption/equivalence, with the
-  compiler formally verified in Lean.
-- **A formally verified evaluator**, differentially fuzzed against the spec.
-- **`forbid` semantics** with a fixed evaluation rule (below). Our SpiceDB
-  schema was 100% additive; there was no way to express a ceiling.
-
-### What we give up, and how we cover it
-
-- **Reverse queries.** Cedar doesn't hold our data, so it can't answer "what
-  can Alice see?" We answer it ourselves from the bindings table plus the
-  resource tree — ordinary SQL against tables we own. This stays cheap only
-  while the one-parent invariant holds.
-- **A second stateful store.** We stopped operating one. Postgres is now the
-  only source of truth for authorization data, which also makes grants
-  transactional with the resources they protect — something the SpiceDB
-  dual-write could not offer — and the reconciliation services that existed
-  to repair drift between the stores are deleted.
+[overview](./overview.md). Why Cedar replaced the earlier SpiceDB deployment,
+and the migration that produced today's system — the phases, the
+shadow-evaluation history, the pre-cutover audit, and the upgrade constraint
+— is recorded in [ADR 0004](../adr/0004-cedar-for-authorization.md).
 
 ## The shape
 
@@ -190,9 +145,10 @@ Notes on the shape, each of which is load-bearing:
 
 Evaluation (`GuardrailStore.forbidding`) returns *every* ceiling in the way,
 not the first: otherwise removing one guardrail looks like it will unblock a
-request the next one still blocks. What shipped in phase 2 was the store and
-these semantics; since cutover, guardrails compile into the evaluator's
-policy set (#480) and sit on the enforcement path of every request.
+request the next one still blocks. The store and these semantics shipped
+first (migration phase 2); since cutover, guardrails compile into the
+evaluator's policy set (#480) and sit on the enforcement path of every
+request.
 
 ### The write-time ceiling report (shipped, #484)
 
@@ -575,7 +531,8 @@ the Cedar a ceiling compiles to.
 
 - **Bare org membership grants `org:read` and `project:create` — nothing
   else.** Org members do not implicitly see any project; all project access is
-  via explicit bindings. (This deliberately reverses current behavior.)
+  via explicit bindings. (This deliberately reverses the pre-Cedar
+  behavior.)
 - **Creating a resource writes an ordinary binding for the creator** in the
   same transaction — visible, listable, revocable. There is no implicit,
   un-revocable `owner` relation living on the resource. This also fixes
@@ -892,8 +849,8 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   with their assembler-assigned ids (`role-editor`, `guardrail-<id>`, …) —
   Cedar's set parser would assign positional ids and decisions could never
   name what decided. The (role × action) enumeration that was verified against
-  the crate out-of-band in phase 3 now runs in-repo through the actual engine
-  (`SwiftCedarEngineTests`).
+  the crate out-of-band in migration phase 3 now runs in-repo through the
+  actual engine (`SwiftCedarEngineTests`).
 
 ### Required APIs (day one of the new system, not v2)
 
@@ -938,23 +895,19 @@ request would have hit first: a disabled or nonexistent principal answers
 `false`, and a *group* — a binding subject that never makes a request —
 answers from its bindings minus the matcher guardrails that can name one.
 
-### Decision logs (shipped with #481; the reverse shadow retired with #483)
+### Decision logs (shipped with #481)
 
-Before cutover, SpiceDB gated requests and Cedar shadowed it. Cutover (#482)
-reversed the direction: **Cedar gates requests inline** — `IAMDecisionEngine`
-decides (the one evaluator, shared with `who-can`), `IAMAuthorizer` enforces
-and records — and every decision lands in `iam_decision_logs` with the
-deciding policy ids, the policy-set version, and the tier. Through the rollback window —
-while SpiceDB remained deployed — each check with a SpiceDB-vocabulary
-equivalent also asked SpiceDB in a background task and recorded both
-verdicts, so the mismatch surface kept watching for regressions. That
-reverse shadow ended when #483 deleted SpiceDB (its kill switch,
-`IAM_SHADOW_EVAL_ENABLED`, went with it); the decision log stays, recording
-the Cedar verdict alone. The `spicedb_permission`/`spicedb_decision` columns
-— and the `spicedbPermission`/`spicedbDecision` API fields — keep their
-historical names for compatibility: the former carries the
-legacy-vocabulary question as asked at the check site, the latter is always
-`none` on rows written after the removal. The pieces that matter:
+**Cedar gates requests inline** — `IAMDecisionEngine` decides (the one
+evaluator, shared with `who-can`), `IAMAuthorizer` enforces and records — and
+every decision lands in `iam_decision_logs` with the deciding policy ids, the
+policy-set version, and the tier. The infrastructure was built during the
+migration's shadow-evaluation phase, and the shadow's residue is deliberate:
+the `spicedb_permission`/`spicedb_decision` columns — and the
+`spicedbPermission`/`spicedbDecision` API fields — keep their historical
+names for compatibility. The former carries the legacy-vocabulary question as
+asked at the check site; the latter is always `none` on rows written after
+SpiceDB's removal ([ADR 0004](../adr/0004-cedar-for-authorization.md)
+records the shadow evaluation and its retirement). The pieces that matter:
 
 - **Coverage is total by construction.** Every check `IAMAuthorizer`
   evaluates — the middleware's route-mapped checks, `req.can`, and the
@@ -986,13 +939,9 @@ legacy-vocabulary question as asked at the check site, the latter is always
   buckets decisions by permission, action, verdict, and tier over a bounded
   window (`?sinceHours`, default 24 — the log takes a row per check, so an
   unbounded `GROUP BY` would scan the whole retention window), are how the
-  log is read. During the rollback window this is where the mismatch
-  burn-down ran (`?mismatchesOnly=true`); the three *expected* mismatch
-  classes — org members losing implicit project visibility, nested-folder
-  admin inheritance being fixed, and conditioned bindings (which the entity
-  slice deliberately does not flatten, surfacing as a non-zero
-  `skipped_conditioned_bindings`) — confirmed the target semantics rather
-  than refuting them.
+  log is read. During the migration's rollback window this is where the
+  mismatch burn-down ran
+  ([ADR 0004](../adr/0004-cedar-for-authorization.md)).
 - Rows are append-only, FK-free (decisions outlive what they describe), and
   pruned by a retention sweep (`IAM_DECISION_LOG_RETENTION_DAYS`, default 30,
   cluster-singleton via the coordination sweep lock). The sweep is armed even
@@ -1037,9 +986,10 @@ in an organization bound an admin on `GET /api/sites/:id` and not on
 `GET /api/sites`. Every list endpoint now filters per row through `req.can`
 for every caller, admins included.
 
-The pre-cutover audit looked for handler-level *allows* that bypassed the
-evaluator, so it could not see the other shape of the same gap: a list that
-never asked at all. The container lists — projects, folders, quotas, and the
+The pre-cutover audit ([ADR 0004](../adr/0004-cedar-for-authorization.md))
+looked for handler-level *allows* that bypassed the evaluator, so it could
+not see the other shape of the same gap: a list that never asked at all. The
+container lists — projects, folders, quotas, and the
 hierarchy tree, search and resource dumps under `/api/organizations/:id` —
 gated on `view_organization` and then returned everything inside the
 organization, which is exactly the `inherited_member` behaviour the invariant
@@ -1167,60 +1117,6 @@ guardrail can move them:
   gets its own name rather than riding along inside it. No seeded role carries
   it (`IAMRoleRegistry.systemAdminOnlyActions`), leaving `platform-system-admin`
   as the only thing that grants it today.
-
-### Pre-cutover audit of handler-level allows (gate on phase 5)
-
-Default-deny silently starts denying any allow decision that lives as code in
-a handler rather than as a tuple, binding, or policy. A full-controller sweep
-(2026-07-20) found and dispositioned every such decision; each is either
-re-expressed where the evaluator can see it or consciously kept with a test
-pinning it. This inventory is the input to the cutover middleware's allowlist.
-
-**Already expressed as tier-1 policy or bindings data** (nothing to do at
-cutover beyond flipping enforcement):
-
-- System admin → `platform-system-admin`; bare org membership →
-  `org-membership`; project-less network read → `platform-open-network-read`
-  (its list twin: `listNetworks` ORs project-less networks into every result
-  at query level — same rule, expressed as a filter).
-- Resource-level `owner`/`editor`/`viewer` tuples → per-create dual-writes
-  plus the boot export, whose type list covers every owner-bearing type
-  including `floating_ip` and `sandbox_snapshot`.
-
-**Re-expressed through the authorization path during the audit** (previously
-inline `UserOrganization` reads — allow decisions invisible to shadow
-evaluation):
-
-- Org member management, org show/update/delete/switch, and the member list
-  (`OrganizationController`) now authorize via `OrganizationAccessService`;
-  `manage_members` maps to `org:update`, `view_organization` to `org:read`.
-- OIDC provider management (`OIDCController`) authorizes via `req.can` with
-  its own error messages. Managing a provider is org administration — it maps
-  to `org:update` rather than growing an `oidc:*` action family.
-
-**Identity-plane, deliberately outside the IAM tree** (login + row scoping;
-the default-deny allowlist keeps these login-only):
-
-- `/api/api-keys` — self-scoped by construction (phase-0 decision: API keys
-  unchanged for now); another user's key is a 404. Pinned by
-  `APIKeyOwnershipTests`.
-- `/api/users/:id` — was self-or-system-admin here; since the identity plane
-  became a resource type it is an ordinary evaluator check and the route is
-  `handlerChecked`, not login-only. Still pinned by `UserControllerTests`.
-- `/api/operations/:id` — falls back to "initiator may read" when the
-  operation's resource is gone (delete operations outlive their resource);
-  non-initiators get 404. Pinned by `VMOperationTests`.
-
-**Defensive denies added by the audit:**
-
-- A `ResourceQuota` with no scope FK (corrupt data — every create path sets
-  exactly one) previously fell through the scope-dispatch chains and was
-  readable and mutable by any authenticated user; it now requires system
-  admin. Pinned by `ResourceQuotaTests`.
-- The SCIM data plane (`/organizations/*/scim/v2`) authenticates an
-  org-scoped bearer token in-handler with no `User` in `request.auth`; it
-  needs its explicit middleware carve-out preserved by the cutover allowlist,
-  like `/ssf/events/` and the agent mTLS endpoints.
 
 ### Enforcement path (shipped with #482)
 
@@ -1358,64 +1254,6 @@ are all batches of one. Agreement between a batched list decision and the
 per-object check it links to is therefore structural rather than a property
 two code paths have to maintain — and it is pinned by tests over a mixed grid
 of principals, actions, and node types all the same.
-
-## Migration plan
-
-Phases; each landed independently:
-
-1. **Bindings groundwork (engine-independent).** Bindings table + role
-   registry in Postgres, dual-written alongside SpiceDB tuples (SpiceDB
-   remained authoritative). Backfill from the existing Postgres mirrors plus
-   a one-time SpiceDB relationship export — resource-level
-   `owner`/`viewer`/`editor` tuples existed **only** in SpiceDB and had to
-   be exported before any cutover. Shipped `who-can` and `expires_at` early.
-2. **Guardrail store + policy versioning.** Forbid-only by construction;
-   versioned policy sets. **Shipped** — see "The store" under Guardrails and
-   "Versioning" above. Guardrails are stored and evaluable but not yet on the
-   enforcement path, which arrives with the evaluator.
-3. **Cedar integration.** Swift binding (separate track), Cedar schema (entity
-   types, action groups, binding templates), entity-slice loader, compiled
-   policy-set cache with Valkey invalidation. **Shipped** — see "The Cedar
-   encoding" above.
-4. **Shadow evaluation + decision logs.** Every check ran through both
-   engines; mismatches were logged with both verdicts and burned down against
-   this document's semantics. The decision-log infrastructure was built here.
-   **Shipped** (#481, including the real engine behind `CedarEngine`) — see
-   "Decision logs" above. The burn-down itself was the gate on phase 5, not
-   part of this phase.
-5. **Cutover.** Flip `req.can` and the middleware to Cedar; default-deny
-   middleware; admin bypass through the evaluator; creator bindings at create.
-   **Shipped** (#482) — see "Enforcement path" above. During the rollback
-   window SpiceDB kept receiving writes and answered the background reverse
-   shadow, the regression watch for the cutover. The cutover release also
-   exported the resource-level `owner`/`editor`/`viewer` tuples into
-   `role_bindings` at boot — which is why the upgrade constraint below
-   exists.
-6. **Deletion.** **Done** (#483). Tuple writes, the reverse shadow (and its
-   `IAM_SHADOW_EVAL_ENABLED` switch), the SpiceDB reconciliation services,
-   `SpiceDBService`, and `schema.zed` are gone; compose/helm/CI no longer
-   run SpiceDB. The decision log keeps its own knobs
-   (`IAM_DECISION_LOG_ENABLED` / `IAM_DECISION_LOG_RETENTION_DAYS` /
-   `IAM_DECISION_LOG_MAX_QUEUE_DEPTH` / `IAM_DECISION_LOG_MAX_BATCH_SIZE`),
-   and the decision-log API keeps the historical
-   `spicedbPermission`/`spicedbDecision` field names for compatibility
-   (`spicedbDecision` is always `none` on new rows).
-
-   **Upgrade constraint:** a deployment must pass through the phase-5
-   cutover release — whose boot-time backfill exported the resource-level
-   `owner`/`editor`/`viewer` tuples from SpiceDB into `role_bindings` —
-   before upgrading past #483. Releases after #483 no longer carry the
-   SpiceDB export, so skipping the cutover release would silently drop
-   resource-level grants that existed only in SpiceDB.
-7. **Payoff features.** The symcc write-time guardrail analysis **shipped** —
-   every grant comes back naming the ceilings that narrow it; see "The
-   write-time ceiling report" above. Still ahead: policy simulator, workload
-   registry/principals, service accounts.
-
-The **folder rename** (OU → folder) happens in two steps: UI/docs copy
-anytime; the API/database rename is still pending (the Cedar vocabulary
-already says `Folder`) — it was deliberately kept out of the migration
-rather than churning the authorization types mid-flight.
 
 ## Explicitly rejected
 
