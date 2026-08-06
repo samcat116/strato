@@ -272,6 +272,13 @@ actor Agent {
     // How much of this host one sync's confirmed teardowns may remove (STR-98).
     private let teardownGuard: TeardownGuard
 
+    // Desired-state transport (STR-146). `desiredStatePullEnabled` is what the
+    // operator asked for; the poller only actually starts once a registration
+    // response confirms the control plane serves the endpoint.
+    private let desiredStatePullEnabled: Bool
+    private let desiredStateFullRefetchInterval: Duration
+    private var desiredStatePoller: DesiredStatePoller?
+
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
@@ -325,7 +332,9 @@ actor Agent {
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
-        teardownGuard: TeardownGuard = TeardownGuard()
+        teardownGuard: TeardownGuard = TeardownGuard(),
+        desiredStatePull: Bool = true,
+        desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -360,6 +369,8 @@ actor Agent {
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
+        self.desiredStatePullEnabled = desiredStatePull
+        self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
@@ -806,6 +817,11 @@ actor Agent {
         networkConnectTask?.cancel()
         networkConnectTask = nil
 
+        // Stop polling before the inbound stream is finished, so an in-flight
+        // poll cannot deliver into a consumer that is already gone.
+        await desiredStatePoller?.stop()
+        desiredStatePoller = nil
+
         // Fail any in-flight registration wait so a caller parked on it (and its
         // timeout timer) doesn't linger past shutdown.
         if let continuation = takeRegistrationContinuation() {
@@ -1130,7 +1146,13 @@ actor Agent {
             sandboxCapable: sandboxCapable,
             tpmCapable: swtpmAvailable,
             operatingSystem: OperatingSystem.current,
-            hostInfo: HostInfoProbe.gather()
+            hostInfo: HostInfoProbe.gather(),
+            // Declared up front so the control plane can stop pushing to this
+            // agent from the moment it registers. Claiming pull mode here does
+            // not commit us to it — if the control plane turns out to predate
+            // the endpoint we never start the poller, and it never stopped
+            // pushing either, because it applies the same version gate.
+            pullsDesiredState: desiredStatePullEnabled
         )
 
         if let client = websocketClient {
@@ -1227,6 +1249,7 @@ actor Agent {
                 ])
         }
         controlPlaneSupportsStateSync = WireProtocol.supportsStateSync(controlPlaneProtocolVersion)
+        await startDesiredStatePollerIfSupported(controlPlaneVersion: controlPlaneProtocolVersion)
 
         guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
@@ -1234,6 +1257,76 @@ actor Agent {
         }
         continuation.resume(returning: response.agentId)
     }
+
+    /// Start the desired-state long-poll loop, if both sides want it
+    /// (STR-146). Called from every registration response, initial and
+    /// reconnect; `DesiredStatePoller.start()` is idempotent, so a reconnect
+    /// keeps the existing loop and its ETag rather than restarting from a full
+    /// fetch.
+    ///
+    /// A control plane too old to serve the endpoint leaves the agent on the
+    /// pushed transport, which is exactly what that control plane is still
+    /// doing — it ignores the `pullsDesiredState` field it has never heard of.
+    private func startDesiredStatePollerIfSupported(controlPlaneVersion: Int) async {
+        guard desiredStatePullEnabled else { return }
+        guard WireProtocol.supportsDesiredStatePull(controlPlaneVersion) else {
+            logger.notice(
+                "Control plane predates the desired-state pull endpoint; staying on pushed syncs",
+                metadata: ["controlPlaneProtocolVersion": .stringConvertible(controlPlaneVersion)])
+            return
+        }
+        guard desiredStatePoller == nil else {
+            await desiredStatePoller?.start()
+            return
+        }
+
+        guard let url = URL(string: controlPlaneHTTPBase + Self.desiredStatePollPath) else {
+            logger.error(
+                "Could not build the desired-state poll URL; staying on pushed syncs",
+                metadata: ["base": .string(controlPlaneHTTPBase)])
+            return
+        }
+
+        // The downloader is built per poller rather than per request, but it
+        // still resolves the TLS configuration on every call, so a rotated SVID
+        // is picked up by the next poll without restarting anything.
+        let downloader = MTLSArtifactDownloader(
+            tlsConfigurationProvider: { [weak self] in
+                guard let self else {
+                    throw AgentError.spiffeConfigurationError("agent is shutting down")
+                }
+                return try await self.currentSVIDTLSConfiguration()
+            },
+            logger: logger,
+            timeouts: .longPoll
+        )
+
+        let poller = DesiredStatePoller(
+            fetch: { ifNoneMatch in
+                try await downloader.poll(url: url, ifNoneMatch: ifNoneMatch)
+            },
+            deliver: { [weak self] envelope in
+                // Straight onto the same inbound path a pushed frame takes, so
+                // a polled sync lands on the `.desiredState` serialization lane
+                // and inherits the ordering guarantees the reconciler relies on.
+                await self?.routeInboundMessage(envelope)
+            },
+            logger: logger,
+            fullRefetchInterval: desiredStateFullRefetchInterval
+        )
+        desiredStatePoller = poller
+        await poller.start()
+        logger.info(
+            "Desired state is now fetched by long-poll",
+            metadata: [
+                "url": .string(url.absoluteString),
+                "fullRefetchSeconds": .stringConvertible(desiredStateFullRefetchInterval.components.seconds),
+            ])
+    }
+
+    /// The control-plane path serving the desired-state long-poll. Under
+    /// `/agent/` because that is the prefix Envoy routes with no timeout.
+    private static let desiredStatePollPath = "/agent/desired-state"
 
     /// Handle an `error` envelope from the control plane.
     ///

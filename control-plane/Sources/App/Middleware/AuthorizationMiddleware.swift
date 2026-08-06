@@ -130,8 +130,14 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     static func classify(path: String) -> RouteClass? {
         // Public allowlist. Split into small sub-expressions: a single long
         // `||` chain trips the Swift type-checker.
+        // `/agent/desired-state` is the desired-state long-poll (STR-146):
+        // agents fetch their sync with their SPIFFE SVID over mTLS, and the
+        // handler authenticates the forwarded client certificate itself.
+        // Matched *exactly*, not as a prefix — `publicPrefixes` below is
+        // `hasPrefix`, so listing it there would silently make a future
+        // `/agent/desired-state-history` public too.
         let exactPublic: Set<String> = [
-            "/api/docs", "/api/openapi.yaml",
+            "/api/docs", "/api/openapi.yaml", "/agent/desired-state",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.

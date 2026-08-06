@@ -12,9 +12,10 @@ protocol AgentDispatch: Sendable {
     /// False for an unplaced resource (nil id) or an offline/unknown agent.
     func agentIsOnline(agentId: String) async -> Bool
 
-    /// Push the freshly written desired state to the agent — directly when this
-    /// replica holds its socket, via a pub/sub nudge to the holding replica
-    /// otherwise. Losing the nudge is safe: the periodic sync timer re-sends.
+    /// Signal that the agent's desired state changed — by ringing the
+    /// broadcast doorbell, plus a direct push when this replica holds the
+    /// socket of a push-mode agent. Losing the signal is safe: the agent
+    /// re-fetches (or is re-pushed) on its own interval regardless.
     func syncDesiredState(agentId: String) async
 
     /// Dispatch a correlated imperative command (an action, not a state, so it

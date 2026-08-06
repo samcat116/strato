@@ -127,18 +127,56 @@ endpoint scopes by SVID identity exactly as the image-download route does.
   targeted delivery. A lost doorbell costs one poll interval.
 - **The agent re-fetches unconditionally on a slow timer**, doorbell or not.
   Over-ringing is free; under-ringing costs latency, never correctness.
-- **Version numbers are an optimization only.** The per-agent revision
-  counter (already present in-process as `desiredStateRevisions`) becomes an
-  ETag for `304 Not Modified`. It must never gate *whether* the agent
-  fetches — a missed bump anywhere in the wide assembly scope (own VMs,
-  volumes, site-peer networks, security-group closures, floating IPs,
-  rollout targets) would otherwise silently strand an agent. The periodic
-  unconditional fetch is the invariant; the version is a bandwidth saving.
+- **Version numbers are an optimization only.** The response carries an ETag
+  for `304 Not Modified`. It must never gate *whether* the agent fetches —
+  the periodic unconditional fetch is the invariant; the validator is a
+  bandwidth saving.
+
+  *Amended in implementation (STR-146):* this originally proposed reusing the
+  in-process `desiredStateRevisions` counter as the ETag. That does not
+  survive multi-replica, which is the deployment this decision exists to make
+  boring. Counters are per-process and start at zero, so a poll landing on a
+  replica other than the one that served the previous poll either collides —
+  a wrong `304`, the exact stranding this bullet forbids — or misses on every
+  request, returning a full payload each time so the agent re-polls
+  immediately and the fleet degenerates into a continuous assembly loop.
+  Scoping the ETag `replicaID:revision` fixes only the first.
+
+  The implementation uses a **SHA-256 digest of the assembled payload**
+  (`DesiredStateDigest`), with per-assembly noise normalized out (correlation
+  ids, the timestamp, freshly minted registry tokens, re-resolved artifact
+  URLs). It is replica-independent, and — unlike a counter that has to be
+  bumped by hand at every mutation site across the wide assembly scope (own
+  VMs, volumes, site-peer networks, security-group closures, floating IPs,
+  rollout targets) — it has **no missed-bump failure mode at all**, because it
+  is derived from the bytes actually assembled. The normalization list is a
+  subtraction from the full payload rather than a hand-built projection, so a
+  field added to the wire protocol participates automatically: forgetting to
+  update it produces a spurious `200` (harmless), never a wrong `304`.
 - **Side effects move to the pull.** Assembly currently records
   image-download grants (issue #562) and mints registry credentials fresh
   per sync. These stay at response-assembly time on the serving replica —
-  never cached — so a grant is never recorded for a sync that was not
-  delivered, and credentials are always fresh.
+  never cached — so credentials are always fresh.
+
+  *Amended in implementation (STR-146):* "a grant is never recorded for a sync
+  that was not delivered" is not achievable and, on inspection, not needed. A
+  conditional poll must assemble to compute its digest, so a poll that ends in
+  `304` has recorded grants for a payload it then discards — routinely, not
+  just in the re-poll race. That is safe, and the argument is specific rather
+  than inherited: `grantImageDownload` is a fixed-TTL `SETEX` of
+  `imggrant:agent:{agentId}:image:{imageId}` — purely **additive**, and scoped
+  to the placement the assembly just read. Re-recording it for an agent that
+  *currently* holds the placement is exactly right; that agent may still be
+  mid-pull, and the grant existing to cover in-flight downloads is why it has
+  a 30-minute grace TTL in the first place. Registry credentials are absorbed
+  by `RegistryCredentialCache`, so a discarded assembly re-mints nothing.
+
+  This does not resurrect the rejected cache-the-payload alternative, which
+  fails for a different reason: it would grant against a *stale* placement and
+  serve *stale* credentials. Over-recording within the current placement is a
+  widening bounded by that placement; caching is a widening bounded by nothing.
+  If grants ever become scoped-and-narrowing rather than additive, this
+  reasoning has to be revisited — `ImageDownloadScopingTests` pins it.
 
 The WebSocket remains for streams (console, exec, log forwarding) and as the
 observed-state/heartbeat channel initially; migrating observed state to POST
@@ -308,8 +346,11 @@ agent is involved.
 8. **Snapshots and checkpoints as desired artifacts** (retention design
    included).
 9. **Reboot/restore nonces** (3 messages).
-10. **Pull transport + broadcast doorbell**; delete targeted nudges, routing
-    keys, and — once nothing else uses it — the RPC bridge.
+10. **Pull transport + broadcast doorbell**; delete targeted nudges and the
+    four-way sync-routing branch. The `agent:{name}:replica` routing key
+    itself moves to stage 11: imperative RPC still reads it to forward an
+    exchange to the socket holder and to fail fast when nobody holds it, and
+    a broadcast can express neither a reply nor an immediate "offline".
 11. **Delete** `ResourceOperation`, its coordinator, sweep, and the pending-
     request apparatus when only façade reads and stream RPCs remain.
 

@@ -258,7 +258,7 @@ struct SecurityGroupController: RouteCollection {
 
         // The group's port group drops out of the next sync's desired state
         // and the topology authority tears it down.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
 
@@ -300,7 +300,7 @@ struct SecurityGroupController: RouteCollection {
             try await Self.bumpGeneration(of: groupId, on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return try SecurityGroupRuleResponse(from: rule)
     }
 
@@ -326,7 +326,7 @@ struct SecurityGroupController: RouteCollection {
             try await Self.bumpGeneration(of: groupId, on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
 
@@ -398,7 +398,7 @@ struct SecurityGroupController: RouteCollection {
         // reaches an agent, so syncing the fleet for one would be a guaranteed
         // no-op (see `SandboxInterfaceSecurityGroup`).
         if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToAllAgents()
+            await req.application.agentService.syncDesiredStateToFleet()
         }
 
         req.logger.info(
@@ -445,7 +445,7 @@ struct SecurityGroupController: RouteCollection {
         guard changed else { return .noContent }
 
         if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToAllAgents()
+            await req.application.agentService.syncDesiredStateToFleet()
         }
 
         req.logger.info(

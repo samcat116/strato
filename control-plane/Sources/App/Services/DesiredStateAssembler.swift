@@ -499,8 +499,20 @@ struct DesiredStateAssembler {
             }
         }
 
-        // Tag→digest pinning.
+        // Tag→digest pinning. Gated on the failure backoff: a pin that cannot
+        // succeed (registry down, anonymous rate limit, a pull secret that no
+        // longer authenticates) leaves `imageDigest` nil, so without the gate
+        // every subsequent assembly would retry it. That retry used to be
+        // bounded by the 10-minute forced sync pass; since STR-146 it would be
+        // bounded by the poll rate instead, which would have the control plane
+        // hammering the registry hardest for exactly the sandbox whose registry
+        // is already unhealthy.
         if sandbox.imageDigest == nil, let sandboxId = sandbox.id {
+            let backoffKey = RegistryOperationBackoff.Key(
+                operation: .resolveDigest, registry: ref.registry, repository: ref.repository)
+            guard await app.registryOperationBackoff.shouldAttempt(backoffKey) else {
+                return await registryCredential(ref: ref, secretRow: secretRow, basic: basic)
+            }
             do {
                 if let digest = try await app.registryClient.resolveDigest(for: ref, credential: basic) {
                     sandbox.imageDigest = digest
@@ -516,9 +528,12 @@ struct DesiredStateAssembler {
                             "digest": .string(digest),
                         ])
                 }
+                await app.registryOperationBackoff.recordSuccess(backoffKey)
             } catch {
                 // The agent then resolves the tag itself (accepting the
-                // mutability) and the next sync retries the pin.
+                // mutability) and a later sync retries the pin — after the
+                // cooldown, not on the very next assembly.
+                await app.registryOperationBackoff.recordFailure(backoffKey)
                 app.logger.warning(
                     "Failed to resolve sandbox image tag to a digest; syncing unpinned",
                     metadata: [
@@ -529,6 +544,16 @@ struct DesiredStateAssembler {
             }
         }
 
+        return await registryCredential(ref: ref, secretRow: secretRow, basic: basic)
+    }
+
+    /// The pull credential half of `sandboxRegistryMaterial`, split out so the
+    /// digest-pin backoff can skip straight to it.
+    private func registryCredential(
+        ref: OCIImageReference,
+        secretRow: RegistryPullSecret?,
+        basic: RegistryBasicCredential?
+    ) async -> RegistryCredential? {
         guard let secretRow, let basic else { return nil }
         let cacheKey = RegistryCredentialCache.Key(
             secretID: secretRow.id,
@@ -540,6 +565,15 @@ struct DesiredStateAssembler {
             return cached
         }
 
+        // Only *successful* mints are cached, so without a backoff a token
+        // service that is down would be re-dialed on every assembly — the same
+        // hammering the digest pin above avoids, and on the same trigger.
+        let backoffKey = RegistryOperationBackoff.Key(
+            operation: .mintPullToken, registry: ref.registry, repository: ref.repository)
+        guard await app.registryOperationBackoff.shouldAttempt(backoffKey) else {
+            return Self.storedCredential(ref: ref, secretRow: secretRow, basic: basic)
+        }
+
         do {
             if let token = try await app.registryClient.mintPullToken(for: ref, credential: basic) {
                 let credential = RegistryCredential(
@@ -549,8 +583,13 @@ struct DesiredStateAssembler {
                     expiresAt: token.expiresAt,
                     bearer: true)
                 await app.registryCredentialCache.store(credential, for: cacheKey)
+                await app.registryOperationBackoff.recordSuccess(backoffKey)
                 return credential
             }
+            // A registry with no token service is a permanent property of the
+            // registry, not a failure — recording success keeps it off the
+            // backoff so the (cheap) probe stays on its normal path.
+            await app.registryOperationBackoff.recordSuccess(backoffKey)
         } catch let error as RegistryClientError {
             // Policy refusal (e.g. plaintext token realm), not transience:
             // a Basic fallback would hand the agent the stored secret to
@@ -564,6 +603,7 @@ struct DesiredStateAssembler {
                 ])
             return nil
         } catch {
+            await app.registryOperationBackoff.recordFailure(backoffKey)
             app.logger.warning(
                 "Failed to mint a registry pull token; falling back to the stored credential",
                 metadata: [
@@ -572,10 +612,18 @@ struct DesiredStateAssembler {
                 ])
         }
 
-        // Basic-only registry, or its token service is unreachable from the
-        // control plane: the stored credential is the only material that can
-        // authorize the pull. Agents hold it in memory only (wire contract).
-        return RegistryCredential(
+        return Self.storedCredential(ref: ref, secretRow: secretRow, basic: basic)
+    }
+
+    /// Basic-only registry, or its token service is unreachable from the
+    /// control plane: the stored credential is the only material that can
+    /// authorize the pull. Agents hold it in memory only (wire contract).
+    private static func storedCredential(
+        ref: OCIImageReference,
+        secretRow: RegistryPullSecret,
+        basic: RegistryBasicCredential
+    ) -> RegistryCredential {
+        RegistryCredential(
             registry: ref.registry,
             username: secretRow.username,
             password: basic.password,
@@ -845,6 +893,68 @@ extension Application {
     /// retained only until shortly before the registry's own expiry.
     var registryCredentialCache: RegistryCredentialCache {
         lazyService(RegistryCredentialCacheKey.self) { RegistryCredentialCache() }
+    }
+
+    private struct RegistryOperationBackoffKey: StorageKey, LockKey {
+        typealias Value = RegistryOperationBackoff
+    }
+
+    /// Cooldowns for outbound registry calls that failed, shared across all
+    /// assemblies on this replica.
+    var registryOperationBackoff: RegistryOperationBackoff {
+        lazyService(RegistryOperationBackoffKey.self) { RegistryOperationBackoff() }
+    }
+}
+
+/// Cooldown for outbound registry calls that sync assembly retries on failure.
+///
+/// Both registry calls in assembly are naturally self-limiting on success — a
+/// resolved digest is persisted on the sandbox row, a minted token is cached —
+/// but neither is on *failure*, so a failing call is retried by every assembly.
+/// That was tolerable when a converged agent assembled once per forced sync
+/// pass (10 minutes). Since desired state moved to a long-poll (STR-146) every
+/// poll assembles, so an unreachable registry would be re-dialed once per hold
+/// window per sandbox — the control plane retrying hardest against the registry
+/// that is already failing.
+///
+/// Keyed by operation and repository rather than by sandbox: two sandboxes on
+/// the same image share one failure, and it is the *registry* being spared.
+/// Replica-local and lossy by design — a restart simply retries sooner.
+actor RegistryOperationBackoff {
+    enum Operation: String, Hashable, Sendable {
+        case resolveDigest
+        case mintPullToken
+    }
+
+    struct Key: Hashable, Sendable {
+        let operation: Operation
+        let registry: String
+        let repository: String
+    }
+
+    /// Long enough to be slower than the poll hold window (so a failing call
+    /// costs at most one attempt per poll cycle), short enough that a registry
+    /// coming back is picked up well inside a sandbox create's patience. Also
+    /// the cadence the pre-STR-146 dirty-agent sync pass produced, so this is
+    /// no more registry load than before the transport changed.
+    static let cooldown: Duration = .seconds(60)
+
+    private var retryAfter: [Key: ContinuousClock.Instant] = [:]
+
+    /// Whether the call should be attempted now, or is still cooling down.
+    func shouldAttempt(_ key: Key) -> Bool {
+        guard let after = retryAfter[key] else { return true }
+        guard ContinuousClock.now >= after else { return false }
+        retryAfter[key] = nil
+        return true
+    }
+
+    func recordFailure(_ key: Key) {
+        retryAfter[key] = ContinuousClock.now + Self.cooldown
+    }
+
+    func recordSuccess(_ key: Key) {
+        retryAfter[key] = nil
     }
 }
 

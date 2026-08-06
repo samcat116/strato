@@ -537,14 +537,18 @@ actor InMemoryCoordinationStore: CoordinationStore {
 // MARK: - Coordination service
 
 /// Thin coordination layer over Valkey (issue #258, reconciliation phase 0;
-/// routing and nudges added in phase 3, issue #261).
+/// routing and cross-replica signalling added in phase 3, issue #261; the
+/// desired-state doorbell made broadcast in STR-146).
 ///
 /// The key families:
 /// - `agent:{name}:presence` — agent liveness visible to every control-plane
 ///   process, written on registration and refreshed on every heartbeat.
 /// - `agent:{name}:replica` — which replica holds the agent's WebSocket,
 ///   written on socket accept and refreshed with presence. Lets any replica
-///   route a sync nudge to the process that can actually reach the agent.
+///   forward an imperative RPC (volume operations, reboot) to the process that
+///   can actually reach the agent. Desired state no longer consults it: since
+///   STR-146 that travels by broadcast doorbell and needs no routing directory,
+///   and this key retires with the last imperative exchange (STR-152).
 /// - `imggrant:agent:{agentId}:image:{imageId}` — the images an agent has been
 ///   handed download URLs for, written at sync assembly and volume create; the
 ///   image-download route authorizes an agent's fetch against them (#562).
@@ -555,8 +559,12 @@ actor InMemoryCoordinationStore: CoordinationStore {
 ///
 /// And the channel families (pub/sub, latency optimization only — the agent's
 /// periodic sync is the correctness backstop, so lost messages are safe):
-/// - `replica:{id}:nudges` — agent names whose desired state changed; the
-///   subscribing replica pushes a sync over its local socket.
+/// - `agent:doorbell` — a fleet-wide broadcast of agent keys whose desired
+///   state changed (STR-146). Every replica subscribes and asks its own parked
+///   polls and sockets whether it can reach that agent; at most one can, and
+///   the rest no-op. Contentless and unrouted on purpose — over-ringing is
+///   free, and under-ringing costs only latency because the agent re-fetches
+///   unconditionally on its own timer.
 /// - `replica:{id}:rpc` / `replica:{id}:rpc-replies` — correlated
 ///   request/response forwarding for the few remaining imperative exchanges
 ///   (volume operations, reboot) when the caller doesn't hold the socket.
@@ -854,10 +862,6 @@ actor CoordinationService {
         "agent:\(agentKey):replica"
     }
 
-    nonisolated static func nudgeChannel(replicaId: String) -> String {
-        "replica:\(replicaId):nudges"
-    }
-
     nonisolated static func rpcChannel(replicaId: String) -> String {
         "replica:\(replicaId):rpc"
     }
@@ -867,8 +871,9 @@ actor CoordinationService {
     }
 
     /// Record (or refresh) which replica holds an agent's WebSocket. Failures
-    /// are logged, not thrown: without the route, cross-replica mutations lose
-    /// only their nudge latency — the periodic sync converges the agent.
+    /// are logged, not thrown: without the route, a cross-replica imperative
+    /// exchange fails as unreachable and its caller retries. Desired state is
+    /// unaffected — it does not consult the route (STR-146).
     func recordAgentRoute(
         agentKey: String, replicaId: String, ttlSeconds: Int = CoordinationService.routeTTLSeconds
     ) async {
@@ -910,15 +915,57 @@ actor CoordinationService {
 
     // MARK: Replica pub/sub (issue #261)
 
-    /// Publish a sync nudge for `agentKey` to the replica holding its socket.
-    /// Best-effort by design: a lost nudge costs one periodic-sync interval of
-    /// latency, never correctness.
-    func publishNudge(agentKey: String, toReplica replicaId: String) async {
+    /// The one channel every replica listens on for "this agent's desired
+    /// state changed" (STR-146). Not `replica:{id}:`-scoped, and deliberately
+    /// so: the point of the broadcast doorbell is that a mutation does not have
+    /// to know which replica can reach the agent. Each replica decides for
+    /// itself whether it holds that agent's parked poll or socket; at most one
+    /// does, and the rest no-op.
+    ///
+    /// Follows the `policy-set:version` precedent, which is the other
+    /// fleet-wide broadcast here.
+    nonisolated static let doorbellChannel = "agent:doorbell"
+
+    /// Doorbell agent key meaning "every agent". Used by the fleet-wide
+    /// callers — a security-group edit, a network change, a site
+    /// reconfiguration — whose blast radius is the whole fleet rather than one
+    /// placement, so enumerating agent keys to ring them individually would be
+    /// a database read that tells the recipients nothing they can't work out
+    /// themselves. Not a legal SPIFFE ID, so it cannot collide with a real key.
+    nonisolated static let doorbellAllAgents = "*"
+
+    /// Encode a doorbell payload. The publisher's replica id rides along so
+    /// subscribers can drop their own echo — every replica receives what it
+    /// publishes, and the publisher has already run the local half inline.
+    ///
+    /// `agentKey` is a SPIFFE ID and contains no `|`, so a single separator is
+    /// unambiguous.
+    nonisolated static func doorbellPayload(agentKey: String, fromReplica replicaId: String) -> String {
+        "\(replicaId)|\(agentKey)"
+    }
+
+    /// Split a doorbell payload into its publisher and agent key, or nil if it
+    /// is malformed.
+    nonisolated static func parseDoorbell(_ payload: String) -> (replicaId: String, agentKey: String)? {
+        guard let separator = payload.firstIndex(of: "|") else { return nil }
+        let replicaId = String(payload[payload.startIndex..<separator])
+        let agentKey = String(payload[payload.index(after: separator)...])
+        guard !replicaId.isEmpty, !agentKey.isEmpty else { return nil }
+        return (replicaId, agentKey)
+    }
+
+    /// Ring the broadcast doorbell for `agentKey`. Best-effort by design: a
+    /// lost doorbell costs one poll interval of latency and never correctness,
+    /// because the agent re-fetches unconditionally on its own timer regardless
+    /// of whether anything rang.
+    func publishDoorbell(agentKey: String, fromReplica replicaId: String) async {
         do {
-            try await store.publish(channel: Self.nudgeChannel(replicaId: replicaId), message: agentKey)
+            try await store.publish(
+                channel: Self.doorbellChannel,
+                message: Self.doorbellPayload(agentKey: agentKey, fromReplica: replicaId))
         } catch {
             logger.warning(
-                "Failed to publish sync nudge; periodic sync will converge the agent",
+                "Failed to publish desired-state doorbell; the agent's own re-fetch will converge it",
                 metadata: [
                     "agentKey": .string(agentKey),
                     "replicaId": .string(replicaId),

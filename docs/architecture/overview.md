@@ -42,12 +42,18 @@ The control plane is declarative, not imperative:
   `paused`, `absent`) — and each sandbox's (`running`, `stopped`, `absent`)
   — alongside its observed status. API mutations update desired state;
   agents converge on it.
-- The control plane periodically sends each agent a full, authoritative
-  `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
-  Each desired record carries a monotonic **generation** counter guarding
-  against reordering; syncs are level-triggered and safe to drop or replay.
-  Image download URLs are control-plane-relative paths the agent fetches
-  over SVID mTLS, so nothing in a sync expires.
+- Each agent gets a full, authoritative `DesiredStateMessage` covering its
+  VMs, sandboxes, and logical networks. Each desired record carries a
+  monotonic **generation** counter guarding against reordering; syncs are
+  level-triggered and safe to drop or replay. Image download URLs are
+  control-plane-relative paths the agent fetches over SVID mTLS, so nothing
+  in a sync expires.
+- The agent **fetches** that sync by long-poll (`GET /agent/desired-state`,
+  wire v29), rather than the control plane pushing it. Mutations ring a
+  contentless broadcast doorbell so a parked poll answers immediately; the
+  agent also re-fetches unconditionally on a slow timer, which is the
+  correctness invariant behind every optimization in the path. Agents that
+  predate v29 are still pushed to, per agent, through the transition.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence
@@ -91,11 +97,13 @@ clients keep working.
 
 Multiple control-plane replicas are supported. PostgreSQL is the only
 source of durable truth; **Valkey** holds ephemeral coordination state
-(agent presence, socket routing, placement reservations, singleton sweep
-locks) and the system fails open if it's unavailable — agents still
-converge via the periodic sync. A mutation on one replica for an agent
-socketed to another publishes a **sync nudge** over pub/sub; lost nudges
-are backstopped by the periodic sync timer. Details:
+(agent presence, socket routing for the remaining imperative RPCs,
+placement reservations, singleton sweep locks) and the system fails open if
+it's unavailable — agents still converge on their own re-fetch. A mutation
+on any replica publishes a contentless **doorbell** on one fleet-wide
+channel; every replica checks whether it holds that agent's parked poll (or
+socket), at most one does, and lost doorbells are backstopped by the
+agent's unconditional re-fetch. Details:
 [multi-replica](./multi-replica.md).
 
 ## Scheduler
