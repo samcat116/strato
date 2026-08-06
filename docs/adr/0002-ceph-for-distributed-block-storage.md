@@ -11,11 +11,10 @@
 - **Builds on**: [ADR 0001](./0001-declarative-agent-protocol.md) — storage
   daemon roles and volume lifecycle are expressed as desired state under the
   durable-noun rule, not as imperative RPCs or `ResourceOperation` rows.
-  **ADR 0001 is still `Proposed`**, so that dependency is directional, not
-  settled: if 0001 is not adopted, the storage work still holds, but cluster
-  progress would need an operations-table home after all and the volume
-  sequencing note below becomes moot. Adopting 0001 is the assumption
-  everything here is sequenced against.
+  ADR 0001 is now `Accepted` (early stages have landed), so that dependency
+  is settled: everything here is sequenced against its migration plan, and
+  cluster progress gets a conditions/`resource_events` home rather than an
+  operations-table one.
 - **Affects**: STR-9 (roadmap umbrella), STR-10, STR-11, STR-12, STR-13,
   STR-31
 

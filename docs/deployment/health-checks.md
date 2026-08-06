@@ -12,7 +12,10 @@ depends on, so it is worth being precise about what each one promises.
 | `GET /health/live` | No | Liveness probes: is the process wedged? |
 | `GET /health/ready` | Yes | Routing decisions: should this replica receive traffic? |
 
-All three return the same JSON shape:
+All three return the same JSON shape, but not the same checks: `/health`
+and `/health/live` touch no dependency, so their `checks` array carries only
+the application check (`{ "name": "application", "status": "up" }`); only
+`/health/ready` includes the dependency checks shown here:
 
 ```json
 {
@@ -109,6 +112,7 @@ The Helm chart wires this up by default:
 ```yaml
 startupProbe:
   enabled: true
+  path: /health/live        # dependency-free; boot time is what it bounds
   periodSeconds: 5
   failureThreshold: 60      # allow 5 minutes for migrations on boot
 

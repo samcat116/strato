@@ -60,8 +60,6 @@
 6. To connect Strato Agents to this control plane:
    - WebSocket URL: ws://{{ include "strato-control-plane.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/agent/ws
    {{- if .Values.gateway.enabled }}
-   - Token join (TLS terminated at the Gateway):
-     wss://{{ include "strato-control-plane.gateway.webHost" . }}/agent/ws
    {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
    - SVID mTLS (SNI passthrough to the Envoy sidecar):
      wss://{{ include "strato-control-plane.gateway.agentsHost" . }}/agent/ws

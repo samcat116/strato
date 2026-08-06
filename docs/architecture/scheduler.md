@@ -22,10 +22,10 @@ When a new VM is created, the Scheduler Service analyzes all available agents an
    - Accessible via `req.scheduler` in request handlers
 
 2. **AgentService Integration** (`control-plane/Sources/App/Services/AgentService.swift`)
-   - Converts in-memory agent data to `SchedulableAgent` format
+   - Builds `SchedulableAgent` candidates from the database
+     (`schedulableAgentsFromDatabase()`)
    - Calls scheduler during VM creation
    - Persists hypervisor assignment to database
-   - Restores VM-to-agent mappings on startup
 
 3. **VMController Integration** (`control-plane/Sources/App/Controllers/VMController.swift`)
    - Invokes `agentService.createVM()` with database context
@@ -52,8 +52,15 @@ VM.hypervisorId = agentId
     ↓
 Save to Database
     ↓
-Send VMCreateMessage to Agent
+syncDesiredState(agentId) — push a fresh DesiredStateMessage
+    ↓
+Agent reconciler converges on the new VM
 ```
+
+There is no imperative create message: once the placement is persisted, the
+VM is part of the chosen agent's desired state, and every sync path (the
+immediate nudge, the periodic timer, a reconnect sync) carries it until the
+agent's reconciler converges.
 
 ## Scheduling Strategies
 
@@ -105,9 +112,9 @@ You can override the strategy programmatically when creating VMs:
 ```swift
 try await agentService.createVM(
     vm: vm,
-    vmConfig: vmConfig,
     db: db,
-    strategy: .bestFit  // Override default strategy
+    strategy: .bestFit,  // Override default strategy
+    image: image         // Optional; its architecture constrains placement
 )
 ```
 
@@ -124,6 +131,7 @@ struct VMPlacementRequirements {
     let hypervisorType: HypervisorType    // Required hypervisor backend
     let architecture: CPUArchitecture?    // Guest CPU architecture, when known
     let requiresInterVMNetworking: Bool   // Needs VM-to-VM networking (OVN)
+    let siteID: UUID?                     // Site pinning (issue #343)
     let requiresSandboxRuntime: Bool      // Sandbox workload (issue #415)
     let requiresSecureBoot: Bool          // UEFI Secure Boot (issue #565)
     let requiresVTPM: Bool                // Emulated TPM 2.0 (issue #565)
@@ -140,6 +148,13 @@ Hard constraints are never relaxed — a VM that cannot be placed fails with a
 specific error rather than landing on an agent that would silently run it
 differently than requested:
 
+- **Site pinning**: When one of the VM's networks is pinned to a site, the VM
+  only places on that site's agents — a pinned network exists only in that
+  site's OVN deployment, so agents elsewhere (or site-less) can never satisfy
+  it, regardless of capacity. This is the *first* categorical filter in
+  `filterEligibleAgents`, and it additionally excludes site members that
+  registered below the site-authority wire protocol or without overlay
+  networking (user-mode/SLIRP hosts never attach to the site's OVN fabric).
 - **Hypervisor support**: The agent must support the VM's hypervisor backend
   (from the capabilities it advertised at registration). A Firecracker VM is
   never placed on a QEMU-only agent (e.g. a macOS host).
@@ -183,6 +198,7 @@ differently than requested:
 2. **Filter Eligible Agents** (staged, each stage throws its own error when it
    eliminates all candidates):
    - Agent status must be `online`
+   - Agent must be in the VM's pinned site (site-pinned placements only)
    - Agent must support the VM's hypervisor type
    - Agent must advertise the sandbox runtime (sandbox placements only)
    - Agent must speak v17+ (Secure Boot or TPM placements) and advertise
@@ -231,54 +247,45 @@ The scheduler throws specific errors for different failure scenarios:
 
 - **`noAvailableAgents`**: No online agents in the cluster
 - **`unsupportedHypervisor`**: No online agent supports the VM's hypervisor backend
+- **`noUsableHypervisors`**: Online agents exist but none advertises any
+  hypervisor at all (their binary probes failed at registration)
 - **`architectureMismatch`**: No eligible agent has the required host architecture
 - **`networkCapabilityUnsatisfied`**: No eligible agent supports the required VM-to-VM networking
+- **`sandboxRuntimeUnsatisfied`**: No eligible agent advertises the sandbox runtime
 - **`machineProfileUnsatisfied`**: No eligible agent is new enough (wire v17+) to realize Secure Boot or a TPM
 - **`vtpmUnsatisfied`**: No eligible agent has swtpm installed to back the requested TPM 2.0
 - **`graphicsConsoleUnsatisfied`**: No eligible agent is new enough (wire v23+) to realize a graphics console
+- **`siteUnsatisfied`**: No eligible agent is in the site the VM's pinned network requires
 - **`insufficientResources`**: Agents exist but none have enough resources
 - **`invalidStrategy`**: Specified strategy name is not recognized
 - **`agentServiceUnavailable`**: AgentService not properly initialized
 
-### Error Messages
+### How placement failures surface
+
+VM create is asynchronous: the controller answers **202 Accepted** with a
+`ResourceOperation` before placement runs, and scheduling happens in the
+background dispatch. A `SchedulerError` there is wrapped so its reason
+survives, and it fails the pending operation — the client sees it by polling
+the operation, never as a synchronous 503:
 
 ```swift
-// Example error handling in VMController
-do {
-    try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db)
+// AgentService.createVM — preserve the scheduler's reason (unsupported
+// hypervisor, arch mismatch, insufficient resources, ...) instead of
+// collapsing every placement failure into a generic "no agent available".
 } catch let error as SchedulerError {
-    req.logger.error("Scheduler error: \(error)")
-    throw Abort(.serviceUnavailable, reason: error.description)
+    app.logger.error("Scheduler failed to find suitable agent: \(error)")
+    throw AgentServiceError.schedulingFailed(error.description)
 }
 ```
 
-## Persistence and Recovery
+## Placement State
 
-### VM-to-Agent Mapping
-
-- **Database**: `vm.hypervisorId` stores the agent ID/name
-- **In-Memory Cache**: `AgentService.vmToAgentMapping` for fast lookups
-- **Recovery**: On startup, mappings are restored from database
-
-### Startup Recovery Process
-
-```swift
-// In AgentService.init()
-Task {
-    await restoreVMToAgentMappings()
-}
-
-// Restores mappings from database
-private func restoreVMToAgentMappings() async {
-    let vms = try await VM.query(on: db)
-        .filter(\.$hypervisorId != nil)
-        .all()
-
-    for vm in vms {
-        vmToAgentMapping[vm.id.uuidString] = vm.hypervisorId
-    }
-}
-```
+Scheduling state is database-backed: `vm.hypervisorId` records each VM's
+placement, and candidate agents are built per decision by
+`AgentService.schedulableAgentsFromDatabase()`. `AgentService` holds no
+cross-request in-memory placement state — consistent with the multi-replica
+control plane, where the placement race is closed by the Valkey reservations
+above rather than by any process-local cache.
 
 ## Monitoring and Logging
 
@@ -289,49 +296,25 @@ The scheduler logs detailed information about placement decisions:
 [INFO] Selected agent 'hypervisor-01' for VM 'web-server-1' - CPU: 12/16, Memory: 24GB/32GB, Disk: 100GB/500GB
 ```
 
+Every placement decision also runs inside a `scheduler.select_agent` span
+(strategy, candidate count, selected agent, outcome), and
+`Telemetry.recordPlacement` emits the same outcome and duration as metrics —
+so placement failures are alertable without traces enabled.
+
 ## Future Enhancements
 
 Potential improvements for future versions:
 
 1. **Affinity Rules**: Place VMs together or apart based on labels/tags
-2. **Zone/Rack Awareness**: Distribute across failure domains
+2. **Failure-Domain Spreading**: Site pinning exists (a VM follows its
+   site-pinned networks); spreading *across* failure domains (racks, hosts
+   within a site) does not
 3. **Resource Reservations**: Reserve capacity for specific projects/users
 4. **Custom Constraints**: User-defined placement rules
 5. **Metrics-Based Scheduling**: Use actual CPU/memory usage instead of allocations
 6. **Migration Recommendations**: Suggest VM migrations to rebalance load
 7. **Preemption**: Move lower-priority VMs to make room for high-priority ones
 8. **GPU/Hardware Affinity**: Schedule based on specific hardware requirements
-
-## Testing Recommendations
-
-### Unit Tests
-
-Test each scheduling strategy with various agent configurations:
-
-```swift
-func testLeastLoadedStrategy() async throws {
-    let scheduler = SchedulerService(logger: app.logger, defaultStrategy: .leastLoaded)
-    let agents = [/* mock agents */]
-    let vm = VM(/* test VM */)
-
-    let selectedAgentId = try scheduler.selectAgent(for: vm, from: agents)
-
-    // Assert correct agent was selected
-}
-```
-
-### Integration Tests
-
-Test complete VM creation flow with multiple agents:
-
-```swift
-func testVMCreationWithScheduler() async throws {
-    // Register multiple mock agents
-    // Create VM
-    // Verify VM is assigned to appropriate agent
-    // Verify hypervisorId is persisted
-}
-```
 
 ## References
 

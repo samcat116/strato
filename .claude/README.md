@@ -13,7 +13,7 @@ This startup hook automatically installs Swift and required dependencies when ru
 - On local Claude Code installations, the hook exits early without making any changes
 
 **Installed Dependencies:**
-- Swift 6.0.2 toolchain
+- Swift 6.3.2 toolchain
 - System libraries: libssl-dev, libsqlite3-dev, libcurl4-openssl-dev, libxml2-dev
 - Build tools: binutils, git, pkg-config, unzip, wget
 - Runtime dependencies required for Swift Package Manager
@@ -22,7 +22,7 @@ This startup hook automatically installs Swift and required dependencies when ru
 1. Checks if running in Claude remote environment (`CLAUDE_CODE_REMOTE=true`)
 2. Verifies if Swift is already installed (to avoid re-installation)
 3. Updates package lists and installs system dependencies
-4. Downloads and installs Swift 6.0.2 from official Swift releases
+4. Downloads and installs Swift 6.3.2 from official Swift releases
 5. Creates symlinks for swift, swiftc, and swift-package commands
 6. Verifies the installation
 

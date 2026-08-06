@@ -12,11 +12,12 @@ package) for contributors; the protocol it speaks is documented in
 `agent/Package.swift` defines four targets, split around one constraint —
 SwiftPM cannot unit-test an executable target:
 
-- **`StratoAgentCore`** (library) — the testable core. Depends only on
-  `StratoShared`, Logging, Toml, and Crypto — deliberately **no SwiftQEMU,
-  SwiftFirecracker, or SwiftOVN** — so the reconcile engine, config parsing,
-  storage backend, OCI pipeline, manifest store, and updater are all unit
-  tests away from any hypervisor.
+- **`StratoAgentCore`** (library) — the testable core. Depends on
+  `StratoShared`, Logging, Toml, Crypto, and the transport/file plumbing its
+  services need (NIOCore/NIOPosix/`_NIOFileSystem`, NIOSSL, AsyncHTTPClient)
+  — deliberately **no SwiftQEMU, SwiftFirecracker, or SwiftOVN** — so the
+  reconcile engine, config parsing, storage backend, OCI pipeline, manifest
+  store, and updater are all unit tests away from any hypervisor.
 - **`StratoAgentSPIFFE`** (library) — SPIFFE/SPIRE support (SVID types, TLS
   config, Workload API client), split out so tests can import it.
 - **`StratoAgent`** (executable) — the binary and everything touching native
@@ -35,9 +36,10 @@ default) funnels into `launchAgent`.
 
 - **Config**: TOML (`AgentConfig` in `StratoAgentCore/AgentConfig.swift`),
   resolved field-by-field with precedence **CLI flag > config file >
-  platform default**. Default path is `/etc/strato/config.toml` on Linux,
-  falling back to `./config.toml`. Enum-valued fields (network mode,
-  hypervisor type, jailer mode) are validated at load.
+  platform default**. Default path is `/etc/strato/config.toml` on Linux and
+  `~/Library/Application Support/strato/config.toml` on macOS, falling back
+  to `./config.toml`. Enum-valued fields (network mode, hypervisor type,
+  jailer mode) are validated at load.
 - **Which URL to dial** (helpers in `StratoAgentCore/WebSocketURLs.swift`):
   the configured `control_plane_url`
   with the agent's name appended as a `?name=` query parameter. There is no
@@ -122,6 +124,14 @@ host cleanly rejects placements it can't serve.
 - **`MockHypervisorService`**: the no-op backend used as a build fallback
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
+
+A migration of the QEMU driver onto **libvirt** is in flight but has not cut
+over: `StratoAgentCore` already holds the domain-document layer —
+`DomainXMLBuilder`/`DomainXMLNode` (spec → domain XML), `ResolvedDisk`, and
+`VMDirectoryLayout` (STR-131) — and `deploy/agent/install.sh` provisions and
+preflights libvirtd (STR-132), including the `qemu.conf` ownership settings
+the agent's own-every-path invariant needs. Today `QEMUService` still drives
+VMs through SwiftQEMU; nothing below reflects libvirt yet.
 
 ### Diagnosing a failed QEMU spawn
 
@@ -589,6 +599,26 @@ site-topology authority, per-network generation guards) and
 network reconciliation (`reconcileNetworks`) defaults to a no-op on
 non-SDN platforms. See [networking](./networking.md).
 
+### Instance metadata chassis (IMDS)
+
+The chassis-local half of the metadata dataplane (wire v27, STR-49) is
+planned by `StratoAgentCore/MetadataChassisPlan.swift`: the OVS internal
+port and per-network namespace (`strato-md-<network-uuid>`) that terminate
+the metadata addresses on this host, kept a pure plan (like
+`SandboxNetnsAttachmentPlan`) so the command sequence stays unit-testable,
+and executed by `NetworkServiceLinux`. Its input is the agent's own workload
+specs (`NetworkSpec.metadataEnabled`), not the `networks` list — it must
+exist on every chassis running a NIC on the network, including sited
+non-controller agents, which receive an empty `networks` list by design. The
+`NetworkReconciler` converges the OVN `localport` itself from
+`DesiredNetworkState.metadataEnabled` on authoritative agents, and
+`metadataProtection(for:)` shields existing ports from teardown when the
+field is nil (a pre-v27 control plane's silence must not delete live ports).
+Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
+listener is future work. See
+[ADR 0003](../adr/0003-imds-chassis-namespace.md) and
+[networking](./networking.md).
+
 ## Self-update
 
 `StratoAgentCore/AgentUpdater.swift`: stages next to the binary (same
@@ -613,7 +643,7 @@ host↔guest handshake.
 
 ## Tests
 
-`agent/Tests/StratoAgentTests/` (~41 files) mirrors the Core units:
+`agent/Tests/StratoAgentTests/` (~68 files) mirrors the Core units:
 reconciliation (VM + sandbox), config/state/URL handling, message ordering,
 the storage backends, the manifest store, the updater and its gate, the
 full OCI suite, the sandbox suite (config drive, control protocol, jail,

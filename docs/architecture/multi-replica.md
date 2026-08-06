@@ -14,7 +14,8 @@ what happens during deploys and failures.
 | Agent liveness | Valkey `agent:{name}:presence` (TTL 60s) | Refreshed on every heartbeat |
 | Socket routing | Valkey `agent:{name}:replica` (TTL 60s) | Which replica holds the agent's WebSocket |
 | Sync nudges | Valkey pub/sub `replica:{id}:nudges` | Latency optimization only |
-| Imperative RPC forwarding | Valkey pub/sub `replica:{id}:rpc`, `replica:{id}:rpc-replies` | Volume operations and reboot |
+| Imperative RPC forwarding | Valkey pub/sub `replica:{id}:rpc`, `replica:{id}:rpc-replies` | The correlated exchanges listed below |
+| Policy-set change broadcast | Valkey pub/sub `policy-set:version` | A broadcast, not `replica:{id}:`-scoped — every replica refreshes its compiled Cedar policy set; backstopped by a 30s periodic re-read |
 | Placement reservations, sweep locks | Valkey (`resv:*`, `lock:sweep:*`) | Phase 0 (issue #258) |
 
 The stuck-**convergence** sweep is deliberately absent from that table
@@ -76,11 +77,16 @@ channels.
 
 ## Remaining imperative exchanges
 
-Two kinds of agent exchanges are actions rather than states, so they cannot
-ride the level-triggered sync and remain correlated request/response:
+Some agent exchanges are actions rather than states, so they cannot ride the
+level-triggered sync and remain correlated request/response:
 
 - **Volume operations** (create/delete/attach/detach/resize/snapshot/clone)
 - **Reboot** (a VM that is `running` before and after has no state delta)
+- **Full-VM checkpoints** — `vm_checkpoint` / `vm_restore` /
+  `vm_snapshot_delete` (wire v22, issue #564)
+- **Sandbox snapshots** — `sandbox_snapshot_create` /
+  `sandbox_snapshot_delete` / `sandbox_restore` (v9), and
+  `sandbox_snapshot_export` (v14)
 
 When the serving replica doesn't hold the agent's socket, the exchange is
 forwarded to the holding replica over `replica:{id}:rpc` and the verdict comes
