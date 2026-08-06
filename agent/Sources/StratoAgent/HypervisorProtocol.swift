@@ -113,6 +113,25 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Parameter vmId: The VM identifier
     func deleteVM(vmId: String) async throws
 
+    /// Removes what the VM left on this host, for a delete that has no session
+    /// to tear down (STR-179).
+    ///
+    /// `deleteVM` is the normal route and reclaims the same state on its way
+    /// out. This is for the one path that cannot reach it: an orphan whose
+    /// re-adoption reported the hypervisor process *gone*, so there is nothing
+    /// to destroy — while its boot disk, cloud-init ISO and the rest of its
+    /// directory are still on the host. That delete then drops the VM's
+    /// manifest entry, the last thing on the host that knows the VM was ever
+    /// here, so anything left behind is leaked for good.
+    ///
+    /// Callers must hold that evidence: this unlinks the disk a live guest
+    /// would still be running from. Best-effort and non-throwing — the delete
+    /// releases the manifest entry either way, so a failure here is loud in
+    /// the log rather than something a caller can act on — and a backend with
+    /// nothing on disk implements it as a no-op.
+    /// - Parameter vmId: The VM identifier
+    func reclaimVMDirectory(vmId: String) async
+
     /// Gets the current status of a VM
     /// - Parameter vmId: The VM identifier
     /// - Returns: The current VM status
@@ -223,73 +242,5 @@ public extension HypervisorService {
             // Continue with deletion even if shutdown fails
         }
         try await deleteVM(vmId: vmId)
-    }
-}
-
-// MARK: - Hypervisor Service Error
-
-/// Errors that can occur when interacting with a hypervisor service
-public enum HypervisorServiceError: Error, LocalizedError, Sendable {
-    /// The specified VM was not found
-    case vmNotFound(String)
-
-    /// The VM is already running
-    case vmAlreadyRunning(String)
-
-    /// The VM is not running
-    case vmNotRunning(String)
-
-    /// The VM is in an invalid state for the operation
-    case invalidState(vmId: String, current: VMStatus, expected: [VMStatus])
-
-    /// Invalid configuration provided
-    case invalidConfiguration(String)
-
-    /// Disk operation failed
-    case diskError(String)
-
-    /// Network operation failed
-    case networkError(String)
-
-    /// The hypervisor binary is not installed
-    case hypervisorNotInstalled(String)
-
-    /// Timeout waiting for operation
-    case timeout(String)
-
-    /// Operation not supported by this hypervisor
-    case notSupported(String)
-
-    /// An orphaned VM's hypervisor process no longer exists, so there is
-    /// nothing to re-adopt. The VM's on-host state (disks) may still exist;
-    /// re-creating it is the way to recover.
-    case adoptionTargetGone(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .vmNotFound(let vmId):
-            return "VM not found: \(vmId)"
-        case .vmAlreadyRunning(let vmId):
-            return "VM is already running: \(vmId)"
-        case .vmNotRunning(let vmId):
-            return "VM is not running: \(vmId)"
-        case .invalidState(let vmId, let current, let expected):
-            return
-                "VM \(vmId) is in state \(current), expected one of: \(expected.map(\.rawValue).joined(separator: ", "))"
-        case .invalidConfiguration(let message):
-            return "Invalid configuration: \(message)"
-        case .diskError(let message):
-            return "Disk error: \(message)"
-        case .networkError(let message):
-            return "Network error: \(message)"
-        case .hypervisorNotInstalled(let path):
-            return "Hypervisor not installed at: \(path)"
-        case .timeout(let operation):
-            return "Timeout during: \(operation)"
-        case .notSupported(let operation):
-            return "Operation not supported: \(operation)"
-        case .adoptionTargetGone(let message):
-            return "Orphaned VM's process is gone: \(message)"
-        }
     }
 }

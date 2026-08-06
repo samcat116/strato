@@ -100,6 +100,11 @@ actor MockHypervisorService: HypervisorService {
         vms.removeValue(forKey: vmId)
     }
 
+    /// A mock VM has no disk image, no seed ISO and no directory — the tracked
+    /// entry `deleteVM` drops is the whole of its footprint — so there is
+    /// nothing to reclaim.
+    func reclaimVMDirectory(vmId: String) async {}
+
     func getVMStatus(vmId: String) async throws -> VMStatus {
         guard let vm = vms[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
