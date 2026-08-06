@@ -78,6 +78,12 @@ reasons. A slug is lossy, so recomputing it would let a VM *rename* silently
 move that VM's records out from under whatever depends on them. And operators
 need to pick names a slug cannot produce.
 
+The *guest* configures itself under the same label: it reaches the agent on
+`DesiredVMState.metadata.hostname` and becomes the seed ISO's `local-hostname`
+(see [agent](./agent.md)). Nothing on either side may fabricate a hostname for
+a VM that has none, because a fabricated name is one this zone does not
+publish — the guest would then answer to a name its own records don't name.
+
 A hostname must be unique within each zone the VM registers into. Two write
 paths enforce that differently, on purpose:
 

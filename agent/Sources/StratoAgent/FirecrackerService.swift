@@ -56,7 +56,11 @@ actor FirecrackerService: HypervisorService {
 
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = []
+        networkAttachments: [ResolvedNetworkAttachment] = [],
+        // Accepted and unused: Firecracker guests boot from a kernel + rootfs
+        // with no seed ISO to render a hostname into. Delivering it means
+        // reaching the guest through MMDS, which is the IMDS work (STR-52).
+        metadata: InstanceMetadata? = nil
     ) async throws {
         logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
@@ -431,7 +435,8 @@ actor FirecrackerService: HypervisorService {
 
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = []
+        networkAttachments: [ResolvedNetworkAttachment] = [],
+        metadata: InstanceMetadata? = nil
     ) async throws {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }

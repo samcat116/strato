@@ -3692,7 +3692,7 @@ extension Agent: ReconcileActuator {
         do {
             try await service.createVM(
                 vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
-                networkAttachments: attachments)
+                networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
             throw error

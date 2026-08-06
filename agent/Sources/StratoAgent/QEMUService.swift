@@ -97,7 +97,8 @@ actor QEMUService: HypervisorService {
     /// against the same disk paths (issue #260).
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = []
+        networkAttachments: [ResolvedNetworkAttachment] = [],
+        metadata: InstanceMetadata? = nil
     ) async throws {
         if activeVMs[vmId] != nil {
             logger.info(
@@ -235,7 +236,8 @@ actor QEMUService: HypervisorService {
         // Translate the neutral spec into QEMU's native configuration. Network
         // attachments were already realized by the agent's NetworkOrchestrator.
         let qemuConfig = try await convertToQEMUConfiguration(
-            spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId)
+            spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId,
+            hostname: metadata?.hostname)
 
         // Spawn the process under its own stage budget — QMP connection can
         // hang indefinitely, but this stage no longer shares its envelope with
@@ -1477,7 +1479,8 @@ actor QEMUService: HypervisorService {
     }
 
     private func convertToQEMUConfiguration(
-        _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String
+        _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String,
+        hostname: String? = nil
     ) async throws
         -> QEMUConfiguration
     {
@@ -1812,7 +1815,7 @@ actor QEMUService: HypervisorService {
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
         if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-            at: cloudInitISOPath, vmId: vmId, sshAuthorizedKeys: spec.sshAuthorizedKeys,
+            at: cloudInitISOPath, vmId: vmId, hostname: hostname, sshAuthorizedKeys: spec.sshAuthorizedKeys,
             userData: spec.userData,
             networkAttachments: networkAttachments)
         {

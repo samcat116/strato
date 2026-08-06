@@ -76,8 +76,17 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: Hypervisor-neutral VM specification
     ///   - imageInfo: Optional image info for disk caching
     ///   - networkAttachments: Host-realized NICs, in `spec.networks` order
+    ///   - metadata: What the control plane publishes about this instance, from
+    ///     the desired-state sync. A driver's guest-bootstrap media renders from
+    ///     it — today only the hostname, which the seed ISO must agree with
+    ///     because the same value is what the VM's DNS zone is assembled from
+    ///     (STR-177). Guest-provisioning *payloads* still come from the spec:
+    ///     `sshAuthorizedKeys`/`userData` are duplicated here for the running
+    ///     guest to re-read, not for boot. Nil when the control plane sent none
+    ///     (pre-STR-51), which is not an instruction — just nothing to render.
     func createVM(
-        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment]
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment],
+        metadata: InstanceMetadata?
     ) async throws
 
     /// Boots (starts) a VM

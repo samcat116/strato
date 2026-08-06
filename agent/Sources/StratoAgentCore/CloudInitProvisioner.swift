@@ -31,7 +31,10 @@ public struct CloudInitProvisioner {
     ///
     /// - Parameters:
     ///   - isoPath: Destination path for the generated ISO.
-    ///   - vmId: The VM identifier, used for the instance-id and hostname.
+    ///   - vmId: The VM identifier, used for the instance-id (and, absent a
+    ///     hostname, for the derived `local-hostname` — see `metaDataDocument`).
+    ///   - hostname: The VM's desired hostname, from
+    ///     `InstanceMetadata.hostname`. Nil for VMs that have none.
     ///   - sshAuthorizedKeys: SSH public keys to authorize for the guest's
     ///     default user via cloud-init. Empty leaves the guest key-less.
     ///   - userData: Caller-supplied cloud-init user data, verbatim (any
@@ -44,7 +47,7 @@ public struct CloudInitProvisioner {
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
     /// - Returns: true if the ISO was created successfully.
     public func makeNoCloudISO(
-        at isoPath: String, vmId: String, sshAuthorizedKeys: [String] = [],
+        at isoPath: String, vmId: String, hostname: String? = nil, sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
@@ -59,10 +62,12 @@ public struct CloudInitProvisioner {
             try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
 
             // Create meta-data file (required for NoCloud)
-            let metaData = """
-                instance-id: \(vmId)
-                local-hostname: vm-\(vmId.prefix(8))
-                """
+            if let hostname, !Self.isValidHostnameLabel(hostname) {
+                logger.warning(
+                    "Desired hostname is not a valid DNS label; booting under a derived name instead",
+                    metadata: ["vmId": .string(vmId), "hostname": .string(hostname)])
+            }
+            let metaData = Self.metaDataDocument(vmId: vmId, hostname: hostname)
             let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
             try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
 
@@ -135,6 +140,47 @@ public struct CloudInitProvisioner {
             try? fileManager.removeItem(atPath: tempDir)
             return false
         }
+    }
+
+    // MARK: - Meta-data document assembly
+
+    /// Renders the NoCloud `meta-data` document.
+    ///
+    /// `local-hostname` is the name the guest configures itself under, and it
+    /// has to be the same label the control plane publishes for the VM: a zone's
+    /// contents are derived from `VM.hostname` (see `docs/architecture/dns.md`),
+    /// so a seed that invents its own name leaves forward and reverse DNS naming
+    /// a host that does not answer to it — the drift `InstanceMetadata.hostname`
+    /// is deliberately optional to avoid (STR-177).
+    ///
+    /// The `vm-<id-prefix>` derivation is therefore reached only when the VM has
+    /// no hostname at all: VMs predating the column (issue #770), and control
+    /// planes predating `DesiredVMState.metadata`. Those publish no name for the
+    /// guest to disagree with, and a guest still needs *some* hostname to boot
+    /// with, so the historical derivation stays exactly as it was.
+    static func metaDataDocument(vmId: String, hostname: String?) -> String {
+        let localHostname = hostname.flatMap { isValidHostnameLabel($0) ? $0 : nil } ?? "vm-\(vmId.prefix(8))"
+        return """
+            instance-id: \(vmId)
+            local-hostname: \(localHostname)
+            """
+    }
+
+    /// Whether `label` is a legal RFC 1123 host label: 1–63 characters of
+    /// letters, digits, and hyphens, not starting or ending with a hyphen. This
+    /// is the control plane's `DNSName.isValidLabel` rule, which every stored
+    /// `VM.hostname` passed — except that uppercase is accepted here, since DNS
+    /// comparison is case-insensitive and a differently-cased spelling still
+    /// answers to the VM's records.
+    ///
+    /// Re-checked on this side rather than trusted because the value lands
+    /// unquoted in a YAML document the guest configures itself from: a name
+    /// carrying a newline or a colon would author *keys* in `meta-data` rather
+    /// than fail, and the agent cannot see the validation the sender did.
+    static func isValidHostnameLabel(_ label: String) -> Bool {
+        guard (1...63).contains(label.count) else { return false }
+        guard !label.hasPrefix("-"), !label.hasSuffix("-") else { return false }
+        return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 
     // MARK: - User-data document assembly
