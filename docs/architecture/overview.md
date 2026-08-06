@@ -167,8 +167,9 @@ transactional with the resources they protect. Access derives from walking
 up the resource hierarchy — `organization` → folder (`organizational_unit`
 on the wire, pending rename) → `project` → resource; explicit `forbid`
 beats explicit `permit` beats default deny. The full design — the model,
-roles, guardrails, decision logging, and why it replaced the earlier
-SpiceDB deployment — is the [iam](./iam.md) decision record.
+roles, guardrails, decision logging — is documented in [iam](./iam.md); why
+it replaced the earlier SpiceDB deployment, and the migration that did, is
+recorded in [ADR 0004](../adr/0004-cedar-for-authorization.md).
 
 Integration points, briefly: `AuthorizationMiddleware` (registered globally,
 tests included) is **structurally default-deny** — every route must fall
@@ -228,7 +229,7 @@ backends, with retention pruning.
 | [storage](./storage.md) | StorageBackend, volumes, snapshots, image materialization |
 | [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
 | [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |
-| [iam](./iam.md) | The Cedar migration decision record |
+| [iam](./iam.md) | Cedar-based authorization: invariants, tiers, roles, guardrails, enforcement |
 | [authorization-edge-audit](./authorization-edge-audit.md) | Point-in-time audit of the authorization enforcement edge (July 2026) |
 | [guest-identity](./guest-identity.md) | SPIFFE SVIDs for guest VMs and sandboxes (design proposal) |
 | [webhooks](./webhooks.md) | User-managed event notifications: event catalog, signing, transactional outbox |

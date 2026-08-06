@@ -63,6 +63,7 @@ export default defineConfig({
           { text: 'ADR 0001: Declarative Agent Protocol', link: '/adr/0001-declarative-agent-protocol' },
           { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' },
           { text: 'ADR 0003: IMDS Chassis Namespace', link: '/adr/0003-imds-chassis-namespace' },
+          { text: 'ADR 0004: Cedar for Authorization', link: '/adr/0004-cedar-for-authorization' },
           { text: 'Authorization Edge Audit (July 2026)', link: '/architecture/authorization-edge-audit' }
         ]
       },
