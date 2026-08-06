@@ -61,11 +61,23 @@ public struct CloudInitProvisioner {
             // Create temp directory structure
             try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
 
-            // Create meta-data file (required for NoCloud)
-            if let hostname, !Self.isValidHostnameLabel(hostname) {
+            // Create meta-data file (required for NoCloud). The warning fires on
+            // exactly the condition the renderer decided on — a resolved label
+            // that is not the one asked for — rather than re-deriving it, so the
+            // two cannot drift. `debugDescription` quotes and escapes the
+            // rejected value: `CustomLogHandler` interpolates metadata straight
+            // into one stderr line, so a name carrying a newline would forge a
+            // log line on its way to being refused (the same injection the
+            // renderer refuses it for, one layer over).
+            let localHostname = Self.localHostname(vmId: vmId, hostname: hostname)
+            if let hostname, hostname != localHostname {
                 logger.warning(
                     "Desired hostname is not a valid DNS label; booting under a derived name instead",
-                    metadata: ["vmId": .string(vmId), "hostname": .string(hostname)])
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "hostname": .string(hostname.debugDescription),
+                        "localHostname": .string(localHostname),
+                    ])
             }
             let metaData = Self.metaDataDocument(vmId: vmId, hostname: hostname)
             let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
@@ -153,17 +165,35 @@ public struct CloudInitProvisioner {
     /// a host that does not answer to it — the drift `InstanceMetadata.hostname`
     /// is deliberately optional to avoid (STR-177).
     ///
-    /// The `vm-<id-prefix>` derivation is therefore reached only when the VM has
-    /// no hostname at all: VMs predating the column (issue #770), and control
-    /// planes predating `DesiredVMState.metadata`. Those publish no name for the
-    /// guest to disagree with, and a guest still needs *some* hostname to boot
-    /// with, so the historical derivation stays exactly as it was.
+    /// The `vm-<id-prefix>` derivation is reached only when the VM has no
+    /// hostname at all, or when the one it has is not a legal label — see
+    /// `localHostname`, which decides between the two.
     static func metaDataDocument(vmId: String, hostname: String?) -> String {
-        let localHostname = hostname.flatMap { isValidHostnameLabel($0) ? $0 : nil } ?? "vm-\(vmId.prefix(8))"
-        return """
-            instance-id: \(vmId)
-            local-hostname: \(localHostname)
-            """
+        """
+        instance-id: \(vmId)
+        local-hostname: \(localHostname(vmId: vmId, hostname: hostname))
+        """
+    }
+
+    /// The label the guest configures itself under: the desired `hostname` when
+    /// there is a usable one, and `vm-<id-prefix>` otherwise.
+    ///
+    /// Two distinct cases fall back, and only one of them is benign:
+    ///
+    /// - **No hostname.** VMs predating the column (issue #770) and control
+    ///   planes predating `DesiredVMState.metadata` publish no name for the
+    ///   guest to disagree with, and a guest still needs *some* hostname to boot
+    ///   with, so the historical derivation stays exactly as it was.
+    /// - **An unusable hostname.** Reaching this means a bug or a hostile
+    ///   sender: a control plane that ran `DNSName.normalizedHostname` on write
+    ///   cannot emit an invalid label. The VM boots anyway, under a name its
+    ///   zone does not publish — knowingly re-introducing the very drift this
+    ///   renderer exists to prevent, because the alternative is refusing to
+    ///   create the VM at all, and a guest with a wrong name is more useful than
+    ///   a guest that will not boot. The trade is only defensible because it is
+    ///   loud: `makeNoCloudISO` warns, naming both labels.
+    static func localHostname(vmId: String, hostname: String?) -> String {
+        hostname.flatMap { isValidHostnameLabel($0) ? $0 : nil } ?? "vm-\(vmId.prefix(8))"
     }
 
     /// Whether `label` is a legal RFC 1123 host label: 1–63 characters of

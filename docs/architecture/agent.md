@@ -274,9 +274,17 @@ that does not answer to it. The historical `vm-<id-prefix>` derivation survives
 only as the fallback for VMs that have no hostname at all (those predating the
 column, and control planes predating the metadata field); the agent also
 re-checks the label against the RFC 1123 rule before rendering it, since the
-value lands unquoted in a YAML document. The ISO is written once at create, so
-a later hostname change reaches the guest through the metadata service rather
-than this seed.
+value lands unquoted in a YAML document. An unusable label falls back too and
+logs a warning rather than failing the create — a guest with a wrong name beats
+a guest that will not boot — but a control plane that validated on write cannot
+produce one.
+
+The ISO is written once at create, so a later hostname change reaches the guest
+through the metadata service rather than this seed. That also bounds what
+fixing this repaired: **VMs created before it keep booting under their
+`vm-<prefix>` name until something re-runs `createVM` for them** — a recreate,
+or a migration, whose destination agent renders a fresh seed from current
+metadata. Existing DNS drift is not repaired in place.
 
 The `user-data` document has two shapes:
 

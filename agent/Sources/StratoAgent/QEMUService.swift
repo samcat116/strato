@@ -1478,9 +1478,12 @@ actor QEMUService: HypervisorService {
         let readonly: Bool
     }
 
+    // `hostname` is deliberately required despite being `Optional`: a default
+    // would let a future caller drop it and silently land the guest back on the
+    // derived name this exists to replace (STR-177).
     private func convertToQEMUConfiguration(
         _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String,
-        hostname: String? = nil
+        hostname: String?
     ) async throws
         -> QEMUConfiguration
     {

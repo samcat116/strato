@@ -54,6 +54,19 @@ struct CloudInitMetaDataTests {
         }
     }
 
+    @Test("the resolved label is the single decision the document renders from")
+    func resolvedLabel() {
+        // `makeNoCloudISO` warns on `resolved != desired` rather than re-deriving
+        // the validity check, so this is the one place the fallback is decided.
+        #expect(CloudInitProvisioner.localHostname(vmId: "abcdefgh-0000", hostname: "web-01") == "web-01")
+        #expect(CloudInitProvisioner.localHostname(vmId: "abcdefgh-0000", hostname: nil) == "vm-abcdefgh")
+        #expect(CloudInitProvisioner.localHostname(vmId: "abcdefgh-0000", hostname: "web 01") == "vm-abcdefgh")
+
+        // And the document renders exactly that label.
+        let resolved = CloudInitProvisioner.localHostname(vmId: "abcdefgh-0000", hostname: "web-01")
+        #expect(CloudInitProvisioner.metaDataDocument(vmId: "abcdefgh-0000", hostname: "web-01").contains(resolved))
+    }
+
     @Test("label validation matches the control plane's RFC 1123 rule")
     func labelValidation() {
         #expect(CloudInitProvisioner.isValidHostnameLabel("web-01"))
