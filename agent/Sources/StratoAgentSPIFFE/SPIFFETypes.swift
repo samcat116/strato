@@ -340,6 +340,10 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
     /// The local SPIRE agent refused this process as a delegate on its
     /// Delegated Identity API. The associated value is SPIRE's own message.
     case delegateNotAuthorized(String)
+    /// A delegated subscription that named the identity it was for received an
+    /// SVID for someone else — meaning its selectors match a registration entry
+    /// they should not. Fail-closed: the whole response is refused, not filtered.
+    case unexpectedDelegatedIdentity(expected: String, received: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -376,6 +380,12 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
             return
                 "SPIRE refused this process as a delegate (\(reason)). Add this agent's SPIFFE ID to "
                 + "`authorized_delegates` in the `agent { }` block of /etc/spire/agent.conf and restart spire-agent."
+        case .unexpectedDelegatedIdentity(let expected, let received):
+            let others = received.sorted().joined(separator: ", ")
+            return
+                "Delegated subscription for '\(expected)' received an SVID for [\(others)]. "
+                + "The subscription's selectors match a registration entry they should not — check that every "
+                + "guest entry carries a unique strato:instance:<uuid> selector."
         }
     }
 }

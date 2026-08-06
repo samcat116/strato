@@ -41,6 +41,42 @@ struct DelegatedIdentityClientTests {
         #expect(DelegatedSelector(text) == nil)
     }
 
+    /// A selector's split point has to survive the wire, and a colon-joined
+    /// comparison cannot check that: `"strato" + ":" + "kind:vm"` and
+    /// `"strato:kind" + ":" + "vm"` rebuild the same string. The fake compares
+    /// NUL-joined pairs so a mis-split reaches the assertion.
+    @Test("A selector value's internal colons survive the wire", .timeLimit(.minutes(1)))
+    func selectorSplitSurvivesTheWire() async throws {
+        let pki = try SPIFFETestPKI()
+        let awkward = [DelegatedSelector(type: "strato", value: "instance:a:b")]
+        let response = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: Self.guestPath,
+            notValidAfter: Date().addingTimeInterval(600))
+
+        try await withFakeDelegatedIdentityAPI(
+            responses: [response], expectedSelectors: awkward
+        ) { socketPath in
+            let client = DelegatedIdentitySPIFFEClient(
+                socketPath: socketPath, logger: Self.testLogger)
+            let svids = try await client.fetchX509SVIDs(selectors: awkward)
+            #expect(svids.count == 1)
+            await client.close()
+        }
+
+        // And the fake really would reject the mis-split form
+        let misSplit = [DelegatedSelector(type: "strato:instance", value: "a:b")]
+        try await withFakeDelegatedIdentityAPI(
+            responses: [response], expectedSelectors: awkward
+        ) { socketPath in
+            let client = DelegatedIdentitySPIFFEClient(
+                socketPath: socketPath, logger: Self.testLogger)
+            await #expect(throws: SPIFFEError.self) {
+                _ = try await client.fetchX509SVIDs(selectors: misSplit)
+            }
+            await client.close()
+        }
+    }
+
     // MARK: - Response conversion
 
     @Test("Converts a delegated response with an already-split certificate chain")
@@ -76,6 +112,94 @@ struct DelegatedIdentityClientTests {
         #expect(abs(svid.expiresAt.timeIntervalSince(expiry)) < 2)
         #expect(svid.federatesWith == ["org-abc.strato.local"])
         #expect(svid.hint == nil)
+    }
+
+    /// `federates_with` is one flat list for the whole response, so with more
+    /// than one SVID it is their union and cannot be attributed. Carrying it
+    /// anyway would let `withBundles` install foreign roots for an entry that
+    /// never federated with that domain.
+    @Test("A multi-SVID response drops federation rather than attributing a union")
+    func multiSVIDResponseDropsFederation() throws {
+        let pki = try SPIFFETestPKI()
+        let expiry = Date().addingTimeInterval(1800)
+        var response = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: Self.guestPath, notValidAfter: expiry,
+            federatesWith: ["org-abc.strato.local"])
+        let second = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: "/vm/22222222-2222-2222-2222-222222222222",
+            notValidAfter: expiry)
+        response.x509Svids.append(contentsOf: second.x509Svids)
+
+        let svids = try DelegatedIdentityConversion.makeSVIDs(from: response)
+        #expect(svids.count == 2)
+        #expect(svids.allSatisfy { $0.federatesWith.isEmpty })
+
+        // Fail-closed: the federated peer stops verifying, loudly, instead of
+        // the wrong CA quietly succeeding.
+        let bundles = try DelegatedIdentityConversion.makeTrustBundles(
+            from: pki.makeDelegatedBundlesResponse(
+                trustDomains: ["strato.local", "org-abc.strato.local"]))
+        let composed = try svids[0].withBundles(bundles)
+        #expect(composed.roots(forTrustDomain: "org-abc.strato.local") == nil)
+    }
+
+    @Test("expecting: refuses a response naming another identity, and does not filter it")
+    func expectingRefusesForeignIdentity() throws {
+        let pki = try SPIFFETestPKI()
+        let expiry = Date().addingTimeInterval(1800)
+        var response = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: Self.guestPath, notValidAfter: expiry)
+        let foreign = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: "/vm/99999999-9999-9999-9999-999999999999",
+            notValidAfter: expiry)
+        response.x509Svids.append(contentsOf: foreign.x509Svids)
+
+        let expected = SPIFFEIdentity(trustDomain: "strato.local", path: Self.guestPath)
+        do {
+            _ = try DelegatedIdentityConversion.makeSVIDs(from: response, expecting: expected)
+            Issue.record("Expected the foreign identity to be refused")
+        } catch let error as SPIFFEError {
+            guard case .unexpectedDelegatedIdentity(let wanted, let received) = error else {
+                Issue.record("Expected unexpectedDelegatedIdentity, got \(error)")
+                return
+            }
+            #expect(wanted == expected.uri)
+            #expect(received == ["spiffe://strato.local/vm/99999999-9999-9999-9999-999999999999"])
+            // Whole response refused, not filtered down to the "good half"
+            let description = try #require(error.errorDescription)
+            #expect(description.contains("strato:instance:"))
+        }
+    }
+
+    @Test("expecting: accepts the named identity, and an empty set stays revocation")
+    func expectingAcceptsMatchAndEmptySet() throws {
+        let pki = try SPIFFETestPKI()
+        let expected = SPIFFEIdentity(trustDomain: "strato.local", path: Self.guestPath)
+        let response = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: Self.guestPath,
+            notValidAfter: Date().addingTimeInterval(1800))
+
+        let svids = try DelegatedIdentityConversion.makeSVIDs(from: response, expecting: expected)
+        #expect(svids.map(\.spiffeID) == [expected])
+
+        let empty = Spire_Api_Agent_Delegatedidentity_V1_SubscribeToX509SVIDsResponse()
+        #expect(try DelegatedIdentityConversion.makeSVIDs(from: empty, expecting: expected).isEmpty)
+    }
+
+    /// The chain gets a real X.509 parse; without this guard the key would sail
+    /// through as a well-formed-looking PEM with an empty body, and the probe
+    /// would print `DELEGATED IDENTITY OK` next to "0-byte PKCS#8 private key".
+    @Test("A missing private key raises parseError rather than yielding an empty PEM")
+    func emptyPrivateKeyThrows() throws {
+        let pki = try SPIFFETestPKI()
+        var response = try pki.makeDelegatedSVIDResponse(
+            trustDomain: "strato.local", path: Self.guestPath,
+            notValidAfter: Date().addingTimeInterval(1800))
+        response.x509Svids[0].x509SvidKey = Data()
+
+        #expect(throws: SPIFFEError.self) {
+            _ = try DelegatedIdentityConversion.makeSVIDs(from: response)
+        }
     }
 
     @Test("An empty SVID set converts to [] rather than throwing")
@@ -388,7 +512,7 @@ struct DelegatedIdentityClientTests {
         #expect(output.contains("authorized_delegates"))
     }
 
-    @Test("An unavailable report points at admin_socket_path")
+    @Test("An unavailable report points at admin_socket_path when the socket is absent")
     func formatsUnavailable() throws {
         let report = DelegatedIdentityProbe.Report(
             socketPath: "/var/run/spire/admin.sock",
@@ -405,6 +529,57 @@ struct DelegatedIdentityClientTests {
         let json = try DelegatedIdentityProbe.formatJSON(report)
         #expect(json.contains("\"outcome\" : \"unavailable\""))
         #expect(json.contains("\"succeeded\" : false"))
+    }
+
+    /// The report must not tell an operator `admin_socket_path` is unconfigured
+    /// two lines under its own claim that the socket is present.
+    @Test("An unavailable report over a present socket does not blame admin_socket_path")
+    func formatsUnavailableWithPresentSocket() {
+        let report = DelegatedIdentityProbe.Report(
+            socketPath: "/var/run/spire/admin.sock",
+            socketPresent: true,
+            selectors: ["strato:instance:x"],
+            outcome: .unavailable
+        )
+
+        let output = DelegatedIdentityProbe.format(report)
+        #expect(output.contains("(present)"))
+        #expect(output.contains("DELEGATED IDENTITY UNAVAILABLE"))
+        #expect(!output.contains("admin_socket_path"))
+        #expect(output.contains("did not answer"))
+    }
+
+    @Test("A timed-out report is its own outcome and names --timeout")
+    func formatsTimedOut() throws {
+        let report = DelegatedIdentityProbe.Report(
+            socketPath: "/var/run/spire/admin.sock",
+            socketPresent: true,
+            selectors: ["strato:instance:x"],
+            outcome: .timedOut,
+            detail: "timed out after 10s waiting for the first stream message"
+        )
+
+        #expect(!report.succeeded)
+        let output = DelegatedIdentityProbe.format(report)
+        #expect(output.contains("DELEGATED IDENTITY TIMED OUT"))
+        #expect(output.contains("--timeout"))
+        #expect(!output.contains("admin_socket_path"))
+        #expect(try DelegatedIdentityProbe.formatJSON(report).contains("\"outcome\" : \"timedOut\""))
+    }
+
+    @Test("An unexpected delegated identity reports as refused")
+    func unexpectedIdentityIsRefused() {
+        let report = DelegatedIdentityProbe.Report(
+            socketPath: "/var/run/spire/admin.sock",
+            socketPresent: true,
+            selectors: ["strato:kind:vm"],
+            outcome: .refused,
+            detail: SPIFFEError.unexpectedDelegatedIdentity(
+                expected: "spiffe://strato.local/vm/a", received: ["spiffe://strato.local/vm/b"]
+            ).localizedDescription
+        )
+        #expect(!report.succeeded)
+        #expect(DelegatedIdentityProbe.format(report).contains("strato:instance:"))
     }
 
     @Test("Probing an unreachable socket reports unavailable rather than throwing")
@@ -446,7 +621,7 @@ struct DelegatedIdentityClientTests {
         let service = FakeDelegatedIdentityService(
             responses: responses,
             pauseBetween: pauseBetween,
-            expectedSelectors: expectedSelectors?.map(\.description).sorted(),
+            expectedSelectors: expectedSelectors?.map(FakeDelegatedIdentityService.wireKey).sorted(),
             rejectSecurityHeader: rejectSecurityHeader,
             failure: failure,
             bundles: bundles
@@ -468,10 +643,20 @@ private struct FakeDelegatedIdentityService: RegistrableRPCService {
     let pauseBetween: Duration
     /// When set, the call fails unless the client sent exactly these selectors —
     /// the check that proves Strato's synthetic selector type survives the wire.
+    ///
+    /// Held as NUL-joined `type`/`value` pairs rather than the colon-joined
+    /// `description`: rejoining with a colon rebuilds the same string whichever
+    /// side of the first colon the value started on, so a colon-joined
+    /// comparison cannot tell a correctly-split selector from a mis-split one.
     let expectedSelectors: [String]?
     let rejectSecurityHeader: Bool
     let failure: RPCError?
     let bundles: Spire_Api_Agent_Delegatedidentity_V1_SubscribeToX509BundlesResponse
+
+    /// A selector's `(type, value)` split, in a form no re-split can forge.
+    static func wireKey(_ selector: DelegatedSelector) -> String {
+        "\(selector.type)\u{0}\(selector.value)"
+    }
 
     private static let service = ServiceDescriptor(
         fullyQualifiedService: "spire.api.agent.delegatedidentity.v1.DelegatedIdentity")
@@ -496,7 +681,7 @@ private struct FakeDelegatedIdentityService: RegistrableRPCService {
 
             var received: [String] = []
             for try await message in request.messages {
-                received = message.selectors.map { "\($0.type):\($0.value)" }.sorted()
+                received = message.selectors.map { "\($0.type)\u{0}\($0.value)" }.sorted()
                 // `pid` and `selectors` are mutually exclusive
                 if message.pid != 0 {
                     throw RPCError(code: .invalidArgument, message: "pid and selectors are mutually exclusive")

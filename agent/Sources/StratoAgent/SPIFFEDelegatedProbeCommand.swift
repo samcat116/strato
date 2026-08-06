@@ -7,6 +7,7 @@ import ArgumentParser
 import Foundation
 import Logging
 import StratoAgentSPIFFE
+import Synchronization
 
 extension StratoAgent {
     /// Node-side diagnostic for guest identity: ask the local spire-agent, over
@@ -94,7 +95,7 @@ extension StratoAgent {
                     socketPath: socketPath,
                     socketPresent: FileManager.default.fileExists(atPath: socketPath),
                     selectors: selectors.map(\.description),
-                    outcome: .unavailable,
+                    outcome: .timedOut,
                     detail: "timed out after \(timeout)s waiting for the first stream message"
                 )
             }
@@ -138,24 +139,42 @@ extension StratoAgent {
             }
         }
 
-        /// Run `work`, falling back to `fallback` if it has not finished within
+        /// Run `work`, returning `fallback()` if it has not finished within
         /// `seconds`. The probe never throws, so neither does this.
+        ///
+        /// Deliberately *not* a task group: a group awaits its remaining
+        /// children when the body returns, so `cancelAll()` followed by `return`
+        /// still blocks until the probe task observes cancellation — which makes
+        /// `--timeout` a hint rather than a bound, and defeats it in exactly the
+        /// case it exists for, a socket that accepts the connection and then
+        /// wedges. Racing two detached tasks through one continuation gives a
+        /// real deadline; the loser is abandoned rather than awaited, which is
+        /// sound here because the caller prints the report and `_exit`s.
         private func withTimeout<Result: Sendable>(
             seconds: Int,
             _ work: @escaping @Sendable () async -> Result,
             orElse fallback: @escaping @Sendable () -> Result
         ) async -> Result {
-            await withTaskGroup(of: Result?.self) { group in
-                group.addTask { await work() }
-                group.addTask {
+            // Holds the continuation until someone claims it, so whichever task
+            // finishes first resumes exactly once and the other becomes a no-op.
+            let pending = Mutex<CheckedContinuation<Result, Never>?>(nil)
+
+            return await withCheckedContinuation { (continuation: CheckedContinuation<Result, Never>) in
+                pending.withLock { $0 = continuation }
+
+                let resume: @Sendable (Result) -> Void = { value in
+                    let claimed = pending.withLock { held -> CheckedContinuation<Result, Never>? in
+                        defer { held = nil }
+                        return held
+                    }
+                    claimed?.resume(returning: value)
+                }
+
+                Task.detached { resume(await work()) }
+                Task.detached {
                     try? await Task.sleep(for: .seconds(seconds))
-                    return nil
+                    resume(fallback())
                 }
-                for await result in group {
-                    group.cancelAll()
-                    return result ?? fallback()
-                }
-                return fallback()
             }
         }
     }

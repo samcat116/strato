@@ -79,14 +79,20 @@ So the chain runs like this:
    exists and knows which node hosts it, because it placed it there:
 
    ```
-   spiffeID  = spiffe://<org-trust-domain>/vm/<vm-uuid>
-   parentID  = spiffe://<trust-domain>/node/<node-name>
+   spiffeID  = spiffe://<td>/vm/<vm-uuid>
+   parentID  = spiffe://<td>/node/<node-name>
    selectors = [ strato:instance:<vm-uuid>, strato:kind:vm ]
    ```
 
    This is the same `BatchCreateEntry` call
    `SPIRERegistrationService.provisionAgent` already makes for node identities
    (`control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift`).
+
+   **Both IDs are in one trust domain, and that is a constraint rather than a
+   simplification.** SPIRE validates a registration entry's SPIFFE ID *and* its
+   parent ID as members of the serving server's own trust domain, so an entry
+   cannot span two. See [the placement prerequisite](#the-placement-prerequisite)
+   for what that costs, because it is not free.
 
 2. **SPIRE syncs that entry only to the node it is parented to.** This property
    is load-bearing and easy to undersell: the node scoping Strato would
@@ -110,6 +116,45 @@ So the chain runs like this:
    Firecracker vsock socket path belongs to exactly one sandbox; a vhost-vsock
    peer CID belongs to exactly one VM. There is no credential to check and none
    to steal. **The transport is the attestation.**
+
+### The placement prerequisite
+
+Because an entry cannot span trust domains, the guest's identity and its hosting
+node's identity must live in the same one — and enrollment resolves a node to
+exactly one SPIRE instance (`OrgSPIREClientRegistry`, see
+[control-plane](./control-plane.md)). A node attested to organization A's server
+has a node ID in A's domain and a cache holding only A's entries. **So a guest
+can only get an identity on a node that belongs to its own organization.**
+
+That is not true today. `Agent.hostsForeignWorkloads`
+(`control-plane/Sources/App/Models/Agent.swift`) exists precisely because it
+isn't:
+
+> Until the scheduler and volume placement enforce org-scoped placement (phase 2
+> of the hierarchy overhaul), an agent may host workloads from another tenant.
+
+For such a guest there is no server that can create an entry parented to its
+hosting node, and both properties this design leans hardest on — node scoping
+falling out of entry sync, and the delegate reading *this node's* cache — stop
+applying. This is a hard dependency, not a feature flag, and it is why
+`SPIRE_ORG_TRUST_DOMAINS_ENABLED` being off leaves guests on the platform domain
+in a **degraded** mode rather than an equivalent one: on the platform domain the
+entry composes, but every tenant's guests are then issued by one CA.
+
+Two ways forward, and the choice materially changes staging items 1 and 5:
+
+- **Wait for org-scoped placement** (hierarchy overhaul phase 2), and treat
+  per-org guest identity as blocked on it. Simplest, and the node keeps one
+  spire-agent and one delegate grant.
+- **One spire-agent per organization per node**, each attested to that org's
+  server, each with its own admin socket and its own `authorized_delegates`
+  entry. This works under mixed-tenancy placement, at the cost of N agents and N
+  delegate grants per node — and it widens the "nothing else may be parented to
+  a node's SPIFFE ID" invariant into N separate invariants to hold.
+
+Until one is picked, the org-trust-domain part of this design is a statement of
+intent. The attestation mechanism below is independent of it and works on the
+platform domain today, which is what the spike ran on.
 
 ### Proven, not assumed
 
@@ -137,6 +182,9 @@ plugin — is what vouched for the workload.
 | `spiffe://<td>/control-plane` | the control plane | existing |
 | `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | to reserve |
 | `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | to reserve |
+
+`<org-td>` is the same domain as the hosting node's `<td>` — see
+[the placement prerequisite](#the-placement-prerequisite).
 
 `/vm/` is fixed by [#789](https://github.com/samcat116/strato/issues/789) and
 adopted verbatim rather than re-litigated. `/sandbox/` is its twin.
@@ -237,6 +285,11 @@ Why this shape:
   forwards it; the guest's own Workload API stream delivers it. Lifetime is the
   entry's `x509SVIDTTLSeconds` (`SPIRERegistrationConfig.svidTTLSeconds`,
   default one hour).
+  **Not every push is a rotation.** When the delegated stream ends normally — a
+  spire-agent restart or config reload — the client re-dials and SPIRE re-sends
+  the current set unchanged. The subscription manager must dedupe by (SPIFFE ID,
+  certificate serial) before forwarding, or every local SPIRE restart becomes a
+  spurious rotation pushed to every guest on the node.
 - **Revocation is entry deletion.** Deleting the entry makes SPIRE push an
   **empty** SVID set — the identity is torn down within seconds rather than
   outliving the decision by up to a full TTL. This is a capability a
@@ -546,7 +599,9 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
 3. Per-sandbox `WorkloadRegistration` lifecycle — the sandbox twin of #789.
 4. Guest SPIRE entry lifecycle parented to the hosting node, including
    re-parenting on placement change.
-5. Agent: per-guest delegated-identity subscription manager.
+5. Agent: per-guest delegated-identity subscription manager — passing
+   `expecting:` so a subscription can only ever yield its own guest's identity,
+   and deduping re-sends across reconnects.
 6. Agent: minimal Workload API server, one identity per connection.
 7. Sandbox guest control protocol v4 identity channel + in-guest forwarder.
 8. QEMU `vhost-vsock-pci` with per-VM CID allocation.
@@ -554,3 +609,10 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
 10. Fork/clone identity safety.
 11. Audit events and metrics for guest identity issuance and refusal.
 12. Operator documentation.
+
+**Blocking item 0**, which has no issue yet because it is a choice rather than a
+task: resolve [the placement prerequisite](#the-placement-prerequisite) — either
+org-scoped placement (hierarchy overhaul phase 2) as a hard dependency, or one
+spire-agent per organization per node. Items 1 and 5 are shaped differently
+depending on which. Everything else, including the whole delivery path, is
+independent of it.

@@ -49,8 +49,15 @@ public enum DelegatedIdentityProbe {
         case ok
         /// SPIRE refused this process as a delegate.
         case refused
-        /// The admin socket is absent or unreachable.
+        /// The admin socket is absent, or present but unreachable. The verdict
+        /// distinguishes the two from `Report.socketPresent`, because telling an
+        /// operator `admin_socket_path` is unconfigured while the report's own
+        /// second line says the socket is present is worse than saying nothing.
         case unavailable
+        /// The API did not answer within the caller's deadline. Distinct from
+        /// `unavailable` because a socket that accepts a connection and then
+        /// says nothing is a different problem from one that isn't there.
+        case timedOut
         /// SPIRE answered, and no registration entry matched the selectors.
         /// A normal answer from this API, and never a success.
         case noEntryMatched
@@ -167,7 +174,7 @@ public enum DelegatedIdentityProbe {
 
     private static func outcome(for error: SPIFFEError) -> Outcome {
         switch error {
-        case .delegateNotAuthorized: return .refused
+        case .delegateNotAuthorized, .unexpectedDelegatedIdentity: return .refused
         case .workloadAPIUnavailable: return .unavailable
         default: return .failed
         }
@@ -231,10 +238,20 @@ public enum DelegatedIdentityProbe {
             return
                 "DELEGATED IDENTITY REFUSED — this agent's SPIFFE ID is not in authorized_delegates "
                 + "in the agent { } block of /etc/spire/agent.conf"
+        case .unavailable where report.socketPresent:
+            // Don't tell an operator the socket is unconfigured two lines under
+            // a report saying it is present.
+            return
+                "DELEGATED IDENTITY UNAVAILABLE — the admin socket exists but the Delegated Identity API "
+                + "did not answer; check that spire-agent is running and has finished attesting"
         case .unavailable:
             return
                 "DELEGATED IDENTITY UNAVAILABLE — admin_socket_path is not configured on this node's "
                 + "spire-agent (it must not live under the Workload API socket's directory)"
+        case .timedOut:
+            return
+                "DELEGATED IDENTITY TIMED OUT — the admin socket accepted the call but sent no response "
+                + "in time; raise --timeout, or check spire-agent's logs for a stalled attestation"
         case .noEntryMatched:
             return
                 "NO ENTRY MATCHED — no registration entry with these selectors has synced to this node; "

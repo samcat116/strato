@@ -68,6 +68,18 @@ public struct DelegatedX509SVID: Sendable, Equatable {
     /// Bare names of the trust domains this SVID's registration entry federates
     /// with. Unlike the Workload API, the delegated stream sends names only —
     /// the roots themselves must be looked up in the bundle stream.
+    ///
+    /// **Empty whenever the response carried more than one SVID.**
+    /// `SubscribeToX509SVIDsResponse.federates_with` is a single flat list for
+    /// the whole response, not a field on each SVID, so when several entries
+    /// match a subscription it is the *union* of their federation sets and
+    /// cannot be attributed to any one of them. Copying that union onto each
+    /// SVID would let `withBundles(_:)` install foreign roots for an entry that
+    /// never federated with that domain — the same cross-domain confusion
+    /// `X509SVID.roots(forTrustDomain:)` exists to prevent, one layer up. So an
+    /// ambiguous response drops federation rather than guessing: a federated
+    /// peer then fails to verify loudly instead of the wrong CA quietly
+    /// succeeding. Pass `expecting:` to make the ambiguity impossible.
     public let federatesWith: [String]
 
     /// Expiry, read from the leaf certificate.
@@ -219,7 +231,18 @@ public actor DelegatedIdentitySPIFFEClient {
     /// > Warning: SPIRE matches an entry when the entry's selectors are a
     /// > **subset** of the requested set, so requesting more selectors matches
     /// > more entries. Pass a guest's exact selector set — never a superset.
-    public func fetchX509SVIDs(selectors: [DelegatedSelector]) async throws -> [DelegatedX509SVID] {
+    ///
+    /// - Parameter expecting: the one identity this subscription is for. When
+    ///   set, a response naming anything else is refused wholesale rather than
+    ///   filtered, because a foreign identity in the answer means the entry's
+    ///   selectors are wrong and the "good half" was never verified to be good.
+    ///   Callers serving a guest one identity per connection should always pass
+    ///   it; the probe passes nil because discovering what a selector set
+    ///   actually matches is the question it exists to answer.
+    public func fetchX509SVIDs(
+        selectors: [DelegatedSelector],
+        expecting: SPIFFEIdentity? = nil
+    ) async throws -> [DelegatedX509SVID] {
         logger.debug(
             "Fetching delegated X.509 SVIDs",
             metadata: [
@@ -242,13 +265,15 @@ public actor DelegatedIdentitySPIFFEClient {
                 // A long-lived subscription whose first message carries the
                 // current set. Convert it and drop the stream.
                 for try await message in response.messages {
-                    return try DelegatedIdentityConversion.makeSVIDs(from: message)
+                    return try DelegatedIdentityConversion.makeSVIDs(
+                        from: message, expecting: expecting)
                 }
                 throw SPIFFEError.workloadAPIUnavailable(
                     "Delegated Identity stream ended without delivering a response")
             }
         }
 
+        warnIfAmbiguous(svids)
         logger.info(
             "Fetched delegated X.509 SVIDs",
             metadata: [
@@ -259,6 +284,20 @@ public actor DelegatedIdentitySPIFFEClient {
         return svids
     }
 
+    /// More than one SVID means the requested selectors matched more than one
+    /// entry, which the design forbids (every guest entry must carry a unique
+    /// `strato:instance:<uuid>` selector). The node cannot verify that rule when
+    /// the control plane writes the entries, so say so loudly instead.
+    private func warnIfAmbiguous(_ svids: [DelegatedX509SVID]) {
+        guard svids.count > 1 else { return }
+        logger.warning(
+            "Delegated subscription matched more than one entry; federation is unattributable and has been dropped",
+            metadata: [
+                "count": .string("\(svids.count)"),
+                "spiffeIDs": .string(svids.map(\.spiffeID.uri).joined(separator: " ")),
+            ])
+    }
+
     /// Every update SPIRE pushes for `selectors`, for as long as the consumer
     /// keeps the stream.
     ///
@@ -266,12 +305,26 @@ public actor DelegatedIdentitySPIFFEClient {
     /// **empty** set, which arrives here as `[]` rather than as the stream
     /// ending. A consumer must treat that as "tear this identity down now"
     /// instead of waiting for the SVID's TTL to run out.
+    ///
+    /// > Important: not every yield is a change. When the underlying stream ends
+    /// > normally — a spire-agent restart or config reload — this re-dials after
+    /// > `watchRetryDelay` and SPIRE re-sends the current set, so the same SVID
+    /// > is yielded again. That is harmless for a one-shot probe, but a consumer
+    /// > forwarding to guests must dedupe by (SPIFFE ID, certificate serial) or
+    /// > it will push a spurious rotation to every guest on the node each time
+    /// > the local SPIRE agent restarts.
+    ///
+    /// - Parameter expecting: as `fetchX509SVIDs(selectors:expecting:)`. A
+    ///   response naming another identity ends the watch rather than yielding,
+    ///   since re-dialing would only produce the same wrong answer.
     nonisolated public func watchX509SVIDs(
-        selectors: [DelegatedSelector]
+        selectors: [DelegatedSelector],
+        expecting: SPIFFEIdentity? = nil
     ) -> AsyncStream<[DelegatedX509SVID]> {
         AsyncStream { continuation in
             let task = Task {
-                await self.runWatch(selectors: selectors, continuation: continuation)
+                await self.runWatch(
+                    selectors: selectors, expecting: expecting, continuation: continuation)
             }
             continuation.onTermination = { _ in
                 task.cancel()
@@ -305,10 +358,13 @@ public actor DelegatedIdentitySPIFFEClient {
         }
     }
 
+    /// A no-op, kept so callers can be written the same way as against
+    /// `WorkloadAPISPIFFEClient`. Fetches and watches use per-call scoped
+    /// connections torn down when their task ends (watches via stream
+    /// termination), so there is nothing here to release — hence `debug` and
+    /// wording that does not imply a teardown happened.
     public func close() async {
-        // Fetches and watches use per-call scoped connections torn down when
-        // their task ends, so there is no persistent state to release.
-        logger.info("Delegated Identity client closed")
+        logger.debug("Delegated Identity client close() called (no connection state to release)")
     }
 
     // MARK: - Private
@@ -332,6 +388,7 @@ public actor DelegatedIdentitySPIFFEClient {
 
     private func runWatch(
         selectors: [DelegatedSelector],
+        expecting: SPIFFEIdentity?,
         continuation: AsyncStream<[DelegatedX509SVID]>.Continuation
     ) async {
         while !Task.isCancelled {
@@ -349,7 +406,9 @@ public actor DelegatedIdentitySPIFFEClient {
                         options: .defaults
                     ) { response in
                         for try await message in response.messages {
-                            let svids = try DelegatedIdentityConversion.makeSVIDs(from: message)
+                            let svids = try DelegatedIdentityConversion.makeSVIDs(
+                                from: message, expecting: expecting)
+                            await self.warnIfAmbiguous(svids)
                             self.logger.info(
                                 "Received delegated SVID update",
                                 metadata: [
@@ -363,10 +422,16 @@ public actor DelegatedIdentitySPIFFEClient {
                 }
                 logger.warning("Delegated Identity stream ended; reconnecting")
             } catch let error as SPIFFEError {
-                // A refused delegate will be refused again on every re-dial.
-                // Surfacing it once and stopping beats a silent retry loop that
-                // looks like "no entry matched" to whoever is watching.
+                // A refused delegate will be refused again on every re-dial, and
+                // so will a subscription whose selectors name someone else's
+                // identity. Surfacing either once and stopping beats a silent
+                // retry loop that looks like "no entry matched" to whoever is
+                // watching.
                 if case .delegateNotAuthorized = error {
+                    logger.error("Delegated Identity stream refused: \(error.localizedDescription)")
+                    break
+                }
+                if case .unexpectedDelegatedIdentity = error {
                     logger.error("Delegated Identity stream refused: \(error.localizedDescription)")
                     break
                 }
@@ -426,14 +491,21 @@ public actor DelegatedIdentitySPIFFEClient {
 ///    stream.
 /// 4. `ca_certificates` keys need normalizing — see `makeTrustBundles`.
 enum DelegatedIdentityConversion {
+    /// - Parameter expecting: when set, the response must name this identity and
+    ///   nothing else. See `DelegatedIdentitySPIFFEClient.fetchX509SVIDs`.
     static func makeSVIDs(
-        from response: Spire_Api_Agent_Delegatedidentity_V1_SubscribeToX509SVIDsResponse
+        from response: Spire_Api_Agent_Delegatedidentity_V1_SubscribeToX509SVIDsResponse,
+        expecting: SPIFFEIdentity? = nil
     ) throws -> [DelegatedX509SVID] {
-        // `federates_with` lives on the response, not on each SVID, matching
-        // how the Workload API reports federated bundles once per response.
-        let federatesWith = response.federatesWith
+        // `federates_with` is one flat list for the whole *response*, not a
+        // field on each SVID, so it is only attributable when exactly one SVID
+        // came back. With several it is their union, and copying a union onto
+        // each SVID would widen the set of CAs allowed to vouch for that SVID's
+        // peers. Dropping it instead fails closed: a federated peer stops
+        // verifying, loudly, rather than the wrong CA quietly succeeding.
+        let federatesWith = response.x509Svids.count == 1 ? response.federatesWith : []
 
-        return try response.x509Svids.map { entry in
+        let svids = try response.x509Svids.map { entry in
             let proto = entry.x509Svid
 
             guard !proto.id.trustDomain.isEmpty else {
@@ -443,6 +515,15 @@ enum DelegatedIdentityConversion {
 
             guard let leafDER = proto.certChain.first else {
                 throw SPIFFEError.parseError("Delegated SVID contains no certificates")
+            }
+
+            // The chain is validated by a real X.509 parse below; the key gets
+            // no such check, so an absent one would otherwise sail through as a
+            // well-formed-looking PEM with an empty body — and the probe would
+            // report success alongside a 0-byte key.
+            guard !entry.x509SvidKey.isEmpty else {
+                throw SPIFFEError.parseError(
+                    "Delegated SVID for \(spiffeID.uri) carries no private key")
             }
 
             // The leaf determines the SVID's lifetime, and thus rotation
@@ -468,6 +549,21 @@ enum DelegatedIdentityConversion {
                 hint: proto.hint.isEmpty ? nil : proto.hint
             )
         }
+
+        if let expecting {
+            // Refuse the whole response rather than filtering to the expected
+            // identity: a foreign SVID in the answer means the subscription's
+            // selectors match an entry they should not, and the remainder was
+            // never verified to be the right remainder. An empty set is still
+            // fine — that is revocation.
+            let unexpected = svids.map(\.spiffeID).filter { $0 != expecting }
+            guard unexpected.isEmpty else {
+                throw SPIFFEError.unexpectedDelegatedIdentity(
+                    expected: expecting.uri, received: unexpected.map(\.uri))
+            }
+        }
+
+        return svids
     }
 
     /// Trust bundles keyed by **bare** trust domain name (`strato.local`), so a
