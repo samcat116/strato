@@ -1,0 +1,26 @@
+docs/architecture/networking.md
+  s_08f323ac086b1c::t_16cca52e4a102d 173-175
+docs/architecture/frontend.md
+  s_08f323ac086b1c::t_9348f934ce116a 154-157
+docs/deployment/docker-compose.md
+  s_08f323ac086b1c::t_9f52b0877728cb 67-69
+docs/debugging/webauthn.md
+  s_08f323ac086b1c::t_c364c58c3ef27d 45,48,51-55
+  s_08f323ac086b1c::t_228d790f584fc1 56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3f269a7cd236996c282da0dbb416eeb66424477f",
+  "prompts": {},
+  "sessions": {
+    "s_08f323ac086b1c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5dbc5171-f32e-4ebd-85f0-e761a26355ec",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
