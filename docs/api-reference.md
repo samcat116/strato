@@ -43,6 +43,29 @@ desired-state change plus a `ResourceOperation` in one transaction and return
 until `status` is terminal (`succeeded` or `failed`). A second mutation on a
 resource that already has a pending operation is rejected with `409`.
 
+VM and sandbox responses also carry a **`conditions`** block, which answers the
+same question from the resource itself:
+
+```json
+"conditions": {
+  "converged": false,
+  "targetGeneration": 14,
+  "observedGeneration": 12,
+  "phase": "downloading image",
+  "degraded": { "reason": "image download failed", "sinceGeneration": 13 }
+}
+```
+
+`converged` is true once the owning agent has confirmed converging to
+`targetGeneration` *and* what it observes satisfies the desired state — the
+same test that succeeds a pending operation, so refetching the resource until
+`converged` is equivalent to polling the operation, and additionally reports
+*what* the agent is doing (`phase`) and *why* it last failed (`degraded`).
+`degraded` can name an older generation than `targetGeneration` while a retry
+is in flight. Nothing stores this block: it is derived on read from the
+resource's generation counters and the convergence progress its agent reports
+([ADR 0001](/adr/0001-declarative-agent-protocol)).
+
 Image and volume mutations are synchronous at the API layer: they return the
 resource immediately (often in a transitional status such as `pending` or
 `creating`) and converge in the background.

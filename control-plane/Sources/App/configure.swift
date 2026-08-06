@@ -741,6 +741,11 @@ public func configure(_ app: Application) async throws {
     // alive until the last one clears its token.
     app.migrations.add(AddFinalizersToWorkloads())
 
+    // STR-142: mirror the agent's reported convergence progress onto the VM
+    // and sandbox rows so the API can project a `conditions` block instead of
+    // making clients poll an operation to learn the same thing (ADR 0001).
+    app.migrations.add(AddConvergenceStateToWorkloads())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.

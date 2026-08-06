@@ -113,6 +113,21 @@ final class Sandbox: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    // Convergence progress mirrored from the agent's observed-state report,
+    // with the same contract as the VM's (STR-142): `convergencePhase` is
+    // non-nil only while the agent is actively converging toward a newer
+    // generation, and the error pair records the last failed attempt until a
+    // successful convergence clears it. Projected as the API's `conditions`
+    // block.
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
+    @OptionalField(key: "last_error")
+    var lastError: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
     /// Outstanding cleanup participants blocking this sandbox's removal
     /// (ADR 0001, stage 3) — the VM contract exactly. See `ResourceFinalizer`.
     @Field(key: "finalizers")
@@ -333,6 +348,9 @@ struct SandboxDetailResponse: Content {
     /// wire, so these groups enforce nothing. See
     /// `SandboxInterfaceSecurityGroup`.
     let securityGroupIds: [UUID]?
+    /// How far the sandbox is from the state the API was last asked to put it
+    /// in (STR-142) — same contract as the VM's; see `ResourceConditions`.
+    let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -361,6 +379,7 @@ struct SandboxDetailResponse: Content {
             .$securityGroupMemberships.value?
             .map { $0.$securityGroup.id }
             .sorted { $0.uuidString < $1.uuidString }
+        self.conditions = sandbox.conditions
         self.createdAt = sandbox.createdAt
         self.updatedAt = sandbox.updatedAt
     }
