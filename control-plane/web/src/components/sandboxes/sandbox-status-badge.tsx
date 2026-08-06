@@ -1,8 +1,9 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { pendingMutationLabels } from "@/lib/operation-labels";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
-import type { SandboxStatus, OperationKind } from "@/types/api";
+import type { SandboxStatus } from "@/types/api";
 
 const statusConfig: Record<SandboxStatus, { label: string; className: string }> =
   {
@@ -36,24 +37,6 @@ const statusConfig: Record<SandboxStatus, { label: string; className: string }> 
       className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
     },
   };
-
-// Labels for sandbox states that only exist as an in-flight operation (the
-// server keeps the sandbox's resting status until the agent confirms). Sandboxes
-// never pause/resume, but the map covers every OperationKind for exhaustiveness.
-const pendingMutationLabels: Record<OperationKind, string> = {
-  create: "Creating",
-  boot: "Starting",
-  shutdown: "Stopping",
-  reboot: "Restarting",
-  pause: "Pausing",
-  resume: "Resuming",
-  delete: "Deleting",
-  resize: "Resizing",
-  snapshot: "Snapshotting",
-  snapshot_delete: "Deleting snapshot",
-  restore: "Restoring",
-  snapshot_export: "Exporting snapshot",
-};
 
 export function SandboxStatusBadge({
   status,

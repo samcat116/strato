@@ -1,6 +1,7 @@
 // Sandbox API endpoints (backend issue #413).
 
 import { api } from "./client";
+import { buildLogQueryString } from "./logs";
 import type {
   Sandbox,
   CreateSandboxRequest,
@@ -98,15 +99,8 @@ export const sandboxesApi = {
     id: string,
     params?: SandboxLogsQueryParams
   ): Promise<SandboxLogEntry[]> {
-    const searchParams = new URLSearchParams();
-    if (params?.limit) searchParams.set("limit", String(params.limit));
-    if (params?.direction) searchParams.set("direction", params.direction);
-    if (params?.start) searchParams.set("start", String(params.start));
-    if (params?.end) searchParams.set("end", String(params.end));
-
-    const query = searchParams.toString();
     return api.get<SandboxLogEntry[]>(
-      `/api/sandboxes/${id}/logs${query ? `?${query}` : ""}`
+      `/api/sandboxes/${id}/logs${buildLogQueryString(params)}`
     );
   },
 };
