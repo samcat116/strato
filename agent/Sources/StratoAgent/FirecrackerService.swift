@@ -265,14 +265,31 @@ actor FirecrackerService: HypervisorService {
         logger.info("Deleting Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Destroy the VM through the client (network attachments are torn down
-        // by the agent's NetworkOrchestrator after this returns)
-        if let client = firecrackerClient {
-            try await client.destroyVM(vmId: vmId)
+        // by the agent's NetworkOrchestrator after this returns).
+        //
+        // No client means this service has never created or adopted anything:
+        // the Agent injects a shared one, and `createVM` builds it lazily
+        // before it can materialize a rootfs. So there is no process to stop
+        // and nothing of this VM's on disk — and in particular the removal
+        // below must not run without a preceding teardown, since it would
+        // unlink the rootfs of a VM that could still be executing it.
+        guard let client = firecrackerClient else {
+            logger.info("Firecracker VM had nothing to tear down", metadata: ["vmId": .string(vmId)])
+            return
         }
+        try await client.destroyVM(vmId: vmId)
 
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
+
+        // Remove the VM's directory, which holds the rootfs materialized at
+        // create. The client owns the API socket (in its own socket directory);
+        // everything else this driver wrote is under here. Same rule as the
+        // QEMU driver: one recursive removal rather than a list of files that
+        // a later addition can fall off (#969), reached only once `destroyVM`
+        // above has returned without throwing.
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
 
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
     }
