@@ -1,6 +1,7 @@
 // VM API endpoints
 
 import { api } from "./client";
+import { buildLogQueryString } from "./logs";
 import type {
   VM,
   CreateVMRequest,
@@ -117,15 +118,8 @@ export const vmsApi = {
   },
 
   getLogs(id: string, params?: VMLogsQueryParams): Promise<VMLogEntry[]> {
-    const searchParams = new URLSearchParams();
-    if (params?.limit) searchParams.set("limit", String(params.limit));
-    if (params?.direction) searchParams.set("direction", params.direction);
-    if (params?.start) searchParams.set("start", String(params.start));
-    if (params?.end) searchParams.set("end", String(params.end));
-
-    const query = searchParams.toString();
     return api.get<VMLogEntry[]>(
-      `/api/vms/${id}/logs${query ? `?${query}` : ""}`
+      `/api/vms/${id}/logs${buildLogQueryString(params)}`
     );
   },
 };

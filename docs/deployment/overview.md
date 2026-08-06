@@ -53,9 +53,10 @@ The first account is the exception: it can always be created, whatever the
 setting says. An installation with no users has no administrator who could
 invite anyone, so refusing there would lock everyone out permanently. As soon
 as that account exists the door closes again — meaning you can ship the setting
-disabled from day one and still complete first-run setup. To bootstrap without
-a browser at all, use the `bootstrap` command instead (see
-[Docker Compose](/deployment/docker-compose#without-a-browser-ci-automation)).
+disabled from day one and still complete first-run setup. To seed that account
+from a terminal instead, use `bootstrap --admin-email` (see
+[Docker Compose](/deployment/docker-compose#seeding-the-first-administrator-from-the-command-line)),
+which mints a claim link you open in a browser to register your passkey.
 
 Existing users are unaffected: this gates account creation only, not sign-in,
 invitations, SCIM provisioning, or SSO.
