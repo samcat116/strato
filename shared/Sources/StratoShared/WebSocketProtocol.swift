@@ -766,27 +766,24 @@ public struct VolumeCreateMessage: WebSocketMessage {
     }
 }
 
-/// Message to delete a volume from an agent. The agent owns volume path
-/// layout and derives the volume's location from its ID; `volumePath` is a
-/// legacy hint that new control planes no longer send, so deletion also
-/// cleans up volumes whose create failed before a path was ever recorded.
+/// Message to delete a volume from an agent. Carries no file path: the agent
+/// owns volume path layout and derives the volume's location from its ID, so
+/// deletion also cleans up volumes whose create failed before a path was ever
+/// recorded.
 public struct VolumeDeleteMessage: WebSocketMessage {
     public var type: MessageType { .volumeDelete }
     public let requestId: String
     public let timestamp: Date
     public let volumeId: String
-    public let volumePath: String?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String? = nil
+        volumeId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.volumeId = volumeId
-        self.volumePath = volumePath
     }
 }
 
@@ -869,8 +866,7 @@ public struct VolumeResizeMessage: WebSocketMessage {
 }
 
 /// Message to create a snapshot of a volume. The agent owns snapshot path
-/// layout and reports the resulting path back in the response; `snapshotPath`
-/// is a legacy hint that new control planes no longer send.
+/// layout and reports the resulting path back in the response.
 public struct VolumeSnapshotMessage: WebSocketMessage {
     public var type: MessageType { .volumeSnapshot }
     public let requestId: String
@@ -878,7 +874,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
     public let volumeId: String
     public let snapshotId: String
     public let volumePath: String
-    public let snapshotPath: String?
     /// The VM this volume is currently attached to, when the control plane
     /// knows it (`Volume.$vm`). Nil for a detached volume, or from an older
     /// control plane.
@@ -897,7 +892,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         volumeId: String,
         snapshotId: String,
         volumePath: String,
-        snapshotPath: String? = nil,
         attachedVMId: String? = nil
     ) {
         self.requestId = requestId
@@ -905,7 +899,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         self.volumeId = volumeId
         self.snapshotId = snapshotId
         self.volumePath = volumePath
-        self.snapshotPath = snapshotPath
         self.attachedVMId = attachedVMId
     }
 }
@@ -936,8 +929,7 @@ public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
 }
 
 /// Message to clone a volume. The agent owns volume path layout and reports
-/// the clone's path back in the response; `targetVolumePath` is a legacy hint
-/// that new control planes no longer send.
+/// the clone's path back in the response.
 public struct VolumeCloneMessage: WebSocketMessage {
     public var type: MessageType { .volumeClone }
     public let requestId: String
@@ -945,22 +937,19 @@ public struct VolumeCloneMessage: WebSocketMessage {
     public let sourceVolumeId: String
     public let sourceVolumePath: String
     public let targetVolumeId: String
-    public let targetVolumePath: String?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sourceVolumeId: String,
         sourceVolumePath: String,
-        targetVolumeId: String,
-        targetVolumePath: String? = nil
+        targetVolumeId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.sourceVolumeId = sourceVolumeId
         self.sourceVolumePath = sourceVolumePath
         self.targetVolumeId = targetVolumeId
-        self.targetVolumePath = targetVolumePath
     }
 }
 
