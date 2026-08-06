@@ -13,7 +13,7 @@ struct VMDirectoryLayoutTests {
     /// it: the boot disk and the cloud-init ISO that #969 leaked, alongside the
     /// sockets and state files the old file-by-file cleanup did know about.
     private func makeStorageRoot(vmId: String) throws -> String {
-        let root = NSTemporaryDirectory() + "/strato-vmdir-\(UUID().uuidString)"
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("strato-vmdir-\(UUID().uuidString)")
         let vmDir = root + "/" + vmId
         try FileManager.default.createDirectory(
             atPath: vmDir + "/tpm", withIntermediateDirectories: true)
@@ -46,6 +46,25 @@ struct VMDirectoryLayoutTests {
         VMDirectoryLayout.removeDirectory(vmStoragePath: root, vmId: vmId, logger: Self.logger)
 
         #expect(!FileManager.default.fileExists(atPath: root + "/" + vmId))
+    }
+
+    /// `fileExists` follows symlinks, so an existence pre-check reports a
+    /// dangling symlink absent and leaves it on disk forever. The removal
+    /// classifies the error instead, which unlinks the link itself.
+    @Test("a dangling symlink at the VM's path is unlinked, not mistaken for absence")
+    func removesDanglingSymlink() throws {
+        let vmId = UUID().uuidString
+        let root = try makeStorageRoot(vmId: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let link = root + "/" + vmId
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: root + "/gone")
+
+        VMDirectoryLayout.removeDirectory(vmStoragePath: root, vmId: vmId, logger: Self.logger)
+
+        // `attributesOfItem` does not traverse the link, so it sees the link
+        // itself — unlike `fileExists`, which is why this is asserted with it.
+        #expect((try? FileManager.default.attributesOfItem(atPath: link)) == nil)
     }
 
     /// The removal is recursive, so an id that escapes its own directory would

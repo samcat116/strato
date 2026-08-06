@@ -52,12 +52,22 @@ public enum VMDirectoryLayout {
             return
         }
 
+        // No `fileExists` pre-check: it follows symlinks, so a dangling
+        // symlink at this path would report absent and never be unlinked, and
+        // the removal itself already distinguishes "not there" from a real
+        // failure. An already-absent directory is a success — a delete can be
+        // replayed, and the reconciler is level-triggered.
         let directory = directory(vmStoragePath: vmStoragePath, vmId: vmId)
-        guard FileManager.default.fileExists(atPath: directory) else { return }
-
         do {
             try FileManager.default.removeItem(atPath: directory)
-            logger.debug("Removed VM directory", metadata: ["vmId": .string(vmId), "path": .string(directory)])
+            // At info, not debug: this is the only record that a VM's disk
+            // space was actually reclaimed, and its absence next to the error
+            // below is what tells an operator which deletes leaked.
+            logger.info("Removed VM directory", metadata: ["vmId": .string(vmId), "path": .string(directory)])
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError
+        {
+            logger.debug("VM directory already absent", metadata: ["vmId": .string(vmId)])
         } catch {
             logger.error(
                 "Failed to remove VM directory; its disk image and other artifacts are leaked on this host",

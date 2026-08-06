@@ -375,7 +375,7 @@ actor QEMUService: HypervisorService {
         // here is safe and idempotent: the TPM's state directory persists, so
         // the respawned guest sees the same TPM it had (issue #565).
         if vmSpecs[vmId]?.effectiveMachine.tpm == true, let swtpm {
-            let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+            let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
             try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
         }
         let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
@@ -518,7 +518,7 @@ actor QEMUService: HypervisorService {
         }
 
         // Compute the expected path deterministically
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let consoleSocketPath = (vmDir as NSString).appendingPathComponent("console.sock")
 
         // Check if the socket file exists (VM is running with console enabled)
@@ -544,7 +544,7 @@ actor QEMUService: HypervisorService {
         }
 
         // Compute the expected path deterministically
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let serialSocketPath = (vmDir as NSString).appendingPathComponent("serial.sock")
 
         // Check if the socket file exists (VM is running with serial enabled)
@@ -572,7 +572,7 @@ actor QEMUService: HypervisorService {
     /// it. The connect attempt is what settles that, and its failure is
     /// reported to the browser as a console that could not be opened.
     func getVNCSocketPath(vmId: String) -> String? {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let vncSocketPath = QEMUGraphicsDevice.socketPath(vmDirectory: vmDir)
 
         guard FileManager.default.fileExists(atPath: vncSocketPath) else {
@@ -701,7 +701,7 @@ actor QEMUService: HypervisorService {
 
     /// The deterministic QMP socket every VM exposes for re-adoption.
     static func adoptionSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qmp.sock")
     }
 
@@ -710,7 +710,7 @@ actor QEMUService: HypervisorService {
     /// The deterministic QEMU-guest-agent socket every VM exposes. Derived only
     /// from vmStoragePath+vmId, so it works for re-adopted VMs too.
     static func qgaSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qga.sock")
     }
 
@@ -959,7 +959,7 @@ actor QEMUService: HypervisorService {
     /// `qmp.sock`), so stats polling gets its own. Derived only from
     /// vmStoragePath+vmId, so it works for re-adopted VMs too.
     static func statsSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qmp-stats.sock")
     }
 
@@ -1412,7 +1412,7 @@ actor QEMUService: HypervisorService {
     /// VARS template on first boot and kept thereafter, so boot entries the
     /// guest writes — and Secure Boot keys it enrolls — survive a respawn.
     static func nvramPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("nvram.fd")
     }
 
@@ -1458,7 +1458,7 @@ actor QEMUService: HypervisorService {
         // The VM directory holds the NVRAM store, the TPM state, and every
         // socket below, so it must exist before any of them are resolved. It
         // usually already does (disk materialization created it).
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: vmDir) {
             do {
