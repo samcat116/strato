@@ -5219,10 +5219,40 @@ export interface components {
             graphicsConsole?: boolean;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+        };
+        /** @description How far a resource is from the state the API was last asked to put it in. Derived on read from the resource's own generation counters and the convergence progress its agent reports — polling this block is the supported alternative to polling the operation a mutation returned. */
+        ResourceConditions: {
+            /** @description Whether the owning agent has confirmed converging to `targetGeneration` *and* what it observes satisfies the desired state. Always false once a delete is in flight: a terminating resource is on its way out, not converging on anything, and it disappears when the last finalizer clears rather than settling. */
+            converged: boolean;
+            /**
+             * Format: int64
+             * @description The generation the resource is trying to reach — what the last mutation bumped it to.
+             */
+            targetGeneration: number;
+            /**
+             * Format: int64
+             * @description The newest generation the owning agent has confirmed converging to. 0 means no agent has ever confirmed this resource.
+             */
+            observedGeneration: number;
+            /** @description The agent's human-readable current step (e.g. "downloading image"), present only while it is actively working toward `targetGeneration`. Absent does not mean idle — an unplaced resource, or one whose agent is offline, reports no phase either. */
+            phase?: string;
+            /** @description The last convergence attempt that failed, or absent if the most recent attempt succeeded. Can be present alongside a newer `targetGeneration` while a retry is in flight. */
+            degraded?: components["schemas"]["DegradedCondition"];
+        };
+        /** @description Why a resource is not converging, and since when. */
+        DegradedCondition: {
+            /** @description The agent's error from the failed attempt, verbatim. */
+            reason: string;
+            /**
+             * Format: int64
+             * @description The generation whose convergence produced `reason`. Compare with `targetGeneration` to tell a failure of the state currently being pursued from one a newer mutation has already superseded.
+             */
+            sinceGeneration: number;
         };
         /**
          * @description The observed VM state (tolerant decoding; unknown values map to Unknown).
@@ -5330,6 +5360,7 @@ export interface components {
             exitCode?: number;
             /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Recorded but **not enforced** — sandbox NICs are still omitted from the agent sync entirely. */
             securityGroupIds?: string[];
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
