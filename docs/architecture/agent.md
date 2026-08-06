@@ -275,6 +275,27 @@ plane allocated static addressing — a v2 `network-config`). Guest bootstrap
 is deliberately per-backend: Firecracker VMs inject configuration through
 kernel args instead and do not use this path.
 
+The seed's `local-hostname` is the VM's **desired hostname**, taken from
+`DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside
+the spec. It must be the name the control plane publishes, because a VM's DNS
+zone is assembled from that same `VM.hostname` (see [dns](./dns.md)) — a seed
+that invented its own name would leave forward and reverse DNS naming a host
+that does not answer to it. The historical `vm-<id-prefix>` derivation survives
+only as the fallback for VMs that have no hostname at all (those predating the
+column, and control planes predating the metadata field); the agent also
+re-checks the label against the RFC 1123 rule before rendering it, since the
+value lands unquoted in a YAML document. An unusable label falls back too and
+logs a warning rather than failing the create — a guest with a wrong name beats
+a guest that will not boot — but a control plane that validated on write cannot
+produce one.
+
+The ISO is written once at create, so a later hostname change reaches the guest
+through the metadata service rather than this seed. That also bounds what
+fixing this repaired: **VMs created before it keep booting under their
+`vm-<prefix>` name until something re-runs `createVM` for them** — a recreate,
+or a migration, whose destination agent renders a fresh seed from current
+metadata. Existing DNS drift is not repaired in place.
+
 The `user-data` document has two shapes:
 
 - **No caller user data**: a single `#cloud-config` carrying Strato's
