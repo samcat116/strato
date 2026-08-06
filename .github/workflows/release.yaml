@@ -665,13 +665,37 @@ jobs:
           release/strato-agent --version
           release/strato --version
 
+          # Checksum for install.sh (and the agent update flow) to verify the
+          # download. Written with a bare filename, since install.sh verifies
+          # with `cd <dir> && sha256sum -c <asset>.sha256`.
+          checksum() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" > "$1.sha256"
+            else
+              shasum -a 256 "$1" > "$1.sha256"
+            fi
+          }
+
           tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent strato
-          # Checksum for install.sh to verify the download.
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
-          else
-            shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
-          fi
+          checksum ${{ matrix.asset_name }}.tar.gz
+
+          # CLI-only asset alongside the bundle (STR-45), for distribution
+          # channels that install onto a laptop — the Homebrew tap, `curl | sh`,
+          # a manual download — where dropping a Vapor server and a hypervisor
+          # node agent next to the CLI is wrong. Same stripped `strato` binary
+          # as the bundle; this is packaging only. The bundle keeps its name and
+          # contents because publish-agent-manifest and the agent self-update
+          # path depend on them.
+          #
+          # Derived from asset_name rather than carried as a second matrix field
+          # so the two names cannot drift: strato-linux-arm64 ->
+          # strato-cli-linux-arm64.
+          ASSET_NAME="${{ matrix.asset_name }}"
+          CLI_ASSET="strato-cli-${ASSET_NAME#strato-}"
+          tar czf "${CLI_ASSET}.tar.gz" -C release strato
+          checksum "${CLI_ASSET}.tar.gz"
+          # Handed to the upload step, which runs in its own shell.
+          echo "CLI_ASSET=$CLI_ASSET" >> "$GITHUB_ENV"
 
       # Raw REST upload rather than `gh release upload`: the static
       # self-hosted runner has no gh CLI, and curl exists everywhere. This
@@ -681,7 +705,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          for f in "${{ matrix.asset_name }}.tar.gz" "${{ matrix.asset_name }}.tar.gz.sha256"; do
+          # Exported to $GITHUB_ENV by the packaging step above; fail loudly
+          # rather than POSTing a file named ".tar.gz" if that ever stops
+          # happening.
+          : "${CLI_ASSET:?CLI_ASSET not set by the packaging step}"
+          for f in "${{ matrix.asset_name }}.tar.gz" "${{ matrix.asset_name }}.tar.gz.sha256" \
+                   "${CLI_ASSET}.tar.gz" "${CLI_ASSET}.tar.gz.sha256"; do
             case "$f" in
               *.sha256) ct="text/plain" ;;
               *) ct="application/gzip" ;;
@@ -708,7 +737,41 @@ jobs:
   publish-agent-manifest:
     runs-on: ubuntu-latest
     needs: build-swift-binaries
+    env:
+      # Combined bundle tarballs only. What keeps the CLI-only assets
+      # (strato-cli-<os>-<arch>.tar.gz, STR-45) out of the manifest — and out
+      # of agents' update path — is the `(linux|macos)` alternation anchored
+      # directly after `strato-`: `cli` is not an os, so those names never
+      # match and can never be parsed as os=cli. The arch alternation is
+      # likewise spelled out rather than left as a `[a-z0-9_]+` class, pinning
+      # the pattern to the platform vocabulary install.sh derives from `uname`
+      # so a differently-shaped future asset has to be added deliberately.
+      # Also excludes the strato-<version>-source.tar.gz archive.
+      BUNDLE_ASSET_PATTERN: '^strato-(linux|macos)-(x86_64|arm64)\.tar\.gz$'
     steps:
+      # Pin the selection down against a fixture rather than trusting the
+      # pattern by inspection: this is the one place a newly added release
+      # asset could quietly land in the manifest and be handed to agents as an
+      # update. Runs before the manifest build so a regression fails cheaply.
+      - name: Verify the asset pattern selects bundles only
+        run: |
+          selected="$(jq -rn '
+            ["strato-linux-x86_64.tar.gz",
+             "strato-linux-arm64.tar.gz",
+             "strato-macos-arm64.tar.gz",
+             "strato-cli-linux-x86_64.tar.gz",
+             "strato-cli-linux-arm64.tar.gz",
+             "strato-cli-macos-arm64.tar.gz",
+             "strato-1.2.3-source.tar.gz",
+             "agent-manifest.json",
+             "install.sh"]
+            | map(select(test($ENV.BUNDLE_ASSET_PATTERN))) | join(" ")')"
+          expected="strato-linux-x86_64.tar.gz strato-linux-arm64.tar.gz strato-macos-arm64.tar.gz"
+          [ "$selected" = "$expected" ] || {
+            echo "asset pattern regressed: selected [$selected], want [$expected]" >&2
+            exit 1
+          }
+
       - name: Build and upload agent-manifest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -717,15 +780,17 @@ jobs:
         run: |
           TAG="$GITHUB_REF_NAME"
 
-          # Binary tarballs only (strato-<os>-<arch>.tar.gz) — the pattern
-          # deliberately excludes the strato-<version>-source.tar.gz archive.
+          # Combined bundle tarballs only (strato-<os>-<arch>.tar.gz); see
+          # BUNDLE_ASSET_PATTERN above for what the pattern keeps out.
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
             --jq '.assets[]
-                  | select(.name | test("^strato-(linux|macos)-[a-z0-9_]+\\.tar\\.gz$"))
+                  | select(.name | test($ENV.BUNDLE_ASSET_PATTERN))
                   | [.name, .browser_download_url, (.size | tostring)] | @tsv' \
             > assets.tsv
           [ -s assets.tsv ] || { echo "no strato-<os>-<arch>.tar.gz assets on $TAG" >&2; exit 1; }
 
+          # Pulls the strato-cli-* sidecars too; harmless, since each entry
+          # below reads the one sidecar named for its asset.
           mkdir sidecars
           gh release download "$TAG" --pattern 'strato-*.tar.gz.sha256' --dir sidecars
 
