@@ -76,7 +76,11 @@ async-mutations section of [overview](./overview.md)). The frontend flow:
 2. `components/vms/mutation-watcher.tsx` — a singleton mounted in the
    dashboard layout so it survives navigation — refetches the resource every
    2s and reads its `conditions` against `targetGeneration`, then toasts the
-   outcome and invalidates the resource list for its `resourceKind`.
+   outcome and invalidates the resource list for its `resourceKind`. The poll
+   re-schedules itself rather than running on an interval, so passes over
+   several watched mutations cannot pile up, and a mutation is given up on only
+   after several consecutive read failures — one 502 from the proxy must not
+   silently kill the toast for a create the user is waiting on.
 
 Two things take a different path, and the watched entry says which
 (`source`) rather than the watcher guessing from the verb: the verbs that

@@ -434,12 +434,15 @@ struct ObservedStateApplier {
         // below is a *transition* out of this state, which is what makes the
         // completion webhook fire exactly once without a side-table row to
         // compare-and-swap on (STR-147): `observedGeneration` only moves
-        // forward, and the read and the write share this transaction.
+        // forward, and the write that closes the transition commits with the
+        // outbox row inside `recordSuccess`/`recordFailure`.
         //
         // `failedBefore` has to be captured here too, because `recordConvergence`
-        // below mirrors the agent's own `failedGeneration` onto the row — after
-        // which the row can no longer say whether *we* had already recorded the
-        // failure.
+        // below mirrors the agent's own `failedGeneration` onto the in-memory
+        // model — after which it can no longer say whether *we* had already
+        // recorded the failure. It must stay in memory until the transition
+        // call persists it: committing the mirror on its own would satisfy the
+        // guard with nothing recorded, and no later pass would re-enter.
         let wasConverged = vm.isConverged
         let failedBefore = vm.failedGeneration
 
@@ -519,23 +522,31 @@ struct ObservedStateApplier {
                 Telemetry.vmDriftDetected()
             }
         }
-        if changed {
-            try await vm.save(on: db)
-        }
-        if let transition = statusTransition {
-            await WebhookEvents.emitVMStateChanged(
-                vm: vm, previous: transition.previous, current: transition.current,
-                on: db, logger: app.logger)
-        }
-
         // Deletions are settled by absence from the report, never by a status.
-        if vm.desiredStatus == .absent { return }
+        //
+        // The save is deferred to the transition below where there is one:
+        // `recordSuccess`/`recordFailure` persist the model inside the same
+        // transaction as the outbox row, and this report's changes include the
+        // mirrored `failedGeneration` that would otherwise suppress every
+        // future pass if it committed alone.
+        let settlesConvergence =
+            vm.desiredStatus != .absent
+            && ((!wasConverged && vm.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == vm.generation))
+        if !settlesConvergence {
+            if changed {
+                try await vm.save(on: db)
+            }
+            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+            return
+        }
 
         if !wasConverged, vm.isConverged {
             // The agent converged to the current generation and the observed
             // status satisfies the desired one: everything outstanding reached
             // its goal.
             try await ResourceConvergence.recordSuccess(vm, on: db)
+            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
             // The agent tried to converge to *this* generation and failed —
             // the failedGeneration match is what distinguishes that from a
@@ -571,11 +582,31 @@ struct ObservedStateApplier {
             let recorded = try await ResourceConvergence.recordFailure(
                 vm, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+            if !recorded, changed {
+                // A repeat of an already-recorded failure: nothing was
+                // persisted by the call above, so this report's own changes
+                // (observed generation, status) still need writing.
+                try await vm.save(on: db)
+            }
+            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
             if recorded, enteredError {
                 await WebhookEvents.emitVMStateChanged(
                     vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
             }
         }
+    }
+
+    /// Emits `vm.state_changed` for an observed status transition, once the
+    /// write that produced it has committed. Best-effort by contract, so it is
+    /// deliberately outside the convergence transaction: a webhook that cannot
+    /// be enqueued must not roll back the observation it describes.
+    private func emitVMStatusTransition(
+        _ transition: (previous: VMStatus, current: VMStatus)?, vm: VM, on db: Database
+    ) async {
+        guard let transition else { return }
+        await WebhookEvents.emitVMStateChanged(
+            vm: vm, previous: transition.previous, current: transition.current,
+            on: db, logger: app.logger)
     }
 
     /// Persists a VM's observed guest-agent view (issue #563): the VM-level
@@ -842,12 +873,19 @@ struct ObservedStateApplier {
             sandbox.exitCode = observed.exitCode
             changed = true
         }
-        if changed {
-            try await sandbox.save(on: db)
-        }
-
         // Deletions are settled by absence from the report, never by a status.
-        if sandbox.desiredStatus == .absent { return }
+        // The save is deferred to the transition where there is one, for the
+        // reason the VM path defers it.
+        let settlesConvergence =
+            sandbox.desiredStatus != .absent
+            && ((!wasConverged && sandbox.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == sandbox.generation))
+        if !settlesConvergence {
+            if changed {
+                try await sandbox.save(on: db)
+            }
+            return
+        }
 
         if !wasConverged, sandbox.isConverged {
             try await ResourceConvergence.recordSuccess(sandbox, on: db)
@@ -863,9 +901,12 @@ struct ObservedStateApplier {
             if failedBefore != sandbox.generation, observed.status == .unknown {
                 sandbox.setStatus(.error)
             }
-            try await ResourceConvergence.recordFailure(
+            let recorded = try await ResourceConvergence.recordFailure(
                 sandbox, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+            if !recorded, changed {
+                try await sandbox.save(on: db)
+            }
         }
     }
 

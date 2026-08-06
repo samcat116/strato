@@ -82,6 +82,14 @@ struct ResourceMutation {
     /// unrecorded (nor be recorded without applying). `mutation` need not save
     /// the resource — this saves it once afterwards, which is also what
     /// persists the deadline.
+    ///
+    /// The transaction opens by locking the row and refreshing the columns the
+    /// reconciliation loop owns (`lockAndRefresh`). That is what replaces the
+    /// dropped `409` — not by refusing the second mutation, but by serializing
+    /// it: the caller's instance was loaded before the request and its `save`
+    /// writes the whole row, so without the refresh a racing mutation's
+    /// generation bump would be lost and a concurrent observed-state report's
+    /// `observedGeneration` would be written *backwards*.
     @discardableResult
     func accept<R: ConvergingResource>(
         _ kind: VMOperationKind,
@@ -94,6 +102,12 @@ struct ResourceMutation {
     ) async throws -> Accepted {
         let resourceID = try resource.requireID()
         let accepted = try await db.transaction { db in
+            guard try await resource.lockAndRefresh(on: db) else {
+                throw Abort(
+                    .notFound,
+                    reason: "This \(R.operationResourceKind.displayName) no longer exists")
+            }
+
             // Resolve the delivery/attribution scope before the mutation: the
             // organization lookup walks the hierarchy, and only the generation
             // moves under a mutation.
@@ -245,7 +259,21 @@ enum ResourceConvergence {
 
     /// Marks a resource degraded for `reason` and resolves the in-flight state
     /// the failed mutation left, saving the row and enqueuing the
-    /// `operation.failed` webhook.
+    /// `operation.failed` webhook **in one transaction**.
+    ///
+    /// The transaction is load-bearing, not hygiene. The save is what flips the
+    /// `failedGeneration == generation` guard below, and the enqueue is what
+    /// tells the user. Committing the first without the second would leave the
+    /// guard permanently satisfied — no later report and no sweep pass would
+    /// re-enter — so `resolveForStuckOperation` would never run, the
+    /// unachieved intent would never be abandoned, and it would replay on every
+    /// sync while the user was told nothing. Rolling both back instead costs a
+    /// retry.
+    ///
+    /// It also means the caller must not hold a transaction of its own: this
+    /// opens the outermost one, exactly as `ResourceOperation.completeIfPending`
+    /// does. Callers pass the pending row changes in on `resource` and let this
+    /// persist them.
     ///
     /// Idempotent by the `failedGeneration == generation` guard: a caller
     /// repeating an already-recorded failure — the agent restating the same
@@ -254,10 +282,10 @@ enum ResourceConvergence {
     ///
     /// `alreadyRecordedAt` is the failure generation the resource carried
     /// *before* the caller touched it, for the one caller that has already
-    /// mirrored the agent's own `failedGeneration` onto the row by this point
-    /// (`ObservedStateApplier`). Without it, that mirror would trip the guard
-    /// on the very first report of a failure and nothing would ever be
-    /// recorded. Everyone else leaves it nil and the guard reads the row.
+    /// mirrored the agent's own `failedGeneration` onto the in-memory model by
+    /// this point (`ObservedStateApplier`). Without it, that mirror would trip
+    /// the guard on the very first report of a failure and nothing would ever
+    /// be recorded. Everyone else leaves it nil and the guard reads the model.
     ///
     /// Note that the resolution *bumps the generation*: abandoning an
     /// unachieved intent is itself a desired-state change
@@ -283,31 +311,37 @@ enum ResourceConvergence {
         resource.failedGeneration = resource.generation
         resource.convergenceDeadline = nil
         resource.resolveForStuckOperation(mutation: mutation, telemetryReason: telemetryReason)
-        try await resource.save(on: db)
 
-        try await WebhookEvents.enqueueMutationOutcome(
-            for: resource, succeeded: false, error: reason, on: db)
+        try await db.transaction { tx in
+            try await resource.save(on: tx)
+            try await WebhookEvents.enqueueMutationOutcome(
+                for: resource, succeeded: false, error: reason, on: tx)
+        }
         return true
     }
 
-    /// Clears the convergence deadline and enqueues `operation.completed` for a
-    /// resource that has just converged. The caller has already established the
-    /// transition and saved everything else the report changed; this is the
-    /// bookkeeping that goes with it.
+    /// Persists a converged resource and enqueues `operation.completed`, in one
+    /// transaction for the reason `recordFailure` opens one: clearing the
+    /// deadline is what closes the transition, and committing that without the
+    /// outbox row loses the completion permanently — the next report sees a
+    /// resource that was already converged and never re-enters.
     ///
     /// A live deadline is what says a mutation was actually outstanding, and it
-    /// gates both effects. Without it, a resource that drifts *into* its
-    /// desired state on its own — a guest powering itself off while desired is
-    /// `shutdown` — would fire a completion webhook naming whichever mutation
-    /// happened to be the most recent, which is not what converged.
+    /// gates the *webhook*, not the save. Without that gate, a resource that
+    /// drifts into its desired state on its own — a guest powering itself off
+    /// while desired is `shutdown` — would fire a completion naming whichever
+    /// mutation happened to be the most recent, which is not what converged.
     static func recordSuccess<R: ConvergingResource>(
         _ resource: R, on db: any Database
     ) async throws {
-        guard resource.convergenceDeadline != nil else { return }
+        let wasOutstanding = resource.convergenceDeadline != nil
         resource.convergenceDeadline = nil
-        try await resource.save(on: db)
-        try await WebhookEvents.enqueueMutationOutcome(
-            for: resource, succeeded: true, error: nil, on: db)
+        try await db.transaction { tx in
+            try await resource.save(on: tx)
+            guard wasOutstanding else { return }
+            try await WebhookEvents.enqueueMutationOutcome(
+                for: resource, succeeded: true, error: nil, on: tx)
+        }
     }
 }
 

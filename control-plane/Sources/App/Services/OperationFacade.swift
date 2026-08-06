@@ -24,12 +24,44 @@ enum OperationFacade {
         let completedAt: Date?
     }
 
+    /// Everything the verdict rules read, resolved once per *resource* rather
+    /// than once per event. Both lookups are the same for every mutation on
+    /// one resource, and `history` returns up to a hundred of them.
+    struct ResourceView {
+        /// The resource's conditions, or nil once its row is gone.
+        let conditions: ResourceConditions?
+        /// The newest terminal event, if the deletion has been recorded.
+        let terminal: ResourceEvent?
+    }
+
+    static func view(
+        of kind: OperationResourceKind, id: UUID, on db: any Database
+    ) async throws -> ResourceView {
+        let conditions: ResourceConditions?
+        switch kind {
+        case .virtualMachine: conditions = try await VM.find(id, on: db)?.conditions
+        case .sandbox: conditions = try await Sandbox.find(id, on: db)?.conditions
+        }
+        // Only worth looking for once the resource is gone — the reap appends
+        // it as the row goes, so a live resource cannot have one.
+        let terminal =
+            conditions == nil
+            ? try await ResourceEvent.latest(.completed, resourceKind: kind, resourceID: id, on: db)
+            : nil
+        return ResourceView(conditions: conditions, terminal: terminal)
+    }
+
     /// Synthesizes the operation view of one recorded mutation.
     ///
     /// `event` must be a `.requested` row; terminal rows are the *evidence*
     /// this reads, not its subject.
     static func response(for event: ResourceEvent, on db: any Database) async throws -> OperationResponse {
-        let verdict = try await self.verdict(for: event, on: db)
+        let view = try await view(of: event.resourceKind, id: event.resourceID, on: db)
+        return response(for: event, in: view)
+    }
+
+    static func response(for event: ResourceEvent, in view: ResourceView) -> OperationResponse {
+        let verdict = self.verdict(for: event, in: view)
         return OperationResponse(
             id: event.id,
             resourceKind: event.resourceKind,
@@ -41,41 +73,47 @@ enum OperationFacade {
             completedAt: verdict.completedAt)
     }
 
-    /// The rules, in the order they are checked:
+    /// **Delete** is judged only by evidence that the resource is gone, never
+    /// by its conditions:
     ///
-    /// 1. **A delete with a terminal event** succeeded — the positive record
-    ///    the reap appends, and the only honest answer once the resource is
-    ///    gone, since `404` on the resource means deleted, never-existed and
-    ///    not-authorized alike.
-    /// 2. **A delete whose resource is gone with no terminal event** also
-    ///    succeeded. The fallback covers rows removed by a path that predates
-    ///    the terminal event (a delete in flight across the deploy that added
-    ///    it) or one that bypasses the reap entirely, and is still a two-part
-    ///    positive signal: the request is recorded and the resource is provably
-    ///    absent. It reports no `completedAt`, which is the honest thing to say
-    ///    about a completion nothing recorded.
-    /// 3. **A failure at this generation** — the resource's `degraded` block
-    ///    naming exactly the generation this mutation targeted.
-    /// 4. **Convergence at or past this generation** succeeded, whether by the
-    ///    agent reaching it or by a later mutation superseding it. A mutation
-    ///    the reconciler has moved past is not left `pending` forever.
-    /// 5. Anything else is still `pending`.
-    static func verdict(for event: ResourceEvent, on db: any Database) async throws -> Verdict {
+    /// * a terminal event recorded after the request → `succeeded`, dated by
+    ///   that row;
+    /// * no terminal event but no resource either → `succeeded` undated. The
+    ///   fallback covers rows removed by a path that bypasses the reap (a
+    ///   delete in flight across the deploy that added the terminal event, a
+    ///   cascade), and is still a two-part positive signal;
+    /// * otherwise `pending`, **including past the convergence deadline**.
+    ///
+    /// That last clause is deliberate. A delete that misses its budget is
+    /// usually slow — a large disk, a finalizer participant waiting on a
+    /// detach — not doomed, and the resource's `degraded` block would flip the
+    /// verdict to `failed` only for the reap to flip it back to `succeeded` a
+    /// minute later. Telling a user their delete failed and then deleting the
+    /// resource anyway is the worst available answer, so the deadline informs
+    /// the *resource* (where an operator can see why it is slow) and never the
+    /// delete's own verdict.
+    ///
+    /// Every other mutation is judged from the resource:
+    ///
+    /// * `degraded` naming exactly the generation this mutation targeted →
+    ///   `failed`;
+    /// * convergence at or past that generation → `succeeded`, whether the
+    ///   agent reached it or a later mutation superseded it, so a mutation the
+    ///   reconciler has moved past is not left `pending` forever;
+    /// * a resource that vanished under a non-delete → `failed`;
+    /// * anything else → `pending`.
+    static func verdict(for event: ResourceEvent, in view: ResourceView) -> Verdict {
         if event.mutation == .delete {
-            if let terminal = try await terminalEvent(for: event, on: db) {
+            if let terminal = view.terminal, isAfter(terminal, event) {
                 return Verdict(status: .succeeded, error: nil, completedAt: terminal.createdAt)
             }
-            if try await !resourceExists(kind: event.resourceKind, id: event.resourceID, on: db) {
+            if view.conditions == nil {
                 return Verdict(status: .succeeded, error: nil, completedAt: nil)
             }
+            return Verdict(status: .pending, error: nil, completedAt: nil)
         }
 
-        guard
-            let conditions = try await conditions(
-                kind: event.resourceKind, id: event.resourceID, on: db)
-        else {
-            // Gone, and not a delete: whatever this mutation was doing, the
-            // resource it was doing it to no longer exists.
+        guard let conditions = view.conditions else {
             return Verdict(
                 status: .failed, error: "The resource was removed before the mutation converged",
                 completedAt: nil)
@@ -89,50 +127,23 @@ enum OperationFacade {
         if let degraded = conditions.degraded, degraded.sinceGeneration == target {
             return Verdict(status: .failed, error: degraded.reason, completedAt: nil)
         }
-        if conditions.observedGeneration >= target {
-            // Superseded mutations count as succeeded: their generation was
-            // reached, and the newer one owns whatever happens next.
-            if conditions.converged || conditions.targetGeneration > target {
-                return Verdict(status: .succeeded, error: nil, completedAt: nil)
-            }
+        if conditions.observedGeneration >= target,
+            conditions.converged || conditions.targetGeneration > target
+        {
+            return Verdict(status: .succeeded, error: nil, completedAt: nil)
         }
         return Verdict(status: .pending, error: nil, completedAt: nil)
     }
 
-    /// The newest terminal event recorded after `event` was requested. Scoped
-    /// by time so a resource id reused by a later create — which cannot happen
-    /// today, but costs one comparison to rule out — cannot answer an older
-    /// request.
-    private static func terminalEvent(
-        for event: ResourceEvent, on db: any Database
-    ) async throws -> ResourceEvent? {
-        guard
-            let terminal = try await ResourceEvent.latest(
-                .completed, resourceKind: event.resourceKind, resourceID: event.resourceID, on: db)
-        else { return nil }
-        guard let requestedAt = event.createdAt, let completedAt = terminal.createdAt else {
-            return terminal
+    /// Whether a terminal event was recorded after the request it would settle.
+    /// Scoped by time so a resource id reused by a later create — which cannot
+    /// happen today, but costs one comparison to rule out — cannot answer an
+    /// older request.
+    private static func isAfter(_ terminal: ResourceEvent, _ request: ResourceEvent) -> Bool {
+        guard let requestedAt = request.createdAt, let completedAt = terminal.createdAt else {
+            return true
         }
-        return completedAt >= requestedAt ? terminal : nil
-    }
-
-    private static func resourceExists(
-        kind: OperationResourceKind, id: UUID, on db: any Database
-    ) async throws -> Bool {
-        switch kind {
-        case .virtualMachine: return try await VM.find(id, on: db) != nil
-        case .sandbox: return try await Sandbox.find(id, on: db) != nil
-        }
-    }
-
-    /// The resource's conditions block, or nil if the row is gone.
-    private static func conditions(
-        kind: OperationResourceKind, id: UUID, on db: any Database
-    ) async throws -> ResourceConditions? {
-        switch kind {
-        case .virtualMachine: return try await VM.find(id, on: db)?.conditions
-        case .sandbox: return try await Sandbox.find(id, on: db)?.conditions
-        }
+        return completedAt >= requestedAt
     }
 
     /// One resource's operation history, newest first: the mutations recorded
@@ -144,6 +155,11 @@ enum OperationFacade {
     /// record of *that*. Deliberately over-fetches `limit` from each side
     /// before the merge — the alternative is a `UNION` across two tables with
     /// different shapes for a list that is capped at 100 rows.
+    ///
+    /// Every event here names the same resource, so the view the verdicts read
+    /// is resolved once rather than per event: this is a list endpoint, and a
+    /// point query per row is exactly the shape that turns one request into a
+    /// hundred.
     static func history(
         resourceKind: OperationResourceKind,
         resourceID: UUID,
@@ -162,8 +178,9 @@ enum OperationFacade {
             .all()
 
         var responses = operations.map { OperationResponse(from: $0) }
-        for event in events {
-            responses.append(try await response(for: event, on: db))
+        if !events.isEmpty {
+            let view = try await view(of: resourceKind, id: resourceID, on: db)
+            responses += events.map { response(for: $0, in: view) }
         }
         return
             responses

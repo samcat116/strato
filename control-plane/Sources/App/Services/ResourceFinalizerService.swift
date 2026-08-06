@@ -183,7 +183,7 @@ enum ResourceFinalizerService {
                 generation: request?.targetGeneration),
             on: tx)
 
-        try await WebhookEvents.enqueueDeletionCompleted(terminal, on: tx)
+        try await WebhookEvents.enqueueDeletionCompleted(terminal, requestID: request?.id, on: tx)
     }
 
     /// Claims the right to reap `id` inside `tx`, returning false when another

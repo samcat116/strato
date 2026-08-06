@@ -1123,10 +1123,10 @@ actor AgentService {
             // out, not converging on anything — so a stuck delete falls through
             // and degrades, which is what a delete blocked on a finalizer
             // should look like.
-            guard !resource.isConverged else {
-                try await resource.save(on: db)
-                continue
-            }
+            // Nothing to save: the claim already cleared the deadline in SQL,
+            // and writing the whole row from a model read before the claim
+            // would put this sweep's stale snapshot over a concurrent report.
+            guard !resource.isConverged else { continue }
 
             // The mutation kind is read for one thing — whether a never-settled
             // `create` should escalate to `.error` — and comes from the audit

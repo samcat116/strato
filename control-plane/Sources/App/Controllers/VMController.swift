@@ -851,14 +851,14 @@ struct VMController: RouteCollection {
             // pending" mutex was actually load-bearing for (STR-147): the
             // sizing above was read before the transaction, so two concurrent
             // resizes would each charge quota for the same delta and the
-            // project would be under-counted by one of them. `FOR UPDATE`
-            // serializes them for the rest of this transaction, and the loser
-            // re-reads the winner's committed sizing — which is what makes the
-            // delta right rather than merely refused.
-            let locked = try await Self.lockVMSizing(existingVMID, on: db)
+            // project would be under-counted by one of them. `accept` already
+            // holds this row's lock, so the read below sees the winner's
+            // committed sizing — which is what makes the delta right rather
+            // than merely refused.
+            let committed = try await Self.committedVMSizing(existingVMID, on: db)
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
-                vcpuDelta: newCPU - locked.cpu, memoryDelta: newMemory - locked.memory, on: db)
+                vcpuDelta: newCPU - committed.cpu, memoryDelta: newMemory - committed.memory, on: db)
             existingVM.cpu = newCPU
             existingVM.memory = newMemory
             // Deliberately not a quota movement: ballooning reclaims memory
@@ -867,35 +867,39 @@ struct VMController: RouteCollection {
             // target is cleared.
             existingVM.balloonTarget = newBalloonTarget
             // Desired status is unchanged — this is a spec change — but the
-            // generation must still advance for the agent to apply it. Taken
-            // from the locked row, not the pre-transaction read, so the loser
-            // of a race lands on a generation strictly above the winner's
-            // rather than reusing it.
-            existingVM.generation = locked.generation + 1
+            // generation must still advance for the agent to apply it. The
+            // generation it builds on came from `accept`'s refresh, so the
+            // loser of a race lands strictly above the winner rather than
+            // reusing its number.
+            existingVM.bumpGeneration()
         }
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
     }
 
-    /// The VM's committed sizing and generation, read under a row lock held for
-    /// the rest of the caller's transaction.
-    private static func lockVMSizing(_ id: UUID, on db: any Database) async throws -> LockedVMSizing {
+    /// The VM's committed sizing, read inside the mutation transaction — where
+    /// `ResourceMutation.accept` already holds the row lock, so this sees what
+    /// a racing resize committed rather than the request's own stale snapshot.
+    ///
+    /// Read here rather than adopted by `accept`'s refresh because `cpu` and
+    /// `memory` are *mutation*-owned columns: the refresh deliberately leaves
+    /// them alone so this request's new sizing is not overwritten by the old.
+    private static func committedVMSizing(_ id: UUID, on db: any Database) async throws -> CommittedVMSizing {
         guard let sql = db as? any SQLDatabase else {
             throw Abort(.internalServerError, reason: "Resizing a VM requires an SQL database")
         }
         guard
             let row = try await sql.raw(
-                "SELECT cpu, memory, generation FROM vms WHERE id = \(bind: id) FOR UPDATE"
-            ).first(decoding: LockedVMSizing.self)
+                "SELECT cpu, memory FROM vms WHERE id = \(bind: id)"
+            ).first(decoding: CommittedVMSizing.self)
         else {
             throw Abort(.notFound, reason: "VM no longer exists")
         }
         return row
     }
 
-    private struct LockedVMSizing: Decodable {
+    private struct CommittedVMSizing: Decodable {
         let cpu: Int
         let memory: Int64
-        let generation: Int64
     }
 
     /// Upper bound on a VM's vCPU count, and so on the hotplug slots QEMU is
@@ -937,7 +941,13 @@ struct VMController: RouteCollection {
         try await detail(for: vm, on: req).encodeResponse(for: req)
     }
 
-    private static func detail(for vm: VM, on req: Request) async throws -> VMDetailResponse {
+    /// - Parameter resolvingEnforcement: whether to ask whether the VM's
+    ///   security groups are actually enforced. That answer costs its own
+    ///   queries and means nothing for a VM being torn down, so the delete path
+    ///   skips it and reports `nil` — "unknown", which is the truth there.
+    private static func detail(
+        for vm: VM, on req: Request, resolvingEnforcement: Bool = true
+    ) async throws -> VMDetailResponse {
         try await vm.$networkInterfaces.load(on: req.db)
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
@@ -946,7 +956,8 @@ struct VMController: RouteCollection {
         }
         return try await VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
+            securityGroupsEnforced: resolvingEnforcement
+                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -957,9 +968,12 @@ struct VMController: RouteCollection {
     /// or started a VM re-renders from this and only then starts polling, which
     /// is one fewer round trip than the operation object ever gave it.
     private static func acceptedResponse(
-        for vm: VM, _ accepted: ResourceMutation.Accepted, on req: Request
+        for vm: VM, _ accepted: ResourceMutation.Accepted, on req: Request,
+        resolvingEnforcement: Bool = true
     ) async throws -> Response {
-        try await AcceptedMutation(detail(for: vm, on: req), accepted).acceptedResponse()
+        try await AcceptedMutation(
+            detail(for: vm, on: req, resolvingEnforcement: resolvingEnforcement), accepted
+        ).acceptedResponse()
     }
 
     func delete(req: Request) async throws -> Response {
@@ -1030,7 +1044,11 @@ struct VMController: RouteCollection {
             ResourceFinalizerService.stampForDeletion(vm)
             vm.setDesiredStatus(.absent)
         }
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        // The delete path skips the enforcement lookup: a client follows a
+        // delete through the operations façade with `mutationId`, so nothing
+        // reads this body beyond the id, and the VM may already be reaped.
+        return try await Self.acceptedResponse(
+            for: vm, accepted, on: req, resolvingEnforcement: false)
     }
 
     func pause(req: Request) async throws -> Response {

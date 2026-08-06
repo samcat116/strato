@@ -682,6 +682,48 @@ final class VMOperationTests {
         }
     }
 
+    @Test("A delete that misses its deadline stays pending, then succeeds")
+    func facadeNeverReportsASlowDeleteAsFailed() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let vmID = try vm.requireID()
+            ResourceFinalizerService.stampForDeletion(vm)
+            vm.setDesiredStatus(.absent)
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            let eventID = try event.requireID()
+
+            // The teardown outran its budget — a large disk, or a finalizer
+            // participant waiting on something — so the sweep degrades the VM.
+            await app.agentService.sweepStuckConvergence()
+            let degraded = try #require(try await VM.find(vmID, on: app.db))
+            #expect(degraded.conditions.degraded != nil)
+
+            // The *resource* carries that reason for an operator, but the
+            // delete's own verdict must not read `failed`: the teardown is slow,
+            // not doomed, and telling a user their delete failed moments before
+            // the resource disappears is the worst available answer.
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .pending)
+            }
+
+            // The agent finally confirms absence.
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: degraded, on: app.db, app: app)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .succeeded)
+                #expect(operation.completedAt != nil)
+            }
+        }
+    }
+
     @Test("A terminal event is not addressable as an operation of its own")
     func facadeRefusesTerminalEventIds() async throws {
         try await withVMTestApp { app, user, vm, token in

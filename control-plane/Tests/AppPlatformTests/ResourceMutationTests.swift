@@ -173,8 +173,12 @@ final class ResourceMutationTests {
             let fake = FakeAgentDispatch(online: true)
             vm.hypervisorId = "agent-1"
 
+            // Committed, as the create transaction leaves it — `accept`
+            // refreshes the reconciliation-owned columns under its row lock, so
+            // an unsaved deadline is not what the reboot composes against.
             vm.extendConvergenceDeadline(
                 by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
+            try await vm.save(on: app.db)
             let createDeadline = try #require(vm.convergenceDeadline)
 
             _ = try await self.mutation(app, fake).accept(
@@ -203,6 +207,44 @@ final class ResourceMutationTests {
     }
 
     // MARK: - The dropped mutex
+
+    @Test("a mutation cannot write a stale snapshot back over the observed state")
+    func acceptRefreshesReconciliationState() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            let vmID = try vm.requireID()
+
+            // The route handler's instance is loaded, and *then* the agent's
+            // report commits — the window every converted endpoint has, since
+            // it mutates a model read before the request's transaction opened.
+            let staleFromTheRouteHandler = try #require(try await VM.find(vmID, on: app.db))
+            let reported = try #require(try await VM.find(vmID, on: app.db))
+            reported.hypervisorId = "agent-1"
+            reported.observedGeneration = 7
+            reported.generation = 7
+            reported.setStatus(.running)
+            try await reported.save(on: app.db)
+
+            _ = try await self.mutation(app, fake).accept(
+                .shutdown, on: staleFromTheRouteHandler, actor: .user(UUID()),
+                dispatch: .stateSync, on: app.db, app: app
+            ) { _ in staleFromTheRouteHandler.setDesiredStatus(.shutdown) }
+
+            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            // None of this may regress: an observedGeneration going backwards
+            // un-converges a client that was already satisfied, and a nulled
+            // hypervisorId loses the scheduler's placement.
+            #expect(reloaded.observedGeneration == 7)
+            #expect(reloaded.status == .running)
+            #expect(reloaded.hypervisorId == "agent-1")
+            // And the mutation itself still applied, on top of the newer
+            // generation rather than under it.
+            #expect(reloaded.desiredStatus == .shutdown)
+            #expect(reloaded.generation == 8)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
 
     @Test("overlapping lifecycle mutations are accepted; the last one wins")
     func overlappingMutationsAreAccepted() async throws {

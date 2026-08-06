@@ -161,6 +161,26 @@ protocol ConvergingResource: Model, ConvergenceObservable, Sendable where IDValu
     /// deadline are excluded by SQL's `NULL` comparison, which is the wanted
     /// behaviour: nothing is outstanding on them.
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Self]
+
+    /// Copies the columns the *reconciliation* loop owns — everything the
+    /// observed-state applier, the scheduler's placement, the finalizer
+    /// participants and other mutations write — from a freshly read row onto
+    /// this instance.
+    ///
+    /// A mutation loads its resource in the route handler and later `save`s the
+    /// whole row, so without this its pre-request snapshot of these columns
+    /// would be written back over whatever committed in between:
+    /// `observedGeneration` would go *backwards*, un-converging a client that
+    /// was already satisfied, and a `hypervisorId` the scheduler had just
+    /// assigned would be nulled. `ResourceMutation.accept` calls this under the
+    /// row lock, before the mutation closure runs, so the closure builds on
+    /// committed state.
+    ///
+    /// Deliberately not "copy everything": the guest telemetry (qga view,
+    /// balloon stats, exit code) is re-reported on every agent poll and heals
+    /// itself within seconds, so it is left out rather than growing this list
+    /// with fields whose staleness has no lasting consequence.
+    func adoptReconciliationState(from committed: Self)
 }
 
 extension ConvergingResource {
@@ -175,6 +195,32 @@ extension ConvergingResource {
     /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
     /// exactly one updates a row: the same compare-and-swap technique as
     /// `ResourceOperation.completeIfPending`, without the cluster lock.
+    /// Locks this resource's row for the rest of the caller's transaction and
+    /// refreshes the reconciliation-owned columns from what is committed.
+    ///
+    /// The lock is what serializes concurrent API mutations on one resource,
+    /// now that the "operation already pending" `409` is gone (STR-147): each
+    /// one's generation bump lands on top of the last, so the loser's desired
+    /// state is genuinely applied rather than silently overwritten by a stale
+    /// snapshot — which would otherwise have the façade report a dropped
+    /// mutation as succeeded. Returns false when the row is gone.
+    func lockAndRefresh(on db: any Database) async throws -> Bool {
+        guard let sql = db as? any SQLDatabase else {
+            throw OperationCompletionError.unsupportedDatabase
+        }
+        let id = try requireID()
+        let locked = try await sql.raw(
+            "SELECT id FROM \(ident: Self.schema) WHERE id = \(bind: id) FOR UPDATE"
+        ).all(decoding: ClaimedConvergenceRow.self)
+        guard !locked.isEmpty else { return false }
+
+        // Read *after* the lock so this sees whatever the writer we waited on
+        // committed, not the snapshot our caller opened with.
+        guard let committed = try await Self.find(id, on: db) else { return false }
+        adoptReconciliationState(from: committed)
+        return true
+    }
+
     func claimConvergenceTimeout(on db: any Database) async throws -> Bool {
         guard let sql = db as? any SQLDatabase else {
             throw OperationCompletionError.unsupportedDatabase
@@ -224,6 +270,20 @@ extension VM: ConvergingResource {
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
         try await VM.query(on: db).filter(\.$convergenceDeadline <= now).all()
     }
+
+    func adoptReconciliationState(from committed: VM) {
+        status = committed.status
+        statusChangedAt = committed.statusChangedAt
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        lastError = committed.lastError
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        hypervisorId = committed.hypervisorId
+        finalizers = committed.finalizers
+    }
 }
 
 extension Sandbox: ConvergingResource {
@@ -232,6 +292,20 @@ extension Sandbox: ConvergingResource {
 
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
         try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    }
+
+    func adoptReconciliationState(from committed: Sandbox) {
+        status = committed.status
+        statusChangedAt = committed.statusChangedAt
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        lastError = committed.lastError
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        hypervisorId = committed.hypervisorId
+        finalizers = committed.finalizers
     }
 }
 

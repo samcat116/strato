@@ -206,11 +206,20 @@ lost cross-replica nudge runs every ~10 minutes.
 There is **no double-submit `409`** on these verbs (STR-147). Desired state is
 level-triggered, so two overlapping writes leave the last one standing and the
 agent converges on it — which is what a user pressing "stop" during a slow
-start actually wants. `accept` still locks the row for the length of its
-transaction, so the mutations serialize against each other and against the
-observed-state applier rather than racing: each one's generation bump lands on
-top of the last, and the resize path recomputes its quota delta against the
-committed sizing rather than the stale value its request read.
+start actually wants.
+
+Overlap is *serialized*, not merely tolerated. A route handler loads its
+resource before the request's transaction opens and later saves the whole row,
+so `accept` starts by locking the row and re-reading the columns the
+reconciliation loop owns (`ConvergingResource.adoptReconciliationState`).
+Without that, the mutation's stale snapshot would be written back over whatever
+committed in between: `observedGeneration` would go *backwards*, un-converging
+a client that was already satisfied, a `hypervisorId` the scheduler had just
+assigned would be nulled, and a racing mutation's generation bump would be
+silently dropped while its `202` had promised that generation. Guest telemetry
+(qga view, balloon stats, exit code) is deliberately left out of the refresh:
+it is re-reported on every agent poll and heals itself. The resize path
+recomputes its quota delta against the committed sizing under the same lock.
 
 `PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
 `cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
@@ -249,6 +258,18 @@ report (clearing them when an attempt finally succeeds). A client refetches the
 resource: done is `converged` at or past its `targetGeneration`; failed is a
 `degraded` whose `sinceGeneration` equals it.
 
+**Both outcomes are transitions, and both commit in one transaction**
+(`ResourceConvergence.recordSuccess` / `recordFailure`). The write that closes
+a transition is also the write that stops it being detected again —
+`convergence_deadline` going nil, or `failed_generation` reaching `generation`
+— so it has to commit with the `operation.completed`/`operation.failed` outbox
+row or not at all. Committing the guard alone would lose the event permanently,
+since nothing re-enters; on the failure side it is worse, because
+`resolveForStuckOperation` would never run and the unachieved intent would
+replay on every sync with the user told nothing. That is also why
+`ObservedStateApplier` defers its own row save into those calls rather than
+committing the agent's mirrored `failed_generation` first.
+
 **The stuck-convergence sweep** is the backstop. Every accepted mutation stamps
 `convergence_deadline = max(existing, now + budget(kind))` — a *deadline*
 rather than a `lastMutationKind`, so a reboot issued during a slow create can
@@ -285,6 +306,14 @@ resource the caller simply cannot see. So the reap appends a *terminal*
 `resource_events` row inside its claim transaction, and the façade answers
 deletes off that positive record. The `mutationId` in the `202` is what a
 client polls.
+
+A delete's verdict is judged **only** by that evidence, never by the
+resource's conditions — so a delete past its deadline reads `pending`, not
+`failed`, however degraded the resource looks. A slow teardown (a large disk, a
+finalizer participant waiting on a detach) is not a failed one, and the
+alternative is telling a user their delete failed moments before the resource
+disappears anyway. The deadline still degrades the *resource*, where an
+operator can see why it is slow.
 
 **Attribution outlives the resource** (ADR 0001 stage 2). Every mutation
 appends a `resource_events` row in its own transaction: the acting principal (type *and* id, so it is not restricted to

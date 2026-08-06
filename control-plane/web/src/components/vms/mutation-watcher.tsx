@@ -34,6 +34,11 @@ const listQueryKey: Record<WatchedMutation["resourceKind"], string> = {
   sandbox: "sandboxes",
 };
 
+const POLL_INTERVAL_MS = 2000;
+
+/** How many polls in a row may fail before a mutation is given up on. */
+const MAX_CONSECUTIVE_FAILURES = 5;
+
 type Outcome = { done: true; error?: string } | { done: false };
 
 /**
@@ -97,41 +102,66 @@ export function MutationWatcher() {
       return outcome(resource.conditions, entry.targetGeneration);
     };
 
+    // Consecutive read failures per mutation. A single 502 from the proxy or a
+    // dropped connection must not silently kill the toast for a create the
+    // user is waiting on, so give up only once a mutation has been unreadable
+    // several polls running — which is what a genuinely gone session looks
+    // like. Reset on any successful read.
+    const failures = new Map<string, number>();
+
     const poll = async () => {
       for (const id of watchedIds.split(",")) {
         // Re-read the store: another poll may have unwatched this id already.
         const entry = useMutationsStore.getState().watched[id];
         if (!entry) continue;
 
+        let result: Outcome;
         try {
-          const result = await settle(entry);
-          if (cancelled || !result.done) continue;
-
-          unwatch(id);
-          queryClient.invalidateQueries({
-            queryKey: [listQueryKey[entry.resourceKind]],
-          });
-
-          const verb = verbs[entry.kind];
-          if (result.error) {
-            toast.error(
-              `Failed to ${verb.infinitive} ${entry.resourceName}: ${result.error}`
-            );
-          } else {
-            toast.success(`${verb.succeeded} ${entry.resourceName}`);
-          }
+          result = await settle(entry);
+          failures.delete(id);
         } catch {
-          // The resource or mutation became unreadable (e.g. the session
-          // expired); stop watching rather than polling it forever.
-          if (!cancelled) unwatch(id);
+          if (cancelled) return;
+          const attempts = (failures.get(id) ?? 0) + 1;
+          failures.set(id, attempts);
+          if (attempts >= MAX_CONSECUTIVE_FAILURES) {
+            failures.delete(id);
+            unwatch(id);
+          }
+          continue;
+        }
+        if (cancelled || !result.done) continue;
+
+        unwatch(id);
+        queryClient.invalidateQueries({
+          queryKey: [listQueryKey[entry.resourceKind]],
+        });
+
+        const verb = verbs[entry.kind];
+        if (result.error) {
+          toast.error(
+            `Failed to ${verb.infinitive} ${entry.resourceName}: ${result.error}`
+          );
+        } else {
+          toast.success(`${verb.succeeded} ${entry.resourceName}`);
         }
       }
     };
 
-    const interval = setInterval(poll, 2000);
+    // Self-rescheduling rather than setInterval: a pass over several watched
+    // mutations is several round trips, and a fixed interval would start the
+    // next one on top of it.
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(async () => {
+        await poll();
+        if (!cancelled) schedule();
+      }, POLL_INTERVAL_MS);
+    };
+    schedule();
+
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      clearTimeout(timer);
     };
   }, [watchedIds, unwatch, queryClient]);
 

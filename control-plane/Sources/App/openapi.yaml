@@ -56,7 +56,10 @@ info:
     `degraded.sinceGeneration == targetGeneration`, carrying the agent's
     reason. Overlapping mutations are accepted rather than refused — desired
     state is level-triggered, so the last write wins and the agent converges on
-    it.
+    it. They are serialized on the resource, so each one's change is applied on
+    top of the last rather than overwriting it with a stale snapshot: if you
+    issue `stop` while a `pause` is in flight, both are recorded and the stop's
+    `targetGeneration` is the higher one.
 
     The exceptions are the verbs still dispatched as imperative agent commands
     — VM restart, and every snapshot verb — which answer with a

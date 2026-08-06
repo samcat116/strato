@@ -220,12 +220,13 @@ enum WebhookEvents {
     /// `operationId` is the newest `requested` event for the resource, which
     /// is the mutation the convergence just settled.
     ///
-    /// Callers are the three places a resource can leave "converging":
-    /// `ObservedStateApplier` (the agent said so), the stuck-convergence sweep
-    /// (the deadline passed), and `ResourceMutation`'s dispatch (the work
-    /// never reached an agent). Each calls this inside the transaction that
-    /// records the transition, so the outbox row commits with it and — because
-    /// the transition is detected once — fires exactly once.
+    /// Reached only through `ResourceConvergence.recordSuccess`/`recordFailure`,
+    /// which call it inside the transaction that also persists the write
+    /// closing the transition — so the outbox row and the guard that stops the
+    /// transition being detected twice commit together, and the event fires
+    /// exactly once. Do not call it outside that transaction: committing the
+    /// guard without the event loses the event permanently, because nothing
+    /// re-enters.
     static func enqueueMutationOutcome<R: ConvergingResource>(
         for resource: R, succeeded: Bool, error: String?, on db: Database
     ) async throws {
@@ -267,8 +268,16 @@ enum WebhookEvents {
     /// whose success is the resource's absence: called from the finalizer reap,
     /// which has the terminal `resource_events` row and no resource left to
     /// read context off.
+    ///
+    /// `operationId` is the **request** event's id, not the terminal one's.
+    /// That is the `mutationId` the `202` handed the client and the id
+    /// `GET /api/operations/{id}` answers for, so a subscriber correlating the
+    /// completion against the delete it issued matches — which is the whole
+    /// promise `enqueueMutationOutcome` makes for every other verb. Nil only
+    /// for a reap with no recorded request, where there is nothing to
+    /// correlate against anyway.
     static func enqueueDeletionCompleted(
-        _ terminalEvent: ResourceEvent, on db: Database
+        _ terminalEvent: ResourceEvent, requestID: UUID?, on db: Database
     ) async throws {
         guard let organizationID = terminalEvent.organizationID else { return }
         let event = WebhookEvent(
@@ -279,7 +288,7 @@ enum WebhookEvents {
                 kind: terminalEvent.resourceKind.rawValue, id: terminalEvent.resourceID,
                 name: terminalEvent.resourceName),
             data: [
-                "operationId": .string(terminalEvent.id?.uuidString ?? ""),
+                "operationId": .string(requestID?.uuidString ?? ""),
                 "operationKind": .string(terminalEvent.mutation.rawValue),
                 "status": .string(VMOperationStatus.succeeded.rawValue),
             ])
