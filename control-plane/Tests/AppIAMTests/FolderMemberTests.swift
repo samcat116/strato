@@ -16,12 +16,12 @@ import AppTestSupport
 /// An analyzer that finds every policy pair overlapping — the mirror image of
 /// `PermissiveGuardrailAnalyzer`.
 ///
-/// `disjoint` answering `holds: false` is what a ceiling breach looks like to
-/// `GuardrailWriteCheck`, so installing this turns any guardrail whose actions
-/// overlap the proposed role into a refusal. That is enough to pin *that the
-/// check runs on this path*, which is the property at risk here; whether the
-/// solver's own answers are right is `GuardrailWriteCheckTests`' business, and
-/// this way the folder suite needs no cvc5.
+/// `disjoint` answering `holds: false` is what a narrowed grant looks like to
+/// `GuardrailWriteReport`, so installing this makes any guardrail whose actions
+/// overlap the proposed role show up in the response. That is enough to pin
+/// *that the report runs on this path*, which is the property at risk here;
+/// whether the solver's own answers are right is `GuardrailWriteReportTests`'
+/// business, and this way the folder suite needs no cvc5.
 struct OverlappingGuardrailAnalyzer: GuardrailAnalyzer {
     func disjoint(
         schemaText: String,
@@ -460,8 +460,8 @@ struct FolderMemberTests {
         }
     }
 
-    @Test("A grant that reaches past a ceiling is refused, naming it")
-    func grantBreachingGuardrailIsRefused() async throws {
+    @Test("A grant a ceiling narrows is granted, naming the ceiling")
+    func grantNarrowedByGuardrailIsReported() async throws {
         try await withFixture { app, fixture in
             app.guardrailAnalyzer = OverlappingGuardrailAnalyzer()
             _ = try await GuardrailStore.create(
@@ -476,20 +476,26 @@ struct FolderMemberTests {
                 on: app.db
             )
 
-            // `editor` carries vm:create/update/delete, which the ceiling covers.
+            // `editor` carries vm:create/update/delete, which the ceiling
+            // covers — and every other action it carries, which the ceiling
+            // does not. The grant lands; the response says what was taken back
+            // (STR-110).
             try await app.test(.POST, try membersPath(fixture)) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
                         userEmail: fixture.target.email, userID: nil, role: "editor"))
             } afterResponse: { res in
-                #expect(res.status == .forbidden)
-                #expect(res.body.string.contains("no-vm-changes"))
+                #expect(res.status == .created)
+                let body = try res.content.decode(GrantWriteResponse.self)
+                #expect(body.ceilings.count == 1)
+                #expect(body.ceilings.first?.guardrail.contains("no-vm-changes") == true)
+                #expect(body.ceilings.first?.ceilingedActions.contains("vm:create") == true)
             }
 
             let roles = try await folderRoles(
                 fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
-            #expect(roles.isEmpty)
+            #expect(roles.count == 1)
         }
     }
 

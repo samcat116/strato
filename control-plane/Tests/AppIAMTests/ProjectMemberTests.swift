@@ -77,6 +77,93 @@ final class ProjectMemberTests {
         }
     }
 
+    @Test("A grant a ceiling narrows still lands, and the response names the ceiling")
+    func grantNarrowedByCeilingStillLands() async throws {
+        try await withApp { app, project, _, target, _, token in
+            // The regression from STR-110, on the path it was reported on: one
+            // narrow ceiling org-wide used to make every role above `viewer`
+            // ungrantable everywhere beneath it.
+            app.guardrailAnalyzer = OverlappingGuardrailAnalyzer()
+            _ = try await GuardrailStore.create(
+                name: "no-vm-stop-org-wide",
+                description: nil,
+                effect: nil,
+                node: IAMNode(type: .organization, id: try #require(project.$organization.id)),
+                actions: ["vm:stop"],
+                principalMatch: .any,
+                resourceMatch: .any,
+                createdBy: nil,
+                on: app.db
+            )
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "member"))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+                let body = try res.content.decode(GrantWriteResponse.self)
+                // Named, so the grantor knows what the role will not do here —
+                // and scoped to the one action, so they can see the other
+                // thirty-odd still work.
+                #expect(body.ceilings.count == 1)
+                #expect(body.ceilings.first?.guardrail.contains("no-vm-stop-org-wide") == true)
+                #expect(body.ceilings.first?.ceilingedActions == ["vm:stop"])
+                #expect(body.analysisUnavailable == nil)
+            }
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeID == project.id!)
+                .count()
+            #expect(bindings == 1)
+        }
+    }
+
+    @Test("Without a solver the grant still lands, and says the analysis could not run")
+    func grantWithoutSolverSaysSo() async throws {
+        try await withApp { app, project, _, target, _, token in
+            app.guardrailAnalyzer = UnavailableGuardrailAnalyzer(reason: "no solver in this test")
+            _ = try await GuardrailStore.create(
+                name: "some-ceiling",
+                description: nil,
+                effect: nil,
+                node: IAMNode(type: .organization, id: try #require(project.$organization.id)),
+                actions: ["vm:*"],
+                principalMatch: .any,
+                resourceMatch: .any,
+                createdBy: nil,
+                on: app.db
+            )
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.GrantMemberRequest(
+                        userEmail: target.email, userID: nil, role: "member"))
+            } afterResponse: { res in
+                // The behavioural heart of the best-effort posture: a missing
+                // solver costs the explanation, not the grant.
+                #expect(res.status == .created)
+                let body = try res.content.decode(GrantWriteResponse.self)
+                #expect(body.ceilings.isEmpty)
+                // And says so, rather than letting an empty list read as "no
+                // ceiling narrows this" — the one thing the caller cannot tell
+                // from the list alone.
+                #expect(body.analysisUnavailable?.contains("no solver in this test") == true)
+            }
+
+            let bindings = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeID == project.id!)
+                .count()
+            #expect(bindings == 1)
+        }
+    }
+
     @Test("Changing a role revokes the old binding and grants the new one")
     func roleChangeSwapsBindings() async throws {
         try await withApp { app, project, _, target, _, token in

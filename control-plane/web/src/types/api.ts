@@ -230,6 +230,33 @@ export interface OrganizationMember {
   joinedAt: string;
 }
 
+/**
+ * A tier-2 ceiling that narrows a grant just written (STR-110). Never a
+ * failure: the grant landed, and confers everything the ceiling does not take
+ * back.
+ */
+export interface GrantCeiling {
+  /** `organization/Acme/no-vm-stop` — attach node and guardrail name. */
+  guardrail: string;
+  /** `alice@acme (organization admin)`, when the author is resolvable. */
+  setBy?: string;
+  explanation: string;
+  /** The role's actions this ceiling takes back; the rest still apply. */
+  ceilingedActions: string[];
+  counterexample?: string;
+}
+
+/** What every role-grant write returns. Usually `ceilings: []`. */
+export interface GrantWriteResponse {
+  ceilings: GrantCeiling[];
+  /**
+   * Why the ceiling analysis could not run, when it could not. `ceilings` is
+   * empty in that case too, so this is the only thing separating "nothing
+   * narrows this grant" from "nobody could say". The grant landed either way.
+   */
+  analysisUnavailable?: string;
+}
+
 // Legacy project-role names still accepted on writes; the unified vocabulary
 // also accepts IAM role names and role ids (issue #608).
 export type ProjectRole = "admin" | "member" | "viewer";

@@ -1,7 +1,7 @@
 // Project-level role grant endpoints (users and groups)
 
 import { api } from "./client";
-import type { ProjectMembers, ProjectRole } from "@/types/api";
+import type { GrantWriteResponse, ProjectMembers, ProjectRole } from "@/types/api";
 
 export const projectMembersApi = {
   list(projectId: string): Promise<ProjectMembers> {
@@ -12,7 +12,7 @@ export const projectMembersApi = {
     projectId: string,
     userEmail: string,
     role: ProjectRole
-  ): Promise<void> {
+  ): Promise<GrantWriteResponse> {
     return api.post(`/api/projects/${projectId}/members`, { userEmail, role });
   },
 
@@ -20,7 +20,7 @@ export const projectMembersApi = {
     projectId: string,
     userId: string,
     role: ProjectRole
-  ): Promise<void> {
+  ): Promise<GrantWriteResponse> {
     return api.patch(`/api/projects/${projectId}/members/${userId}`, { role });
   },
 
@@ -32,7 +32,7 @@ export const projectMembersApi = {
     projectId: string,
     groupID: string,
     role: ProjectRole
-  ): Promise<void> {
+  ): Promise<GrantWriteResponse> {
     return api.post(`/api/projects/${projectId}/groups`, { groupID, role });
   },
 

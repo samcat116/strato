@@ -71,7 +71,7 @@ compile. Give builds a generous timeout rather than assuming they hung.
 
 ### The IAM symbolic-analysis suites
 
-The write-time guardrail check and the role-nesting subsumption proof
+The write-time guardrail report and the role-nesting subsumption proof
 (`docs/architecture/iam.md`) drive an SMT solver, and their suites skip
 themselves when there is none. The rest of the suite is unaffected — the test
 harness installs a permissive analyzer, so writing a binding in an unrelated
@@ -86,7 +86,8 @@ The script downloads the pinned, checksum-verified cvc5 1.3.1 build for your
 platform; `cvc5` anywhere on `PATH` works too. Without it those suites skip
 themselves silently, so if you don't install it nothing covers them — CI won't
 catch it for you either (see below). The shipped control-plane image carries the
-solver, because binding writes fail closed without one.
+solver, because without one a grant is written with no explanation of the
+ceilings that narrow it.
 
 ::: warning CI does not run tests
 PR validation is a compile check only: it builds each package without

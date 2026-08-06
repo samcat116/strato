@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { useGrantProjectMember, projectMemberErrorMessage } from "@/lib/hooks";
 import { toast } from "sonner";
+import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { ProjectRole } from "@/types/api";
 
 const ROLES: { value: ProjectRole; label: string; hint: string }[] = [
@@ -61,8 +62,9 @@ export function AddMemberDialog({
       return;
     }
     try {
-      await grant.mutateAsync({ userEmail: trimmed, role });
+      const result = await grant.mutateAsync({ userEmail: trimmed, role });
       toast.success(`Granted ${trimmed} the ${role} role`);
+      warnAboutGrantCeilings(result, `${trimmed}'s ${role} role`);
       handleClose();
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to add member"));

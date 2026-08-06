@@ -24,9 +24,10 @@ final class Guardrail: Model, @unchecked Sendable {
     @ID(key: .id)
     var id: UUID?
 
-    /// Slug, unique per attach node. It appears in the denial the write-time
-    /// check produces (`403 GuardrailViolation … folder/engineering/no-prod-for-contractors`),
-    /// so it is user-facing prose, not an internal handle.
+    /// Slug, unique per attach node. It appears in the write-time ceiling
+    /// report a grant comes back with (`folder/engineering/no-prod-for-contractors`)
+    /// and in the eval-time denial, so it is user-facing prose, not an
+    /// internal handle.
     @Field(key: "name")
     var name: String
 

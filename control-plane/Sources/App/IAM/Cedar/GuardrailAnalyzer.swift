@@ -5,14 +5,14 @@ import Vapor
 // IAM phase 7 (issue #484): the symbolic-analysis seam.
 //
 // `CedarEngine` decides one request. This decides questions about *every*
-// request: can a proposed grant reach anything a ceiling forbids? Denying at
-// evaluation time is correct but produces a mystery; denying at write time
-// produces an explanation, and that is what an analyzable policy language was
-// chosen for (docs/architecture/iam.md).
+// request: which ceilings does a proposed grant run into? Denying at
+// evaluation time is correct but produces a mystery; naming the ceiling at
+// write time produces an explanation, and that is what an analyzable policy
+// language was chosen for (docs/architecture/iam.md).
 
 /// The "type" of request an analysis reasons over. SymCC answers one of these
 /// at a time, so the caller picks which ones can possibly matter — see
-/// `GuardrailWriteCheck` for how the enumeration is kept to a handful.
+/// `GuardrailWriteReport` for how the enumeration is kept to a handful.
 struct CedarRequestEnvironment: Hashable, Sendable {
     let principalType: CedarEntityType
     let action: String
@@ -33,9 +33,10 @@ struct GuardrailAnalysis: Sendable {
 /// Why an analysis could not be performed.
 ///
 /// The distinction is the whole point of the type: `unavailable` means the
-/// question went unanswered, which the write path treats as `503`, while a
-/// rejected query is a bug in what we generated and must not be mistaken for
-/// a clean bill of health.
+/// question went unanswered, while a rejected query is a bug in what we
+/// generated. Neither may be mistaken for a clean bill of health — the write
+/// path reports every one of them as `analysisUnavailable` rather than as an
+/// empty ceiling list.
 enum GuardrailAnalyzerError: Error, CustomStringConvertible {
     /// No solver is configured, or the configured one could not be run.
     case unavailable(String)
@@ -157,13 +158,12 @@ struct SymCCGuardrailAnalyzer: GuardrailAnalyzer {
 
 /// An analyzer that answers nothing, because no solver was found.
 ///
-/// Every query throws `unavailable`, which the write path turns into a `503`.
-/// This is the fail-closed half of the posture: a deployment with no solver
-/// stops accepting the writes this check guards rather than accepting them
-/// unchecked. It does not stop the deployment — eval-time guardrail
-/// enforcement is untouched, and readiness deliberately does not depend on the
-/// solver, because a solver outage should fail the writes it guards, not cycle
-/// every pod.
+/// Every query throws `unavailable`, which the write path reports as
+/// `analysisUnavailable`: the grant is written, and the response says plainly
+/// that no one could say what narrows it. Nothing is refused, because nothing
+/// here enforces — eval-time guardrail enforcement is untouched, and readiness
+/// deliberately does not depend on the solver, because a solver outage should
+/// cost explanations, not cycle every pod.
 struct UnavailableGuardrailAnalyzer: GuardrailAnalyzer {
     let reason: String
 
@@ -211,9 +211,9 @@ extension Application {
     ///
     /// `IAM_SYMCC_SOLVER_PATH` first, then `cvc5` on `PATH`. Resolution happens
     /// once, at first use, and its outcome is logged either way: a deployment
-    /// that has quietly lost its solver is refusing binding writes, and the
-    /// operator needs to be able to find out why from the logs rather than
-    /// from a support ticket.
+    /// that has quietly lost its solver is handing out grants nobody can
+    /// explain, and the operator needs to find that out from the logs rather
+    /// than from a support ticket.
     static func resolveGuardrailAnalyzer(logger: Logger) -> any GuardrailAnalyzer {
         let environment = ProcessInfo.processInfo.environment
         var candidates: [String] = []
@@ -235,8 +235,8 @@ extension Application {
             } ?? "no cvc5 found via IAM_SYMCC_SOLVER_PATH or PATH"
         logger.error(
             """
-            No SMT solver for the write-time guardrail check; binding writes will be refused. \
-            Install cvc5 and set IAM_SYMCC_SOLVER_PATH.
+            No SMT solver for the write-time guardrail report; grants will be written without \
+            the ceilings that narrow them. Install cvc5 and set IAM_SYMCC_SOLVER_PATH.
             """,
             metadata: ["reason": .string(reason)])
         return UnavailableGuardrailAnalyzer(reason: reason)

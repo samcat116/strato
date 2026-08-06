@@ -25,6 +25,7 @@ import {
   projectMemberErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
+import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { ProjectRole } from "@/types/api";
 
 const ROLES: ProjectRole[] = ["admin", "member", "viewer"];
@@ -68,8 +69,9 @@ export function AddGroupDialog({
       return;
     }
     try {
-      await grant.mutateAsync({ groupId, role });
+      const result = await grant.mutateAsync({ groupId, role });
       toast.success("Group access granted");
+      warnAboutGrantCeilings(result, `The group's ${role} role`);
       handleClose();
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to grant group"));

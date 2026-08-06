@@ -2196,7 +2196,7 @@ export interface paths {
         put?: never;
         /**
          * Add a member to an organization
-         * @description Organization admins only. The target user is looked up by email and must already exist; adding an existing member returns 409. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Organization admins only. The target user is looked up by email and must already exist; adding an existing member returns 409. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         post: operations["addOrganizationMember"];
         delete?: never;
@@ -2229,7 +2229,7 @@ export interface paths {
         head?: never;
         /**
          * Change a member's organization role
-         * @description Organization admins only. Demoting the last remaining admin is rejected with 400. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Organization admins only. Demoting the last remaining admin is rejected with 400. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         patch: operations["updateOrganizationMemberRole"];
         trace?: never;
@@ -2387,7 +2387,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a user a role on a folder
-         * @description Requires `iam:setPolicy` on the folder. Identify the user by `userID` or `userEmail`. Returns an empty body. The grant inherits down every folder, project, and resource beneath the folder, and keeps applying to projects added later. A principal may hold at most one role per folder; use `PATCH` to change it. A user outside the folder's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires `iam:setPolicy` on the folder. Identify the user by `userID` or `userEmail`. The grant inherits down every folder, project, and resource beneath the folder, and keeps applying to projects added later. A principal may hold at most one role per folder; use `PATCH` to change it. A user outside the folder's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         post: operations["grantFolderMember"];
         delete?: never;
@@ -2422,7 +2422,7 @@ export interface paths {
         head?: never;
         /**
          * Change a user's role on a folder
-         * @description Requires `iam:setPolicy` on the folder. Replaces the user's grant on this folder; returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the folder and is recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires `iam:setPolicy` on the folder. Replaces the user's grant on this folder; returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the folder and is recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         patch: operations["updateFolderMemberRole"];
         trace?: never;
@@ -2443,7 +2443,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a group a role on a folder
-         * @description Requires `iam:setPolicy` on the folder. Returns an empty body. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires `iam:setPolicy` on the folder. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the folder; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         post: operations["grantFolderGroup"];
         delete?: never;
@@ -3012,7 +3012,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a user a role on a project
-         * @description Requires project admin. Identify the user by `userID` or `userEmail`. Returns an empty body. A user outside the project's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. Identify the user by `userID` or `userEmail`. A user outside the project's organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         post: operations["grantProjectMember"];
         delete?: never;
@@ -3045,7 +3045,7 @@ export interface paths {
         head?: never;
         /**
          * Change a user's role on a project
-         * @description Requires project admin. Returns an empty body. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the project and is recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. Changing an organization-external user's role is a new cross-org grant: it requires `iam:grantExternal` on the project and is recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         patch: operations["updateProjectMemberRole"];
         trace?: never;
@@ -3064,7 +3064,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a group a role on a project
-         * @description Requires project admin. Returns an empty body. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires project admin. A group from another organization can be granted a role, but only by a caller who also holds `iam:grantExternal` on the project; such cross-org grants are recorded with a distinct `iam.cross_org_grant` audit event. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one — ceilings subtract at evaluation — but every ceiling that narrows it comes back in `ceilings`, naming the guardrail, who set it, and which of the role's actions it takes back.
          */
         post: operations["grantProjectGroup"];
         delete?: never;
@@ -3649,7 +3649,7 @@ export interface paths {
         get?: never;
         /**
          * Grant the service account a role on its project
-         * @description Requires `iam:setPolicy` on the project. Replaces any existing project role. Checked against the tier-2 guardrails in force on the node before it is accepted: a grant that would reach past a ceiling is refused with `403`, naming the guardrail, who set it, and why.
+         * @description Requires `iam:setPolicy` on the project. Replaces any existing project role. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one, but every ceiling that narrows it comes back in `ceilings`.
          */
         put: operations["setServiceAccountProjectRole"];
         post?: never;
@@ -3777,7 +3777,7 @@ export interface paths {
         get?: never;
         /**
          * Grant a registered workload a role on a project
-         * @description Requires `iam:setPolicy` on the project. The registration must be a directly registered workload in the project's organization. Replaces any existing role. Checked against the tier-2 guardrails in force on the node before it is accepted.
+         * @description Requires `iam:setPolicy` on the project. The registration must be a directly registered workload in the project's organization. Replaces any existing role. Analyzed against the tier-2 guardrails in force on the node: the grant is never refused over one, but every ceiling that narrows it comes back in `ceilings`.
          */
         put: operations["setProjectWorkloadGrant"];
         post?: never;
@@ -7902,6 +7902,25 @@ export interface components {
             role: "viewer" | "operator" | "editor" | "admin";
             node: components["schemas"]["IAMNode"];
         };
+        /** @description What a role grant returns: the tier-2 ceilings in force that narrow it. The mirror of `shadowedBindings` on a guardrail write — there the ceiling's author sees the grants it narrows, here the grant's author sees the ceilings that narrow it. */
+        IAMGrantWriteResponse: {
+            /** @description Empty in the ordinary case. A non-empty list is not a failure — the binding confers everything the listed ceilings do not take back. Also empty when `analysisUnavailable` is set, which is the only thing distinguishing "nothing narrows this grant" from "nobody could say". */
+            ceilings: components["schemas"]["IAMGrantCeiling"][];
+            /** @description Present only when the symbolic analysis could not run — no solver, a solver failure, or the analysis exceeding its wall-clock budget — naming which. The grant is written and the ceilings are enforced at evaluation either way; what is missing is the explanation. */
+            analysisUnavailable?: string;
+        };
+        IAMGrantCeiling: {
+            /** @description `organization/Acme/no-prod-for-contractors` — the attach node and the guardrail's name, so the reader knows where to go to change it. */
+            guardrail: string;
+            /** @description `alice@acme (organization admin)`, when the author is still resolvable. */
+            setBy?: string;
+            /** @description What the grant does that the ceiling forbids, in the vocabulary the ceiling was written in. */
+            explanation: string;
+            /** @description The role's actions this ceiling takes back: covered by its action scope *and* able to reach a resource type it can match. Everything else in the role is unaffected. */
+            ceilingedActions: string[];
+            /** @description A concrete request the grant allows and the ceiling forbids, as the solver found it. */
+            counterexample?: string;
+        };
         IAMGuardrailCreateRequest: {
             name: string;
             description?: string;
@@ -8719,15 +8738,6 @@ export interface components {
         };
         /** @description The caller is authenticated but not authorized. */
         Forbidden: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
-        };
-        /** @description The write-time guardrail check could not run, so the policy write was not accepted. Deliberately fail-closed: a grant is never accepted unchecked because the analyzer was unavailable. Existing access is unaffected and guardrails remain enforced on every request. */
-        GuardrailCheckUnavailable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -12692,19 +12702,20 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The member was added. No response body. */
+            /** @description The member was added. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     removeOrganizationMember: {
@@ -12746,18 +12757,19 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The role was updated. No response body. */
+            /** @description The role was updated. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     listFolders: {
@@ -13078,14 +13090,15 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     revokeFolderMember: {
@@ -13136,13 +13149,14 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     grantFolderGroup: {
@@ -13168,14 +13182,15 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     revokeFolderGroup: {
@@ -14096,14 +14111,15 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     revokeProjectMember: {
@@ -14150,13 +14166,14 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     grantProjectGroup: {
@@ -14180,14 +14197,15 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     revokeProjectGroup: {
@@ -15380,13 +15398,14 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     clearServiceAccountProjectRole: {
@@ -15581,13 +15600,14 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IAMGrantWriteResponse"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            503: components["responses"]["GuardrailCheckUnavailable"];
         };
     };
     revokeProjectWorkloadGrant: {

@@ -148,7 +148,7 @@ struct ProjectMemberController: RouteCollection {
     }
 
     /// POST /api/projects/:projectID/members — grant a user a role on the project.
-    func grant(req: Request) async throws -> HTTPStatus {
+    func grant(req: Request) async throws -> Response {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
@@ -174,17 +174,17 @@ struct ProjectMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .user, principalID: userID, node: node, req: req)
 
-        // A ceiling in force on this project (or above it) may forbid what
-        // this grant would reach — refuse now, with the reason, rather than
-        // leaving it to be discovered as a denial days later (#484).
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .user,
-                principalID: userID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        // A ceiling in force on this project (or above it) may narrow what
+        // this grant reaches. Reported with the response, not refused: the
+        // evaluator subtracts the ceilinged actions and leaves the rest of the
+        // grant working, so the write does too (#484, STR-110).
+        let proposed = ProposedBinding(
+            principalType: .user,
+            principalID: userID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         // The role binding lands in the same transaction as the mirror row.
         // The mirror stores the resolved role id going forward (issue #608).
@@ -206,11 +206,12 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return .created
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// PATCH /api/projects/:projectID/members/:userID — change a user's role.
-    func updateRole(req: Request) async throws -> HTTPStatus {
+    func updateRole(req: Request) async throws -> Response {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
@@ -237,17 +238,16 @@ struct ProjectMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .user, principalID: userID, node: node, req: req)
 
-        // Checked even though the user already holds a role here: the new role
+        // Reported even though the user already holds a role here: the new role
         // is a different grant, and widening viewer to editor is exactly the
-        // move a ceiling exists to stop.
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .user,
-                principalID: userID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        // move a ceiling bears on.
+        let proposed = ProposedBinding(
+            principalType: .user,
+            principalID: userID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         let previousRole = membership.role
         let actorID = req.auth.get(User.self)?.id
@@ -282,7 +282,8 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return .ok
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/projects/:projectID/members/:userID — revoke a user's role.
@@ -331,7 +332,7 @@ struct ProjectMemberController: RouteCollection {
     }
 
     /// POST /api/projects/:projectID/groups — grant a group a role on the project.
-    func grantGroup(req: Request) async throws -> HTTPStatus {
+    func grantGroup(req: Request) async throws -> Response {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
@@ -359,16 +360,15 @@ struct ProjectMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
             principalType: .group, principalID: body.groupID, node: node, req: req)
 
-        // A group grant reaches every member, so the ceiling check asks
+        // A group grant reaches every member, so the ceiling report asks
         // whether it covers the group or anyone in it (#484).
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .group,
-                principalID: body.groupID,
-                roleActions: role.actions,
-                roleLabel: role.displayName,
-                node: node
-            ), req: req)
+        let proposed = ProposedBinding(
+            principalType: .group,
+            principalID: body.groupID,
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
+        )
 
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
@@ -389,7 +389,8 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
                 role: role.displayName, node: node, req: req)
         }
-        return .created
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// DELETE /api/projects/:projectID/groups/:groupID — revoke a group's role.

@@ -26,6 +26,7 @@ import {
   projectMemberErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
+import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { ProjectMember, ProjectRole } from "@/types/api";
 
 const ROLES: ProjectRole[] = ["admin", "member", "viewer"];
@@ -70,8 +71,12 @@ export function MembersTable({
     if (role === member.role) return;
     setPendingId(member.userId);
     try {
-      await updateRole.mutateAsync({ userId: member.userId, role });
+      const result = await updateRole.mutateAsync({ userId: member.userId, role });
       toast.success(`Updated ${member.displayName || member.username} to ${role}`);
+      warnAboutGrantCeilings(
+        result,
+        `${member.displayName || member.username}'s ${role} role`
+      );
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to update role"));
     } finally {
