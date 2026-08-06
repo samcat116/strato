@@ -151,6 +151,57 @@ geneve specifically to carry its logical metadata (datapath + ingress/egress
 port); VXLAN cannot, and OVN restricts VXLAN to limited hardware-VTEP
 integration. EVPN belongs in the underlay/edge, not the tenant overlay.
 
+#### Instance metadata (IMDS) — the localport
+
+Every logical switch with `metadataEnabled` publishes the metadata service's
+addresses — `169.254.169.254` and `fd00:ec2::254`, the two cloud-init's Ec2
+datasource already probes — via an OVN logical switch port of type
+**`localport`** (STR-49). A localport is the primitive designed for exactly
+this: `ovn-controller` instantiates it on every chassis and never forwards it
+across geneve tunnels, so one address can be published site-wide and every
+guest still reaches its own host. OpenStack's neutron metadata agent and
+ovn-kubernetes' management port both use it. OVN answers guest ARP and Neighbor
+Solicitation from the port's `addresses` field, which is why the addresses need
+not belong to the switch's subnets.
+
+The feature has **two halves with two different owners**, and that shape is
+load-bearing rather than incidental:
+
+- The **localport itself** is one row in the shared northbound database, so it
+  is authored only by the site's network controller, from
+  `DesiredNetworkState.metadataEnabled`. It rides the network desired state
+  rather than the per-VM spec for `dhcpEnabled`'s reason: network-level edits
+  don't bump VM generations, so a converged VM would never re-realize it.
+- The **chassis-local termination** — an OVS internal port on `br-int` carrying
+  `external_ids:iface-id=<lsp>`, moved into a namespace and given both
+  addresses — must exist on *every* host running a NIC on that network,
+  including the sited agents that receive an empty `networks` list because they
+  may not author topology. Its input is therefore the agent's own workload specs
+  (`NetworkSpec.metadataEnabled`), and it converges before the reconciler's
+  authority guard. Its teardown trigger is different too: the last local NIC
+  leaving the network, not the network being deleted.
+
+**One namespace per network per chassis** (`strato-md-<network-uuid>`, mirroring
+OpenStack's `ovnmeta-<network>`). Not an isolation nicety — overlapping tenant
+subnets are supported by design, so two guests on different networks can both be
+`10.0.0.5`. A listener in a shared namespace would see identical
+`(source, destination, port)` for both and could not tell which instance was
+asking, and "the source address identifies the caller" is the entire security
+model of an instance metadata service. Reply routing breaks on the same
+ambiguity. See [ADR 0003](../adr/0003-imds-chassis-namespace.md).
+
+The IPv6 address is added unconditionally, including on v4-only networks, so
+both halves of the reconcile derive from one input with no drift. In practice a
+guest can only *use* it on a dual-stack network: with no global IPv6 address it
+has no valid source address for a ULA destination.
+
+Neither address is on-link, so both need an advertised route before a guest can
+reach them (STR-53: DHCP option 121 for v4, a static `network-config` route
+and/or RFC 4191 route information for v6). On a network with security groups
+attached, guest→metadata egress is also dropped by the default-drop port group
+until STR-54's implicit allow rules land — two rules, since OVN ACL matches are
+per-family.
+
 ### Layer 2 — Edge / north-south
 
 Progression from simplest to most capable:
@@ -713,6 +764,12 @@ verification on real multi-node hardware (recipe in
   IPv4 subnet, and each NIC carries one address row per family. IPv6 is
   allocated, delivered (RA + DHCPv6), and realized; what remains open is
   IPv6-specific L3 work such as external egress.
+- **Metadata reachability** — the localport and its per-chassis namespace exist
+  (STR-49), but nothing routes guests to them yet (STR-53), no implicit
+  security-group allow exists (STR-54), and nothing listens in the namespace
+  (STR-56). STR-53 must not land before this one is verified on a live
+  deployment: a route to an address with no local binding turns a fast failure
+  into cloud-init's minutes-long retry loop.
 - **Name resolution** is a separate track: see [dns](./dns.md). What exists on
   this substrate today is DHCP option delivery only (`dns_servers` /
   `domain_name` → OVN `DHCP_Options`); the OVN `DNS` table is not yet written.

@@ -207,6 +207,7 @@ struct NetworkController: RouteCollection {
             domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             leaseTime: request.leaseTime,
             externalAccess: request.externalAccess ?? true,
+            metadataEnabled: request.metadataEnabled ?? true,
             siteID: request.siteId
         )
 
@@ -456,6 +457,14 @@ struct NetworkController: RouteCollection {
         if let leaseTime = request.leaseTime {
             try Self.validateLeaseTime(leaseTime)
             network.leaseTime = leaseTime
+        }
+
+        // Applied below the generation bump, deliberately: the metadata port is
+        // converged level-triggered on every network reconcile (like the DHCP
+        // rows), so bumping the generation here would buy nothing and would make
+        // agents treat legitimately concurrent syncs as stale.
+        if let metadataEnabled = request.metadataEnabled {
+            network.metadataEnabled = metadataEnabled
         }
 
         // The zone this network's VMs register into (issue #770). Only ever a

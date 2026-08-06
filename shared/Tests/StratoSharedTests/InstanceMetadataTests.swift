@@ -260,4 +260,30 @@ struct InstanceMetadataTests {
         #expect(WireProtocol.supportsInstanceMetadata(26))
         #expect(WireProtocol.supportsInstanceMetadata(WireProtocol.currentVersion))
     }
+
+    @Test("Metadata-port support is keyed on protocol version 27")
+    func metadataPortVersionGate() {
+        // Below the gate a nil `metadataEnabled` is silence too — and here it
+        // matters more, because network teardown is `observed - desired`, so
+        // reading silence as "off" would delete a live localport.
+        #expect(!WireProtocol.supportsMetadataPort(26))
+        #expect(WireProtocol.supportsMetadataPort(27))
+        #expect(WireProtocol.supportsMetadataPort(WireProtocol.currentVersion))
+    }
+
+    @Test("The metadata endpoints are the ones guest tooling already probes")
+    func metadataEndpointAddresses() {
+        // cloud-init's Ec2 datasource tries both without configuration; that is
+        // the entire reason for adopting these numbers rather than our own.
+        #expect(InstanceMetadataEndpoint.address == "169.254.169.254")
+        #expect(InstanceMetadataEndpoint.addressV6 == "fd00:ec2::254")
+        #expect(InstanceMetadataEndpoint.cidr == "169.254.169.254/32")
+        #expect(InstanceMetadataEndpoint.cidrV6 == "fd00:ec2::254/128")
+        // v4 first, the order the OVN addresses column and the namespace
+        // interface both use.
+        #expect(
+            InstanceMetadataEndpoint.addresses == [
+                InstanceMetadataEndpoint.address, InstanceMetadataEndpoint.addressV6,
+            ])
+    }
 }

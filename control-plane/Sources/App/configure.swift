@@ -740,6 +740,9 @@ public func configure(_ app: Application) async throws {
     // making clients poll an operation to learn the same thing (ADR 0001).
     app.migrations.add(AddConvergenceStateToWorkloads())
 
+    // Per-network switch for the instance metadata service (STR-49).
+    app.migrations.add(AddMetadataEnabledToLogicalNetwork())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
