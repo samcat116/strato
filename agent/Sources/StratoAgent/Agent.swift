@@ -2009,9 +2009,6 @@ extension Agent {
             case .vmSnapshotDelete:
                 let message = try envelope.decode(as: VMSnapshotDeleteMessage.self)
                 await handleVMSnapshotDelete(message)
-            case .agentUpdate:
-                let message = try envelope.decode(as: AgentUpdateMessage.self)
-                await handleAgentUpdate(message)
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
                 // Realize logical networks (per-project routers, SNAT uplinks)
@@ -2298,80 +2295,15 @@ extension Agent {
         }
     }
 
-    /// Operator-triggered self-update (issue #432): download, verify, and swap
-    /// this process's own binary, then shut down and exit for the supervisor
-    /// to restart the new build. The success reply is sent *after* the swap
-    /// (so it reports the real outcome) but *before* the shutdown that closes
-    /// the socket. Any failure leaves the running binary untouched and is
-    /// reported as a correlated error.
-    private func handleAgentUpdate(_ message: AgentUpdateMessage) async {
-        logger.notice(
-            "Received agent update command",
-            metadata: [
-                "targetVersion": .string(message.targetVersion),
-                // Redacted: the URL's query string may be a presigned credential.
-                "artifactURL": .string(message.redactedArtifactURL),
-                "currentVersion": .string(BuildInfo.version),
-            ])
-
-        guard !updateRestartPending else {
-            await sendError(
-                for: message.requestId,
-                error: "An update was already applied; the agent is restarting")
-            return
-        }
-
-        let outcome: AgentUpdateOutcome
-        do {
-            let updater = AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
-            outcome = try await updater.applyUpdate(
-                artifactURL: message.artifactURL,
-                sha256: message.sha256,
-                artifactKind: message.artifactKind,
-                tarballMember: message.tarballMember
-            )
-        } catch let error as AgentUpdateError {
-            logger.error("Agent update failed", metadata: ["error": .string(error.description)])
-            await sendError(for: message.requestId, error: "Agent update failed", details: error.description)
-            return
-        } catch {
-            logger.error("Agent update failed", metadata: ["error": .string("\(error)")])
-            await sendError(for: message.requestId, error: "Agent update failed", details: "\(error)")
-            return
-        }
-
-        updateRestartPending = true
-        await sendSuccess(
-            for: message.requestId,
-            message:
-                "Binary updated to \(message.targetVersion) (previous preserved at \(outcome.previousBinaryPath)); restarting"
-        )
-
-        // Shut down from a separate task: this handler runs on the inbound
-        // message pipeline, and stop() tears that pipeline down — stopping
-        // inline would cancel ourselves mid-teardown. start() returns once
-        // stop() completes and launchAgent exits with the restart code.
-        logger.notice(
-            "Agent update applied; shutting down for supervisor restart",
-            metadata: ["binaryPath": .string(outcome.binaryPath)])
-        Task {
-            // Grace period before dropping the socket: the control plane
-            // handles frames in independent tasks, so an immediate close can
-            // still fail the awaiting update request as connectionLost before
-            // the success reply's task resumes it. stop() also skips the
-            // unregister message on this path for the same reason.
-            try? await Task.sleep(for: .seconds(1))
-            await self.stop()
-        }
-    }
-
-    /// Declarative self-update (issue #434): converge on the desired agent
-    /// build carried by the sync, through the same download/verify/swap/
-    /// restart path as the operator-triggered update — but gated on local
-    /// preconditions instead of an operator's `force`. Level-triggered: a
-    /// blocked update is re-evaluated on every sync and the current reason is
-    /// reported back on observed-state reports; a failed artifact is not
-    /// retried within this process lifetime.
+    /// Self-update (issue #434): converge on the desired agent build carried by
+    /// the sync — download, verify, swap, restart — gated on local
+    /// preconditions. Since wire v27 this is the only update path there is: an
+    /// operator's "update now" reaches the agent as this same field, assigned
+    /// by the control plane rather than dispatched as a command, so the
+    /// preconditions below hold for it too. Level-triggered: a blocked update
+    /// is re-evaluated on every sync and the current reason is reported back on
+    /// observed-state reports; a failed artifact is not retried within this
+    /// process lifetime.
     private func handleDesiredAgentUpdate(_ update: DesiredAgentUpdate?) async {
         guard let update else {
             // No opinion from the control plane (rollout not reached us,
@@ -2464,10 +2396,9 @@ extension Agent {
 
         updateRestartPending = true
         autoUpdateStatus = nil
-        // Same restart choreography as the operator-triggered path: stop()
-        // from a separate task (this handler runs on the inbound pipeline
-        // stop() tears down), then launchAgent exits with the restart code
-        // for the supervisor. The new binary proves the update by
+        // stop() from a separate task (this handler runs on the inbound
+        // pipeline stop() tears down), then launchAgent exits with the restart
+        // code for the supervisor. The new binary proves the update by
         // re-registering with its version.
         logger.notice(
             "Desired agent update applied; shutting down for supervisor restart",

@@ -18,6 +18,9 @@ interface AgentAutoUpdateCardProps {
  * target version, the agent converges when its own preconditions allow (no
  * in-flight work, not containerized), and the next agent follows only once
  * this one re-registers healthy.
+ *
+ * The in-flight/blocked/failed status below is shown for manually requested
+ * updates too — since STR-145 the Update button assigns the same field.
  */
 export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
   const patchAgent = usePatchAgent();
@@ -70,11 +73,12 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
           containerized installs and in-flight operations defer the update.
         </p>
 
-        {agent.autoUpdate && agent.updateDesiredVersion && (
+        {agent.updateDesiredVersion && (
           <div className="flex items-start gap-2 text-foreground">
             <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground" />
             <p>
               Updating to <span className="font-medium">{agent.updateDesiredVersion}</span>
+              {agent.updateAssignmentSource === "manual" ? " (requested manually)" : ""}
               {agent.updateAttemptedAt
                 ? ` (assigned ${new Date(agent.updateAttemptedAt).toLocaleString()})`
                 : " (waiting on the agent)"}
@@ -93,8 +97,8 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
           <div className="flex items-start gap-2 text-red-600 dark:text-red-400">
             <AlertTriangle className="h-4 w-4 mt-0.5" />
             <p>
-              Update failed (rollout halted here): {agent.updateFailureReason}. Re-enable
-              auto-update to retry, or update manually.
+              Update failed (rollout halted here): {agent.updateFailureReason}. Retry with
+              the Update button, or re-enable auto-update.
             </p>
           </div>
         )}

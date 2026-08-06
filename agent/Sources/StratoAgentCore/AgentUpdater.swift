@@ -173,7 +173,7 @@ public struct AgentUpdater: Sendable {
         else {
             // Redacted: the error travels into logs on both sides, and the
             // URL's query string may be a presigned credential.
-            throw AgentUpdateError.invalidArtifactURL(AgentUpdateMessage.redactURL(artifactURL))
+            throw AgentUpdateError.invalidArtifactURL(DesiredAgentUpdate.redactURL(artifactURL))
         }
 
         let binaryPath = try resolveBinaryPath()
@@ -195,7 +195,7 @@ public struct AgentUpdater: Sendable {
         logger.info(
             "Downloading agent update artifact",
             metadata: [
-                "url": .string(AgentUpdateMessage.redactURL(artifactURL)),
+                "url": .string(DesiredAgentUpdate.redactURL(artifactURL)),
                 "kind": .string(artifactKind.rawValue),
             ])
         let artifactPath = workspace + "/artifact"
@@ -342,7 +342,7 @@ public struct AgentUpdater: Sendable {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             try? FileManager.default.removeItem(at: temporaryURL)
             throw AgentUpdateError.downloadFailed(
-                "HTTP \(http.statusCode) from \(AgentUpdateMessage.redactURL(url.absoluteString))")
+                "HTTP \(http.statusCode) from \(DesiredAgentUpdate.redactURL(url.absoluteString))")
         }
         do {
             try FileManager.default.moveItem(atPath: temporaryURL.path, toPath: destination)

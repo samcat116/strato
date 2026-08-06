@@ -60,9 +60,9 @@ export function useRevokeAgentEnrollment() {
   });
 }
 
-// Triggers an agent self-update. The request resolves only once the agent has
-// installed the binary and started restarting (or refused), so `isPending`
-// spans the whole download-and-verify window.
+// Assigns an agent self-update. The request resolves as soon as the assignment
+// is durable (202) — the download, install and restart happen afterwards, and
+// show up as `updateDesiredVersion` on the refetched agent.
 export function useUpdateAgent() {
   const queryClient = useQueryClient();
   return useMutation({

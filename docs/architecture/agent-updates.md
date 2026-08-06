@@ -1,19 +1,29 @@
 # Agent Updates
 
-Strato updates hypervisor agents from the control plane over the existing
-agent WebSocket — no SSH, no configuration management run. There are two
-paths that share one installation mechanism:
+Strato updates hypervisor agents from the control plane — no SSH, no
+configuration management run. An agent's build is desired state like anything
+else: the control plane records which version an agent should run, the version
+rides that agent's desired-state sync as `desiredAgentUpdate`, and the agent
+converges on it. There are two ways a version gets assigned:
 
+- **Fleet auto-update** (issue #434): enrolled agents are advanced to the
+  deployment's target version one agent at a time, with health gating.
 - **Operator-triggered** (issue #432): `POST /api/agents/:id/actions/update`
-  updates one agent now, synchronously reporting the agent's own outcome.
-- **Declarative auto-update** (issue #434): enrolled agents converge on the
-  version the control plane says they should be running, advanced across the
-  fleet one agent at a time with health gating.
+  assigns one agent now, enrolled or not.
 
-Both end the same way: the agent downloads the artifact, verifies its
-SHA-256, atomically swaps its own binary (preserving the old one as
-`<binary>.prev`), exits with a restart code for its supervisor, and proves
-the update by re-registering with the new build's version.
+Both write the same field, so they share every mechanism below — the
+convergence preconditions, the health budget, the reported blocked/failure
+reasons, and the one-agent-at-a-time property (an in-flight manual update holds
+the fleet rollout, and vice versa). The end is always the same: the agent
+downloads the artifact, verifies its SHA-256, atomically swaps its own binary
+(preserving the old one as `<binary>.prev`), exits with a restart code for its
+supervisor, and proves the update by re-registering with the new build's
+version.
+
+Until wire v27 the operator path was a separate imperative `agent_update`
+message answered synchronously over the socket. It is gone (ADR 0001 stage 6):
+one path, one set of preconditions, and an intent that survives a disconnected
+agent or a restarted control plane instead of dying with the request.
 
 ## Version identity and artifacts
 
@@ -26,7 +36,8 @@ the update by re-registering with the new build's version.
   meaningful target and never triggers updates.
 - Each release publishes an `agent-manifest.json` (issue #431) mapping
   OS/arch to a tarball URL, SHA-256, and the member holding the agent binary.
-  `AgentUpdateArtifacts` resolves the manifest at dispatch/assembly time;
+  `AgentUpdateArtifacts` resolves the manifest at assignment and sync-assembly
+  time;
   releases predating the manifest fall back to the
   `strato-<os>-<arch>.tar.gz` + `.sha256` sidecar convention.
   `AGENT_UPDATE_ARTIFACT_BASE_URL` points both at a mirror for air-gapped
@@ -55,34 +66,51 @@ Any failure before the final rename leaves the running binary untouched.
 
 Running VMs survive the restart: QEMU VMs expose a deterministic per-VM QMP
 socket and Firecracker VMs a deterministic API socket (issue #433), both of
-which the new agent process re-adopts. The imperative endpoint's `force`
-acknowledgement for Firecracker workloads predates re-adoption and remains
-as a conservative operator confirmation.
+which the new agent process re-adopts. Sandboxes do not yet, which is the one
+caveat the update endpoint asks an operator to acknowledge with `force`.
 
 ## Operator-triggered updates
 
-`POST /api/agents/:id/actions/update` (permission: `agent#manage`):
+`POST /api/agents/:id/actions/update` (permission: `agent#manage`) assigns the
+update and returns **202** — the assignment is the update, and it is durable on
+the agent row. Progress is on the agent resource: `updateDesiredVersion` clears
+on convergence, `updateBlockedReason` carries the agent's reason for waiting,
+`updateFailureReason` a terminal failure.
 
-- Refuses offline agents, agents on a pre-v6 wire protocol (they cannot even
-  decode the command), and — without `force` — agents hosting Firecracker
-  VMs or sandboxes, or already at the target.
-- Resolves the artifact for the agent's reported OS/arch and dispatches an
-  `AgentUpdateMessage`; the agent replies only after the swap, so the HTTP
-  response reports the real outcome. System admins may override the artifact
-  (`artifactUrl` + `sha256`) for air-gapped or one-off builds; delegated
-  admins may not — an explicit artifact is arbitrary code on the host.
+- Refuses offline agents, agents on a pre-v7 wire protocol (they decode the
+  sync but ignore `desiredAgentUpdate`, so the assignment would converge on
+  nothing), agents that have not reported their OS/architecture, and — without
+  `force` — agents hosting sandboxes, whose runtime does not yet re-adopt them
+  after a restart. Hosted VMs need no acknowledgement: QEMU and Firecracker
+  VMs alike are re-adopted (issue #433).
+- Refuses an agent **already at the target**, and `force` does not waive it:
+  an update converges on a version, so an agent already running it has nothing
+  to do. Reinstalling the same build would need an edge-as-nonce the protocol
+  does not carry (ADR 0001 stage 9); until then, reinstalling means pointing
+  the agent at a different version.
+- Needs no auto-update enrollment, and does not create one. Withdrawing an
+  agent from auto-update clears the *rollout's* assignment, never an
+  operator's.
+- System admins may override the artifact (`artifactUrl` + `sha256`) for
+  air-gapped or one-off builds; delegated admins may not — an explicit
+  artifact is arbitrary code on the host. An override is pinned to the agent
+  row (there is no release to re-resolve it from), and its `targetVersion`
+  label is load-bearing rather than informational: convergence is "the agent
+  re-registered at this version", so a label the artifact's binary does not
+  report leaves the update stuck until the health budget records it failed.
 
-## Declarative auto-update
+## Fleet auto-update
 
-The declarative path makes the control plane's target version part of desired
-state, converged like everything else — level-triggered, idempotent, safe to
-drop or replay.
+Desired state is converged like everything else — level-triggered, idempotent,
+safe to drop or replay. What the fleet rollout adds on top is *which* enrolled
+agent gets assigned next, and when.
 
 ### Opt-in
 
 Auto-update is per-agent and default-off: `PATCH /api/agents/:id` with
 `{"autoUpdate": true}` (permission: `agent#manage`), or the toggle on the
-agent detail page. Withdrawing clears any in-flight assignment.
+agent detail page. Withdrawing clears an in-flight rollout assignment — but not
+an operator's own, which never needed enrollment.
 
 ### Fleet rollout (control plane)
 
@@ -93,7 +121,9 @@ where another stopped:
 
 - The sweep assigns the target version to **one agent at a time**
   (deterministic name order), only to enrolled, online, wire-v7+ agents whose
-  platform artifact actually resolves.
+  platform artifact actually resolves. An agent already carrying an assignment
+  — including one an operator made by hand — counts as in flight, so only one
+  agent in the fleet is ever restarting.
 - The assignment (`update_desired_version`) rides the agent's periodic
   desired-state sync as `desiredAgentUpdate`, with the artifact URL and
   checksum re-resolved on every assembly so a long-desired update never
@@ -109,9 +139,11 @@ where another stopped:
   - **Failed** — the agent reported a terminal failure (download, checksum,
     probe, or swap), or went silent past the health budget. The rollout
     **halts** — no further agents are assigned — until an operator
-    intervenes (re-enable auto-update on the failed agent to retry, update
-    it manually) or the target version moves on, which resets stale
-    assignments and failures.
+    intervenes (re-enable auto-update on the failed agent to retry, or
+    re-issue the update, which overwrites the assignment and clears the
+    failure) or the target version moves on, which resets stale rollout
+    assignments and failures. A version an operator assigned by hand is never
+    reset as stale: the deployment target has no opinion about it.
 
 ### Convergence preconditions (agent)
 
@@ -139,8 +171,15 @@ real error rather than a timeout.
 Version 7 adds both fields, additively and backward-tolerantly:
 `DesiredStateMessage.desiredAgentUpdate` (nil = "no opinion", never
 "downgrade") and `ObservedStateReport.agentUpdateStatus`. The gate matters on
-the control-plane side: a pre-v7 agent ignores the field, so the rollout
-never assigns to one — it would burn its health budget against silence.
+the control-plane side: a pre-v7 agent ignores the field, so neither the
+rollout nor the update endpoint assigns to one — it would burn its health
+budget against silence.
+
+Version 27 removed the imperative `agent_update` message, leaving these fields
+as the only update path. A control plane at v27 never sends the old message to
+any agent; the only skew that regresses is an *older* control plane driving a
+v27 agent, whose manual update would time out against an envelope the agent no
+longer decodes. Upgrade the control plane first.
 
 ### Rollback
 
@@ -153,8 +192,12 @@ supervisor helper and is out of scope until halting proves insufficient.
 
 - `strato_agent_auto_update_assignments_total`,
   `..._converged_total`, `..._failures_total{reason}` (`agent_reported` |
-  `health_budget`), `..._parked_total`.
+  `health_budget`), `..._parked_total`. `assignments_total` counts what the
+  fleet rollout assigned; the rest are recorded by the sweep, which since
+  STR-145 classifies operator-assigned updates too, so they cover both.
 - Version transitions log at `notice` on registration ("Agent re-registered
   with a new version") and on every rollout state change; blocked reasons
   and failures surface on `AgentResponse`
-  (`updateBlockedReason`/`updateFailureReason`) and in the UI.
+  (`updateBlockedReason`/`updateFailureReason`) and in the UI, for
+  operator-assigned updates as much as rollout ones —
+  `updateAssignmentSource` says which.

@@ -159,25 +159,25 @@ public struct DesiredWorkloadTombstone: Codable, Sendable, Equatable {
 // MARK: - Desired Agent Update
 
 /// The agent build the control plane wants this agent to be running, carried
-/// on the desired-state sync (issue #434) — the declarative complement to the
-/// imperative `AgentUpdateMessage`. Artifact URL and checksum are resolved
-/// fresh at sync assembly, so a long-desired update never carries a stale
-/// link.
+/// on the desired-state sync (issue #434). Since v27 this is the *only* way an
+/// agent is updated: the imperative `agent_update` message is gone and the
+/// operator's "update now" assigns this field too (ADR 0001 stage 6). Artifact
+/// URL and checksum are resolved fresh at sync assembly, so a long-desired
+/// update never carries a stale link.
 ///
 /// Level-triggered and idempotent: an agent already running `targetVersion`
 /// diffs this to nothing, and absence of the field means "no opinion" — never
-/// "downgrade". The agent converges through the same download/verify/swap/
-/// restart path as the imperative update, but only when its local
-/// preconditions hold (not containerized, no in-flight reconcile work);
-/// otherwise it reports why via `ObservedStateReport.agentUpdateStatus` and
-/// retries on later syncs.
+/// "downgrade". The agent converges through download/verify/swap/restart, but
+/// only when its local preconditions hold (not containerized, no in-flight
+/// reconcile work); otherwise it reports why via
+/// `ObservedStateReport.agentUpdateStatus` and retries on later syncs.
 public struct DesiredAgentUpdate: Codable, Sendable {
     /// The version the agent should be running. Informational to the updater
     /// (the artifact decides what is installed) but the agent uses it to
     /// no-op when already converged and to label its status reports.
     public let targetVersion: String
     /// Where to download the artifact. May be presigned — treat the query
-    /// string as a credential (see `AgentUpdateMessage.redactURL`).
+    /// string as a credential (see `redactURL`).
     public let artifactURL: String
     /// Hex SHA-256 the downloaded artifact must match.
     public let sha256: String
@@ -202,7 +202,22 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 
     /// `artifactURL` with query and userinfo stripped, safe for logs.
     public var redactedArtifactURL: String {
-        AgentUpdateMessage.redactURL(artifactURL)
+        Self.redactURL(artifactURL)
+    }
+
+    /// Artifact URLs may carry credentials — presigned query tokens or
+    /// userinfo are often the only way to authenticate a private mirror
+    /// download. Log this form, never the raw value, on both sides of the
+    /// wire.
+    public static func redactURL(_ raw: String) -> String {
+        guard var components = URLComponents(string: raw) else { return "<unparseable-url>" }
+        let hadQuery = components.query != nil
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        guard let base = components.string else { return "<unparseable-url>" }
+        return hadQuery ? base + "?[redacted]" : base
     }
 }
 

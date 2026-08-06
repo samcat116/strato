@@ -23,13 +23,16 @@ interface AgentUpdateActionProps {
 
 /**
  * "Update" button shown when an online agent runs a version older than the
- * deployment's target. Confirms the restart caveats, then triggers the
- * control-plane-driven self-update; the request resolves only once the agent
- * has installed the binary and started restarting.
+ * deployment's target. Confirms the restart caveats, then assigns the update as
+ * desired state (STR-145): the request returns as soon as the assignment is
+ * durable, and the agent converges on its next sync — its progress shows on the
+ * auto-update card.
  *
- * A 409 from the endpoint is a refusal the operator may override (hosted
- * sandboxes, already at target): the dialog surfaces the reason and
- * offers a force retry instead of failing outright.
+ * A 409 is a refusal. One of them — hosted sandboxes, whose runtime does not
+ * re-adopt after a restart — the operator may override, so the dialog surfaces
+ * the reason and offers a force retry instead of failing outright. The others
+ * (offline, already at the target, too old a wire protocol) are not waivable;
+ * force simply gets the same refusal back.
  */
 export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateActionProps) {
   const [open, setOpen] = useState(false);
@@ -85,8 +88,9 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
             <DialogDescription className="text-muted-foreground" asChild>
               <div className="space-y-2">
                 <p>
-                  The agent downloads the new binary, verifies its checksum, and restarts
-                  into it. During the restart:
+                  The agent is told which build to run; it downloads the new binary,
+                  verifies its checksum, and restarts into it on its next sync. During
+                  the restart:
                 </p>
                 <ul className="list-disc pl-5 space-y-1">
                   <li>The agent briefly disconnects; it re-registers automatically.</li>
@@ -113,10 +117,7 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
             </p>
           )}
           {updateAgent.isPending && (
-            <p className="text-sm text-muted-foreground">
-              The agent is downloading and verifying the update — this can take a few
-              minutes…
-            </p>
+            <p className="text-sm text-muted-foreground">Assigning the update…</p>
           )}
           <DialogFooter>
             <Button

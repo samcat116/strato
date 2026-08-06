@@ -588,9 +588,13 @@ export interface Agent {
   updateAvailable: boolean;
   // Declarative auto-update enrollment and rollout state (issue #434).
   autoUpdate: boolean;
-  // The version the fleet rollout has assigned this agent, while it is
-  // converging; absent once converged (or never assigned).
+  // The version this agent has been assigned, while it is converging; absent
+  // once converged (or never assigned). Set by the fleet rollout and by an
+  // operator's "update now" alike (STR-145), so it is not conditional on
+  // `autoUpdate`.
   updateDesiredVersion?: string;
+  // Who assigned it. Absent exactly when there is no assignment.
+  updateAssignmentSource?: "rollout" | "manual";
   updateAttemptedAt?: string;
   // The agent's self-reported reason for not converging yet.
   updateBlockedReason?: string;
@@ -631,9 +635,10 @@ export interface AdoptWorkloadsResult {
   skippedUnclaimed: number;
 }
 
-// Result of POST /api/agents/:id/actions/update — the agent has verified and
-// installed the new binary and is restarting into it.
+// Result of POST /api/agents/:id/actions/update — the update the agent has
+// been assigned and is now converging on (202, not a completed install).
 export interface AgentUpdateResult {
+  // Always "assigned".
   status: string;
   targetVersion: string;
   artifactUrl: string;

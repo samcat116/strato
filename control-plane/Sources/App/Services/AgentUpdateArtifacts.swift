@@ -24,8 +24,11 @@ struct AgentReleaseManifest: Decodable {
     let assets: [Asset]
 }
 
-/// Everything the update command needs to hand an agent.
-struct ResolvedAgentArtifact: Equatable {
+/// Everything a desired agent update needs to name an artifact. `Codable` so an
+/// operator-supplied override can be pinned to the agent row (`Agent
+/// .updateArtifactOverride`) and replayed on every sync assembly; release-path
+/// artifacts are re-resolved instead of stored.
+struct ResolvedAgentArtifact: Codable, Equatable, Sendable {
     let url: String
     let sha256: String
     let kind: AgentUpdateArtifactKind
@@ -35,7 +38,7 @@ struct ResolvedAgentArtifact: Equatable {
 
 /// The seam through which release artifacts are resolved for an agent update:
 /// rollout-assignment time (the auto-update sweep), sync-assembly time
-/// (`DesiredStateAssembler`), and the imperative update endpoint. A value
+/// (`DesiredStateAssembler`), and the operator's update endpoint. A value
 /// wrapping one closure so tests can substitute a stub without a release host;
 /// production resolves via `AgentUpdateArtifacts.resolveArtifact`.
 ///

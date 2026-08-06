@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 26), stamped on
+`WireProtocol.swift` holds the protocol version (currently 27), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -57,8 +57,7 @@ ad-hoc checks scattered through the code:
 | `supportsNetworkSync` | 3 | Networks in the desired-state sync |
 | `supportsSiteAuthority` | 4 | `networksAuthoritative` site-topology flag |
 | `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
-| `supportsAgentUpdate` | 6 | Imperative agent self-update |
-| `supportsDesiredAgentUpdate` | 7 | Declarative agent update in the sync |
+| `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v27) |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
 | `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
@@ -189,7 +188,6 @@ dual-mode rollout.
 | `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
-| `agent_update` | Imperative agent self-update (v6+) |
 
 **Agent → control plane**
 
