@@ -38,9 +38,10 @@ need no inbound connectivity.
 
 The control plane is declarative, not imperative:
 
-- The database stores each VM's and sandbox's **desired state** (`running`,
-  `shutdown`, `paused`, `absent`) alongside its observed status. API
-  mutations update desired state; agents converge on it.
+- The database stores each VM's **desired state** (`running`, `shutdown`,
+  `paused`, `absent`) — and each sandbox's (`running`, `stopped`, `absent`)
+  — alongside its observed status. API mutations update desired state;
+  agents converge on it.
 - The control plane periodically sends each agent a full, authoritative
   `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
   Each desired record carries a monotonic **generation** counter guarding
@@ -144,18 +145,17 @@ listener authenticated by their SPIFFE SVID (issue #493).
 
 ### Authentication
 
-- **WebAuthn/Passkeys** (swift-server/webauthn-swift) with Vapor sessions
-  is the primary human login; **API keys** (bearer tokens with scoping)
-  serve programmatic access; optional **OIDC** providers federate sign-in,
-  with **SCIM** provisioning for users and groups and a Shared Signals
-  (SSF) receiver for revocation events.
-- Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in
-  front of the control plane. The listener prefers **X25519MLKEM768**, a
-  hybrid post-quantum key exchange, so a recorded handshake cannot be
-  decrypted retroactively once quantum computers arrive; the classical
-  X25519 half keeps the connection safe if ML-KEM is ever broken. Agents
-  negotiate it automatically from swift-nio-ssl 2.37.1 onward, and it needs
-  Envoy >= v1.39.0.
+**WebAuthn/Passkeys** (swift-server/webauthn-swift) with Vapor sessions is
+the primary human login; **API keys** (bearer tokens with scoping) serve
+programmatic access; optional **OIDC** providers federate sign-in, with
+**SCIM** provisioning for users and groups and a Shared Signals (SSF)
+receiver for revocation events. Agent transport security is
+SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane
+(the only agent auth path); the listener prefers **X25519MLKEM768**, a
+hybrid post-quantum key exchange, so a recorded handshake cannot be
+decrypted retroactively once quantum computers arrive, while the classical
+X25519 half keeps the connection safe if ML-KEM is ever broken (agents
+negotiate it from swift-nio-ssl 2.37.1 onward; it needs Envoy >= v1.39.0).
 
 ### Authorization (built-in Cedar IAM)
 
@@ -163,44 +163,26 @@ Authorization is a built-in IAM system evaluated **in-process** by an
 embedded [Cedar](https://www.cedarpolicy.com/) policy engine — there is no
 external authorization service. Postgres is the only authorization store
 (role bindings, guardrails, the resource tree), which makes grants
-transactional with the resources they protect. The full design — including
-why it replaced the earlier SpiceDB deployment — is the
-[iam](./iam.md) decision record.
+transactional with the resources they protect. Access derives from walking
+up the resource hierarchy — `organization` → folder (`organizational_unit`
+on the wire, pending rename) → `project` → resource; explicit `forbid`
+beats explicit `permit` beats default deny. The full design — the model,
+roles, guardrails, decision logging, and why it replaced the earlier
+SpiceDB deployment — is the [iam](./iam.md) decision record.
 
-Access derives from walking up the resource hierarchy — `organization` →
-folder (`organizational_unit` on the wire, pending rename) → `project` →
-resource — with hierarchy inheritance a Cedar language primitive rather than
-hand-rolled recursion. Explicit `forbid` beats explicit `permit` beats
-default deny.
-
-Integration points:
-
-- `AuthorizationMiddleware` (registered globally, including in tests) is
-  **structurally default-deny**: every registered route must fall into
-  exactly one class — public allowlist (health checks, `/auth/*`, the agent
-  mTLS surfaces, the SCIM data plane), login-only identity-plane surfaces,
-  resource-mapped (`/api/vms`, `/api/sandboxes` — the middleware maps HTTP
-  method + path to the checked action, including lifecycle verbs such as
-  `start`, `stop`, `restart`, `pause`, `resume`, and sandbox `exec`), or
-  handler-checked. An unclassified route fails boot; an unmatched path is
-  denied.
-- Checks funnel into `IAMAuthorizer`, which evaluates the compiled Cedar
-  policy set against `role_bindings` rows and the relational
-  org/folder/project hierarchy. Handlers use `req.can` / `req.authorize`
-  for per-object checks. System admins are allowed by a tier-1 policy
-  inside the evaluator, not by a bypass.
-- **Roles** are nested global action groups
-  (`viewer ⊂ operator ⊂ editor ⊂ admin`); bindings attach a principal
-  (user or group) with a role to an org, folder, project, or individual
-  resource. Creating a resource writes an ordinary binding for the creator
-  in the same transaction — visible, listable, revocable.
-- **Guardrails** are forbid-only ceilings authored by org/folder admins;
-  they inherit downward, intersect along the ancestry chain, and bind
-  system admins like everyone else.
-- Every decision lands in the `iam_decision_logs` decision log with the
-  deciding policy ids, the policy-set version, and the tier; the
-  **can-i / who-can** API (`/api/authorization/*`) answers hypothetical and
-  reverse queries.
+Integration points, briefly: `AuthorizationMiddleware` (registered globally,
+tests included) is **structurally default-deny** — every route must fall
+into exactly one class (public allowlist, login-only, resource-mapped, or
+handler-checked), an unclassified route fails boot, and an unmatched path is
+denied. Checks funnel into `IAMAuthorizer`; handlers use `req.can` /
+`req.authorize` for per-object checks, and system admins are allowed by a
+tier-1 policy inside the evaluator, not by a bypass. **Roles** are nested
+global action groups (`viewer ⊂ operator ⊂ editor ⊂ admin`) bound at org,
+folder, project, or resource level, with the creator's binding written in
+the same transaction as the resource. **Guardrails** are forbid-only
+ceilings that inherit downward and bind system admins like everyone else.
+Every decision lands in the decision log, and the **can-i / who-can** API
+(`/api/authorization/*`) answers hypothetical and reverse queries.
 
 ### Hierarchy, groups, and quotas
 
@@ -213,12 +195,15 @@ create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 
 ## Observability
 
-The control plane emits OTLP metrics, logs, and traces via swift-otel to
-an OTel collector, which exports to Prometheus, Loki, and Jaeger
-(`OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`).
-VM and sandbox console/workload logs flow from agents over the WebSocket
-and are pushed to Loki. Audit events fan out to the database and optional
-external backends, with retention pruning.
+The control plane emits OTLP metrics, logs, and traces via swift-otel
+(`OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`). The
+Helm chart ships an OTel collector that exports metrics to Prometheus (a
+remote-write to the bundled instance, plus a scrape endpoint) and traces to
+a configurable OTLP endpoint; collected logs go to the debug exporter. The
+compose deployment leaves OTLP export off and runs Loki directly. VM and
+sandbox console/workload logs flow from agents over the WebSocket and are
+pushed to Loki. Audit events fan out to the database and optional external
+backends, with retention pruning.
 
 ## Deployment shapes
 
@@ -244,6 +229,7 @@ external backends, with retention pruning.
 | [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
 | [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |
 | [iam](./iam.md) | The Cedar migration decision record |
+| [authorization-edge-audit](./authorization-edge-audit.md) | Point-in-time audit of the authorization enforcement edge (July 2026) |
 | [guest-identity](./guest-identity.md) | SPIFFE SVIDs for guest VMs and sandboxes (design proposal) |
 | [webhooks](./webhooks.md) | User-managed event notifications: event catalog, signing, transactional outbox |
 | [agent-updates](./agent-updates.md) | Operator-triggered and declarative agent updates |

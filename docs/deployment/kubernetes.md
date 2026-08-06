@@ -43,28 +43,33 @@ stored in the same secret so every consumer stays in sync.
 
 ## Production configuration
 
-The only values you must set for a production install are the external
-hostname ones:
+External exposure goes through the **Gateway API** (Envoy Gateway): one
+LoadBalancer on `:443` carries the web UI/API, agent mTLS, and SPIRE node
+attestation, routed by SNI. TLS for the web host terminates at the Gateway;
+the agent and SPIRE hosts pass through untouched, because agent mTLS is
+end-to-end — an edge that terminated it would strip the client certificate
+(the SVID) and the control plane would reject every agent.
 
 ```yaml
 # my-values.yaml
-ingress:
+gateway:
   enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-  hosts:
-    - host: strato.example.com
-      paths:
-        - path: /
-          pathType: Prefix
+  # The conventional split: your infrastructure owns the Gateway (e.g. an
+  # Argo app deploying Envoy Gateway) and the chart attaches its routes to it
+  # (create: false, the default). Set create: true to have the chart render
+  # the Gateway itself:
+  create: true
+  gatewayClassName: eg          # Envoy Gateway's default GatewayClass
   tls:
-    - secretName: strato-tls
-      hosts:
-        - strato.example.com
+    certManager:
+      enabled: true             # issue the web-host cert via the Gateway shim
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
 
 strato:
-  # Reachable by hypervisor hosts; embedded in agent join commands.
+  # Reachable by hypervisor hosts; derives the SNI hostnames below and is
+  # embedded in agent join commands.
   externalHostname: strato.example.com
   webauthn:
     relyingPartyId: strato.example.com
@@ -75,18 +80,84 @@ strato:
 helm install strato . -f my-values.yaml
 ```
 
+The install notes print the resulting URL — `https://strato.example.com`,
+TLS terminated at the Gateway on `:443`.
+
+Three SNI hosts share that one listener. Leave `gateway.hostnames.*` empty
+and they derive from `strato.externalHostname`:
+
+| SNI host | Gateway route | Terminates where | Backend |
+| --- | --- | --- | --- |
+| `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (web UI and JSON API) |
+| `agents.<host>` | `TLSRoute` passthrough | at the Envoy sidecar (sees the SVID) | control-plane `agent-mtls` `:8443` |
+| `spire.<host>` | `TLSRoute` passthrough | at the SPIRE server | SPIRE node API `:8081` |
+
+An SVID node therefore connects to `wss://agents.<host>/agent/ws` and attests
+against `spire.<host>:443` — outbound-443-only, the friendliest shape for
+nodes behind home networks. The chart points `EXTERNAL_HOSTNAME` at
+`agents.<host>`, so the bootstrap command and telemetry-ingest origin the UI
+hands you already target the passthrough listener — no manual rewrite needed.
+`TLSRoute` is an experimental Gateway API channel; the chart pins
+`gateway.networking.k8s.io/v1alpha2` for it, matching Envoy Gateway's
+experimental install. Deploying Envoy Gateway itself, and DNS for the three
+hosts (external-dns needs `--source=gateway-httproute` and
+`--source=gateway-tlsroute`), are infrastructure concerns handled outside the
+chart.
+
 WebAuthn requires the origin to exactly match the URL users visit (and HTTPS
-for anything other than localhost). When `ingress.tls` is set, the chart
-derives sensible WebAuthn defaults from the first ingress host, but setting
-them explicitly is recommended.
+for anything other than localhost). With `gateway.enabled` the chart derives
+sensible WebAuthn defaults from the gateway web host, but setting them
+explicitly is recommended.
+
+::: warning The legacy `ingress:` block is not a standalone path
+The Gateway superseded the chart's `ingress:` block for external exposure
+(issue #508). Setting `ingress.enabled` without `gateway.enabled` fails at
+render time: the legacy Ingress routes `/agent` to the plain HTTP service
+port, terminating TLS at the edge, so no client certificate ever reaches the
+Envoy mTLS sidecar and the control plane rejects every agent. Keep the
+Ingress only for a web-host route alongside the Gateway during a migration;
+new installs should use the Gateway alone.
+:::
 
 To provision users yourself rather than letting anyone sign up, add
 `strato.selfRegistrationEnabled: false`. The first account is still creatable,
 so first-run setup works with it disabled — see
 [Self-registration](/deployment/overview#self-registration).
 
+### Image storage: use S3 in production
+
+`strato.imageStorage` decides where uploaded VM image bytes (disks, kernels,
+rootfs artifacts) live. The default `filesystem` backend writes into the
+container's ephemeral filesystem — the chart mounts no persistent volume for
+images, so uploads are lost whenever the pod restarts, and multiple replicas
+each hold a different, partial set (an agent can be handed a download URL
+that whichever replica answers has never heard of). The default is kept only
+so a single-replica install still starts.
+
+Production should use the `s3` backend. Any S3 API implementation works
+(MinIO, Garage, Ceph RGW, R2, or AWS itself); none is bundled:
+
+```yaml
+strato:
+  imageStorage:
+    backend: s3
+    s3:
+      bucket: strato-images
+      endpoint: http://minio.storage.svc:9000  # empty for AWS S3
+      existingSecret: strato-s3-credentials    # or leave keys empty for
+                                               # IRSA / workload identity
+```
+
+### Other production values
+
+| Value | What it does |
+| --- | --- |
+| `externalDatabase.*` | Use an external PostgreSQL (`postgresql.enabled: false`). `existingSecret` sources the password from a pre-provisioned Secret; `strato.database.tls` defaults to `require` for external databases. |
+| `externalValkey.*` | Use an external Valkey (`valkey.enabled: false`) — Valkey is required either way. |
+| `strato.secretEncryption` | Points `existingSecret` at a Secret holding the 32-byte key (`openssl rand -hex 32`) that encrypts stored secrets — OIDC client secrets, SSF stream tokens, registry pull secrets, webhook signing secrets — at rest. Without it the control plane warns and stores them unencrypted. |
+
 Further hardening options (network policies, pod disruption budgets,
-resource limits, external database) are documented in the
+resource limits) are documented in the
 [chart README](https://github.com/samcat116/strato/blob/main/helm/strato-control-plane/README.md).
 
 ### Separating session storage from coordination

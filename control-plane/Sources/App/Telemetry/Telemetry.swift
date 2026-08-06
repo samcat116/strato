@@ -26,8 +26,9 @@ enum Telemetry {
         Counter(label: "strato_agent_disconnections_total", dimensions: [("reason", reason)]).increment()
     }
 
-    /// A registration attempt was rejected. `reason` is e.g. `invalid_token`,
-    /// `expired_token`, `register_error`, or `token_save_failed`.
+    /// A registration attempt was rejected. `reason` is e.g. `register_error`,
+    /// `unsupported_protocol`, `organization_scope_mismatch`,
+    /// `missing_organization_scope`, or `same_named_networks_unsupported`.
     static func agentRegistrationFailed(reason: String) {
         Counter(label: "strato_agent_registration_failures_total", dimensions: [("reason", reason)]).increment()
     }

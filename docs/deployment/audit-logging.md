@@ -2,8 +2,8 @@
 
 The control plane keeps a centralized audit trail of who did what: every API
 mutation, authentication events (login, logout, registration, OIDC), and — as
-first-class events — every request served through the system-admin permission
-bypass, including reads. Events are fanned out to one or more configurable
+first-class events — every request allowed by the platform system-admin
+policy, including reads. Events are fanned out to one or more configurable
 backends.
 
 ## What gets recorded
@@ -11,7 +11,17 @@ backends.
 Each audit event captures the actor (user, username snapshot, API key),
 the organization, the HTTP method/path/status, a parsed resource reference
 (type, id, action — e.g. `vms` / `<uuid>` / `start`), the client IP, and
-whether the request used the system-admin bypass.
+whether the request was allowed by the system-admin policy. That last flag
+is recorded as `adminBypass` (the historical name): since the Cedar cutover
+it is derived from the evaluator's determining policies — admin access is a
+Cedar-evaluated tier-1 allow, not a controller bypass — and it is what makes
+admin activity a filterable, first-class part of the trail.
+
+The client IP (`sourceIP`) is resolved through the shared proxy-trust
+configuration (`RATE_LIMIT_TRUST_FORWARDED_FOR` /
+`RATE_LIMIT_TRUSTED_PROXY_HOPS`), counting in from the right of
+`X-Forwarded-For` so a client cannot forge the address on its own audit
+events — see [Rate limiting](/deployment/rate-limiting#configuration).
 
 Event types:
 
@@ -22,8 +32,10 @@ Event types:
 | `auth.logout` | Session logout |
 | `auth.register` | Passkey registration completing (also creates a session) |
 | `auth.oidc_login` / `auth.oidc_login_failed` | OIDC callback success / failure |
+| `auth.passkey_added` / `auth.passkey_removed` | Self-service passkey enrollment / removal (`/api/users/me/passkeys`). Credential changes alter who can sign in, so they are audited alongside the login events. |
 | `iam.cross_org_grant` | A role granted to a principal (user or group) outside the resource's organization. Cross-org access is explicit-only and deliberately loud; the metadata names the principal and the role. |
 | `iam.cross_org_revoke` | A cross-org principal's role revoked — the visible end of external access. |
+| `ssf.*` | Actions taken by the [Shared Signals](/deployment/shared-signals) receiver: `ssf.event_received`, `ssf.sessions_revoked`, `ssf.api_keys_deactivated`, `ssf.user_disabled`, `ssf.user_enabled`, `ssf.stream_verified`, `ssf.stream_updated`, `ssf.event_ignored`, `ssf.event_error`, `ssf.subject_unmatched`. Security-relevant by construction — an IdP told Strato to revoke sessions or disable a user, and the trail shows what was done about it. |
 
 ## Configuration
 

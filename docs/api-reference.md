@@ -27,12 +27,21 @@ Every operation requires authentication unless the spec marks it public. Two
 schemes are accepted interchangeably:
 
 - **API key** (`Authorization: Bearer <key>`) — mint one with
-  `POST /api/api-keys`. Keys carry scopes (`read`, `write`).
+  `POST /api/api-keys`. Keys carry scopes (`read`, `write`, `admin`, ordered
+  least-to-most privileged: `admin` implies `write` implies `read`).
 - **Session cookie** (`vapor-session`) — set after a WebAuthn/passkey login.
 
 Per-object access is additionally enforced by the built-in IAM system (an
 in-process Cedar policy evaluator); an authenticated-but-unauthorized caller
 receives `403`.
+
+### Pagination
+
+List endpoints page by default (issue #700): `limit` (default 50, max 500)
+and `offset` (default 0) query parameters select the slice, and the response
+is a paged envelope — `items` (the requested slice), `total` (the count after
+authorization filtering), plus the clamped `limit` and `offset` actually
+applied. Non-integer values are rejected with `400`.
 
 ### Asynchronous mutations
 

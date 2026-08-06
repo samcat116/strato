@@ -17,8 +17,9 @@
 # hardcoded here. The one-shot services (image-storage-init, spire-bootstrap)
 # exit 0 after doing their job — that is expected in `docker compose ps`.
 #
-# For local development from source, use the docker-compose.yml at the
-# repository root instead.
+# To run from source, swap image: for build: on the control-plane/frontend
+# services in an untracked docker-compose.override.yml — never edit this file.
+# See docs/development/local-development.md.
 
 services:
   db:

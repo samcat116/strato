@@ -45,8 +45,14 @@ no tokens are stored in JS. It parses Vapor `{reason}`/`{error}` bodies into
 an `ApiError`, hard-redirects to `/login` on 401 (except on auth endpoints),
 and rewrites generic 403s into a permissions message. Per-resource endpoint
 modules (`lib/api/vms.ts`, `sandboxes.ts`, `agents.ts`, `images.ts`,
-`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) are typed against the
-hand-maintained DTO definitions in `types/api.ts` (there is no codegen).
+`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) carry the types, in
+two regimes: `bun run generate:api-types` (openapi-typescript) generates
+`src/types/openapi.ts` from the control plane's OpenAPI document — the same
+one its handlers are generated from, so the types cannot drift from the
+server, and CI fails when the committed file is stale — and
+`lib/api/projects.ts` is the first module typed against it (issue #583). The
+remaining ~28 modules are still typed against the hand-maintained DTO
+definitions in `types/api.ts`, migrating surface by surface.
 Domain-specific error prettifying lives in `lib/errors.ts`.
 
 **Server state — TanStack Query** (`providers/query-provider.tsx`; defaults:
@@ -144,9 +150,11 @@ environment, development included, goes through the same passkey flows.
   natively-running control plane.
 - **Deployed**: `control-plane/web/Dockerfile` builds with Bun and runs the
   standalone server on Node as a non-root user. In the compose deployment,
-  `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/agent/`,
-  `/health`, `/organizations/` go to the control plane (with hour-long read
-  timeouts for the WebSockets), everything else to the frontend.
+  `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/oauth/`
+  (the CLI's OAuth device grant), `/agent/`, `/health`, `/organizations/`,
+  and `/ssf/` (the Shared Signals receiver) go to the control plane (with
+  hour-long read timeouts for the WebSockets), everything else to the
+  frontend.
 - **Tailwind v4** is configured CSS-first: no `tailwind.config`; the theme
   lives in `app/globals.css` via `@theme`, processed by
   `@tailwindcss/postcss`.

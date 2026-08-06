@@ -11,6 +11,21 @@ turn off:
 VMs run on **[agents](/deployment/agents)** — hypervisor hosts joined with a
 one-line command.
 
+## What's where
+
+| Page | Covers |
+|---|---|
+| [Docker Compose](/deployment/docker-compose) | The single-host stack: setup, services, secrets, upgrades |
+| [Kubernetes (Helm)](/deployment/kubernetes) | The chart: Gateway exposure, credentials, SPIRE, production values |
+| [Agents](/deployment/agents) | Enrolling hypervisor nodes, remote updates, mTLS, connectivity |
+| [IAM & Access](/deployment/iam) | Self-registration, WebAuthn, OIDC claim mapping, programmatic credentials |
+| [Health checks](/deployment/health-checks) | The `/health` endpoints, probes, graceful shutdown, blue/green |
+| [Rate limiting](/deployment/rate-limiting) | Request throttling, auth lockout, proxy trust for client IPs |
+| [Logging](/deployment/logging) | Getting stdout logs captured reliably; the HTTP request log |
+| [Audit logging](/deployment/audit-logging) | The who-did-what trail: event types, backends, retention |
+| [Shared Signals (SSF)](/deployment/shared-signals) | Receiving IdP security events (session revocation, user disable) |
+| [Observability](/deployment/observability) | OTel metrics/traces, the metric catalog, the alert runbook |
+
 ## Session lifetime
 
 Browser sessions live in Valkey and expire after a period of inactivity — every
@@ -23,7 +38,7 @@ By default sessions share the Valkey instance the coordination layer uses. The
 two can be separated with `SESSION_VALKEY_*`, which is worth doing: coordination
 is fail-open, session storage is not, so sharing one instance lets a
 coordination problem log everyone out. See
-[docker-compose](./docker-compose.md#splitting-session-storage).
+[docker-compose](/deployment/docker-compose#splitting-session-storage).
 
 ## Self-registration
 

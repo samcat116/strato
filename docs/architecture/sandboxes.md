@@ -8,15 +8,19 @@ a sandbox is a fast, disposable execution environment for a container-shaped
 workload — an image reference, resource sizing, and overrides for
 entrypoint/cmd/env/workdir.
 
-> **Status**: phase 1 in progress. The wire protocol (issue #411), the
-> generalized operation machinery (#412), the control-plane model/API (#413),
-> registry pull secrets + tag→digest resolution (#414), scheduler gating
-> + quota accounting (#415), the NIC/address model + IPAM integration
-> (#416), the agent's OCI client + rootfs materialization (#418), and the
-> guest base image — kernel + init/guest-agent (#419) — are landed; the rest
-> of the agent runtime is tracked in issues #417 and #420–#422. Sections
-> below describe the agreed design; anything not yet landed is marked with
-> its issue.
+> **Status**: implemented end to end. The wire protocol, the generalized
+> operation machinery, the control-plane model/API, registry pull secrets +
+> tag→digest resolution, scheduler gating + quota accounting, and the full
+> agent runtime — OCI pull + rootfs materialization, the guest base image,
+> vsock control, `FirecrackerSandboxRuntime` — are all landed, as are
+> exec/attach + workload logs (phase 2), jailer hardening (phase 3), and
+> snapshots: checkpoint/restore, warm start, fork, and cross-agent mobility
+> (phase 4). The main open front is **guest networking** (STR-100..104): the
+> NIC/address model and IPAM allocation exist, and agents can wire a NIC
+> into the jail, but the NIC stays off the wire until the guest can
+> configure it (STR-101) and the fleet-wide flag becomes a per-agent gate
+> (STR-103) — see the networking bullet below. Issue numbers throughout mark
+> which change delivered each piece.
 
 ## Decision: native Swift Firecracker path
 
@@ -141,7 +145,7 @@ itself):
   started" — it ran to completion; phase 1 has no restart policy, so the
   reconciler must not relaunch one-shot workloads forever) and desired
   `stopped` (equally not-running). Exit-code surfacing to the API and richer
-  lifecycle handling come with #423.
+  lifecycle handling landed with #423.
 - Sandbox mutations create the same 202-Accepted async operation rows as VM
   mutations, via the operation machinery generalized in #412.
 
@@ -185,9 +189,9 @@ same asymmetric hazard as the v3 networks list:
   registration (`AgentRegisterMessage.sandboxCapable`), and the scheduler keys
   eligibility on that flag plus the version (#415) — never on the version
   alone. Agent-side, the flag comes from `SandboxRuntimeProbe`: the build must
-  contain the runtime driver (`SandboxRuntimeProbe.runtimeBuilt`, hard-false
-  until #421 lands — a runtime-less agent would silently ignore desired
-  sandboxes), Firecracker must be usable (binary + KVM, from the hypervisor
+  contain the runtime driver (`SandboxRuntimeProbe.runtimeBuilt` — true now
+  that #421's runtime ships; a runtime-less agent would silently ignore
+  desired sandboxes), Firecracker must be usable (binary + KVM, from the hypervisor
   probe), **and** the sandbox guest base image (#419) must be present at
   `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`) — so
   the capability lights up exactly when a runtime-carrying agent has the
@@ -205,8 +209,8 @@ same asymmetric hazard as the v3 networks list:
   `resource_operations` row (`resource_kind = sandbox`) and bump desired state
   in one transaction, returning **202 Accepted** — the machinery generalized
   in #412. Restart is expressed as a fresh desired-`running` generation (there
-  is no imperative sandbox reboot message); its agent-side interpretation
-  lands with the runtime (#421).
+  is no imperative sandbox reboot message); the runtime (#421) interprets it
+  agent-side.
 - `sandbox` is an IAM node type of its own: the same action families as
   `virtual_machine` minus console/pause/promote, plus `exec` for phase 2.
   `AuthorizationMiddleware` guards `/api/sandboxes` through the same
@@ -280,18 +284,20 @@ The agent-side pipeline, all native Swift:
    re-listen, re-identify) in mind from the start. See the *guest rootfs & boot
    strategy* decision above for the rootfs/config-drive/vsock design and
    `sandbox-guest/` for the artifacts and build pipeline.
-3. **vsock** (#420): SwiftFirecracker grows vsock device support for
+3. **vsock** (#420, landed): SwiftFirecracker's vsock device support for
    host↔guest control.
-4. **`SandboxRuntimeService`** (#421): the driver that wires it together on
-   the existing Firecracker machinery, registered in the agent's driver
-   registry and manifest like any other backend, including orphan adoption
-   after agent restarts. The reconciler and manifest are generalized over
+4. **`SandboxRuntimeService`** (#421, landed): the driver that wires it
+   together on the existing Firecracker machinery, registered in the agent's
+   driver registry and manifest like any other backend, including orphan
+   adoption after agent restarts. The reconciler and manifest are generalized over
    workload kinds first (#417, landed): the diff engine, generation guard,
    attempt cap, and per-workload serial lanes are shared across kinds — VM
    items route to hypervisor drivers, sandbox items to the
-   `SandboxRuntimeService` seam (which stays nil, and the capability off,
-   until #421 ships the driver) — and manifest entries carry a workload kind
-   so sandbox orphans survive restarts with their resources reserved.
+   `SandboxRuntimeService` seam, populated with `FirecrackerSandboxRuntime`
+   on capable Linux hosts (nil only on hosts that cannot run sandboxes,
+   which keeps the capability off there) — and manifest entries carry a
+   workload kind so sandbox orphans survive restarts with their resources
+   reserved.
 
 ## Phase 2: exec/attach and workload logs (issue #423)
 
@@ -403,7 +409,7 @@ persisted.
   `/config.img`, `/kernel`, `/initramfs`). The API socket
   (`/run/firecracker.socket`) and vsock UDS (`/run/vsock.sock`) are created by
   the jailed process under `run/`; the host dials them through the chroot
-  prefix. Phase-4 snapshot files will follow the same rule: staged into, and
+  prefix. Phase-4 snapshot files follow the same rule: staged into, and
   loaded from, in-jail paths. Teardown removes the whole jail subtree.
 - **Privilege drop**: each sandbox runs as its own uid/gid, derived
   statelessly as `sandbox_jailer_uid_base + (FNV-1a-64(sandboxId) % 65536)` —
