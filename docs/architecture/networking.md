@@ -170,8 +170,9 @@ Solicitation from the port's `addresses` field, which is why the addresses need
 not belong to the switch's subnets.
 
 The localport is the *transport* half of the IMDS story. The *payload* half
-is the per-VM metadata document itself: `InstanceMetadataFactory` builds it
-control-plane-side and `DesiredStateAssembler` attaches it to each VM's
+is the per-VM metadata document itself: the control plane builds it (the
+factory extension in `InstanceMetadataFactory.swift`) and
+`DesiredStateAssembler` attaches it to each VM's
 `DesiredVMState.metadata` (wire v26, STR-48/51;
 `shared/Sources/StratoShared/InstanceMetadata.swift`), so agents already hold,
 per VM, exactly what a metadata listener should serve. With both halves in

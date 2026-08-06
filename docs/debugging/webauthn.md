@@ -42,11 +42,17 @@ anywhere). For a real hostname:
 `setup.sh` is idempotent and never overwrites an existing `.env`. To change
 the hostname on an existing deployment, edit `.env` directly —
 `STRATO_HOSTNAME`, the three `WEBAUTHN_*` variables, plus
-`CONTROL_PLANE_URL`/`BASE_URL` — then restart the service:
+`CONTROL_PLANE_URL`/`BASE_URL` — then redeploy:
 
 ```bash
-docker compose up -d control-plane
+./redeploy.sh
 ```
+
+Use `redeploy.sh`, not `docker compose up -d control-plane`: the config
+change recreates the control-plane container, which strands the `envoy` and
+`spire-api-bridge` containers sharing its network namespace — agent
+enrollment then fails with a misleading "SPIRE server unreachable" error.
+See [Operations](/deployment/docker-compose#operations).
 
 Changing the relying-party ID orphans existing passkeys; users must
 re-register.

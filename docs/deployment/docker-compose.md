@@ -64,7 +64,9 @@ in front. The generated `.env` sets
 
 `setup.sh` is idempotent — it never overwrites an existing `.env`. To change
 non-secret settings later (hostname, version pin, log level), edit `.env`
-directly and `docker compose up -d` again.
+directly and run `./redeploy.sh` — a bare `docker compose up -d` recreates
+the control plane on a config change without recreating the containers that
+share its network namespace (see [Operations](#operations)).
 
 ## What runs
 
