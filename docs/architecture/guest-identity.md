@@ -141,10 +141,11 @@ plugin — is what vouched for the workload.
 `/vm/` is fixed by [#789](https://github.com/samcat116/strato/issues/789) and
 adopted verbatim rather than re-litigated. `/sandbox/` is its twin.
 
-Two prefixes rather than a shared `/instance/`: `resource_kind` is already
-`virtual_machine | sandbox` throughout the codebase (see `CONTEXT.md`), and
-collapsing the distinction in the identity namespace would be the one place it
-does not hold.
+Two prefixes rather than a shared `/instance/`: the kind is already a
+first-class discriminator everywhere else — `resource_kind` on operations
+(`virtual_machine | sandbox`, see `CONTEXT.md`) and `WorkloadKind` on the wire
+(`vm | sandbox`) — and collapsing it in the identity namespace would be the one
+place it does not hold.
 
 **UUIDs, never names.** A VM's name is mutable and reusable; a SPIFFE ID that can
 be re-pointed at a different resource is a lookup key that lies, and every
@@ -171,6 +172,10 @@ Every guest entry carries two selectors:
 strato:instance:<uuid>     # the uniqueness carrier — mandatory
 strato:kind:vm|sandbox     # makes a cross-kind match structurally impossible
 ```
+
+The `kind` values are `WorkloadKind`'s raw values
+(`shared/Sources/StratoShared/WorkloadKind.swift`), not a third spelling of the
+same distinction.
 
 SPIRE matches an entry when the **entry's** selector set is a subset of the
 **requested** set. Requesting more selectors therefore matches *more* entries,
@@ -316,6 +321,20 @@ link-local address — no stream, so no rotation and no revocation.
 and attached read-only — structurally a one-shot bootstrap channel. It cannot
 rotate an hour-lived credential, and it is VM-only. **Kept for what it is good
 at**: installing the guest daemon.
+
+**4b. The instance metadata service** (`InstanceMetadata`, STR-48). This one
+answers cloud-init's objection — it rides the desired-state sync, so it is
+level-triggered and an edit propagates on the next sync rather than needing a
+rebuilt disk. It is still the wrong place for an SVID, for reasons its own
+doc comment states plainly: it is "a publication boundary, not an internal
+DTO", where "every field is readable by any process inside the VM that can reach
+the link-local address." A private key published to every process in the guest
+cannot support per-workload identity *within* the guest, which is the point of
+running a Workload API there. It also needs guest networking (so, no sandboxes)
+and would route key material through the control plane and the sync — the
+`MintX509SVID` problem by another road. **What it is good for**: publishing the
+guest's own SPIFFE ID, which is not a secret and which in-guest tooling
+otherwise has to learn from its certificate.
 
 **5. The sandbox config drive.** `SandboxConfigDrive.standardBlockImageBytes`
 (256 KiB) is part of the warm-snapshot cache key, so growing the document
