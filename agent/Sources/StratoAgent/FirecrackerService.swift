@@ -274,6 +274,13 @@ actor FirecrackerService: HypervisorService {
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
 
+        // Remove the VM's directory, which holds the rootfs materialized at
+        // create. The client owns the API socket (in its own socket directory);
+        // everything else this driver wrote is under here. Same rule as the
+        // QEMU driver: one recursive removal rather than a list of files that
+        // a later addition can fall off (#969).
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
+
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
     }
 

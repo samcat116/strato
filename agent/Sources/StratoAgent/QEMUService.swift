@@ -481,7 +481,7 @@ actor QEMUService: HypervisorService {
         // Stop the VM's swtpm, if it has one. Unconditional rather than gated
         // on the spec's machine profile: a re-adopted VM has no spec here, and
         // stopping is a no-op when no swtpm is running.
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
 
         // Clean up VM resources
@@ -490,46 +490,17 @@ actor QEMUService: HypervisorService {
         vmSpawnSizing.removeValue(forKey: vmId)
         vmConfigs.removeValue(forKey: vmId)
         awaitingFirstStart.remove(vmId)
+        vmConsoleSocketPaths.removeValue(forKey: vmId)
+        vmSerialSocketPaths.removeValue(forKey: vmId)
 
-        // Clean up console socket
-        if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
-            try? FileManager.default.removeItem(atPath: socketPath)
-            logger.debug("Removed console socket: \(socketPath)")
-        }
-
-        // Clean up serial socket
-        if let socketPath = vmSerialSocketPaths.removeValue(forKey: vmId) {
-            try? FileManager.default.removeItem(atPath: socketPath)
-            logger.debug("Removed serial socket: \(socketPath)")
-        }
-
-        // Clean up the deterministic VNC socket (issue #566). Unconditional,
-        // like the QMP sockets below: a VM re-adopted from a previous agent
-        // incarnation has one on disk that this process never recorded.
-        try? FileManager.default.removeItem(
-            atPath: QEMUGraphicsDevice.socketPath(
-                vmDirectory: (vmStoragePath as NSString).appendingPathComponent(vmId)))
-
-        // Clean up the deterministic re-adoption QMP socket
-        try? FileManager.default.removeItem(
-            atPath: Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the deterministic guest-agent socket (issue #563)
-        try? FileManager.default.removeItem(
-            atPath: Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the deterministic balloon-stats QMP socket (issue #567)
-        try? FileManager.default.removeItem(
-            atPath: Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the UEFI variable store and the TPM's state directory
-        // (issue #565). Both are per-VM and meaningless once the VM is gone;
-        // keeping the NVRAM would also make a later VM reusing this id inherit
-        // a stranger's boot entries.
-        try? FileManager.default.removeItem(
-            atPath: Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId))
-        try? FileManager.default.removeItem(
-            atPath: SwtpmSupervisor.stateDirectory(vmDirectory: vmDir))
+        // Everything else the VM owns on this host lives in its own directory —
+        // the boot disk, the cloud-init ISO, the UEFI varstore, the TPM state,
+        // and every socket — so remove the directory whole. Naming files one at
+        // a time is what leaked the boot disk on every delete (#969), and it
+        // covers a re-adopted VM's files too, which this process never recorded.
+        // Safe here: the QEMU process is confirmed gone (the destroy above
+        // throws otherwise) and swtpm has been stopped.
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
