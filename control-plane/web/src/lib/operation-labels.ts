@@ -5,7 +5,7 @@ import type { OperationKind } from "@/types/api";
 // VM and sandbox status badges: neither resource carries every kind — VMs never
 // snapshot-export, sandboxes never pause/resume — but the map stays total over
 // OperationKind so a new variant is a compile error rather than a blank badge.
-export const pendingMutationLabels: Record<OperationKind, string> = {
+const pendingMutationLabels: Record<OperationKind, string> = {
   create: "Creating",
   boot: "Starting",
   shutdown: "Stopping",
@@ -19,3 +19,15 @@ export const pendingMutationLabels: Record<OperationKind, string> = {
   restore: "Restoring",
   snapshot_export: "Exporting snapshot",
 };
+
+/**
+ * What to show on a status badge while `kind` is in flight.
+ *
+ * The map is total over the union, but a control plane running ahead of the
+ * frontend can send a kind this build doesn't declare — the lookup is a miss at
+ * runtime even though the types say otherwise. A generic label beats the blank
+ * badge that `undefined` would render.
+ */
+export function pendingMutationLabel(kind: OperationKind): string {
+  return pendingMutationLabels[kind] ?? "Working";
+}

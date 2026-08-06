@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { pendingMutationLabels } from "@/lib/operation-labels";
+import { pendingMutationLabel } from "@/lib/operation-labels";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
 import type { VMStatus } from "@/types/api";
 
@@ -60,7 +60,7 @@ export function VMStatusBadge({
         variant="outline"
         className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
       >
-        {pendingMutationLabels[pendingMutation.kind]}
+        {pendingMutationLabel(pendingMutation.kind)}
       </Badge>
     );
   }

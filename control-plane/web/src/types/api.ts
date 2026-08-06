@@ -1073,9 +1073,11 @@ export interface UpdateVMRequest {
 // Async VM operations: lifecycle mutations return 202 Accepted with an
 // Operation record, which the client polls until it reaches a terminal state.
 /// Mirrors `VMOperationKind` in shared/Sources/StratoShared/OperationModels.swift.
-/// Adding a case here is what forces the matching entry in the `verbs` map in
-/// components/vms/operation-watcher.tsx (a `Record<OperationKind, …>`, so the
-/// compiler catches the omission). Forgetting to add it *here* is the silent
+/// Adding a case here is what forces the matching entry in every
+/// `Record<OperationKind, …>` — the `verbs` map in
+/// components/vms/mutation-watcher.tsx, `kindToAction` in vm-actions.tsx and
+/// sandbox-actions.tsx, and the labels in lib/operation-labels.ts — so the
+/// compiler catches each omission. Forgetting to add it *here* is the silent
 /// failure: the watcher then throws on an unknown kind and the user never sees
 /// a terminal toast.
 export type OperationKind =
@@ -1349,12 +1351,20 @@ export interface SandboxLogEntry {
   };
 }
 
-export interface SandboxLogsQueryParams {
+/**
+ * The window/paging params every resource's log endpoint accepts. One shape,
+ * because `buildLogQueryString` in lib/api/logs.ts serializes all of them: a
+ * per-resource copy that drifted would leave the builder silently dropping that
+ * resource's new param.
+ */
+export interface LogQueryParams {
   limit?: number;
   direction?: "forward" | "backward";
   start?: number; // Unix timestamp
   end?: number; // Unix timestamp
 }
+
+export type SandboxLogsQueryParams = LogQueryParams;
 
 export interface CreateOrganizationRequest {
   name: string;
@@ -1591,12 +1601,7 @@ export interface VMLogEntry {
   };
 }
 
-export interface VMLogsQueryParams {
-  limit?: number;
-  direction?: "forward" | "backward";
-  start?: number; // Unix timestamp
-  end?: number; // Unix timestamp
-}
+export type VMLogsQueryParams = LogQueryParams;
 
 // Resource Quotas
 export type QuotaEntityType = "organization" | "ou" | "project";
