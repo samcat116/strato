@@ -78,9 +78,11 @@ jobs:
               - 'control-plane/Sources/App/openapi.yaml'
             firecracker:
               - 'SwiftFirecracker/**'
-            # The node install script and its shell-level tests.
+            # The node install script and its shell-level tests, plus the
+            # compose-side E2E setup scripts linted by the same job.
             install_script:
               - 'deploy/agent/**'
+              - 'deploy/compose/*.sh'
             workflow:
               - '.github/workflows/build.yaml'
             # A separate filter, not another pattern under `workflow`: with
@@ -125,24 +127,24 @@ jobs:
             clients/swift/Sources clients/swift/Tests
 
   install-script:
-    name: Agent Install Script
+    name: Shell Scripts
     needs: changes
     if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.workflow == 'true'
-    # The script provisions hypervisor hosts and edits /etc/libvirt/qemu.conf in
-    # place; its helpers are only reachable by running them, and nothing else in
-    # CI touches shell. Cheap enough to keep honest.
+    # These provision hypervisor hosts, edit /etc/libvirt/qemu.conf in place, and
+    # `rm -rf` VM state as root; their helpers are only reachable by running
+    # them, and nothing else in CI touches shell. Cheap enough to keep honest.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Check syntax
-        run: bash -n deploy/agent/install.sh
+        run: bash -n deploy/agent/install.sh deploy/compose/*.sh
 
       - name: Lint with shellcheck
-        # Warnings only: the script predates this job, and style findings should
+        # Warnings only: install.sh predates this job, and style findings should
         # not gate a node-provisioning fix.
-        run: shellcheck --severity=warning deploy/agent/install.sh deploy/agent/tests/*.sh
+        run: shellcheck --severity=warning deploy/agent/install.sh deploy/agent/tests/*.sh deploy/compose/*.sh
 
       - name: Test install.sh helpers
         run: bash deploy/agent/tests/install-sh-test.sh

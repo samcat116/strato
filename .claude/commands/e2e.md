@@ -29,9 +29,13 @@ workload entry's selector is `unix:uid:0` — and `sudo` prompts for a password 
 this host, so **hand it to the user and wait**; do not try to run it yourself.
 
 ```bash
-sudo bash deploy/compose/e2e-agent.sh reset    # after --fresh
-sudo bash deploy/compose/e2e-agent.sh start    # otherwise
+sudo RUN_DIR=<printed> bash deploy/compose/e2e-agent.sh reset    # after --fresh
+sudo RUN_DIR=<printed> bash deploy/compose/e2e-agent.sh start    # otherwise
 ```
+
+`e2e-up.sh` prints the exact invocation with `RUN_DIR` filled in — relay that
+verbatim. `sudo` does not forward the environment, so omitting it makes the
+agent script look for a SPIRE config that was written somewhere else.
 
 `e2e-up.sh` blocks until the agent registers, so just let it wait.
 
@@ -68,7 +72,7 @@ swiftly run +6.3.2 swift build --package-path agent
    so poll the façade `GET /api/operations/{mutationId}` instead.
 
 Also worth checking on the host: `pgrep -f qemu-system`, the agent log at
-`/home/sam/strato-agent-run/strato-agent.log`, and the `resource_events` table
+`$RUN_DIR/strato-agent.log`, and the `resource_events` table
 for the audit trail of every mutation.
 
 ## 4. Report
@@ -83,13 +87,14 @@ wrong are deliberate:
 - The libvirt version advisory is non-gating while
   `LibvirtProbe.driverBuilt == false`.
 
-Known-open issue: STR-178 — after `bootstrap`, no reachable system admin, so a
-passkey registered in the browser gets no privileges and the admin-only nav
-items stay hidden.
+If the user will also be using the UI, pass `--admin-email <them>` so bootstrap
+mints a passkey claim link. Without it the seeded admin is headless and the
+first-user-becomes-admin slot is spent, so any passkey they register afterwards
+lands with no privileges.
 
 ## Cleanup
 
 ```bash
-sudo bash deploy/compose/e2e-agent.sh stop
+sudo RUN_DIR=<same as setup> bash deploy/compose/e2e-agent.sh stop
 cd deploy/compose && ./e2e-up.sh --down
 ```

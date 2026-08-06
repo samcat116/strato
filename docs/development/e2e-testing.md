@@ -13,8 +13,9 @@ Two scripts do the work:
 | `deploy/compose/e2e-agent.sh` | **root** | The node-side `spire-agent` + `strato-agent` |
 
 The split exists because the agent must run as root — the SPIRE workload entry
-`e2e-up.sh` provisions carries the selector `unix:uid:0`, so a non-root agent
-never gets an SVID and the control plane refuses it.
+`e2e-up.sh` provisions carries the default selector `unix:uid:0`, so a non-root
+agent never gets an SVID and the control plane refuses it. (The default comes
+from `SPIRE_AGENT_SELECTORS`; if your deployment overrides it, adjust to match.)
 
 ## Prerequisites
 
@@ -27,8 +28,24 @@ never gets an SVID and the control plane refuses it.
   swiftly run +6.3.2 swift build --package-path agent
   ```
 
-- `spire-agent` on the host, and an agent config at `/etc/strato/config.toml`
-  pointing `control_plane_url` at `wss://<host>:8443/agent/ws`.
+- `spire-agent` on the host, and an agent config at `/etc/strato/config.toml`.
+  The scripts only check that the file exists — a wrong `control_plane_url`
+  presents as an agent that starts cleanly and never registers, which is
+  exactly the failure this page exists to prevent. A minimal one:
+
+  ```toml
+  control_plane_url = "wss://<host>:8443/agent/ws"
+  network_mode = "ovn"          # or "user" for macOS / no-SDN hosts
+
+  [spiffe]
+  enabled = true
+  trust_domain = "strato.local"
+  workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
+  source_type = "workload_api"
+  ```
+
+  The host and port must match `EXTERNAL_HOSTNAME` in `deploy/compose/.env`,
+  and the trust domain must match the SPIRE server's.
 
 ## Building from source
 
@@ -64,8 +81,12 @@ It stops partway and prints the command you must run as root, then waits for the
 agent to register:
 
 ```bash
-sudo bash deploy/compose/e2e-agent.sh reset
+sudo RUN_DIR=<printed by e2e-up.sh> bash deploy/compose/e2e-agent.sh reset
 ```
+
+`sudo` does not forward the environment, so `RUN_DIR` has to be passed on the
+command line — `e2e-up.sh` prints the whole invocation with it already filled
+in, so copy that rather than typing it.
 
 When it finishes you get an org, project, site (with its network controller
 assigned), a network, a guest image, and a 16/16 smoke test.
@@ -146,14 +167,26 @@ strato` finds nothing and will convince you the database is fresh when it is
 not.
 
 **`bootstrap` only works on an empty database.** It refuses once any user
-exists. On a dirty database, mint a key in the UI under **Access → API Keys** and
-pass `--api-key`, or start over with `--fresh`.
+exists. On a dirty database, export `STRATO_API_KEY` with a key minted in the UI
+under **Access → API Keys**, or start over with `--fresh`.
 
-**Bootstrap consumes the first-user-becomes-admin slot.** A passkey registered
-in the browser afterwards gets no privileges at all — no projects, and the
-admin-only nav items stay hidden. Those are gated on `isSystemAdmin`, which
-today can only be set at user creation. See
-[STR-178](https://linear.app/stratocloud/issue/STR-178/bootstrap-leaves-the-deployment-with-no-reachable-system-admin).
+**Pass `--admin-email` if you want to use the UI.** Without it, `bootstrap`
+seeds a headless admin that has no passkey and cannot log in, and it spends the
+first-user-becomes-admin slot — so a passkey you register in the browser
+afterwards gets no privileges at all: no projects, and the admin-only nav items
+stay hidden (they are gated on `isSystemAdmin`). With it, you get a one-time
+claim link to enrol a passkey against a real admin account:
+
+```bash
+./e2e-up.sh --fresh --admin-email you@example.com
+```
+
+To rescue a deployment that is already in that state, promote an existing
+account:
+
+```bash
+docker compose run --rm bootstrap grant-platform-admin --email you@example.com --claim
+```
 
 **A `down -v` rotates the SPIRE CA.** The node's cached SVID in
 `/var/lib/spire/agent` was issued by the old CA; `spire-agent` will try to
@@ -172,7 +205,7 @@ sites, networks, agents and VMs return `{items, total, limit, offset}`.
 
 ```bash
 cd deploy/compose
-sudo bash e2e-agent.sh stop
+sudo RUN_DIR=<same as setup> bash e2e-agent.sh stop
 ./e2e-up.sh --down          # keep volumes
 docker compose down -v      # discard everything
 ```
