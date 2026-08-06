@@ -65,6 +65,7 @@ struct ReconciliationProtocolTests {
                     dnsServers: ["1.1.1.1", "fd00::53"],
                     domainName: "corp.example.com",
                     leaseTime: 7200,
+                    metadataEnabled: true,
                     generation: 4
                 ),
                 DesiredNetworkState(
@@ -94,12 +95,14 @@ struct ReconciliationProtocolTests {
         #expect(decoded.networks[0].dnsServers == ["1.1.1.1", "fd00::53"])
         #expect(decoded.networks[0].domainName == "corp.example.com")
         #expect(decoded.networks[0].leaseTime == 7200)
+        #expect(decoded.networks[0].metadataEnabled == true)
         // Same router key: both networks share one per-project logical router.
         #expect(decoded.networks[1].routerKey == projectKey)
         #expect(decoded.networks[1].gateway == nil)
         #expect(decoded.networks[1].subnet6 == nil)
         #expect(decoded.networks[1].gateway6 == nil)
         #expect(decoded.networks[1].dhcpEnabled == nil)
+        #expect(decoded.networks[1].metadataEnabled == nil)
         #expect(!decoded.networks[1].externalAccess)
     }
 
@@ -116,6 +119,11 @@ struct ReconciliationProtocolTests {
         // delete them when a pre-field control plane says nothing.
         #expect(decoded.dhcpEnabled == nil)
         #expect(decoded.dnsServers == nil)
+        // Nil again, and for a sharper reason: network teardown is a set
+        // difference, so reading this silence as "off" would delete a live
+        // metadata port. `NetworkReconciler.metadataProtection(for:)` is what
+        // enforces that.
+        #expect(decoded.metadataEnabled == nil)
         #expect(decoded.subnet == "192.168.1.0/24")
     }
 

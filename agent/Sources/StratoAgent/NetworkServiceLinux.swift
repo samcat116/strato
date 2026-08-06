@@ -100,6 +100,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// candidates.
     static let externalRoleKey = "strato-role"
     static let externalRoleValue = "external"
+    /// OVN port type for the metadata port (STR-49). `localport` is instantiated
+    /// on every chassis by `ovn-controller` and never forwarded across geneve
+    /// tunnels, which is what lets one address be published on every switch in a
+    /// site and still reach the guest's own host.
+    static let metadataPortType = "localport"
 
     /// Whether an OVN object's external-ids mark it as created by this reconciler.
     static func isManaged(_ externalIDs: [String: String]?) -> Bool {
@@ -843,7 +848,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
         try run("ovs-vsctl", plan.ovsAttach)
 
-        _ = try await verifyOVSBinding(plan: plan, portName: portName, stage: "attach")
+        _ = try await verifyOVSBinding(
+            verify: plan.ovsVerify, device: plan.vethHostName, portName: portName, stage: "attach")
 
         for command in plan.namespaceSetup {
             try await runNetnsCommand(command)
@@ -855,7 +861,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // the rows survive" is precisely what STR-99 measured, and proving the
         // binding *after* the move is what actually closes that loop. One
         // `ovs-vsctl get` against ~15 other spawns.
-        let binding = try await verifyOVSBinding(plan: plan, portName: portName, stage: "namespace-setup")
+        let binding = try await verifyOVSBinding(
+            verify: plan.ovsVerify, device: plan.vethHostName, portName: portName,
+            stage: "namespace-setup")
 
         // Sandboxes are churn-heavy and cold start is a headline property, so
         // the cost of this path is measured rather than assumed.
@@ -891,12 +899,16 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// `ofport` should already be populated; the bounded retry covers the case
     /// where it isn't, because failing there would unwind an otherwise healthy
     /// create.
+    ///
+    /// Shared by the sandbox NIC path and the metadata namespace path (STR-49):
+    /// both move a device that OVS has a port for, and both fail the same silent
+    /// way, so they check the same way.
     private func verifyOVSBinding(
-        plan: SandboxNetnsAttachmentPlan, portName: String, stage: String
+        verify: [String], device: String, portName: String, stage: String
     ) async throws -> OVSInterfaceBinding {
         var binding = OVSInterfaceBinding(ofport: nil, error: nil)
         for attempt in 1...Self.ovsBindingReadbackAttempts {
-            binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", plan.ovsVerify))
+            binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", verify))
             if binding.isBound { return binding }
             // An `error` is a verdict, not a race — retrying cannot clear it.
             if binding.error != nil { break }
@@ -905,9 +917,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             }
         }
         throw NetworkError.ovsError(
-            "OVS did not bind \(plan.vethHostName) on \(Self.ovnIntegrationBridge) for port \(portName) "
+            "OVS did not bind \(device) on \(Self.ovnIntegrationBridge) for port \(portName) "
                 + "after \(stage) (ofport=\(binding.ofport.map(String.init) ?? "unset"), "
-                + "error=\(binding.error ?? "none")) — the sandbox NIC would report healthy and carry no packets")
+                + "error=\(binding.error ?? "none")) — the interface would report healthy and carry no packets")
     }
 
     /// Removes the host-side half of a sandbox NIC. Needs neither the namespace
@@ -1305,7 +1317,8 @@ extension NetworkServiceLinux {
     /// with an empty list, would tear down the controller's objects.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
-        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
+        metadataNetworks: [UUID]?
     ) async {
         topologyAuthority = authoritative
 
@@ -1315,6 +1328,14 @@ extension NetworkServiceLinux {
             return
         }
         #endif
+
+        // The chassis half of the metadata dataplane (STR-49), converged before
+        // the authority guard because it is per-host state this agent owns even
+        // when it may not author topology — the `portMemberships` pattern. A
+        // sited non-controller agent gets an empty `networks` list by design,
+        // yet its guests need the metadata address materialized locally just the
+        // same, so the input is its own workloads' NIC specs.
+        await reconcileMetadataChassisPorts(metadataNetworks)
 
         guard authoritative else {
             logger.debug("Not the site's network topology authority; skipping network reconciliation")
@@ -1350,7 +1371,12 @@ extension NetworkServiceLinux {
             networkGenerations[network.networkId] = network.generation
             current.append(network)
         }
-        let protected = NetworkReconciler.protectedTopology(forStale: stale)
+        var protected = NetworkReconciler.protectedTopology(forStale: stale)
+        // A control plane that predates `metadataEnabled` says nothing about
+        // metadata ports, and teardown is a set difference — so without this a
+        // rollback would delete every live port on the next sync. See
+        // `metadataProtection(for:)`.
+        protected.formUnion(NetworkReconciler.metadataProtection(for: current))
 
         do {
             try await NetworkReconciler.reconcile(
@@ -1395,6 +1421,209 @@ extension NetworkServiceLinux {
         await SecurityGroupReconciler.reconcileMembership(
             memberships: portMemberships, actuator: self, logger: logger)
     }
+
+    /// Converge this chassis's metadata namespaces toward `desired` — the
+    /// networks this host runs a metadata-enabled NIC on (STR-49).
+    ///
+    /// Level-triggered like everything else here: create what's missing, remove
+    /// what's no longer wanted. Nil means the control plane predates the field
+    /// and has no opinion; converging an empty set against it would tear down
+    /// every live namespace on a rollback, so nil touches nothing — the
+    /// `dhcpEnabled` contract.
+    ///
+    /// Observation keys off external-ids rather than the `mdp` name prefix, so
+    /// an operator's own internal ports on `br-int` are never candidates for
+    /// removal.
+    private func reconcileMetadataChassisPorts(_ desired: [UUID]?) async {
+        #if os(Linux)
+        guard let desired else { return }
+        guard let ovsManager else { return }
+
+        let observed: [ObservedMetadataPort]
+        do {
+            observed = try await observedMetadataChassisPorts(ovsManager)
+        } catch {
+            // Without a trustworthy snapshot, removals can't be computed safely.
+            // Creates are idempotent, so skip the whole pass and let the next
+            // periodic sync retry rather than guess.
+            logger.error(
+                "Could not read metadata chassis ports; skipping this pass",
+                metadata: ["error": .string(error.localizedDescription)])
+            return
+        }
+
+        for action in MetadataChassisReconciler.actions(desired: desired, observed: observed) {
+            switch action {
+            case .realize(let networkId):
+                await attemptMetadataChassisSetup(networkId: networkId)
+            case .remove(let networkId, let interfaceName):
+                await removeMetadataChassisPort(networkId: networkId, interfaceName: interfaceName)
+            }
+        }
+        #endif
+    }
+
+    #if os(Linux)
+    /// Every metadata interface this chassis currently owns, read from the
+    /// interfaces' external-ids — never a name prefix, so an operator's own
+    /// internal port on `br-int` is never a removal candidate.
+    ///
+    /// The namespace is probed alongside the row because the two have different
+    /// lifetimes (see `ObservedMetadataPort.namespacePresent`). A `stat` per
+    /// network, no subprocess.
+    private func observedMetadataChassisPorts(_ ovsManager: OVSManager) async throws
+        -> [ObservedMetadataPort]
+    {
+        var found: [ObservedMetadataPort] = []
+        for interface in try await ovsManager.getInterfaces() {
+            guard let ids = interface.external_ids,
+                ids[MetadataChassisPlan.managedKey] == MetadataChassisPlan.managedValue,
+                ids[MetadataChassisPlan.roleKey] == MetadataChassisPlan.roleValue,
+                let raw = ids[MetadataChassisPlan.networkIDKey],
+                let networkId = UUID(uuidString: raw)
+            else { continue }
+            found.append(
+                ObservedMetadataPort(
+                    networkId: networkId,
+                    interfaceName: interface.name,
+                    namespacePresent: FileManager.default.fileExists(
+                        atPath: MetadataChassisPlan.netnsPath(networkId: networkId))))
+        }
+        return found
+    }
+
+    /// Realize one network's metadata namespace, logging and swallowing failure
+    /// so one bad network can't stall the sync.
+    ///
+    /// The logical switch port this binds to may not exist yet: on a
+    /// non-controller agent the site's network controller writes it, and the two
+    /// syncs are independent. That needs no retry logic — `ovn-controller`
+    /// simply leaves the port unbound until the row appears, and the next
+    /// periodic sync re-verifies.
+    private func attemptMetadataChassisSetup(networkId: UUID) async {
+        guard let ipBinaryPath else {
+            let message =
+                "Metadata service needs the iproute2 `ip` tool, which was not found on this host; "
+                + "guests on this network will not reach the metadata address"
+            logger.warning(
+                "\(message)",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "searched": .string(SandboxJailerResolver.ipBinaryCandidates.joined(separator: ", ")),
+                ])
+            return
+        }
+        let plan = MetadataChassisPlan.plan(
+            networkId: networkId, ipBinaryPath: ipBinaryPath,
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        do {
+            // Ordering is forced from both sides: the device cannot be moved
+            // into a namespace that does not exist, and it cannot be moved
+            // before the OVS attach creates it. Hence the attach between the two
+            // halves of setup.
+            for command in plan.namespaceSetup {
+                try await runNetnsCommand(command)
+            }
+            try run("ovs-vsctl", plan.ovsAttach)
+            _ = try await verifyOVSBinding(
+                verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
+                stage: "attach")
+            for command in plan.interfaceSetup {
+                try await runNetnsCommand(command)
+            }
+            // Re-read after the move. Moving a TAP out from under OVS silently
+            // kills its port while the rows survive (STR-99); an internal port
+            // is a different animal and should be fine, but "should be fine" is
+            // exactly what that bug looked like, so prove it.
+            let binding = try await verifyOVSBinding(
+                verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
+                stage: "namespace-setup")
+            logger.info(
+                "Realized metadata namespace",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "netns": .string(plan.netnsName),
+                    "interface": .string(plan.interfaceName),
+                    "port": .string(plan.logicalPortName),
+                    "ofport": .string(binding.ofport.map(String.init) ?? "unset"),
+                ])
+        } catch {
+            logger.error(
+                "Failed to realize metadata namespace",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+            // Roll the namespace back so the next pass observes an honest
+            // "not built" and rebuilds from scratch. Without this a setup that
+            // died between `netns add` and the addresses would leave a namespace
+            // that looks realized to every future observation while carrying no
+            // addresses — the same silent half-built state the reboot case
+            // produces, just reached a different way.
+            await removeMetadataChassisPort(
+                networkId: networkId, interfaceName: plan.interfaceName, quiet: true)
+        }
+    }
+
+    /// Remove one network's metadata namespace and its OVS port. Each step is
+    /// independently tolerant so a partial teardown still removes what it can.
+    ///
+    /// `interfaceName` is the device observed on the bridge rather than one
+    /// rederived here, so teardown removes what it actually found.
+    ///
+    /// `quiet` marks the rollback path, where a failure is the *expected* shape
+    /// (there may be nothing to remove yet) and the real error has already been
+    /// logged by the caller.
+    private func removeMetadataChassisPort(
+        networkId: UUID, interfaceName: String, quiet: Bool = false
+    ) async {
+        // Like sandbox teardown, cleanup falls back to the PATH-resolved name:
+        // it must attempt something on a host whose iproute2 was never resolved,
+        // rather than refuse and leak a namespace forever.
+        let removal = MetadataChassisPlan.teardownPlan(
+            networkId: networkId, interfaceName: interfaceName, ipBinaryPath: ipBinaryPath ?? "ip",
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        var failures = 0
+        do {
+            try run("ovs-vsctl", removal.ovsDetach)
+        } catch {
+            failures += 1
+            if !quiet {
+                logger.warning(
+                    "Failed to remove metadata OVS port",
+                    metadata: [
+                        "networkId": .string(networkId.uuidString),
+                        "interface": .string(interfaceName),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        for command in removal.commands {
+            do {
+                try await runNetnsCommand(command)
+            } catch {
+                failures += 1
+                if !quiet {
+                    logger.warning(
+                        "Failed to remove metadata namespace",
+                        metadata: [
+                            "networkId": .string(networkId.uuidString),
+                            "command": .string(command.arguments.joined(separator: " ")),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            }
+        }
+        // Only claim what actually happened: a partial teardown leaves state
+        // behind, and logging success over it is how a leak stays invisible.
+        guard failures == 0, !quiet else { return }
+        logger.info(
+            "Removed metadata namespace",
+            metadata: [
+                "networkId": .string(networkId.uuidString), "interface": .string(interfaceName),
+            ])
+    }
+    #endif
 
     /// Best-effort per-network DHCP row convergence; a failing network is
     /// logged and left for the next periodic sync, like reconcile steps.
@@ -1474,9 +1703,74 @@ extension NetworkServiceLinux: NetworkActuator {
                 switches.filter { $0.external_ids?[Self.externalRoleKey] == Self.externalRoleValue }.map(
                     \.name)),
             snatRules: snatRules,
-            dnatRules: dnatRules)
+            dnatRules: dnatRules,
+            // Metadata localports get their own set rather than joining
+            // `switchRouterPortNames`, which is filtered to `type=router`. That
+            // filter is also why an agent predating this field never swept a
+            // localport it didn't understand — the ports were simply invisible
+            // to its teardown diff.
+            metadataPortNames: Set(
+                switchPorts.filter { $0.portType == Self.metadataPortType && Self.isManaged($0.external_ids) }
+                    .map(\.name)))
         #else
         return ObservedNetworkTopology()
+        #endif
+    }
+
+    /// Create or re-address a network's metadata `localport`.
+    ///
+    /// Deliberately without `port_security`, matching the localnet port: port
+    /// security on a localport filters the agent's own replies to the guest.
+    func ensureMetadataPort(_ port: DesiredMetadataPort) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let desired = OVNLogicalSwitchPort(
+            name: port.name,
+            portType: Self.metadataPortType,
+            addresses: port.addresses,
+            external_ids: [
+                Self.managedKey: Self.managedValue,
+                "description": "Strato instance metadata localport",
+            ])
+        if let existing = try await ovnManager.getLogicalSwitchPort(named: port.name) {
+            // Re-write in place on drift: the port name is derived from the
+            // network, so the row is stable across edits and a stale
+            // type/address set would otherwise persist forever. Addresses
+            // compared as a set — OVN's column is unordered.
+            //
+            // The switch the port sits on is deliberately not compared. Both the
+            // port name and the switch name derive from the same network id, so
+            // they can only disagree if an operator moved the port by hand —
+            // and re-homing it would mean a delete and recreate, not an update,
+            // which is a heavier repair than an unreachable case earns.
+            let drifted =
+                existing.portType != Self.metadataPortType
+                || Set(existing.addresses ?? []) != Set(port.addresses)
+            if drifted, let uuid = existing.uuid {
+                try await ovnManager.updateLogicalSwitchPort(uuid: uuid, desired)
+                logger.info(
+                    "Updated metadata localport",
+                    metadata: [
+                        "port": .string(port.name),
+                        "addresses": .string(port.addresses.joined(separator: ", ")),
+                    ])
+            }
+            return
+        }
+        do {
+            _ = try await ovnManager.createLogicalSwitchPort(desired, onSwitch: port.switchName)
+        } catch {
+            // Tolerate a concurrent creator that won the check→insert race.
+            if try await ovnManager.getLogicalSwitchPort(named: port.name) == nil { throw error }
+        }
+        #endif
+    }
+
+    func removeMetadataPort(name: String) async throws {
+        #if os(Linux)
+        try? await ovnManager?.deleteLogicalSwitchPort(named: name)
         #endif
     }
 

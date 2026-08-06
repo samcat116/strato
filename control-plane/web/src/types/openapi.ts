@@ -5663,6 +5663,8 @@ export interface components {
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
+            /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
+            metadataEnabled?: boolean;
             /** Format: uuid */
             siteId?: string;
         };
@@ -5678,6 +5680,8 @@ export interface components {
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
+            /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
+            metadataEnabled?: boolean;
             /**
              * Format: uuid
              * @description The DNS zone this network's VMs auto-register into. Must already be attached to the network.
@@ -5704,6 +5708,8 @@ export interface components {
             domainName?: string;
             leaseTime?: number;
             externalAccess: boolean;
+            /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
+            metadataEnabled: boolean;
             /** Format: uuid */
             siteId?: string;
             /**

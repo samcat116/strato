@@ -251,6 +251,24 @@ struct VMSpecTests {
         #expect(decoded.gateway6 == nil)
         #expect(decoded.ipAddress == "10.0.0.5")
         #expect(!decoded.dhcpEnabled)
+        #expect(decoded.metadataEnabled == nil)
+    }
+
+    /// `NetworkSpec` hand-writes `init(from:)`, so a new field needs both a
+    /// coding key and a `decodeIfPresent` line — miss either and it silently
+    /// decodes as nil forever, which for `metadataEnabled` (STR-49) means a
+    /// chassis that never materializes the metadata address and reports no
+    /// error. Round-tripping alone would not catch it; this decodes the key
+    /// from raw JSON.
+    @Test func networkSpecCarriesMetadataEnabled() throws {
+        let json = """
+            {"network":"default","networkId":"\(UUID().uuidString)",
+             "ipAddress":"10.0.0.5","metadataEnabled":true}
+            """
+        #expect(try decodeJSON(NetworkSpec.self, from: json).metadataEnabled == true)
+
+        let spec = NetworkSpec(network: "default", networkId: UUID(), metadataEnabled: false)
+        #expect(try roundTrip(spec).metadataEnabled == false)
     }
 
     // MARK: - Machine profile (issue #565)

@@ -89,10 +89,14 @@ struct VMSpecBuilder {
     /// through an assembly bug, but dropping one silently costs a VM a NIC with
     /// no symptom anywhere — so the sync paths pass a logger and the pure
     /// callers (tests) need not.
+    ///
+    /// `sendsMetadata` gates `metadataEnabled` on the receiving agent's protocol
+    /// version, exactly as `securityGroupsByInterface` is gated by its caller.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadata: Bool = true,
         logger: Logger? = nil
     ) -> [NetworkSpec] {
         interfaces
@@ -111,7 +115,8 @@ struct VMSpecBuilder {
                 return NetworkSpec.build(
                     interface: interface,
                     network: network,
-                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] })
+                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
+                    sendsMetadata: sendsMetadata)
             }
     }
 
@@ -176,6 +181,7 @@ struct VMSpecBuilder {
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadata: Bool = true,
         logger: Logger? = nil
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
@@ -205,7 +211,8 @@ struct VMSpecBuilder {
             volumes: volumes,
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
-                securityGroupsByInterface: securityGroupsByInterface, logger: logger),
+                securityGroupsByInterface: securityGroupsByInterface,
+                sendsMetadata: sendsMetadata, logger: logger),
             console: ConsoleSpec(
                 console: vm.consoleMode, serial: vm.serialMode,
                 // nil, not an explicit `.headless`, so the key is omitted

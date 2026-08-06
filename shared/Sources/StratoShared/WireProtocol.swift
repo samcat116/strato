@@ -93,7 +93,7 @@ public enum WireProtocol {
     /// envelope decode fails silently and no reply is ever sent — the control
     /// plane would see only a timeout. The update endpoint therefore refused
     /// agents that registered with a pre-v6 version instead of sending and
-    /// hoping. (The message itself is gone as of v27; only the OS reporting
+    /// hoping. (The message itself is gone as of v28; only the OS reporting
     /// remains from this version.)
     ///
     /// Version 7: declarative agent auto-update (issue #434).
@@ -402,7 +402,31 @@ public enum WireProtocol {
     /// ISO is retired, and retiring it is what will make a placement gate
     /// load-bearing.
     ///
-    /// Version 27: the imperative `agent_update` message is removed (ADR 0001
+    /// Version 27: the metadata dataplane (STR-49). `DesiredNetworkState` gains
+    /// `metadataEnabled`, and `NetworkSpec` gains the same flag per NIC. The
+    /// two are not redundant — they feed the two halves of a feature with two
+    /// different owners. The OVN `localport` that publishes
+    /// `InstanceMetadataEndpoint`'s addresses on a logical switch is authored
+    /// only by the site's network controller, from `networks`; the chassis-local
+    /// namespace that terminates them must exist on *every* host running a NIC
+    /// on that network, and a non-controller host receives an empty `networks`
+    /// list by design (it may not author topology), so its only input is its own
+    /// workloads' specs. Hence the flag on both.
+    ///
+    /// Absence is asymmetric in the v3/v5 sense on both fields, and on
+    /// `DesiredNetworkState` the asymmetry is enforced in code, not by
+    /// convention: network teardown is `observed − desired`, so
+    /// `NetworkReconciler.metadataProtection(for:)` explicitly protects the
+    /// ports of networks whose `metadataEnabled` is nil. Without it, rolling a
+    /// control plane back to v26 would delete every live metadata port on the
+    /// next sync. `false` remains an opinion and is honored, which is what makes
+    /// turning the feature off work.
+    ///
+    /// Like v26 and unlike v18/v23, the gate does not refuse placement. A
+    /// pre-v27 agent simply doesn't publish the address; its guests fall back to
+    /// the seed ISO exactly as today.
+    ///
+    /// Version 28: the imperative `agent_update` message is removed (ADR 0001
     /// stage 6). An agent's build is a durable fact about the host, not an
     /// action, so it belongs in the sync — where `desiredAgentUpdate` has
     /// carried it since v7. The operator's "update now" endpoint now assigns
@@ -410,15 +434,15 @@ public enum WireProtocol {
     /// leaves the message with no sender.
     ///
     /// Removing a `MessageType` case is breaking in exactly one direction, and
-    /// only across a skew that upgrades backwards: a *pre-v27 control plane*
-    /// driving a v27 agent would send `agent_update` (from its own manual
+    /// only across a skew that upgrades backwards: a *pre-v28 control plane*
+    /// driving a v28 agent would send `agent_update` (from its own manual
     /// endpoint) into an envelope the agent can no longer decode, and the
     /// request would burn its 300s timeout against silence. Nothing else
-    /// regresses — a v27 control plane never sends the message to any agent,
+    /// regresses — a v28 control plane never sends the message to any agent,
     /// old or new, and the declarative path it uses instead has been
     /// understood by every agent since v7. Upgrade the control plane first,
     /// which is the deployment order everywhere else in this document.
-    public static let currentVersion = 27
+    public static let currentVersion = 28
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -490,7 +514,7 @@ public enum WireProtocol {
     /// sync fine but never acts on the field, so neither assigner may select
     /// such an agent — the fleet rollout's health budget would expire against
     /// silence and halt, and an operator's "update now" would report an
-    /// assignment that never converges. Since v27 this is the *only* way an
+    /// assignment that never converges. Since v28 this is the *only* way an
     /// agent is updated, so it is also the update endpoint's floor.
     public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
         version >= desiredAgentUpdateMinimumVersion
@@ -695,6 +719,25 @@ public enum WireProtocol {
     /// omit the field for agents that would discard it.
     public static func supportsInstanceMetadata(_ version: Int) -> Bool {
         version >= instanceMetadataMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks `metadataEnabled` on
+    /// `DesiredNetworkState` and `NetworkSpec` (see `currentVersion` version 27
+    /// notes).
+    public static let metadataPortMinimumVersion = 27
+
+    /// Whether a peer at `version` understands the metadata port.
+    ///
+    /// Agent-side this decides whether a nil `metadataEnabled` *means* anything:
+    /// from a v27+ control plane it is authoritative silence about a network the
+    /// sender knows the field for, from an older one the sender has never heard
+    /// of the feature and the agent must leave existing ports alone. Since
+    /// network teardown is a set difference, that reading is enforced by
+    /// `NetworkReconciler.metadataProtection(for:)` rather than left to each
+    /// call site. Control-plane-side it lets sync assembly omit the field for
+    /// agents that would discard it.
+    public static func supportsMetadataPort(_ version: Int) -> Bool {
+        version >= metadataPortMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

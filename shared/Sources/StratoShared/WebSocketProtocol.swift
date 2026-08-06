@@ -8,7 +8,7 @@ public enum MessageType: String, Codable, Sendable {
     case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
-    // `agent_update` (v6–v26) is gone: the agent's build is desired state, not
+    // `agent_update` (v6–v27) is gone: the agent's build is desired state, not
     // an action, and rides the sync as `DesiredStateMessage.desiredAgentUpdate`
     // (v7+). The operator's "update now" assigns that field rather than
     // dispatching a command (ADR 0001 stage 6).

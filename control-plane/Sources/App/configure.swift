@@ -746,6 +746,9 @@ public func configure(_ app: Application) async throws {
     // making clients poll an operation to learn the same thing (ADR 0001).
     app.migrations.add(AddConvergenceStateToWorkloads())
 
+    // Per-network switch for the instance metadata service (STR-49).
+    app.migrations.add(AddMetadataEnabledToLogicalNetwork())
+
     // ADR 0001 stage 6 (STR-145): the operator's "update now" assigns the same
     // declarative field as the fleet rollout, so the row records who assigned
     // it and any explicit artifact the operator pinned to it.

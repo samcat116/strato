@@ -565,6 +565,57 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("The metadata service defaults on and toggles without bumping the generation")
+    func metadataEnabledDefaultsOnAndDoesNotBumpGeneration() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            // Created through the API, not the model, so this covers the
+            // controller's default rather than the model's.
+            var created: NetworkResponse?
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "md-net", subnet: "10.62.0.0/24", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                created = try res.content.decode(NetworkResponse.self)
+                // An opt-out: the metadata service replaces the seed ISO, so a
+                // network that never mentions it still publishes it.
+                #expect(created?.metadataEnabled == true)
+            }
+            let networkID = try #require(created?.id)
+            let startGeneration = try #require(
+                await LogicalNetwork.find(networkID, on: app.db)?.generation)
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(metadataEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let disabled = try res.content.decode(NetworkResponse.self)
+                #expect(disabled.metadataEnabled == false)
+            }
+
+            let updated = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(updated?.metadataEnabled == false)
+            // Deliberately no bump: the metadata port converges level-triggered
+            // on every network reconcile, like the DHCP rows, so bumping would
+            // only make agents skip legitimately concurrent syncs as stale.
+            #expect(updated?.generation == startGeneration)
+
+            // And back on, since turning it off is the half that has to delete
+            // a live port.
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(metadataEnabled: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(reEnabled?.metadataEnabled == true)
+        }
+    }
+
     @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
     func subnetOverlapLogic() {
         #expect(NetworkController.subnetsOverlap("10.0.0.0/16", "10.0.1.0/24"))

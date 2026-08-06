@@ -2035,10 +2035,32 @@ extension Agent {
                                 securityGroupIds: spec.securityGroupIds)
                         }
                     }
+                    // The networks this host must materialize the metadata
+                    // address on (STR-49), derived from our own workload specs
+                    // rather than `message.networks`: a sited agent that is not
+                    // its site's network controller receives an empty topology
+                    // list by design, yet its guests need the service just the
+                    // same. Same derivation as `portMemberships` above, and the
+                    // same "this host owns it without topology authority"
+                    // reason. Nil for a control plane that predates the field,
+                    // so silence is never read as "tear every namespace down".
+                    let metadataNetworks: [UUID]?
+                    if WireProtocol.supportsMetadataPort(envelope.senderVersion) {
+                        var ids = Set(
+                            message.vms.flatMap { $0.spec.networks }
+                                .filter { $0.metadataEnabled == true }.map(\.networkId))
+                        ids.formUnion(
+                            message.sandboxes.compactMap { $0.spec.network }
+                                .filter { $0.metadataEnabled == true }.map(\.networkId))
+                        metadataNetworks = ids.sorted { $0.uuidString < $1.uuidString }
+                    } else {
+                        metadataNetworks = nil
+                    }
                     await networkService?.reconcileNetworks(
                         message.networks, authoritative: message.networksAuthoritative,
                         securityGroups: message.securityGroups,
-                        portMemberships: portMemberships)
+                        portMemberships: portMemberships,
+                        metadataNetworks: metadataNetworks)
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a
                 // control plane older than the sandbox protocol (v5) omits
@@ -2297,7 +2319,7 @@ extension Agent {
 
     /// Self-update (issue #434): converge on the desired agent build carried by
     /// the sync — download, verify, swap, restart — gated on local
-    /// preconditions. Since wire v27 this is the only update path there is: an
+    /// preconditions. Since wire v28 this is the only update path there is: an
     /// operator's "update now" reaches the agent as this same field, assigned
     /// by the control plane rather than dispatched as a command, so the
     /// preconditions below hold for it too. Level-triggered: a blocked update

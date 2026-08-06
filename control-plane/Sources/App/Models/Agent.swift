@@ -277,7 +277,7 @@ enum AgentStatus: String, Codable, CaseIterable, Sendable {
 }
 
 /// Who assigned an agent's `updateDesiredVersion` (STR-145). Both sources feed
-/// the same declarative field — there is only one update path since wire v27 —
+/// the same declarative field — there is only one update path since wire v28 —
 /// but they differ in who may reset the assignment.
 enum AgentUpdateAssignmentSource: String, Codable, Sendable {
     /// The fleet auto-update sweep, advancing enrolled agents to the

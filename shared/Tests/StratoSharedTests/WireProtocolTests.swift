@@ -40,7 +40,7 @@ struct WireProtocolTests {
 
     @Test("declarative agent-update gate starts at wire protocol v7")
     func desiredAgentUpdateGate() {
-        // Since v27 there is no imperative `agent_update` message: this is the
+        // Since v28 there is no imperative `agent_update` message: this is the
         // only gate on updating an agent, for the fleet rollout and the
         // operator's "update now" alike. A pre-v7 agent decodes the sync but
         // ignores the field, so an assignment would never converge.

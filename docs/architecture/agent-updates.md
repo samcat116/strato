@@ -20,7 +20,7 @@ downloads the artifact, verifies its SHA-256, atomically swaps its own binary
 supervisor, and proves the update by re-registering with the new build's
 version.
 
-Until wire v27 the operator path was a separate imperative `agent_update`
+Until wire v28 the operator path was a separate imperative `agent_update`
 message answered synchronously over the socket. It is gone (ADR 0001 stage 6):
 one path, one set of preconditions, and an intent that survives a disconnected
 agent or a restarted control plane instead of dying with the request.
@@ -175,10 +175,10 @@ the control-plane side: a pre-v7 agent ignores the field, so neither the
 rollout nor the update endpoint assigns to one — it would burn its health
 budget against silence.
 
-Version 27 removed the imperative `agent_update` message, leaving these fields
-as the only update path. A control plane at v27 never sends the old message to
+Version 28 removed the imperative `agent_update` message, leaving these fields
+as the only update path. A control plane at v28 never sends the old message to
 any agent; the only skew that regresses is an *older* control plane driving a
-v27 agent, whose manual update would time out against an envelope the agent no
+v28 agent, whose manual update would time out against an envelope the agent no
 longer decodes. Upgrade the control plane first.
 
 ### Rollback
