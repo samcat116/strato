@@ -11,6 +11,19 @@ Both the control plane and the agent log to **stdout/stderr** via SwiftLog
 (`LoggingSystem.bootstrap`). They do not write log files themselves — capture is
 the responsibility of whatever supervises the process.
 
+**Verbosity** is set with the `LOG_LEVEL` environment variable (a SwiftLog
+level: `trace`, `debug`, `info`, `notice`, `warning`, `error`, `critical`;
+default `info`) — the compose stack reads it from `.env`, and the Helm
+chart sets it from `strato.logLevel`.
+
+Two other subsystems ride this same stdout pipeline:
+
+- The audit `log` backend emits one structured `audit_event` line per event
+  — see [Audit logging](/deployment/audit-logging).
+- When tracing is enabled, every line logged inside a span carries
+  `trace_id` / `span_id` metadata for log↔trace correlation — see
+  [Observability](/deployment/observability#correlating-traces-with-logs).
+
 ### Production: run under a supervisor that captures stdout/stderr
 
 Run the control plane and agent under a process supervisor that captures their

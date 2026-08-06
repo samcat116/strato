@@ -1,111 +1,92 @@
 # What is Strato?
 
-Strato is a fast, secure, and easy to deploy private cloud platform based on battle-tested technologies and built for modern infrastructure. It enables operators to run efficient, secure, and powerful infrastructure with ease.
+Strato is a private cloud platform: a control plane, a fleet of hypervisor
+agents, and a web UI that together give you VMs, microVM sandboxes,
+software-defined networking, and fine-grained access control on your own
+hardware. It aims to be fast, secure by default, and genuinely easy to
+deploy — a fresh install generates its own secrets and is production-shaped
+from the first `docker compose up`.
 
-## Key Features
+## How it's shaped
 
-### Distributed Architecture
+Strato splits into a **control plane** and per-node **agents**:
 
-Strato uses a **Control Plane** and **Agent** architecture for distributed VM management:
+- **Control plane** — the JSON API, PostgreSQL database, scheduler, IPAM,
+  and built-in IAM. Declarative: the database stores each workload's
+  *desired* state, and agents converge on it.
+- **Agents** — run on each hypervisor node and manage workloads through
+  hypervisor drivers (QEMU for VMs, Firecracker for sandboxes and
+  lightweight VMs). Agents dial out to the control plane over a WebSocket;
+  hypervisor nodes need no inbound connectivity.
+- **Frontend** — a Next.js web app consuming the same JSON API, with
+  in-browser serial and graphics consoles.
 
-- **Control Plane**: Web UI, REST API, database, and orchestration
-- **Agents**: Run on hypervisor nodes, manage VMs via QEMU
-- **Communication**: Real-time WebSocket protocol
+The [architecture overview](/architecture/overview) is the full map.
 
-### Hardware-Accelerated Virtualization
+## What you get
 
-Near-native VM performance through:
+### Virtual machines
 
-- **Linux**: KVM (Kernel-based Virtual Machine)
-- **macOS**: Hypervisor.framework (HVF)
-- **Cross-platform**: QEMU with TCG for different architectures
+Full-lifecycle VM management on QEMU with hardware acceleration — KVM on
+Linux, Hypervisor.framework on macOS (dev/test). Images carry typed
+artifacts per hypervisor and architecture; VMs get cloud-init provisioning,
+snapshots and checkpoints, online resize, virtio-balloon memory management,
+Secure Boot/vTPM for [Windows guests](/guide/windows-guests), and optional
+VNC [graphics consoles](/guide/graphics-console).
 
-### Software-Defined Networking
+### Sandboxes
 
-Production-ready networking on Linux:
+Disposable Firecracker microVMs booted directly from OCI container images —
+create, exec, fork, snapshot/restore — with TTL-based auto-expiry. Built for
+fast, isolated code execution alongside your longer-lived VMs.
 
-- **OVN/OVS**: Software-defined networking with SwiftOVN
-- **Features**: Network isolation, security groups, DHCP, routing
-- **Multi-tenancy**: Isolated networks for different users/organizations
+### Software-defined networking
 
-macOS uses user-mode (SLIRP) networking for development.
+Production networking on Linux via OVN/OVS: multi-node overlay networks,
+security groups, floating IPs, IPv4/IPv6 dual-stack, DHCP, and routing —
+with the control plane doing IPAM and DNS zone modeling. macOS falls back to
+user-mode (SLIRP) networking for development.
 
-### Authentication & Authorization
+### Identity and access
 
-Enterprise-grade security:
+- **WebAuthn/Passkeys** for passwordless human login, plus API keys for
+  automation and optional OIDC/SCIM federation
+- **Built-in Cedar-based IAM**: roles, guardrails, and decision logs over an
+  organization → folder → project hierarchy — no external authorization
+  service to run
+- **SPIFFE/SPIRE mTLS** as the only agent authentication path — no join
+  tokens or shared secrets
 
-- **WebAuthn/Passkeys**: Modern passwordless authentication
-- **Built-in IAM**: Cedar-based authorization with role bindings, guardrails,
-  and decision logs
-- **RBAC**: Role-based access control for users and organizations
+### Scheduling
 
-### Intelligent VM Scheduling
+VMs are placed across agents by resource availability with pluggable
+strategies (`least_loaded` by default; `best_fit`, `round_robin`, `random`),
+honoring hard constraints like hypervisor support, site pinning, and vTPM
+capability.
 
-Multiple scheduling strategies for optimal resource placement:
+## The stack
 
-- **least_loaded**: Balance VMs across agents (default)
-- **best_fit**: Pack VMs to minimize fragmentation
-- **round_robin**: Even distribution
-- **random**: For testing
+Swift end to end on the server — the control plane is
+[Vapor](https://vapor.codes) on PostgreSQL, and the agent is a Swift daemon
+driving QEMU, Firecracker, and OVN. The web frontend is Next.js/React. Both
+supported deployments — single-host Docker Compose and a Kubernetes Helm
+chart — ship the full stack including SPIRE.
 
-### Modern Development Stack
+## Use cases
 
-Built with modern technologies:
+- **Private cloud infrastructure** — self-hosted, multi-tenant VM
+  infrastructure with real isolation between projects
+- **Development and testing** — disposable environments, multiple OS
+  targets, sandboxed code execution
+- **Learning** — a readable, modern codebase for understanding how clouds
+  are built: scheduling, SDN, IAM, and reconciliation loops in one repo
 
-- **Swift**: Control Plane (Vapor 4) and Agent
-- **PostgreSQL**: Database with Fluent ORM
-- **HTMX**: Dynamic frontend interactions
-- **TailwindCSS**: Utility-first styling
-- **Kubernetes**: Production deployment with Helm
+## License
 
-## Use Cases
+Strato is released under the Functional Source License (FSL-1.1-MIT):
+source-available, converting to MIT after two years.
 
-### Development & Testing
+## Next steps
 
-- Run multiple OS environments locally
-- Test across different platforms
-- Isolated development environments
-
-### Private Cloud Infrastructure
-
-- Self-hosted VM infrastructure
-- Multi-tenant environments
-- Edge computing deployments
-
-### Education & Learning
-
-- Learn cloud infrastructure
-- Experiment with networking
-- Understand virtualization
-
-## Why Strato?
-
-### Performance
-
-- Hardware acceleration for near-native speed
-- Efficient resource utilization
-- Intelligent scheduling algorithms
-
-### Security
-
-- Modern authentication (WebAuthn/Passkeys)
-- Fine-grained authorization (built-in Cedar-based IAM)
-- Network isolation (OVN/OVS)
-
-### Developer Experience
-
-- Swift packages that build and test with no infrastructure
-- Comprehensive documentation
-- Active development
-
-### Open Source
-
-- Functional Source License (FSL-1.1-MIT)
-- Community-driven
-- Transparent development
-
-## Next Steps
-
-- [Getting Started](/guide/getting-started)
-- [Quick Start Guide](/guide/quick-start)
-- [Architecture Overview](/architecture/overview)
+- [Getting Started](/guide/getting-started) — install and boot your first VM
+- [Architecture Overview](/architecture/overview) — how it all fits together

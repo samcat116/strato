@@ -79,6 +79,16 @@ are invisible to unit tests and direct-to-container curl.
   every main-branch merge). Database migrations run automatically at startup.
   Pin an immutable build with `STRATO_VERSION` in `.env` (e.g. a `main-<sha>`
   tag).
+- **Image storage** — by default (`IMAGE_STORAGE_BACKEND=filesystem`) base
+  images are written to the `image_storage` volume (`IMAGE_STORAGE_PATH`). A
+  one-shot `image-storage-init` service chowns the volume to the non-root
+  control-plane user on each `up` so imports can write to it. Agents fetch
+  images through the Envoy mTLS listener (`:8443`) they already dial,
+  authenticated by their SPIFFE SVID — no separate download origin to
+  configure. To keep images in an S3-compatible bucket instead, set
+  `IMAGE_STORAGE_BACKEND=s3` and the `IMAGE_S3_*` variables in your `.env` (no
+  object store is bundled — you supply the bucket). Agents still fetch through
+  the control plane either way. See `docs/architecture/storage.md`.
 - **SPIRE + Envoy (mTLS agent auth, on by default)** — a SPIRE server issues
   X.509 SVIDs; an Envoy front terminates agent mTLS on `:8443` and forwards the
   verified client identity to the control plane. A one-shot `spire-bootstrap`
@@ -105,20 +115,10 @@ are invisible to unit tests and direct-to-container curl.
 mTLS is end-to-end: `:8443` and `:8085` must be reachable from your hypervisor
 nodes, and you must **not** terminate TLS in front of `:8443`. The browser
 origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
-- **Image storage** — by default (`IMAGE_STORAGE_BACKEND=filesystem`) base
-  images are written to the `image_storage` volume (`IMAGE_STORAGE_PATH`). A
-  one-shot `image-storage-init` service chowns the volume to the non-root
-  control-plane user on each `up` so imports can write to it. Agents fetch
-  images through the Envoy mTLS listener (`:8443`) they already dial,
-  authenticated by their SPIFFE SVID — no separate download origin to
-  configure. To keep images in an S3-compatible bucket instead, set
-  `IMAGE_STORAGE_BACKEND=s3` and the `IMAGE_S3_*` variables in your `.env` (no
-  object store is bundled — you supply the bucket). Agents still fetch through
-  the control plane either way. See `docs/architecture/storage.md`.
 
 ## Adding a hypervisor
 
-In the web UI, go to Agents → Enroll node. Enrollment provisions the node in
+In the web UI, go to Agents → Add Agent. Enrollment provisions the node in
 SPIRE — the only way agents authenticate — and the dialog shows a one-line
 `curl … deploy/agent/install.sh | sudo bash …` command; run it on the
 hypervisor host. It downloads the binaries, starts a `spire-agent` (attested
@@ -132,5 +132,7 @@ metrics and logs back here. See the agent documentation for details.
   PostgreSQL password cannot be changed after the volume is initialized
   without also updating the database.
 - `docker compose down` keeps data; `docker compose down -v` wipes it.
-- For local development from source, use the compose file at the repository
-  root instead.
+- To run this stack from source, swap `image:` for `build:` on the
+  `control-plane`/`frontend` services in an untracked
+  `docker-compose.override.yml` — never in the tracked compose file. See
+  `docs/development/local-development.md`.

@@ -19,12 +19,16 @@ OpenTelemetry is bootstrapped. Controlled by environment variables (see
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OTEL_METRICS_ENABLED` | `true` (the compose deployment sets it to `false`) | Master switch for metric export |
+| `OTEL_METRICS_ENABLED` | `true` | Master switch for metric export |
 | `OTEL_TRACES_ENABLED` | `true` | Master switch for trace/span export |
 | `OTEL_LOGS_ENABLED` | `true` | Master switch for log export |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; merged over the built-in `service.version` / `service.instance.id` / `deployment.environment.name` |
+
+The compose deployment sets all **three** `OTEL_*_ENABLED` variables to
+`false` — its Prometheus and Loki serve agent host telemetry and VM console
+logs, not control-plane OTLP export.
 
 When a pillar is disabled, its facade uses a no-op backend — emission call sites
 (`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but cost nothing. The
@@ -150,12 +154,22 @@ bounded; unmatched requests fall back to `unmatched`.
 |--------|------|--------|---------|
 | `strato_agent_connections_total` | counter | — | Agent successfully (re)registered |
 | `strato_agent_disconnections_total` | counter | `reason` = `connection_closed` \| `unregister` \| `stale` | Agent connection ended |
-| `strato_agent_registration_failures_total` | counter | `reason` = `invalid_token` \| `expired_token` \| `register_error` \| `token_save_failed` \| `unsupported_protocol` \| `organization_scope_mismatch` \| `missing_organization_scope` | A registration attempt was rejected |
+| `strato_agent_registration_failures_total` | counter | `reason` = `register_error` \| `unsupported_protocol` \| `organization_scope_mismatch` \| `missing_organization_scope` \| `same_named_networks_unsupported` | A registration attempt was rejected |
 | `strato_agent_send_failures_total` | counter | `kind` = `message` \| `success` \| `error` | Failed to encode/send a message to an agent over its WebSocket |
 | `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `stuck_transition` \| `agent_reported` \| `operation_failed` \| `stuck_operation` \| `convergence_failed` | A VM transitioned into `.error` |
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no operation in flight (issue #260) |
+
+### Teardown safety & site networking
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_site_network_controller_up` | gauge | `site` | `1` while the site's designated network controller can author its topology, `0` once it goes stale or re-registers unable to (issue #833). **Alert on `== 0`** — the highest-value alert in this area: one node going quiet stalls *every* new networked workload in its site, and this fires before an operator sees the first refusal |
+| `strato_workload_tombstones_total` | counter | `kind` | A workload an agent holds was confirmed to have no control-plane row, so its teardown was authorized by tombstone. Expected near zero — ordinary deletes keep their rows until the agent confirms absence |
+| `strato_workload_teardowns_withheld_total` | counter | `reason` = `row_present_here` \| `row_on_other_agent` | An agent reported holding a workload a sync omitted while the row still exists, so teardown was refused. **Alert on it firing at all**: it means the control plane described a host incorrectly (before STR-98 the same condition destroyed the workloads instead of counting them) |
+| `strato_workload_claims_held` | gauge | `agent`, `reason` | Level-triggered companion to the counter above: how many workloads an agent currently holds that the control plane refused to tear down, recorded on every report including zero. Alert on `> 0` — the counter only fires at the transition, so it goes silent across a control-plane restart while the condition persists |
+| `strato_agent_teardown_refusals_total` | counter | — | An agent refused a sync's teardowns because its blast-radius guard tripped |
 
 ### Agent auto-update rollout (issue #434)
 
@@ -357,9 +371,9 @@ Thresholds are starting points; tune to your fleet size and SLOs.
   reporting `0` after the sweep, so the alert actually fires.
 - **Severity:** warning at 5 min, page at 15 min (capacity loss / VMs unmanaged).
 - **First checks:** is the agent process alive on the node? Network path to the
-  control plane? Look for `register_error` / token issues in
-  `strato_agent_registration_failures_total` (an agent stuck in a reconnect loop
-  with a bad token will show rising registration failures).
+  control plane? Look at `strato_agent_registration_failures_total` (an agent
+  stuck in a reconnect loop that keeps being rejected shows rising
+  registration failures with the `reason` naming why).
 
 ### Any VM in `.error`
 
@@ -377,9 +391,12 @@ Thresholds are starting points; tune to your fleet size and SLOs.
 
 - **Condition:** `increase(strato_agent_registration_failures_total[10m])`
   above a small threshold.
-- **Severity:** warning. A burst of `invalid_token` / `expired_token` usually
-  means a misconfigured or restarting agent presenting a stale token; a burst of
-  `register_error` points at a control-plane/database problem.
+- **Severity:** warning. A burst of `organization_scope_mismatch` /
+  `missing_organization_scope` means a node's SPIFFE identity doesn't match
+  the organization it is enrolled under (an enrollment or trust-domain
+  misconfiguration); `unsupported_protocol` is version skew — an agent too
+  old or too new for this control plane; a burst of `register_error` points
+  at a control-plane/database problem.
 
 ### Readiness probe failing
 

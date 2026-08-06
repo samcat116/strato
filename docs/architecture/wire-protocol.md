@@ -7,8 +7,12 @@ code shared between the two services — if a type crosses the socket, it lives
 here.
 
 The package deliberately has almost no dependencies (swift-nio is declared for
-consumers; the sources themselves import only Foundation) and no I/O of its
-own. It is a vocabulary, not a client.
+consumers; the StratoShared sources themselves import only Foundation) and no
+I/O of its own. It is a vocabulary, not a client. The package also ships a
+second product, **SPIFFEVerification** — the SPIFFE peer-identity verifier
+both services pin certificates with — kept as a separate target precisely so
+StratoShared consumers don't inherit its NIOSSL and swift-certificates
+dependencies.
 
 ## Envelope and encoding
 
@@ -65,7 +69,12 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
 | `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
 | `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
+| `supportsBalloonTarget` | 19 | `VMSpec.balloonTargetBytes` — operator balloon targets on a running guest |
+| `supportsSecurityGroups` | 20 | Security groups: OVN port groups/ACLs from the sync, membership per NIC |
+| `supportsProjectNetworkIsolation` | 21 | Id-keyed OVN naming, so two same-named networks can coexist |
+| `supportsVMCheckpoint` | 22 | The `vm_checkpoint` / `vm_restore` / `vm_snapshot_delete` message trio |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
+| `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 
@@ -73,20 +82,14 @@ Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
 degrade around — they must upgrade.
 
-Version 15 has no gate either: it added the QEMU guest agent (issue #563).
-Both fields it introduces are optional and nil-tolerant in each direction —
-`ObservedVMState.guestInfo` (the guest's observed hostname and per-MAC
-addresses, agent → control plane) and `VolumeSnapshotMessage.attachedVMId`
-(control plane → agent). A nil from an older peer reads identically to "not
-known" and can never mean a destructive action, so no send-side gate is needed.
+Versions 15 and 16 have no gates either: both add optional, nil-tolerant
+fields — `ObservedVMState.guestInfo` and `VolumeSnapshotMessage.attachedVMId`
+at v15 (the QEMU guest agent, issue #563), `ObservedVMState.memoryStats` at
+v16 (virtio-balloon statistics, issue #567). A nil from an older peer reads
+identically to "not known" and can never mean a destructive action, so no
+send-side gate is needed. One meaning did tighten without its shape changing:
 `attachedVMId` originally told the agent which guest to fs-freeze around a
-snapshot; since issue #747 the agent uses it to *refuse* the snapshot, so the
-field's meaning tightened without its shape changing.
-
-Version 16 follows the same pattern: `ObservedVMState.memoryStats` (issue
-#567) carries the guest's virtio-balloon memory statistics on the
-observed-state report — optional, nil-tolerant both ways, informational only,
-so no gate.
+snapshot; since issue #747 the agent uses it to *refuse* the snapshot.
 
 Version 17 adds CPU/memory hot-add (issue #568). The new spec field —
 `VMSpec.maxMemoryBytes`, defaulting to `memoryBytes` — is additive and
@@ -152,7 +155,10 @@ the sync is the whole point of the design: the metadata store inherits
 level-triggering, generation guards, and replay safety from the machinery that
 already exists, so an operator's edit propagates on the next sync with no
 second control loop, no second transport, and nothing in the payload that can
-expire.
+expire. Carrying the metadata on the sync is shipped; serving it is not — no
+agent yet answers HTTP on `169.254.169.254`, so the guest-facing IMDS listener
+is future work (only the v27 chassis/localport half exists agent-side, see
+[agent](./agent.md)).
 
 Absence is asymmetric in the v3/v5 sense rather than the harmless v7 sense,
 which is why `supportsInstanceMetadata` gates both directions. Agent-side it
@@ -227,11 +233,16 @@ dual-mode rollout.
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
-| `vm_create`, `vm_boot`, `vm_shutdown`, `vm_pause`, `vm_resume`, `vm_delete`, `vm_info`, `vm_status` | **Deprecated** imperative VM lifecycle (issue #261), superseded by desired-state sync; kept for older control planes |
-| `network_*` (create/delete/list/info/attach/detach) | Network operations |
 | `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |
+| `sandbox_snapshot_create`, `sandbox_snapshot_delete`, `sandbox_restore` | Sandbox checkpoint/restore (v9+, issue #426) — imperative request/response pairs like the volume operations |
+| `sandbox_snapshot_export` | Export a checkpoint's artifacts off-node to control-plane object storage (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
+
+There are deliberately no `network_*` messages: network topology is
+level-triggered from `DesiredStateMessage.networks` alone (the imperative
+frames were removed in issue #781, as were the pre-sync `vm_*` lifecycle
+messages and `status_update` in issue #512).
 
 **Agent → control plane**
 
@@ -241,7 +252,6 @@ dual-mode rollout.
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
-| `status_update` | Push notification of a VM status change |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
 | `sandbox_exec_started`, `sandbox_exec_output`, `sandbox_exec_exit`, `sandbox_exec_closed` | Exec stream responses |

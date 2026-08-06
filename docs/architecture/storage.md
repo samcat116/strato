@@ -121,6 +121,9 @@ a local directory. Future backends (LVM, Ceph RBD, ZFS, raw-file layouts for
 Virtualization.framework) implement the same protocol and can realize
 `createVolumeFromImage`/`cloneVolume` efficiently — backing files, reflinks,
 COW snapshots — instead of full copies.
+[ADR 0002](../adr/0002-ceph-for-distributed-block-storage.md) has since
+chosen Ceph/RBD per site as the distributed backend (see
+[distributed-storage](./distributed-storage.md)).
 
 ## Key design points
 

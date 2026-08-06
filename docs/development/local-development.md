@@ -1,8 +1,11 @@
 # Local Development
 
-Strato is developed as three independent Swift packages plus a Next.js
-frontend. Building and testing needs no infrastructure at all; running the
-full stack goes through the same Docker Compose deployment operators use.
+Strato is developed as independent Swift packages plus a Next.js frontend.
+Four packages see active development — `control-plane/`, `agent/`, `shared/`,
+and `cli/` — alongside the generated API client (`clients/swift/`) and the
+vendored `SwiftFirecracker/` package. Building and testing needs no
+infrastructure at all; running the full stack goes through the same Docker
+Compose deployment operators use.
 
 ## Prerequisites
 
@@ -26,7 +29,7 @@ Platform notes for running VMs:
 
 ## Build and test
 
-The three Swift packages build and test separately. The agent and shared
+The Swift packages build and test separately. The agent, shared, and cli
 suites need no running services. The control-plane suite runs against
 PostgreSQL — the engine production uses — and expects one reachable via the
 standard `DATABASE_*` env vars (defaults: `localhost:5432`, user `strato`,
@@ -50,6 +53,9 @@ swift test  --package-path control-plane
 
 swift build --package-path agent
 swift test  --package-path agent
+
+swift build --package-path cli
+swift test  --package-path cli
 
 swift test  --package-path shared
 ```
@@ -177,14 +183,15 @@ yourself in an override file.
 
 ### Adding an agent
 
-VMs need a hypervisor host. In the web UI go to **Agents → Enroll node**,
+VMs need a hypervisor host. In the web UI go to **Agents → Add Agent**,
 then run the generated bootstrap command on the host — it installs the
 agent, attests it to SPIRE, and starts it. Enrollment needs the control
 plane configured for SPIRE (`SPIRE_ENABLED=true` plus
 `SPIRE_SERVER_API_ADDRESS`); `deploy/compose` sets this up for you.
 
 To run an agent from source against a local control plane, copy
-`config.toml.example` and point `control_plane_url` at your stack:
+`config.toml.example` (at the repository root) and point `control_plane_url`
+at your stack:
 
 ```bash
 swift run --package-path agent StratoAgent --config-file ./config.toml
