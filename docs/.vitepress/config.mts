@@ -53,6 +53,7 @@ export default defineConfig({
           { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
           { text: 'IAM', link: '/architecture/iam' },
+          { text: 'Guest Identity (Proposal)', link: '/architecture/guest-identity' },
           { text: 'Webhooks', link: '/architecture/webhooks' },
           { text: 'Agent Updates', link: '/architecture/agent-updates' }
         ]

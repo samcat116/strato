@@ -96,6 +96,7 @@ let package = Package(
                 .product(name: "SPIFFEVerification", package: "shared"),
             ],
             path: "Sources/StratoAgentSPIFFE",
+            exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
         ),
         .executableTarget(

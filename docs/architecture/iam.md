@@ -697,6 +697,20 @@ Still future: per-org trust domains for JWT-SVID auth, and the impersonation
 *flow* (minting short-lived credentials) behind the already-modeled
 `serviceaccount:impersonate` permission.
 
+### Guest identities are minted elsewhere (issue #496)
+
+The registry describes SPIFFE identities Strato *authorizes*. A separate design
+proposal — [guest-identity](./guest-identity.md) — covers issuing SVIDs to the
+VMs and sandboxes Strato hosts, for their own service-to-service mTLS. It
+reserves `/vm/<uuid>` and `/sandbox/<uuid>` as guest namespaces alongside the
+already-reserved `/agent/`, so a hand-registered URI cannot collide with one a
+guest will later be minted into.
+
+The two are deliberately independent, and the invariant above is why: an SVID
+minted for a guest names a workload and grants nothing. Turning it into a
+principal is an ordinary registration — the same `workload_registrations` row and
+the same role bindings as any other machine principal.
+
 ## Architecture: the evaluator is in-process
 
 SpiceDB was a stateful network service; Cedar is a library. The migration

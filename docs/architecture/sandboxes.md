@@ -734,6 +734,12 @@ part of the warm-snapshot cache key.
   SwiftFirecracker, still unused) plus a periodic auto-checkpoint policy;
   uffd lazy-load restore for fork latency; and snapshot retention policies
   beyond delete-time cleanup (#428).
+- **Guest identity** (#496, design in [guest-identity](./guest-identity.md)): a
+  SPIFFE Workload API socket inside the sandbox, served by strato-agent over a v4
+  control-protocol identity port. Sandboxes are the ready half of that proposal —
+  vsock and an in-house PID 1 are already here — and the fork case composes with
+  the clone-safety policy above, because identity arrives over a live channel
+  rather than baked into the config drive.
 
 ## Non-goals (v1)
 

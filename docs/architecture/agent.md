@@ -50,7 +50,11 @@ default) funnels into `launchAgent`.
   bookkeeping; a node that loses its SPIRE registration simply stops being
   able to connect. The agent persists no credential state at all — its name
   comes from `--agent-id` (defaulting to the hostname) and its identity from
-  SPIRE, so there is nothing on disk to rotate, corrupt, or leak.
+  SPIRE, so there is nothing on disk to rotate, corrupt, or leak. That is the
+  agent's *own* SVID; a separate proposal
+  ([guest-identity](./guest-identity.md), #496) has the agent additionally act as
+  a SPIRE **delegate**, brokering SVIDs for the VMs and sandboxes it hosts.
+  `strato-agent spiffe-delegated-probe` is the node-side diagnostic for it.
 - **Server identity is pinned, not just chain-verified**: every workload in
   the trust domain holds a bundle-signed SVID, so "chains to the bundle"
   would accept a compromised workload impersonating the control plane. The
