@@ -374,8 +374,8 @@ struct GuardrailController: RouteCollection {
     /// Runs after the write has committed, so an unavailable solver cannot
     /// turn a guardrail write into a failure: the ceiling is already in force
     /// either way, and the report is a courtesy the write does not depend on.
-    /// This is the opposite posture from binding writes, and deliberately so —
-    /// there, the analysis is the thing being decided.
+    /// Binding writes take the same posture since STR-110 — both directions
+    /// report, neither is decided by the analysis.
     private func shadowed(by guardrail: Guardrail, req: Request) async throws
         -> [GuardrailWriteReport.ShadowedBinding]
     {

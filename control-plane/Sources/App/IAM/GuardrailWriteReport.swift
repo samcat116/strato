@@ -67,14 +67,51 @@ struct ProposedBinding: Sendable {
 
 /// What a grant write returns: the ceilings in force that narrow it.
 ///
-/// Empty is the normal case, and means the grant is unconstrained where it was
-/// written. A non-empty list is not a failure — the binding exists and confers
-/// everything the listed ceilings do not take back.
+/// Empty `ceilings` is the normal case, and means the grant is unconstrained
+/// where it was written. A non-empty list is not a failure — the binding exists
+/// and confers everything the listed ceilings do not take back.
 struct GrantWriteResponse: Content {
     let ceilings: [GuardrailWriteReport.GrantCeiling]
+    /// Why the analysis could not run, when it could not.
+    ///
+    /// Without this, an empty `ceilings` says both "nothing narrows this grant"
+    /// and "nobody looked", and only a server log tells them apart — while the
+    /// person who can act on the difference is the one holding the response.
+    /// The grant lands either way: ceilings are enforced at evaluation, and
+    /// this report has never been what enforces them.
+    let analysisUnavailable: String?
+
+    /// Nothing to analyze — the write created no binding.
+    static let noBinding = GrantWriteResponse(ceilings: [], analysisUnavailable: nil)
+}
+
+/// Raised when the analysis ran out of wall clock.
+///
+/// Not an `AbortError`: nothing is refused over it, and by the time it is
+/// thrown the write has already committed. It reaches the caller, which names
+/// it in `analysisUnavailable` — an expired report must not read as an
+/// all-clear.
+struct GuardrailAnalysisExpired: Error, CustomStringConvertible {
+    let budget: Duration
+    let guardrail: String
+
+    var description: String {
+        "the ceiling analysis exceeded its \(budget) budget at guardrail '\(guardrail)'"
+    }
 }
 
 enum GuardrailWriteReport {
+
+    /// Wall clock the whole report gets, across every candidate ceiling.
+    ///
+    /// The analysis is one solver invocation per reachable resource type per
+    /// candidate ceiling, and ceilings inherit, so a deep node with several
+    /// above it can stack invocations onto a response whose write already
+    /// committed and no longer depends on them. Bounding it trades a rare
+    /// explanation for a bounded response; the budget is checked between
+    /// invocations, so the worst case is this plus one `SymCCGuardrailAnalyzer`
+    /// timeout.
+    static let analysisBudget: Duration = .seconds(15)
 
     // MARK: - Binding writes
 
@@ -101,8 +138,8 @@ enum GuardrailWriteReport {
         let counterexample: String?
     }
 
-    /// The ceilings that narrow `binding`, or none if the analysis could not
-    /// run.
+    /// The response body for a grant that has just been written: the ceilings
+    /// that narrow it, or why nobody could say.
     ///
     /// Call from the request handler *after* the transaction that writes the
     /// binding: the analysis spawns solver processes, holding a database
@@ -110,11 +147,13 @@ enum GuardrailWriteReport {
     /// here can change whether the write happens.
     ///
     /// Best-effort by design. Eval-time enforcement is exact and always in
-    /// force, so an absent or failing solver costs an explanation, never a
-    /// grant — the same posture the shadow report takes on a guardrail write,
-    /// and the opposite of the `503` this path returned while it still refused
-    /// writes.
-    static func ceilings(narrowing binding: ProposedBinding, req: Request) async -> [GrantCeiling] {
+    /// force, so an absent, failing, or too-slow solver costs an explanation,
+    /// never a grant — the same posture the shadow report takes on a guardrail
+    /// write, and the opposite of the `503` this path returned while it still
+    /// refused writes. What is *not* best-effort is saying which happened:
+    /// a failure is named in `analysisUnavailable` rather than rendered as an
+    /// all-clear.
+    static func report(for binding: ProposedBinding, req: Request) async -> GrantWriteResponse {
         let found: [GrantCeiling]
         do {
             found = try await ceilings(
@@ -131,7 +170,7 @@ enum GuardrailWriteReport {
                     "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
                     "error": .string("\(error)"),
                 ])
-            return []
+            return GrantWriteResponse(ceilings: [], analysisUnavailable: "\(error)")
         }
         for ceiling in found {
             req.logger.notice(
@@ -143,7 +182,7 @@ enum GuardrailWriteReport {
                     "ceilinged_actions": .string(ceiling.ceilingedActions.joined(separator: ", ")),
                 ])
         }
-        return found
+        return GrantWriteResponse(ceilings: found, analysisUnavailable: nil)
     }
 
     /// Every ceiling that narrows `binding`.
@@ -157,6 +196,7 @@ enum GuardrailWriteReport {
         on db: any Database,
         logger: Logger
     ) async throws -> [GrantCeiling] {
+        let deadline = ContinuousClock.now + analysisBudget
         let chain = try await IAMResourceTree.ancestors(of: binding.node, on: db)
         // Matcher-built ceilings only. An authored ceiling's principal side is
         // free-form Cedar this report cannot resolve against the database — the
@@ -185,7 +225,8 @@ enum GuardrailWriteReport {
             else { continue }
             guard
                 let overlap = try await overlap(
-                    between: binding, and: rendering, analyzer: analyzer, logger: logger)
+                    between: binding, and: rendering, analyzer: analyzer,
+                    deadline: deadline, logger: logger)
             else { continue }
             ceilings.append(
                 try await describe(guardrail, binding: binding, overlap: overlap, on: db))
@@ -209,6 +250,7 @@ enum GuardrailWriteReport {
         on db: any Database,
         logger: Logger
     ) async throws -> [ShadowedBinding] {
+        let deadline = ContinuousClock.now + analysisBudget
         // Authored ceilings are not analyzed against existing bindings for the
         // same reason they are skipped on binding writes (`ceilings`): their
         // free-form principal side cannot be resolved against the database, and
@@ -250,7 +292,8 @@ enum GuardrailWriteReport {
             else { continue }
             guard
                 try await overlap(
-                    between: binding, and: rendering, analyzer: analyzer, logger: logger) != nil
+                    between: binding, and: rendering, analyzer: analyzer,
+                    deadline: deadline, logger: logger) != nil
             else { continue }
             shadowed.append(
                 ShadowedBinding(
@@ -362,8 +405,9 @@ enum GuardrailWriteReport {
 
     /// What a ceiling takes out of a grant.
     private struct Overlap {
-        /// The role's actions the ceiling's action scope covers — what it
-        /// subtracts, and everything else in the role still stands.
+        /// The role's actions this ceiling subtracts — covered by its action
+        /// scope *and* able to reach a resource type it can match. Everything
+        /// else in the role still stands.
         let actions: [String]
         /// A concrete request the grant allows and the ceiling forbids.
         let counterexample: String
@@ -377,6 +421,7 @@ enum GuardrailWriteReport {
         between binding: ProposedBinding,
         and rendering: GuardrailRendering,
         analyzer: any GuardrailAnalyzer,
+        deadline: ContinuousClock.Instant,
         logger: Logger
     ) async throws -> Overlap? {
         // The action side is decided here, over the finite registry: a role's
@@ -393,7 +438,8 @@ enum GuardrailWriteReport {
         // asked about — only on the resource type, since `appliesTo` is what
         // ties an action to a type. So one query per reachable resource type,
         // with any overlapping action as its representative. The enumeration
-        // is complete, not sampled: no ceiling is skipped for cost.
+        // is complete, not sampled: no ceiling is skipped for cost, and no
+        // type is skipped either — see the accumulation below.
         let reachable = Set(CedarSchemaBuilder.descendantTypes(of: binding.node.type.cedarEntityType))
         var representatives: [CedarEntityType: String] = [:]
         for action in overlapping {
@@ -424,7 +470,22 @@ enum GuardrailWriteReport {
         case .serviceAccount: principalType = .serviceAccount
         case .workload: principalType = .workload
         }
+        // Every reachable type is asked about, rather than stopping at the
+        // first one that comes back non-disjoint: the answers decide *which
+        // actions are reported*, and an action whose reachable types are all
+        // provably disjoint is not one this ceiling takes back. Stopping early
+        // would attribute the first hit's verdict to actions nobody asked
+        // about — the same over-broad claim this report exists to stop making,
+        // moved from the status code into the body.
+        var narrowedTypes: Set<CedarEntityType> = []
+        var counterexample: String?
         for (resourceType, action) in representatives.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            // Checked between queries, so the worst case is the budget plus one
+            // solver timeout — bounded, which unbounded stacking of solver
+            // calls onto an already-committed write is not.
+            guard ContinuousClock.now < deadline else {
+                throw GuardrailAnalysisExpired(budget: analysisBudget, guardrail: rendering.name)
+            }
             let environment = CedarRequestEnvironment(
                 principalType: principalType, action: action, resourceType: resourceType)
             let grant = grantPolicy(binding, action: action)
@@ -444,12 +505,20 @@ enum GuardrailWriteReport {
                 throw error
             }
             if !analysis.holds {
-                return Overlap(
-                    actions: overlapping,
-                    counterexample: analysis.counterexample ?? "\(action) on \(resourceType.rawValue)")
+                narrowedTypes.insert(resourceType)
+                // The first one found, in the sorted enumeration, so the
+                // reported counterexample is deterministic.
+                counterexample =
+                    counterexample ?? analysis.counterexample ?? "\(action) on \(resourceType.rawValue)"
             }
         }
-        return nil
+        guard let counterexample else { return nil }
+        return Overlap(
+            actions: overlapping.filter { action in
+                CedarSchemaBuilder.resourceTypes(for: action).contains(where: narrowedTypes.contains)
+            },
+            counterexample: counterexample
+        )
     }
 
     /// The proposed binding as the policy it amounts to.

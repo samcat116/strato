@@ -8,7 +8,7 @@ import Vapor
 /// A service account is a resource in the IAM tree (`serviceaccount:*`
 /// actions under its project, including `impersonate`) *and* a principal —
 /// its project role is an ordinary `role_bindings` row written through the
-/// same guardrail-checked path user and group grants use.
+/// same ceiling-reported path user and group grants use.
 struct ServiceAccountController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let projectScoped = routes.grouped("api", "projects", ":projectID", "service-accounts")
@@ -247,9 +247,8 @@ struct ServiceAccountController: RouteCollection {
                 on: db
             )
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .ok, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/service-accounts/:serviceAccountID/project-role

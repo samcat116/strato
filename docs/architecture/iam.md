@@ -211,6 +211,12 @@ guardrail, who set it, and what it takes back:
 }] }
 ```
 
+`ceilingedActions` is the point of the shape: the ceiling covers three of
+`editor`'s actions and the grant still confers the other thirty. An action is
+listed only if the ceiling's action scope covers it **and** it can reach a
+resource type the ceiling matches — which is why the symbolic half below asks
+about every reachable type rather than stopping at the first that overlaps.
+
 Denying at eval time is correct but produces a mystery; explaining at write
 time is what an analyzable policy language buys. Eval-time enforcement is what
 *enforces* — the write-time pass only reports. The analysis runs only on
@@ -251,7 +257,8 @@ The question is split deliberately:
   carrying the attributes the ceiling matches on? That question does not depend
   on which overlapping action is asked about, only on the resource type, so the
   enumeration is one query per reachable resource type per candidate guardrail
-  — complete, not sampled.
+  — complete, not sampled, and not short-circuited: the per-type answers are
+  what decide which actions are reported.
 
 **Matcher ceilings only (#610).** The write-time report runs against
 matcher-built guardrails. An authored guardrail's principal side is free-form
@@ -259,17 +266,28 @@ Cedar this analysis cannot resolve against the database, and resolving it
 symbolically would make the solver invent memberships it was never told about
 (the very thing the principal-side split above exists to avoid) — so rather
 than name a ceiling on a guess, authored ceilings rely on eval-time
-enforcement, which is exact and always in force. The trade-off is that an authored ceiling gives no *write-time*
-explanation; the eval-time denial still names it. `who-can`, whose queries are
-concrete, reflects authored ceilings exactly without a solver — see below.
+enforcement, which is exact and always in force. The trade-off is that an
+authored ceiling gives no *write-time* explanation; the eval-time denial still
+names it. `who-can`, whose queries are concrete, reflects authored ceilings
+exactly without a solver — see below.
 
-**Best effort.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on `PATH`) names the SMT
-solver; the control-plane image ships one. With no solver, a write is accepted
-with an empty `ceilings` list and the failure logged: the report is an
-explanation, and enforcement never depended on it. (It failed *closed* while it
-still refused writes — with nothing being refused there is nothing to fail
-closed about.) Readiness deliberately does not depend on it either: a solver
-outage should cost explanations, not cycle every replica.
+**Best effort, but never silently.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on
+`PATH`) names the SMT solver; the control-plane image ships one. With no
+solver — or a failing one, or one too slow — the write is accepted and the
+response says so in `analysisUnavailable`, because an empty `ceilings` list
+otherwise means both "nothing narrows this grant" and "nobody looked", and only
+the first is an all-clear. (The path failed *closed* while it still refused
+writes; with nothing being refused there is nothing to fail closed about.)
+Readiness deliberately does not depend on the solver either: an outage should
+cost explanations, not cycle every replica.
+
+**The report is bounded.** It is one solver invocation per reachable resource
+type per candidate ceiling, and ceilings inherit, so a deep node can stack
+invocations onto a response whose write has already committed and no longer
+depends on them. `GuardrailWriteReport.analysisBudget` caps the whole report;
+the budget is checked between invocations, so the worst case is the budget plus
+one analyzer timeout. Exceeding it is reported like any other failure to
+answer, not as an empty list.
 
 **Two carve-outs**, both at the call sites — neither runs the analysis at all:
 
@@ -549,8 +567,8 @@ the best-effort caveat above — only permits, which widen access, remain
 un-invertible. Marking rather than filtering is deliberate: an admin auditing
 "who can reach this?" needs to see both a ceilinged grant and a live one. This
 is what #484 unblocked for guardrails — the symbolic machinery is for the
-subtree-quantified write-time report; the concrete reverse lookup only needed the
-compiled set. Guardrail DTOs also carry their `cedar_text` so the UI can show
+subtree-quantified write-time report; the concrete reverse lookup only needed
+the compiled set. Guardrail DTOs also carry their `cedar_text` so the UI can show
 the Cedar a ceiling compiles to.
 
 ### Membership and visibility

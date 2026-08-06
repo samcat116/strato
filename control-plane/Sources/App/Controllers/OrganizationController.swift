@@ -506,17 +506,14 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        return try await GrantWriteResponse(ceilings: await ceilings(narrowing: proposed, req: req))
-            .encodeResponse(status: .created, for: req)
+        return try await report(for: proposed, req: req).encodeResponse(status: .created, for: req)
     }
 
-    /// The ceilings narrowing a binding this write created, or none when it
-    /// created no binding (bare membership).
-    private func ceilings(
-        narrowing proposed: ProposedBinding?, req: Request
-    ) async -> [GuardrailWriteReport.GrantCeiling] {
-        guard let proposed else { return [] }
-        return await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
+    /// The ceiling report for a binding this write created, or the empty one
+    /// when it created no binding (bare membership).
+    private func report(for proposed: ProposedBinding?, req: Request) async -> GrantWriteResponse {
+        guard let proposed else { return .noBinding }
+        return await GuardrailWriteReport.report(for: proposed, req: req)
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
@@ -664,8 +661,7 @@ struct OrganizationController: RouteCollection {
             }
         }
 
-        return try await GrantWriteResponse(ceilings: await ceilings(narrowing: proposed, req: req))
-            .encodeResponse(status: .ok, for: req)
+        return try await report(for: proposed, req: req).encodeResponse(status: .ok, for: req)
     }
 
     // MARK: - Org role resolution (issue #608)

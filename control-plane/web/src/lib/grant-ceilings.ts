@@ -28,6 +28,16 @@ export function warnAboutGrantCeilings(
   result: GrantWriteResponse | undefined,
   subject: string
 ): void {
+  // An empty list means "nothing narrows this" only when the analysis ran.
+  // Saying nothing when it didn't would turn a missing answer into an
+  // all-clear — the one reading the server can't correct later.
+  if (result?.analysisUnavailable) {
+    toast.warning(`Couldn't check guardrails against ${subject}`, {
+      description: `${result.analysisUnavailable}. Any guardrails narrowing this grant are still enforced, but can't be listed here.`,
+      duration: 10000,
+    });
+    return;
+  }
   const ceilings = result?.ceilings ?? [];
   if (ceilings.length === 0) return;
   toast.warning(`${subject} is narrowed by a guardrail`, {

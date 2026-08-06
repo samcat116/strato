@@ -151,9 +151,8 @@ struct WorkloadRegistrationController: RouteCollection {
                 on: db
             )
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .ok, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/projects/:projectID/workload-grants/:registrationID

@@ -238,9 +238,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .created, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// PATCH /api/organizations/:organizationID/ous/:ouID/members/:userID —
@@ -289,9 +288,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .ok, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/organizations/:organizationID/ous/:ouID/members/:userID —
@@ -349,9 +347,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .created, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// DELETE /api/organizations/:organizationID/ous/:ouID/groups/:groupID —

@@ -13857,12 +13857,20 @@ components:
         ceilings:
           type: array
           description: >-
-            Empty in the ordinary case, and empty when the symbolic analysis
-            could not run; the grant is written and enforced either way. A
-            non-empty list is not a failure — the binding confers everything
-            the listed ceilings do not take back.
+            Empty in the ordinary case. A non-empty list is not a failure —
+            the binding confers everything the listed ceilings do not take
+            back. Also empty when `analysisUnavailable` is set, which is the
+            only thing distinguishing "nothing narrows this grant" from
+            "nobody could say".
           items:
             $ref: "#/components/schemas/IAMGrantCeiling"
+        analysisUnavailable:
+          type: string
+          description: >-
+            Present only when the symbolic analysis could not run — no solver,
+            a solver failure, or the analysis exceeding its wall-clock budget —
+            naming which. The grant is written and the ceilings are enforced at
+            evaluation either way; what is missing is the explanation.
 
     IAMGrantCeiling:
       type: object
@@ -13884,8 +13892,9 @@ components:
         ceilingedActions:
           type: array
           description: >-
-            The role's actions this ceiling takes back. Everything else in the
-            role is unaffected.
+            The role's actions this ceiling takes back: covered by its action
+            scope *and* able to reach a resource type it can match. Everything
+            else in the role is unaffected.
           items:
             type: string
         counterexample:

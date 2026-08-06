@@ -249,6 +249,12 @@ export interface GrantCeiling {
 /** What every role-grant write returns. Usually `ceilings: []`. */
 export interface GrantWriteResponse {
   ceilings: GrantCeiling[];
+  /**
+   * Why the ceiling analysis could not run, when it could not. `ceilings` is
+   * empty in that case too, so this is the only thing separating "nothing
+   * narrows this grant" from "nobody could say". The grant landed either way.
+   */
+  analysisUnavailable?: string;
 }
 
 // Legacy project-role names still accepted on writes; the unified vocabulary

@@ -7861,8 +7861,10 @@ export interface components {
         };
         /** @description What a role grant returns: the tier-2 ceilings in force that narrow it. The mirror of `shadowedBindings` on a guardrail write — there the ceiling's author sees the grants it narrows, here the grant's author sees the ceilings that narrow it. */
         IAMGrantWriteResponse: {
-            /** @description Empty in the ordinary case, and empty when the symbolic analysis could not run; the grant is written and enforced either way. A non-empty list is not a failure — the binding confers everything the listed ceilings do not take back. */
+            /** @description Empty in the ordinary case. A non-empty list is not a failure — the binding confers everything the listed ceilings do not take back. Also empty when `analysisUnavailable` is set, which is the only thing distinguishing "nothing narrows this grant" from "nobody could say". */
             ceilings: components["schemas"]["IAMGrantCeiling"][];
+            /** @description Present only when the symbolic analysis could not run — no solver, a solver failure, or the analysis exceeding its wall-clock budget — naming which. The grant is written and the ceilings are enforced at evaluation either way; what is missing is the explanation. */
+            analysisUnavailable?: string;
         };
         IAMGrantCeiling: {
             /** @description `organization/Acme/no-prod-for-contractors` — the attach node and the guardrail's name, so the reader knows where to go to change it. */
@@ -7871,7 +7873,7 @@ export interface components {
             setBy?: string;
             /** @description What the grant does that the ceiling forbids, in the vocabulary the ceiling was written in. */
             explanation: string;
-            /** @description The role's actions this ceiling takes back. Everything else in the role is unaffected. */
+            /** @description The role's actions this ceiling takes back: covered by its action scope *and* able to reach a resource type it can match. Everything else in the role is unaffected. */
             ceilingedActions: string[];
             /** @description A concrete request the grant allows and the ceiling forbids, as the solver found it. */
             counterexample?: string;

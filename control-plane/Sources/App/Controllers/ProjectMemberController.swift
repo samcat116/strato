@@ -206,9 +206,8 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .created, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// PATCH /api/projects/:projectID/members/:userID — change a user's role.
@@ -283,9 +282,8 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .user, principalID: userID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .ok, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/projects/:projectID/members/:userID — revoke a user's role.
@@ -391,9 +389,8 @@ struct ProjectMemberController: RouteCollection {
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
                 role: role.displayName, node: node, req: req)
         }
-        return try await GrantWriteResponse(
-            ceilings: await GuardrailWriteReport.ceilings(narrowing: proposed, req: req)
-        ).encodeResponse(status: .created, for: req)
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .created, for: req)
     }
 
     /// DELETE /api/projects/:projectID/groups/:groupID — revoke a group's role.

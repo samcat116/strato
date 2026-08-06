@@ -358,11 +358,12 @@ final class GuardrailWriteReportTests {
             let binding = ProposedBinding(
                 principalType: .user, principalID: user.id!, role: .editor,
                 node: tree.projectNode)
-            // The analyzer's failure reaches the caller, which swallows it and
-            // reports nothing (`ceilings(narrowing:req:)`). Eval-time
-            // enforcement is exact and always in force, so a deployment whose
-            // solver has gone missing loses the explanation, not the ceiling —
-            // and, crucially, not the ability to grant roles.
+            // The analyzer's failure reaches this overload; `report(for:req:)`
+            // is what turns it into a written grant carrying
+            // `analysisUnavailable` (pinned over HTTP in `ProjectMemberTests`).
+            // Eval-time enforcement is exact and always in force, so a
+            // deployment whose solver has gone missing loses the explanation,
+            // not the ceiling — and not the ability to grant roles.
             await #expect(throws: GuardrailAnalyzerError.self) {
                 _ = try await GuardrailWriteReport.ceilings(
                     narrowing: binding,
@@ -371,6 +372,44 @@ final class GuardrailWriteReportTests {
                     logger: app.logger
                 )
             }
+        }
+    }
+
+    @Test("An action the ceiling cannot reach is not reported as ceilinged")
+    func unreachableActionsAreNotReported() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "Reach")
+            let user = try await builder.createUser(username: "reach", email: "reach@example.com")
+
+            _ = try await GuardrailStore.create(
+                name: "vms-and-images",
+                description: nil,
+                effect: nil,
+                node: tree.orgNode,
+                actions: ["vm:stop", "image:delete"],
+                principalMatch: .any,
+                resourceMatch: .any,
+                createdBy: nil,
+                on: app.db
+            )
+
+            // The solver's answers are stubbed *per resource type* so the
+            // mapping under test is the only variable: `Image` and `Project`
+            // come back provably disjoint, `VM` does not. The enumeration is
+            // sorted, so `Image` is asked first — stopping at the first hit
+            // would attribute VM's verdict to `image:delete`, which is the
+            // over-broad claim this report exists not to make.
+            let found = try await GuardrailWriteReport.ceilings(
+                narrowing: ProposedBinding(
+                    principalType: .user, principalID: user.id!, role: .editor,
+                    node: tree.projectNode),
+                analyzer: SelectiveGuardrailAnalyzer(nonDisjointResourceTypes: [CedarEntityType.vm.rawValue]),
+                on: app.db,
+                logger: app.logger
+            )
+            #expect(found.count == 1)
+            #expect(found.first?.ceilingedActions == ["vm:stop"])
         }
     }
 
@@ -432,6 +471,35 @@ final class GuardrailWriteReportTests {
             #expect(shadowed.first?.role == .editor)
             #expect(shadowed.first?.node == tree.projectNode)
         }
+    }
+}
+
+/// An analyzer whose answers depend only on the request environment's resource
+/// type, so a test can pin *which* types the report attributes to which
+/// actions without depending on what cvc5 makes of a particular schema.
+struct SelectiveGuardrailAnalyzer: GuardrailAnalyzer {
+    let nonDisjointResourceTypes: Set<String>
+
+    func disjoint(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        let overlaps = nonDisjointResourceTypes.contains(environment.resourceType.rawValue)
+        return GuardrailAnalysis(
+            holds: !overlaps,
+            counterexample: overlaps
+                ? "test analyzer: \(environment.action) on \(environment.resourceType.rawValue)" : nil)
+    }
+
+    func implies(
+        schemaText: String,
+        _ a: [CedarPolicySource],
+        _ b: [CedarPolicySource],
+        in environment: CedarRequestEnvironment
+    ) async throws -> GuardrailAnalysis {
+        GuardrailAnalysis(holds: true, counterexample: nil)
     }
 }
 
