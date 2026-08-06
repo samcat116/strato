@@ -64,8 +64,14 @@ struct ImageFetchRedirectTests {
 
     /// Boots the control plane with the REAL fetch service, plus a separate
     /// origin server, and hands the test the origin's port.
+    ///
+    /// `approvedAddresses`, when set, installs a guarded client with a scripted
+    /// address validator. That is the only way to exercise the connection pin
+    /// from a test: under `.testing` the guard deliberately allows private
+    /// hosts, so it approves nothing and there is nothing to pin.
     private func withFetchApp(
         redirectHops: Int = 1,
+        approvedAddresses: [String]? = nil,
         _ test: (Application, Int) async throws -> Void
     ) async throws {
         let (origin, port) = try await Self.makeOriginApp(redirectHops: redirectHops)
@@ -83,6 +89,10 @@ struct ImageFetchRedirectTests {
 
         do {
             try await configure(app)
+            if let approvedAddresses {
+                app.guardedHTTPClient = GuardedHTTPClient(
+                    app: app, validator: { _ in approvedAddresses })
+            }
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storagePath)
             // Deliberately NOT the mock: the point is the real HTTP path.
             app.imageFetchService = ImageFetchService(app: app)
@@ -185,6 +195,47 @@ struct ImageFetchRedirectTests {
 
             #expect(image.status == .error)
             #expect(image.errorMessage?.contains("Checksum verification failed") == true)
+        }
+    }
+
+    /// The rebind simulation on the practically exploitable path. Validation
+    /// approves `::1`; the host resolves to `127.0.0.1`, where the origin is
+    /// serving the image. If the connection re-resolved the name instead of
+    /// using the address that was validated, those bytes would land in the
+    /// project's image object — an arbitrary internal GET with the response
+    /// exfiltrated to whoever can then download or boot the image.
+    @Test("A fetch connects to the validated address, not a re-resolved one")
+    func testFetchPinsTheValidatedAddress() async throws {
+        try await withFetchApp(approvedAddresses: ["::1"]) { app, port in
+            let imageID = try await makePendingImage(
+                app: app, sourceURL: "http://localhost:\(port)/image.qcow2")
+
+            try await app.imageFetchService.startFetch(imageId: imageID)
+            // Longer than the guarded client's connect timeout: the fetch settles
+            // only once the connection to the pinned address has given up.
+            let image = try await waitForTerminalStatus(
+                app: app, imageID: imageID, timeout: .seconds(20))
+
+            #expect(image.status == .error)
+            #expect(image.size == 0)
+        }
+    }
+
+    /// The same path with the pin aimed where the origin actually is: every
+    /// redirect hop gets its own pinned client (`dnsOverride` is fixed at
+    /// client construction), so the chain must still complete.
+    @Test("A pinned fetch follows its redirect chain to the image")
+    func testPinnedFetchFollowsRedirectChain() async throws {
+        try await withFetchApp(redirectHops: 2, approvedAddresses: ["127.0.0.1"]) { app, port in
+            let imageID = try await makePendingImage(
+                app: app, sourceURL: "http://localhost:\(port)/redirect")
+
+            try await app.imageFetchService.startFetch(imageId: imageID)
+            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+
+            #expect(image.status == .ready)
+            #expect(image.format == .qcow2)
+            #expect(image.size == Int64(Self.qcow2Bytes().count))
         }
     }
 

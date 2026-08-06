@@ -125,6 +125,28 @@ struct OIDCValidationTests {
         #expect(OIDCValidation.defaultAllowedDomainSuffixes.contains(".amazonaws.com"))
     }
 
+    /// The trap this closes: an operator who sets
+    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES=example.com` (no leading dot) used to be
+    /// allowing `evilexample.com` too, because the match was a bare `hasSuffix`.
+    /// Entries now match on label boundaries either way.
+    @Test("suffix matching respects label boundaries, with or without a leading dot")
+    func testHostMatchesSuffix() {
+        // No leading dot: the domain and its subdomains, nothing that merely
+        // ends with the same characters.
+        #expect(OIDCValidation.hostMatchesSuffix("example.com", suffix: "example.com"))
+        #expect(OIDCValidation.hostMatchesSuffix("id.example.com", suffix: "example.com"))
+        #expect(!OIDCValidation.hostMatchesSuffix("evilexample.com", suffix: "example.com"))
+        #expect(!OIDCValidation.hostMatchesSuffix("example.com.evil.net", suffix: "example.com"))
+
+        // Leading dot keeps its existing meaning: subdomains only.
+        #expect(OIDCValidation.hostMatchesSuffix("acme.okta.com", suffix: ".okta.com"))
+        #expect(!OIDCValidation.hostMatchesSuffix("evilokta.com", suffix: ".okta.com"))
+        #expect(!OIDCValidation.hostMatchesSuffix("okta.com", suffix: ".okta.com"))
+
+        // DNS is case-insensitive.
+        #expect(OIDCValidation.hostMatchesSuffix("ACME.Okta.com", suffix: ".okta.com"))
+    }
+
     @Test("parseAllowList splits on commas and semicolons, trimming and dropping empties")
     func testParseAllowList() {
         #expect(OIDCValidation.parseAllowList("a.com, b.com ; c.com") == ["a.com", "b.com", "c.com"])

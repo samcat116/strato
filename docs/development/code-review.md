@@ -370,6 +370,24 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   half-finished.
 - Backing formats are **detected**, never assumed.
 
+**Outbound HTTP (SSRF)**
+- Any fetch whose destination a tenant can influence — image `sourceURL`, an
+  OCI registry host or the token realm it advertises, a webhook URL, an OIDC
+  endpoint — goes through `app.guardedHTTPClient`. `app.client` and
+  `app.http.client.shared` are for operator-configured destinations only.
+- Validating without pinning is not a fix. `SSRFGuard.validate` resolves the
+  host; the connection resolves it *again*, so a low-TTL record can rebind the
+  name to `169.254.169.254` in between. The guarded client validates, pins
+  `dnsOverride` to an address it approved, and refuses redirects — a new call
+  site that re-spells part of that sequence is blocking.
+- Build the request from the URL that was validated, not from the raw string.
+  If two parsers disagree about the host, the pin misses silently while
+  validation still "passes".
+- A host allow-list is an *additional* gate, never a substitute for
+  classifying the resolved address (the OIDC path had only the allow-list).
+  Match allow-list suffixes on label boundaries — a bare `hasSuffix` on
+  `example.com` also allows `evilexample.com`.
+
 **Fluent query building**
 - A `.join` issued **inside** a `.group(.or) { … }` closure is dropped from the
   emitted SQL while its filter is kept, so the statement names a table it never

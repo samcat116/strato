@@ -18,14 +18,18 @@ import Darwin
 /// public address.
 ///
 /// The check runs at two points: in the controller for a fast, well-formed 400
-/// before any DB rows are created, and again in `ImageFetchService` on the URL
-/// actually about to be fetched, which also covers redirect targets.
+/// before any DB rows are created, and again on the URL actually about to be
+/// fetched, which also covers redirect targets.
 ///
-/// KNOWN GAP: the fetch re-resolves the host when it connects, so a low-TTL
-/// record can rebind the name to an internal address between this check and
-/// the connect. `validate` returns the addresses it approved so a future
-/// change can pin the connection to them (AsyncHTTPClient's `dnsOverride`);
-/// no caller does that yet.
+/// THE PIN IS PART OF THE CONTRACT. A connection re-resolves the host, so a
+/// low-TTL record can rebind the name to an internal address between this check
+/// and the connect. `validate` returns the addresses it approved precisely so
+/// the caller can pin the connection to one of them (AsyncHTTPClient's
+/// `dnsOverride`); validating without pinning leaves that window open.
+/// `GuardedHTTPClient` is the one place that owns the whole sequence — parse
+/// once, validate, pin, no redirects — and every tenant-influenced fetch goes
+/// through it. Call `validate` directly only for a pre-flight check that is
+/// followed by a guarded fetch (e.g. `ImageController`'s create-time 400).
 enum SSRFGuard {
     /// Blocked because the resolved address is not a public, routable host.
     struct BlockedHostError: Error, CustomStringConvertible {
