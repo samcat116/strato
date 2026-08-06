@@ -761,6 +761,11 @@ public func configure(_ app: Application) async throws {
     // it and any explicit artifact the operator pinned to it.
     app.migrations.add(AddManualAgentUpdateAssignment())
 
+    // STR-138: whether an agent can still read its own record of what it runs.
+    // An agent that can't stops advertising capacity and stops converging, and
+    // this is where an operator sees why.
+    app.migrations.add(AddManifestStatusToAgent())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.

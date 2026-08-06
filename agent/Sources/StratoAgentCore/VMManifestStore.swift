@@ -50,6 +50,100 @@ public struct VMManifestEntry: Codable, Sendable {
     }
 }
 
+/// An entry that proves a workload exists under its id but cannot be routed to
+/// a backend (STR-138).
+///
+/// The manifest is the agent's only memory of what it is running, and it is
+/// read by builds that did not write it: an agent rolled back past a new
+/// hypervisor backend meets `"hypervisorType": "libvirt"`, and one rolled back
+/// past a required spec field meets a `VMSpec` it cannot decode. Neither is a
+/// reason to forget the workload — something is still running under that id,
+/// on disks a `.create` would happily open a second writer against. So the
+/// entry is kept in a degraded form that is enough for the two safety-critical
+/// jobs: keep reserving the host capacity it is using, and keep the reconciler
+/// from creating it again.
+///
+/// `raw` is the entry exactly as it was read, re-emitted verbatim by `save`.
+/// Rewriting it in a shape this build understands would destroy the routing
+/// information the *newer* build needs when the operator rolls forward again.
+public struct QuarantinedManifestEntry: Sendable {
+    /// The workload kind, when it decoded. Nil means even that is unreadable;
+    /// callers treat nil as `.vm`, matching how a kind-less (pre-sandbox)
+    /// entry decodes.
+    public let kind: WorkloadKind?
+    /// The unroutable backend identifier, verbatim, when the entry carried a
+    /// string there at all.
+    public let hypervisorTypeRawValue: String?
+    /// Salvaged reservation. Zero when even this could not be read — an
+    /// under-count, but the entry still blocks a re-create, which is the half
+    /// that cannot be recovered later.
+    public let cpus: Int
+    public let memoryBytes: Int64
+    public let diskBytes: Int64
+    /// Why this entry could not be used, for the log and the operator.
+    public let reason: String
+    /// The entry as read, for verbatim re-persistence.
+    public let raw: CodableValue
+
+    init(
+        kind: WorkloadKind?,
+        hypervisorTypeRawValue: String?,
+        cpus: Int,
+        memoryBytes: Int64,
+        diskBytes: Int64,
+        reason: String,
+        raw: CodableValue
+    ) {
+        self.kind = kind
+        self.hypervisorTypeRawValue = hypervisorTypeRawValue
+        self.cpus = cpus
+        self.memoryBytes = memoryBytes
+        self.diskBytes = diskBytes
+        self.reason = reason
+        self.raw = raw
+    }
+
+    /// The kind to file this entry under, treating an unreadable kind as a VM
+    /// exactly as a pre-sandbox entry decodes.
+    public var effectiveKind: WorkloadKind { kind ?? .vm }
+}
+
+/// Why the manifest could not be read, and where the evidence went.
+public struct ManifestReadFailure: Sendable, Equatable {
+    /// The manifest that could not be read.
+    public let path: String
+    public let reason: String
+    /// Where the unreadable bytes were copied for post-mortem, when the copy
+    /// succeeded. The original stays where it is.
+    public let preservedCopyPath: String?
+
+    init(path: String, reason: String, preservedCopyPath: String?) {
+        self.path = path
+        self.reason = reason
+        self.preservedCopyPath = preservedCopyPath
+    }
+}
+
+/// The result of reading the manifest, with "I don't know" spelled differently
+/// from "there's nothing here" (STR-138).
+///
+/// Before this existed, `load()` returned a bare dictionary and every read
+/// error returned `[:]` — an assertion that the host is idle, which capacity
+/// accounting, the reconciler, and the observed-state report all act on
+/// immediately. A caller now has to decide what an unreadable manifest means,
+/// and the only safe answer is to stop advertising and stop converging.
+public enum ManifestLoad: Sendable {
+    /// No manifest and no legacy manifest: a genuinely fresh host, which is
+    /// the only case that may be read as "nothing is running here".
+    case fresh
+    /// The manifest parsed. `entries` are routable; `quarantined` are
+    /// workloads that exist but cannot be acted on.
+    case loaded(entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry])
+    /// The manifest exists but could not be read or parsed. The host's
+    /// contents are unknown.
+    case unreadable(ManifestReadFailure)
+}
+
 extension Sequence where Element == VMManifestEntry {
     /// Total disk committed across these workloads' specs. Specs from a
     /// control plane that predates `VMSpec.diskBytes` (issue #473) count as 0
@@ -90,33 +184,72 @@ public struct VMManifestStore {
         self.logger = logger
     }
 
-    /// Loads the previously-persisted VM manifest, or an empty map if none exists
-    /// or it cannot be read. If only a legacy QEMU-only manifest exists, its
-    /// entries are migrated (they are QEMU VMs by definition), persisted in the
-    /// unified format, and the legacy file is removed.
-    public func load() -> [String: VMManifestEntry] {
-        if FileManager.default.fileExists(atPath: path) {
-            do {
-                let data = try Data(contentsOf: URL(fileURLWithPath: path))
-                return try JSONDecoder().decode([String: VMManifestEntry].self, from: data)
-            } catch {
-                logger.error("Failed to read VM manifest at \(path): \(error)")
-                return [:]
-            }
+    /// Reads the previously-persisted workload manifest. If only a legacy
+    /// QEMU-only manifest exists, its entries are migrated (they are QEMU VMs
+    /// by definition), persisted in the unified format, and the legacy file is
+    /// removed.
+    ///
+    /// Entries are decoded **one at a time** so one bad entry costs one entry.
+    /// The dictionary used to decode as a unit, which made any single
+    /// undecodable entry — an unrecognized `hypervisorType` after an agent
+    /// rollback, a spec field this build doesn't know — discard every other
+    /// workload on the host along with it. Only a failure at the top level
+    /// (unreadable bytes, truncated or non-object JSON) is `.unreadable` now.
+    public func load() -> ManifestLoad {
+        guard FileManager.default.fileExists(atPath: path) else {
+            return migrateLegacyQEMUManifest()
         }
-        return migrateLegacyQEMUManifest()
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: URL(fileURLWithPath: path))
+        } catch {
+            return unreadable("could not be read: \(error)")
+        }
+
+        let parsed: PartiallyDecodedManifest
+        do {
+            parsed = try JSONDecoder().decode(PartiallyDecodedManifest.self, from: data)
+        } catch {
+            return unreadable("is not a readable manifest object: \(error)")
+        }
+
+        if !parsed.quarantined.isEmpty {
+            logger.error(
+                "Quarantining VM manifest entries this build cannot route; their capacity stays reserved and nothing may re-create them",
+                metadata: [
+                    "path": .string(path),
+                    "quarantined": .stringConvertible(parsed.quarantined.count),
+                    "readable": .stringConvertible(parsed.entries.count),
+                    "workloadIds": .string(parsed.quarantined.keys.sorted().joined(separator: ",")),
+                    "reasons": .string(
+                        Set(parsed.quarantined.values.map(\.reason)).sorted().joined(separator: "; ")),
+                ])
+        }
+        return .loaded(entries: parsed.entries, quarantined: parsed.quarantined)
     }
 
-    /// Atomically writes the current manifest to disk.
+    /// Atomically writes the current manifest to disk, re-emitting any
+    /// quarantined entries verbatim.
+    ///
+    /// Callers must not call this at all while the manifest is unreadable —
+    /// the first write after a failed read is what turns a recoverable file
+    /// into a permanent loss. `Agent.persistManifest()` holds that line;
+    /// `preserveUnreadableManifest` is the backstop that keeps a copy anyway.
+    ///
     /// - Returns: `true` when the write succeeded; failures are logged.
     @discardableResult
-    public func save(_ manifest: [String: VMManifestEntry]) -> Bool {
+    public func save(
+        _ manifest: [String: VMManifestEntry],
+        preserving quarantined: [String: QuarantinedManifestEntry] = [:]
+    ) -> Bool {
         do {
             let directory = (path as NSString).deletingLastPathComponent
             if !directory.isEmpty {
                 try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             }
-            let data = try JSONEncoder().encode(manifest)
+            let data = try JSONEncoder().encode(
+                MergedManifest(entries: manifest, quarantined: quarantined.mapValues(\.raw)))
             // Atomic write so a crash mid-write can't leave a truncated manifest.
             try data.write(to: URL(fileURLWithPath: path), options: .atomic)
             return true
@@ -126,10 +259,70 @@ public struct VMManifestStore {
         }
     }
 
-    private func migrateLegacyQEMUManifest() -> [String: VMManifestEntry] {
+    /// Logs an unreadable manifest, copies it aside for post-mortem, and
+    /// describes the failure.
+    private func unreadable(_ reason: String) -> ManifestLoad {
+        let preserved = preserveUnreadableManifest()
+        logger.error(
+            "VM manifest is unreadable; this host's workloads are unknown and it will advertise no capacity until the manifest is repaired or removed",
+            metadata: [
+                "path": .string(path),
+                "reason": .string(reason),
+                "preservedCopy": .string(preserved ?? "none"),
+            ])
+        return .unreadable(
+            ManifestReadFailure(path: path, reason: reason, preservedCopyPath: preserved))
+    }
+
+    /// Copies the unreadable manifest to `<path>.corrupt-<timestamp>`, leaving
+    /// the original in place.
+    ///
+    /// A copy, not a move: the original is what a *later* build — one that
+    /// understands whatever this one choked on — needs to find, and moving it
+    /// aside would make the next start read the host as fresh, which is the
+    /// exact confusion this whole change exists to prevent.
+    ///
+    /// Skipped when an identical copy is already there, so an agent that
+    /// crash-loops against the same bad file leaves one copy rather than one
+    /// per restart.
+    private func preserveUnreadableManifest() -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let directory = (path as NSString).deletingLastPathComponent
+        let prefix = (path as NSString).lastPathComponent + Self.preservedSuffix
+
+        let existing =
+            (try? FileManager.default.contentsOfDirectory(atPath: directory.isEmpty ? "." : directory)) ?? []
+        for name in existing.sorted() where name.hasPrefix(prefix) {
+            let candidate = (directory as NSString).appendingPathComponent(name)
+            if (try? Data(contentsOf: URL(fileURLWithPath: candidate))) == data {
+                return candidate
+            }
+        }
+
+        let destination = path + Self.preservedSuffix + Self.preservationTimestamp()
+        do {
+            try data.write(to: URL(fileURLWithPath: destination), options: .atomic)
+            return destination
+        } catch {
+            logger.error("Failed to preserve unreadable VM manifest at \(destination): \(error)")
+            return nil
+        }
+    }
+
+    static let preservedSuffix = ".corrupt-"
+
+    private static func preservationTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return formatter.string(from: Date())
+    }
+
+    private func migrateLegacyQEMUManifest() -> ManifestLoad {
         guard let legacyPath = legacyQEMUManifestPath,
             FileManager.default.fileExists(atPath: legacyPath)
-        else { return [:] }
+        else { return .fresh }
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: legacyPath))
             let specs: [String: VMSpec]
@@ -154,12 +347,140 @@ public struct VMManifestStore {
             if save(migrated) {
                 try? FileManager.default.removeItem(atPath: legacyPath)
             }
-            return migrated
+            return .loaded(entries: migrated, quarantined: [:])
         } catch {
-            logger.error("Failed to read legacy VM manifest at \(legacyPath): \(error)")
-            return [:]
+            // Same rule as the unified manifest: a manifest that exists and
+            // cannot be read is not evidence of an empty host. The legacy file
+            // is left exactly as it is — nothing writes to that path.
+            logger.error(
+                "Legacy VM manifest is unreadable; this host's workloads are unknown and it will advertise no capacity until the manifest is repaired or removed",
+                metadata: ["path": .string(legacyPath), "reason": .string("\(error)")])
+            return .unreadable(
+                ManifestReadFailure(
+                    path: legacyPath, reason: "could not be read: \(error)", preservedCopyPath: nil))
         }
     }
+}
+
+// MARK: - Per-entry decoding
+
+/// Decodes the manifest object entry by entry, so an entry this build cannot
+/// read is quarantined instead of taking the whole host's record with it.
+private struct PartiallyDecodedManifest: Decodable {
+    var entries: [String: VMManifestEntry] = [:]
+    var quarantined: [String: QuarantinedManifestEntry] = [:]
+
+    init(from decoder: any Decoder) throws {
+        // A throw here — not an object, truncated bytes — is the genuinely
+        // unreadable case and is the caller's `.unreadable`.
+        let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+        for key in container.allKeys {
+            if let entry = try? container.decode(VMManifestEntry.self, forKey: key) {
+                entries[key.stringValue] = entry
+                continue
+            }
+            quarantined[key.stringValue] = Self.quarantine(container, key)
+        }
+    }
+
+    private static func quarantine(
+        _ container: KeyedDecodingContainer<DynamicCodingKey>, _ key: DynamicCodingKey
+    ) -> QuarantinedManifestEntry {
+        let raw = (try? container.decode(CodableValue.self, forKey: key)) ?? .null
+        let salvaged = try? container.decode(SalvagedEntry.self, forKey: key)
+        let reservation = salvaged?.spec ?? salvaged?.sandboxSpec
+        let hypervisorType = salvaged?.hypervisorType
+
+        let reason: String
+        if let hypervisorType, HypervisorType(rawValue: hypervisorType) == nil {
+            // The rollback case: an agent downgraded past a backend it once
+            // wrote here. Named precisely, because the fix is to roll forward.
+            reason = "unrecognized hypervisor type \"\(hypervisorType)\""
+        } else if salvaged == nil {
+            reason = "entry is not a readable object"
+        } else {
+            reason = "entry could not be decoded by this agent build"
+        }
+
+        return QuarantinedManifestEntry(
+            kind: salvaged?.kind.flatMap(WorkloadKind.init(rawValue:)),
+            hypervisorTypeRawValue: hypervisorType,
+            cpus: reservation?.cpus ?? 0,
+            memoryBytes: reservation?.memoryBytes ?? 0,
+            diskBytes: reservation?.diskBytes ?? 0,
+            reason: reason,
+            raw: raw
+        )
+    }
+}
+
+/// Everything worth salvaging from an entry this build cannot decode: what
+/// backend it claims, what kind it is, and what it reserves. Every field is
+/// optional and read with `try?` so one unreadable field never costs the
+/// others.
+private struct SalvagedEntry: Decodable {
+    struct Reservation: Decodable {
+        let cpus: Int?
+        let memoryBytes: Int64?
+        let diskBytes: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case cpus, memoryBytes, diskBytes
+        }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            cpus = try? c.decodeIfPresent(Int.self, forKey: .cpus)
+            memoryBytes = try? c.decodeIfPresent(Int64.self, forKey: .memoryBytes)
+            diskBytes = try? c.decodeIfPresent(Int64.self, forKey: .diskBytes)
+        }
+    }
+
+    let kind: String?
+    let hypervisorType: String?
+    let spec: Reservation?
+    let sandboxSpec: Reservation?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, hypervisorType, spec, sandboxSpec
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try? c.decodeIfPresent(String.self, forKey: .kind)
+        hypervisorType = try? c.decodeIfPresent(String.self, forKey: .hypervisorType)
+        spec = try? c.decodeIfPresent(Reservation.self, forKey: .spec)
+        sandboxSpec = try? c.decodeIfPresent(Reservation.self, forKey: .sandboxSpec)
+    }
+}
+
+/// The manifest as written: decodable entries encoded normally, quarantined
+/// ones re-emitted byte-for-byte as they were read.
+private struct MergedManifest: Encodable {
+    let entries: [String: VMManifestEntry]
+    let quarantined: [String: CodableValue]
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        for (id, entry) in entries {
+            try container.encode(entry, forKey: DynamicCodingKey(id))
+        }
+        // A live entry wins if an id somehow appears in both: the workload was
+        // re-created under a build that can route it, which retires the
+        // quarantine.
+        for (id, raw) in quarantined where entries[id] == nil {
+            try container.encode(raw, forKey: DynamicCodingKey(id))
+        }
+    }
+}
+
+private struct DynamicCodingKey: CodingKey {
+    let stringValue: String
+    var intValue: Int? { nil }
+
+    init(_ stringValue: String) { self.stringValue = stringValue }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
 }
 
 /// Minimal projection of the pre-VMSpec manifest format, kept only to migrate
