@@ -184,9 +184,11 @@ struct DNSController: RouteCollection {
 
         try await req.db.transaction { db in
             // Records cascade with the zone; bindings have no FK to the
-            // resources they protect, so they are dropped with the node.
+            // resources they protect, so the zone's node bindings *and* its
+            // records' are dropped here (STR-137) — before the delete, which
+            // takes the record rows the sweep reads with it.
+            try await ResourceBindingCleanup.revokeBindings(forDeletedDNSZone: zoneID, on: db)
             try await zone.delete(on: db)
-            try await RoleBindingService.revokeAll(nodeType: .dnsZone, nodeID: zoneID, on: db)
         }
 
         req.logger.info(

@@ -182,21 +182,12 @@ struct ProjectsAPIService: APIProtocol {
         // nowhere while still shaping the Cedar schema. Removing roles is a
         // policy-set change and bumps the version.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            // Service accounts cascade away with the project row, but their
-            // bindings do not (no FK on either side): each account carries at
-            // least its creator's binding on its own node, and may hold
-            // bindings elsewhere as a principal. Sweep both directions before
-            // the cascade, the same cleanup the account's own delete endpoint
-            // performs (issue #491).
-            let serviceAccountIDs = try await ServiceAccount.query(on: db)
-                .filter(\.$project.$id == projectID)
-                .all()
-                .compactMap(\.id)
-            for accountID in serviceAccountIDs {
-                try await RoleBindingService.revokeAll(nodeType: .serviceAccount, nodeID: accountID, on: db)
-                try await RoleBindingService.revokeAll(
-                    principalType: .serviceAccount, principalID: accountID, on: db)
-            }
+            // The project node's bindings, and those of every resource that
+            // cascades away with it — service accounts (in both directions),
+            // images, networks, security groups, floating IPs, DNS zones and
+            // records, volumes and their snapshots (STR-137). This reads rows
+            // the delete below removes, so it runs first.
+            try await ResourceBindingCleanup.revokeBindings(forDeletedProject: projectID, on: db)
             // The emptiness checks above and this delete are not one atomic
             // step, and read-committed Postgres will happily commit a VM
             // created in between. `vms.project_id` is RESTRICT (STR-98), so
@@ -212,7 +203,6 @@ struct ProjectsAPIService: APIProtocol {
                     reason: "Cannot delete project: a VM or sandbox was created in it. "
                         + "Delete or move its workloads first.")
             }
-            try await RoleBindingService.revokeAll(nodeType: .project, nodeID: projectID, on: db)
             let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removedPolicies = try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removed = removedRoles + removedPolicies

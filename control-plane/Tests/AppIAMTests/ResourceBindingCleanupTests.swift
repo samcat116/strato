@@ -22,38 +22,68 @@ struct ResourceBindingCleanupTests {
     /// `c` — CASCADE — removes the child row, and so orphans its bindings.
     private static let cascadeDeleteAction = "c"
 
-    @Test("Every cascading child of a VM or sandbox is a node type the cleanup revokes")
+    @Test("Every cascading descendant of a declared parent is a node type the cleanup revokes")
     func cascadingChildrenAreCovered() async throws {
         try await withTestApp { app in
             let sql = try #require(app.db as? any SQLDatabase)
+
+            /// The tables a delete of `table` removes, transitively — one
+            /// cascade feeds the next, so `dns_records` go with a project
+            /// through `dns_zones` even though no foreign key joins them.
+            func cascadingTables(from table: String) async throws -> Set<String> {
+                var seen: Set<String> = []
+                var pending = [table]
+                while let next = pending.popLast() {
+                    let rows = try await sql.raw(
+                        """
+                        SELECT child.relname AS child_table
+                        FROM pg_constraint AS fk
+                        JOIN pg_class AS child ON child.oid = fk.conrelid
+                        JOIN pg_class AS parent ON parent.oid = fk.confrelid
+                        WHERE fk.contype = 'f'
+                          AND fk.confdeltype = \(bind: Self.cascadeDeleteAction)
+                          AND parent.relname = \(bind: next)
+                        """
+                    ).all()
+                    for row in rows {
+                        let child = try row.decode(column: "child_table", as: String.self)
+                        // A self-referencing cascade (nested folders) would
+                        // otherwise loop forever.
+                        if seen.insert(child).inserted { pending.append(child) }
+                    }
+                }
+                return seen
+            }
+
+            // The declared map names direct children only, and a parent
+            // inherits its children's entries the same way the database
+            // inherits their cascades.
+            func declaredDescendants(of parent: IAMNodeType) -> Set<IAMNodeType> {
+                var seen: Set<IAMNodeType> = []
+                var pending = ResourceBindingCleanup.cascadingChildren[parent] ?? []
+                while let next = pending.popLast() {
+                    guard seen.insert(next).inserted else { continue }
+                    pending.append(contentsOf: ResourceBindingCleanup.cascadingChildren[next] ?? [])
+                }
+                return seen
+            }
 
             // The set the helper declares is inert on its own; hold it against
             // the schema the database actually enforces. A new child table
             // added with ON DELETE CASCADE would otherwise compile and pass
             // while leaking its bindings on every parent delete — the exact
-            // failure STR-112 was.
-            for (parent, declaredChildren) in ResourceBindingCleanup.cascadingChildren {
-                let rows = try await sql.raw(
-                    """
-                    SELECT child.relname AS child_table
-                    FROM pg_constraint AS fk
-                    JOIN pg_class AS child ON child.oid = fk.conrelid
-                    JOIN pg_class AS parent ON parent.oid = fk.confrelid
-                    WHERE fk.contype = 'f'
-                      AND fk.confdeltype = \(bind: Self.cascadeDeleteAction)
-                      AND parent.relname = \(bind: parent.table)
-                    """
-                ).all()
-                let cascadingTables = Set(
-                    try rows.map { try $0.decode(column: "child_table", as: String.self) })
+            // failure STR-112 and STR-137 were.
+            for parent in ResourceBindingCleanup.cascadingChildren.keys {
+                let declared = declaredDescendants(of: parent)
+                let tables = try await cascadingTables(from: parent.table)
 
                 // Only cascading children that are themselves bindable matter:
                 // a NIC or an interface-address row carries no bindings, so its
                 // removal orphans nothing.
-                let bindableChildren = IAMNodeType.allCases.filter { cascadingTables.contains($0.table) }
+                let bindableChildren = IAMNodeType.allCases.filter { tables.contains($0.table) }
                 for child in bindableChildren {
                     #expect(
-                        declaredChildren.contains(child),
+                        declared.contains(child),
                         """
                         \(child.rawValue) rows cascade away with \(parent.rawValue) rows, \
                         so their bindings orphan on every \(parent.rawValue) delete. \
@@ -111,5 +141,264 @@ struct ResourceBindingCleanupTests {
             #expect(snapshotBindings == 0)
             #expect(bystanderBindings == 1)
         }
+    }
+
+    @Test("Revoking for a deleted project clears every node that cascades away with it")
+    func revokesProjectAndCascadingChildren() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "proj", email: "proj@example.com")
+            let org = try await builder.createOrganization(name: "Project Cleanup Org")
+            let project = try await builder.createProject(
+                name: "Doomed", description: "cascades away", organization: org)
+            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+
+            // A project that shares nothing but the organization: its bindings
+            // stand in for every binding the sweep must not touch.
+            let bystander = try await builder.createProject(
+                name: "Bystander", description: "stays", organization: org)
+            let bystanderNodes = try await Self.populate(project: bystander, owner: user, on: app.db)
+
+            for (nodeType, nodeID) in nodes + bystanderNodes {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .admin,
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+            }
+            // The doomed project's service account also holds a grant of its
+            // own, on a node outside the project entirely — the principal
+            // direction, which a node-keyed sweep alone would miss.
+            let serviceAccountID = try #require(nodes.first { $0.0 == .serviceAccount }?.1)
+            try await RoleBindingService.grant(
+                principalType: .serviceAccount, principalID: serviceAccountID, role: .viewer,
+                nodeType: .organization, nodeID: org.id!, createdBy: user.id!, on: app.db)
+
+            try await ResourceBindingCleanup.revokeBindings(
+                forDeletedProject: try project.requireID(), on: app.db)
+
+            for (nodeType, nodeID) in nodes {
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the project delete")
+            }
+            for (nodeType, nodeID) in bystanderNodes {
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                #expect(remaining == 1, "\(nodeType.rawValue) bindings of an unrelated project were swept")
+            }
+            let heldByAccount = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.serviceAccount.rawValue)
+                .filter(\.$principalID == serviceAccountID)
+                .count()
+            #expect(heldByAccount == 0)
+        }
+    }
+
+    @Test("Revoking for a deleted DNS zone clears its authored records' bindings")
+    func revokesZoneAndRecords() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "dns", email: "dns@example.com")
+            let org = try await builder.createOrganization(name: "DNS Cleanup Org")
+            let project = try await builder.createProject(
+                name: "DNS", description: "", organization: org)
+            let projectID = try project.requireID()
+
+            let zone = DNSZone(name: "acme.internal", projectID: projectID)
+            try await zone.save(on: app.db)
+            let record = DNSRecord(
+                zoneID: try zone.requireID(), name: "www", type: .a, value: "192.0.2.1")
+            try await record.save(on: app.db)
+
+            // A record in a second zone: it cascades with *its* zone, not this
+            // one, so the sweep must key on the zone rather than the project.
+            let otherZone = DNSZone(name: "other.internal", projectID: projectID)
+            try await otherZone.save(on: app.db)
+            let otherRecord = DNSRecord(
+                zoneID: try otherZone.requireID(), name: "www", type: .a, value: "192.0.2.2")
+            try await otherRecord.save(on: app.db)
+
+            for (nodeType, nodeID) in [
+                (IAMNodeType.dnsZone, try zone.requireID()),
+                (.dnsRecord, try record.requireID()),
+                (.dnsZone, try otherZone.requireID()),
+                (.dnsRecord, try otherRecord.requireID()),
+            ] {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .admin,
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+            }
+
+            try await ResourceBindingCleanup.revokeBindings(
+                forDeletedDNSZone: try zone.requireID(), on: app.db)
+
+            let zoneBindings = try await Self.bindingCount(.dnsZone, try zone.requireID(), on: app.db)
+            let recordBindings = try await Self.bindingCount(.dnsRecord, try record.requireID(), on: app.db)
+            let otherZoneBindings = try await Self.bindingCount(
+                .dnsZone, try otherZone.requireID(), on: app.db)
+            let otherRecordBindings = try await Self.bindingCount(
+                .dnsRecord, try otherRecord.requireID(), on: app.db)
+            #expect(zoneBindings == 0)
+            #expect(recordBindings == 0)
+            #expect(otherZoneBindings == 1)
+            #expect(otherRecordBindings == 1)
+        }
+    }
+
+    @Test("Revoking for a deleted folder clears the subtree it cascades")
+    func revokesFolderSubtree() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "folder", email: "folder@example.com")
+            let org = try await builder.createOrganization(name: "Folder Cleanup Org")
+            let folder = try await builder.createOU(name: "team", description: "", organization: org)
+            let nested = try await builder.createOU(
+                name: "sub", description: "", organization: org, parentOU: folder)
+            let project = try await builder.createProject(
+                name: "Nested", description: "cascades away", ou: nested)
+            var nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            nodes.append((.organizationalUnit, try folder.requireID()))
+            nodes.append((.organizationalUnit, try nested.requireID()))
+
+            let sibling = try await builder.createOU(name: "other", description: "", organization: org)
+            let siblingID = try sibling.requireID()
+
+            for (nodeType, nodeID) in nodes + [(.organizationalUnit, siblingID)] {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .admin,
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+            }
+
+            try await ResourceBindingCleanup.revokeBindings(forDeletedFolder: folder, on: app.db)
+
+            for (nodeType, nodeID) in nodes {
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the folder delete")
+            }
+            let siblingBindings = try await Self.bindingCount(.organizationalUnit, siblingID, on: app.db)
+            #expect(siblingBindings == 1)
+        }
+    }
+
+    @Test("Revoking for a deleted organization clears its folders, projects, and their children")
+    func revokesOrganizationSubtree() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "orgdel", email: "orgdel@example.com")
+            let org = try await builder.createOrganization(name: "Org Cleanup Org")
+            let organizationID = try org.requireID()
+            let folder = try await builder.createOU(name: "team", description: "", organization: org)
+            let folderProject = try await builder.createProject(
+                name: "In Folder", description: "", ou: folder)
+            let orgProject = try await builder.createProject(
+                name: "In Org", description: "", organization: org)
+
+            var nodes: [(IAMNodeType, UUID)] = [
+                (.organization, organizationID),
+                (.organizationalUnit, try folder.requireID()),
+            ]
+            nodes += try await Self.populate(project: folderProject, owner: user, on: app.db)
+            nodes += try await Self.populate(project: orgProject, owner: user, on: app.db)
+
+            // A group cascades on `organization_id` and is a binding principal,
+            // never a node, so only the principal direction reclaims its grants.
+            let group = try await builder.createGroup(name: "team", description: "", organization: org)
+            let groupID = try group.requireID()
+
+            let other = try await builder.createOrganization(name: "Untouched Org")
+            let otherID = try other.requireID()
+
+            for (nodeType, nodeID) in nodes + [(.organization, otherID)] {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .admin,
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+            }
+            try await RoleBindingService.grant(
+                principalType: .group, principalID: groupID, role: .viewer,
+                nodeType: .organization, nodeID: otherID, createdBy: user.id!, on: app.db)
+
+            try await ResourceBindingCleanup.revokeBindings(
+                forDeletedOrganization: organizationID, on: app.db)
+
+            for (nodeType, nodeID) in nodes {
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the organization delete")
+            }
+            let heldByGroup = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.group.rawValue)
+                .filter(\.$principalID == groupID)
+                .count()
+            #expect(heldByGroup == 0)
+            // The other org's own node binding is the group's former grant's
+            // neighbour: sweeping the principal must not take the node with it.
+            let otherBindings = try await Self.bindingCount(.organization, otherID, on: app.db)
+            #expect(otherBindings == 1)
+        }
+    }
+
+    /// One row of every node type that cascades away with a project, returned
+    /// as the (type, id) pairs a binding sweep has to reach.
+    private static func populate(
+        project: Project, owner: User, on db: any Database
+    ) async throws -> [(IAMNodeType, UUID)] {
+        let projectID = try project.requireID()
+        let ownerID = try owner.requireID()
+        let suffix = projectID.uuidString.prefix(8)
+
+        let image = Image(
+            name: "image-\(suffix)", description: "", projectID: projectID,
+            filename: "disk.qcow2", size: 1024, format: .qcow2, status: .ready, uploadedByID: ownerID)
+        try await image.save(on: db)
+
+        let network = LogicalNetwork(
+            name: "default", subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID)
+        try await network.save(on: db)
+
+        let securityGroup = SecurityGroup(projectID: projectID, name: "default")
+        try await securityGroup.save(on: db)
+
+        // Pools are org-scoped, not project-scoped, so each project needs its
+        // own only to keep the (pool, address) unique index happy.
+        let pool = FloatingIPPool(name: "pool-\(suffix)", cidr: "203.0.113.0/24")
+        try await pool.save(on: db)
+        let floatingIP = FloatingIP(
+            poolID: try pool.requireID(), address: "203.0.113.5", projectID: projectID)
+        try await floatingIP.save(on: db)
+
+        let zone = DNSZone(name: "acme.internal", projectID: projectID)
+        try await zone.save(on: db)
+        let record = DNSRecord(
+            zoneID: try zone.requireID(), name: "www", type: .a, value: "192.0.2.1")
+        try await record.save(on: db)
+
+        let volume = Volume(
+            name: "data", description: "", projectID: projectID, size: 1024, createdByID: ownerID)
+        try await volume.save(on: db)
+        let volumeSnapshot = VolumeSnapshot(
+            name: "snap", description: "", volumeID: try volume.requireID(), projectID: projectID,
+            size: 1024, createdByID: ownerID)
+        try await volumeSnapshot.save(on: db)
+
+        let serviceAccount = ServiceAccount(name: "runner", projectID: projectID)
+        try await serviceAccount.save(on: db)
+
+        return [
+            (.project, projectID),
+            (.image, try image.requireID()),
+            (.network, try network.requireID()),
+            (.securityGroup, try securityGroup.requireID()),
+            (.floatingIP, try floatingIP.requireID()),
+            (.dnsZone, try zone.requireID()),
+            (.dnsRecord, try record.requireID()),
+            (.volume, try volume.requireID()),
+            (.volumeSnapshot, try volumeSnapshot.requireID()),
+            (.serviceAccount, try serviceAccount.requireID()),
+        ]
+    }
+
+    private static func bindingCount(
+        _ nodeType: IAMNodeType, _ nodeID: UUID, on db: any Database
+    ) async throws -> Int {
+        try await RoleBinding.query(on: db)
+            .filter(\.$nodeType == nodeType.rawValue)
+            .filter(\.$nodeID == nodeID)
+            .count()
     }
 }

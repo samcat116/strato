@@ -279,9 +279,11 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Cannot delete the default organization")
         }
 
-        // Bindings have no FK to the nodes they protect, so drop the org
-        // node's bindings — and those of every project that cascades away
-        // with it — alongside the row.
+        // The projects that cascade away with the organization: the workload
+        // check below names them, and the roles and policies they own go with
+        // them. Their *bindings* are swept inside the transaction instead, by
+        // `ResourceBindingCleanup`, which re-reads this set there rather than
+        // trusting a snapshot taken outside it.
         let orgProjectIDs = try await Project.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .all()
@@ -322,6 +324,10 @@ struct OrganizationController: RouteCollection {
         // schema. That makes this a policy-set change, so it runs inside
         // `withPolicySetChange` and bumps the version when roles actually went.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+            // Bindings first: the sweep reads the rows the delete cascades
+            // away — the org node, its folders, its projects, and everything
+            // each project carries (STR-137) — so it cannot run after them.
+            try await ResourceBindingCleanup.revokeBindings(forDeletedOrganization: organizationID, on: db)
             // Projects cascade away with the organization, and VM rows used to
             // cascade away with them — hard-deleted by the database, with no
             // `.absent`, no operation, and no audit, leaving running guests
@@ -341,15 +347,11 @@ struct OrganizationController: RouteCollection {
             // has to be able to read it after the org is gone. Mark it for
             // teardown rather than deleting it.
             try await OrgTrustDomainProvisioning.markForTeardown(organizationID: organizationID, on: db)
-            try await RoleBindingService.revokeAll(
-                nodeType: .organization, nodeID: organizationID, on: db)
             var removedRoles = try await RoleStore.deleteOwned(
                 by: .organization, ownerID: organizationID, on: db)
             var removedPolicies = try await PolicyStore.deleteOwned(
                 by: .organization, ownerID: organizationID, on: db)
             for projectID in cascadedProjectIDs {
-                try await RoleBindingService.revokeAll(
-                    nodeType: .project, nodeID: projectID, on: db)
                 removedRoles += try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
                 removedPolicies += try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             }
