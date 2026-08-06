@@ -281,21 +281,82 @@ actor FirecrackerService: HypervisorService {
             logger.info("Firecracker VM had nothing to tear down", metadata: ["vmId": .string(vmId)])
             return
         }
-        try await client.destroyVM(vmId: vmId)
+        if vmManagers[vmId] != nil {
+            try await client.destroyVM(vmId: vmId)
+        } else {
+            try await destroyWithoutSession(vmId: vmId, client: client)
+        }
 
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
 
         // Remove the VM's directory, which holds the rootfs materialized at
-        // create. The client owns the API socket (in its own socket directory);
-        // everything else this driver wrote is under here. Same rule as the
-        // QEMU driver: one recursive removal rather than a list of files that
-        // a later addition can fall off (#969), reached only once `destroyVM`
-        // above has returned without throwing.
-        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
+        // create. Same rule as the QEMU driver: one recursive removal rather
+        // than a list of files that a later addition can fall off (#969),
+        // reached only once the teardown above has returned without throwing.
+        await reclaimVMDirectory(vmId: vmId)
 
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
+    }
+
+    /// Leaves the host with no Firecracker process for `vmId` when this service
+    /// holds no manager for it, so `deleteVM` can go on to reclaim its
+    /// directory.
+    ///
+    /// The client throws `vmNotFound` for a VM it does not track, which used to
+    /// abort the delete before its removal and leak the rootfs on every retry —
+    /// the same defect `QEMUService.destroyWithoutSession` fixes for QEMU
+    /// (STR-179). The deterministic API socket answers the same question here:
+    /// re-adoption over it registers the VM with the client (and verifies the
+    /// pid it finds), so a successful one turns this back into an ordinary
+    /// teardown, and a failure means there is no live VMM to tear down.
+    private func destroyWithoutSession(vmId: String, client: FirecrackerClient) async throws {
+        let socketPath = Self.adoptionSocketPath(socketDirectory: socketDirectory, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            logger.warning(
+                "Deleting a Firecracker VM with no manager and no API socket; assuming nothing is left to tear down",
+                metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+            return
+        }
+
+        do {
+            _ = try await client.adoptVM(vmId: vmId)
+        } catch {
+            logger.warning(
+                "VM has no live Firecracker behind its API socket; deleting what it left on this host",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "socket": .string(socketPath),
+                    "error": .string(error.localizedDescription),
+                ])
+            return
+        }
+
+        logger.warning(
+            "Deleting a VM whose Firecracker is alive but had no manager on this agent",
+            metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+        try await client.destroyVM(vmId: vmId)
+    }
+
+    /// See `HypervisorService.reclaimVMDirectory`. Same state `deleteVM`
+    /// removes: the directory holding the rootfs materialized at create, plus
+    /// the API socket — which lives in the client's socket directory rather
+    /// than under the VM's, so the recursive removal cannot reach it. A stale
+    /// one left there is what makes a later `adoptVM` attempt a connect instead
+    /// of reporting the socket missing.
+    func reclaimVMDirectory(vmId: String) async {
+        guard vmManagers[vmId] == nil else {
+            // The caller's evidence contradicts what this service knows. Refuse
+            // rather than unlink the rootfs of a VM it is still driving.
+            logger.error(
+                "Refusing to reclaim the directory of a VM with a live control session",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
+        try? FileManager.default.removeItem(
+            atPath: Self.adoptionSocketPath(socketDirectory: socketDirectory, vmId: vmId))
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
@@ -480,6 +541,11 @@ actor FirecrackerService: HypervisorService {
 
     func deleteVM(vmId: String) async throws {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
+    }
+
+    func reclaimVMDirectory(vmId: String) async {
+        // This stub never created a VM here, so there is nothing on the host to
+        // reclaim — and unlike the calls above, cleanup has no failure to report.
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {

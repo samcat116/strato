@@ -102,8 +102,9 @@ VM in the cgroup with it (issue #522).
 
 `HypervisorProtocol.swift` defines `protocol HypervisorService: Actor` —
 create/boot/shutdown/reboot/pause/resume/delete, status/info queries,
-console endpoints, disk hot-(de)attach, `reservedResources()`, and an
-opt-in `adoptVM` for orphan re-adoption.
+console endpoints, disk hot-(de)attach, `reservedResources()`, an
+opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
+delete path that has no session to tear down (below).
 
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
@@ -548,6 +549,47 @@ drain sets `allow_bulk_teardown` in the agent config. Ordinary `.absent`
 deletes — the ones someone asked for through the API, with an operation row
 and an audit trail — are deliberately not counted, so normal bulk deletes are
 unaffected.
+
+### Deleting a VM with no live session
+
+A delete normally converges through the driver's `deleteVM`, which tears the
+hypervisor process down and then removes `<vm_storage_dir>/<vmId>` whole —
+boot disk, cloud-init ISO, UEFI varstore, TPM state, sockets (#969). Two
+deletes never reach that removal, and both used to leave the directory on the
+host permanently (STR-179):
+
+- **An orphan that cannot be re-adopted.** `reconcileDelete` re-adopts first,
+  so a surviving process is really destroyed rather than abandoned. The failure
+  is then classified by `OrphanDeleteAdoption.classify` (in `StratoAgentCore`,
+  so the table is unit-tested): only `adoptionTargetGone` — no live process
+  behind the VM's control socket — reaches the driver's `reclaimVMDirectory`,
+  and it runs *before* the manifest entry is released, since that entry is the
+  host's last record the VM existed. Every other failure is ambiguous (the VM
+  may be alive and merely unreachable) and keeps the older contract: release
+  the entry, log, leave the files for manual cleanup.
+- **A VM the driver holds no session for.** `QEMUService.deleteVM` used to
+  throw `vmNotFound` and leave the directory behind on every retry; the
+  Firecracker driver had the same shape, one layer down, where
+  `FirecrackerClient.destroyVM` throws for a VM it does not track. Both now ask
+  the VM's deterministic control socket whether anything is still running from
+  that directory: a socket that answers is torn down for real (so the delete
+  converges), one that refuses outlived its process, and only a connect that
+  hangs is ambiguous enough to fail the delete and be retried by the next sync.
+
+The evidence is the socket, not the process, so an *absent* socket is the weak
+case — it is the ordinary trace of a hypervisor that exited and unlinked it,
+but also what a still-running VM created before deterministic sockets (#260 /
+#433) looks like. Both drivers treat it as gone and log it at `warning`,
+matching what `Agent.adoptVM` already does with the same error (it re-creates
+from the manifest spec, over the very same disks). Where a live process *is*
+found, `AdoptedQEMUVM.destroy` now waits for the QMP socket to stop accepting
+connections before returning: `quit` cannot report an exit — it legitimately
+errors when QEMU exits before replying — so without that wait a wedged guest
+could keep running from unlinked inodes.
+
+Directories leaked before this are not reclaimed by either path. A startup
+sweep would have to distinguish a leaked directory from one belonging to a
+running VM whose manifest entry is missing, which needs its own design.
 
 ## Sandboxes on the agent
 
