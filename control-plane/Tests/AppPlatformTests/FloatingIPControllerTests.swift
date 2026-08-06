@@ -780,7 +780,10 @@ final class FloatingIPControllerTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(["vmId": vm.id!.uuidString])
             } afterResponse: { res in
-                #expect(res.status == .forbidden)
+                // 404, not 403: the refusal must not tell a caller with no
+                // rights on this VM that the id names a real one (issue #881).
+                // `VMAttachTargetDisclosureTests` pins the indistinguishability.
+                #expect(res.status == .notFound)
             }
 
             // Editor on the VM itself flips the verdict.

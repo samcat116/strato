@@ -1224,6 +1224,13 @@ paths:
         Requires `attach` on the volume and `update` on the VM. Refused with
         `400` when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        volume, never to the VM.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1629,6 +1636,13 @@ paths:
         Requires `update` on the floating IP and on the VM. Refused with `400`
         when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        floating IP, never to the VM.
       tags: [Floating IPs]
       requestBody:
         required: true
@@ -1816,6 +1830,14 @@ paths:
         Requires `attach` on the group and `update` on the VM. Refused with
         `400` when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        security group, never to the VM. A `sandboxId` still separates the two —
+        `404` absent, `403` forbidden.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -1839,6 +1861,14 @@ paths:
       description: >-
         Refused when it would leave the NIC with no security group — every
         NIC keeps at least one.
+
+
+        Resolves the target the same way attach does: a `vmId` this caller
+        cannot reach is answered `404` whether no such VM exists or the caller
+        merely lacks `update` on it, so the two are indistinguishable and the
+        endpoint cannot be used to probe which VM ids exist. `403` therefore
+        refers to the security group, never to the VM; a `sandboxId` still
+        separates the two.
       tags: [Security Groups]
       requestBody:
         required: true

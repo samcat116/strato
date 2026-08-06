@@ -436,9 +436,10 @@ final class CrossProjectContainmentTests {
                 try req.content.encode(AttachSecurityGroupRequest(vmId: try vm.requireID()))
             } afterResponse: { res in
                 // The VM check, not an earlier one on the group: the editor
-                // holds `securitygroup:attach` on `home`.
-                #expect(res.status == .forbidden)
-                #expect(res.body.string.contains("You don't have permission to modify this VM"))
+                // holds `securitygroup:attach` on `home`. Its refusal is the
+                // not-found one an absent VM gets (#881), so what this pins is
+                // that the containment message never appears.
+                #expect(res.status == .notFound)
                 #expect(!res.body.string.contains(Self.sharedReason))
             }
         }
@@ -460,9 +461,9 @@ final class CrossProjectContainmentTests {
                 try req.content.encode(["vmId": try vm.requireID().uuidString])
             } afterResponse: { res in
                 // The VM check, not an earlier one on the floating IP: the
-                // editor holds `floatingip:attach` on `home`.
-                #expect(res.status == .forbidden)
-                #expect(res.body.string.contains("You don't have permission to modify this VM"))
+                // editor holds `floatingip:attach` on `home`. Not-found rather
+                // than forbidden since #881 — see the security-group twin.
+                #expect(res.status == .notFound)
                 #expect(!res.body.string.contains(Self.sharedReason))
             }
         }
