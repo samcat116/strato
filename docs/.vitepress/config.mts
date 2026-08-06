@@ -74,6 +74,7 @@ export default defineConfig({
         text: 'Development',
         items: [
           { text: 'Local Development', link: '/development/local-development' },
+          { text: 'End-to-End Testing', link: '/development/e2e-testing' },
           { text: 'Code Review', link: '/development/code-review' },
           { text: 'Troubleshooting Kubernetes', link: '/development/troubleshooting-k8s' }
         ]
