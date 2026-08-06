@@ -474,7 +474,7 @@ struct NetworkReconcilerTests {
     // MARK: - Metadata localport (STR-49)
 
     @Test("An enabled network plans a dual-stack metadata localport on its switch")
-    func metadataPortPlanned() {
+    func metadataPortPlanned() throws {
         let id = UUID()
         let plan = NetworkReconciler.plan(networks: [
             network(
@@ -482,15 +482,17 @@ struct NetworkReconcilerTests {
                 metadataEnabled: true, id: id)
         ])
 
-        let port = try? #require(plan.switches[0].metadataPort)
-        #expect(port?.name == OVNNaming.metadataPortName(networkId: id))
-        #expect(port?.switchName == OVNNaming.switchName(networkId: id))
-        #expect(port?.mac == OVNNaming.metadataPortMAC(networkId: id))
-        #expect(port?.ips == ["169.254.169.254", "fd00:ec2::254"])
+        // `try #require`, not `try?` + optional chaining: a missing port should
+        // fail once, here, rather than cascade into five confusing comparisons.
+        let port = try #require(plan.switches[0].metadataPort)
+        #expect(port.name == OVNNaming.metadataPortName(networkId: id))
+        #expect(port.switchName == OVNNaming.switchName(networkId: id))
+        #expect(port.mac == OVNNaming.metadataPortMAC(networkId: id))
+        #expect(port.ips == ["169.254.169.254", "fd00:ec2::254"])
         // One whitespace-separated entry, not one per address: that is the
         // shape OVN's `addresses` column expects, and getting it wrong yields a
         // port that never answers.
-        #expect(port?.addresses == ["\(OVNNaming.metadataPortMAC(networkId: id)) 169.254.169.254 fd00:ec2::254"])
+        #expect(port.addresses == ["\(OVNNaming.metadataPortMAC(networkId: id)) 169.254.169.254 fd00:ec2::254"])
         #expect(plan.expectedTopology.metadataPortNames == [OVNNaming.metadataPortName(networkId: id)])
     }
 

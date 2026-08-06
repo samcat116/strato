@@ -1439,7 +1439,7 @@ extension NetworkServiceLinux {
         guard let desired else { return }
         guard let ovsManager else { return }
 
-        let observed: [UUID: String]
+        let observed: [ObservedMetadataPort]
         do {
             observed = try await observedMetadataChassisPorts(ovsManager)
         } catch {
@@ -1452,21 +1452,29 @@ extension NetworkServiceLinux {
             return
         }
 
-        let wanted = Set(desired)
-        for networkId in wanted.subtracting(observed.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
-            await attemptMetadataChassisSetup(networkId: networkId)
-        }
-        for networkId in Set(observed.keys).subtracting(wanted).sorted(by: { $0.uuidString < $1.uuidString }) {
-            await removeMetadataChassisPort(networkId: networkId)
+        for action in MetadataChassisReconciler.actions(desired: desired, observed: observed) {
+            switch action {
+            case .realize(let networkId):
+                await attemptMetadataChassisSetup(networkId: networkId)
+            case .remove(let networkId, let interfaceName):
+                await removeMetadataChassisPort(networkId: networkId, interfaceName: interfaceName)
+            }
         }
         #endif
     }
 
     #if os(Linux)
-    /// Network id → interface name for every metadata interface this chassis
-    /// currently owns, read from the interfaces' external-ids.
-    private func observedMetadataChassisPorts(_ ovsManager: OVSManager) async throws -> [UUID: String] {
-        var found: [UUID: String] = [:]
+    /// Every metadata interface this chassis currently owns, read from the
+    /// interfaces' external-ids — never a name prefix, so an operator's own
+    /// internal port on `br-int` is never a removal candidate.
+    ///
+    /// The namespace is probed alongside the row because the two have different
+    /// lifetimes (see `ObservedMetadataPort.namespacePresent`). A `stat` per
+    /// network, no subprocess.
+    private func observedMetadataChassisPorts(_ ovsManager: OVSManager) async throws
+        -> [ObservedMetadataPort]
+    {
+        var found: [ObservedMetadataPort] = []
         for interface in try await ovsManager.getInterfaces() {
             guard let ids = interface.external_ids,
                 ids[MetadataChassisPlan.managedKey] == MetadataChassisPlan.managedValue,
@@ -1474,7 +1482,12 @@ extension NetworkServiceLinux {
                 let raw = ids[MetadataChassisPlan.networkIDKey],
                 let networkId = UUID(uuidString: raw)
             else { continue }
-            found[networkId] = interface.name
+            found.append(
+                ObservedMetadataPort(
+                    networkId: networkId,
+                    interfaceName: interface.name,
+                    namespacePresent: FileManager.default.fileExists(
+                        atPath: MetadataChassisPlan.netnsPath(networkId: networkId))))
         }
         return found
     }
@@ -1541,43 +1554,74 @@ extension NetworkServiceLinux {
                     "networkId": .string(networkId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
+            // Roll the namespace back so the next pass observes an honest
+            // "not built" and rebuilds from scratch. Without this a setup that
+            // died between `netns add` and the addresses would leave a namespace
+            // that looks realized to every future observation while carrying no
+            // addresses — the same silent half-built state the reboot case
+            // produces, just reached a different way.
+            await removeMetadataChassisPort(
+                networkId: networkId, interfaceName: plan.interfaceName, quiet: true)
         }
     }
 
     /// Remove one network's metadata namespace and its OVS port. Each step is
     /// independently tolerant so a partial teardown still removes what it can.
-    private func removeMetadataChassisPort(networkId: UUID) async {
+    ///
+    /// `interfaceName` is the device observed on the bridge rather than one
+    /// rederived here, so teardown removes what it actually found.
+    ///
+    /// `quiet` marks the rollback path, where a failure is the *expected* shape
+    /// (there may be nothing to remove yet) and the real error has already been
+    /// logged by the caller.
+    private func removeMetadataChassisPort(
+        networkId: UUID, interfaceName: String, quiet: Bool = false
+    ) async {
         // Like sandbox teardown, cleanup falls back to the PATH-resolved name:
         // it must attempt something on a host whose iproute2 was never resolved,
         // rather than refuse and leak a namespace forever.
         let removal = MetadataChassisPlan.teardownPlan(
-            networkId: networkId, ipBinaryPath: ipBinaryPath ?? "ip",
+            networkId: networkId, interfaceName: interfaceName, ipBinaryPath: ipBinaryPath ?? "ip",
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        var failures = 0
         do {
             try run("ovs-vsctl", removal.ovsDetach)
         } catch {
-            logger.warning(
-                "Failed to remove metadata OVS port",
-                metadata: [
-                    "networkId": .string(networkId.uuidString),
-                    "error": .string(error.localizedDescription),
-                ])
+            failures += 1
+            if !quiet {
+                logger.warning(
+                    "Failed to remove metadata OVS port",
+                    metadata: [
+                        "networkId": .string(networkId.uuidString),
+                        "interface": .string(interfaceName),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
         }
         for command in removal.commands {
             do {
                 try await runNetnsCommand(command)
             } catch {
-                logger.warning(
-                    "Failed to remove metadata namespace",
-                    metadata: [
-                        "networkId": .string(networkId.uuidString),
-                        "command": .string(command.arguments.joined(separator: " ")),
-                        "error": .string(error.localizedDescription),
-                    ])
+                failures += 1
+                if !quiet {
+                    logger.warning(
+                        "Failed to remove metadata namespace",
+                        metadata: [
+                            "networkId": .string(networkId.uuidString),
+                            "command": .string(command.arguments.joined(separator: " ")),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
             }
         }
+        // Only claim what actually happened: a partial teardown leaves state
+        // behind, and logging success over it is how a leak stays invisible.
+        guard failures == 0, !quiet else { return }
         logger.info(
-            "Removed metadata namespace", metadata: ["networkId": .string(networkId.uuidString)])
+            "Removed metadata namespace",
+            metadata: [
+                "networkId": .string(networkId.uuidString), "interface": .string(interfaceName),
+            ])
     }
     #endif
 
@@ -1695,6 +1739,12 @@ extension NetworkServiceLinux: NetworkActuator {
             // network, so the row is stable across edits and a stale
             // type/address set would otherwise persist forever. Addresses
             // compared as a set — OVN's column is unordered.
+            //
+            // The switch the port sits on is deliberately not compared. Both the
+            // port name and the switch name derive from the same network id, so
+            // they can only disagree if an operator moved the port by hand —
+            // and re-homing it would mean a delete and recreate, not an update,
+            // which is a heavier repair than an unreachable case earns.
             let drifted =
                 existing.portType != Self.metadataPortType
                 || Set(existing.addresses ?? []) != Set(port.addresses)

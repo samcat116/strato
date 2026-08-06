@@ -94,13 +94,13 @@ struct MetadataChassisPlanTests {
     }
 
     @Test("The IPv6 address is added with nodad")
-    func ipv6SkipsDuplicateAddressDetection() {
+    func ipv6SkipsDuplicateAddressDetection() throws {
         // DAD leaves the address tentative for ~1s, during which bind() fails
         // with EADDRNOTAVAIL — a startup race on every agent restart, for a
         // duplicate that cannot happen (one address per namespace).
-        let command = try? #require(
+        let command = try #require(
             plan().interfaceSetup.first { $0.arguments.contains(InstanceMetadataEndpoint.cidrV6) })
-        #expect(command?.arguments.last == "nodad")
+        #expect(command.arguments.last == "nodad")
     }
 
     @Test("Each family gets its own default route out the device")
@@ -142,6 +142,16 @@ struct MetadataChassisPlanTests {
         #expect(argv(removal.commands) == argv(full.teardown))
     }
 
+    @Test("Teardown removes the observed device rather than a rederived one")
+    func teardownPrefersObservedInterface() {
+        // They agree by construction; passing the observation is what keeps them
+        // agreeing if the derivation ever changes under a live deployment.
+        let removal = MetadataChassisPlan.teardownPlan(
+            networkId: networkId, interfaceName: "mdpdeadbeef123", ipBinaryPath: "/sbin/ip",
+            bridge: "br-int", ovsTimeoutSeconds: 10)
+        #expect(removal.ovsDetach.last == "mdpdeadbeef123")
+    }
+
     @Test("Different networks get different namespaces and devices")
     func perNetworkIsolation() {
         // One namespace per network per chassis is what makes the caller
@@ -150,5 +160,99 @@ struct MetadataChassisPlanTests {
             networkId: UUID(), ipBinaryPath: "/sbin/ip", bridge: "br-int", ovsTimeoutSeconds: 10)
         #expect(other.netnsName != plan().netnsName)
         #expect(other.interfaceName != plan().interfaceName)
+    }
+
+    @Test("The namespace path is on tmpfs, which is why it is observed separately")
+    func netnsPathIsUnderRunNetns() {
+        #expect(
+            MetadataChassisPlan.netnsPath(networkId: networkId)
+                == "/var/run/netns/\(MetadataChassisPlan.netnsName(networkId: networkId))")
+    }
+}
+
+/// The chassis *diff* — the half that deletes namespaces, and the half a live
+/// deployment gets wrong in ways that are invisible to the OVSDB rows.
+@Suite("Metadata Chassis Reconciler")
+struct MetadataChassisReconcilerTests {
+
+    private let a = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+    private let b = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+
+    private func observed(
+        _ networkId: UUID, namespacePresent: Bool = true, interfaceName: String = "mdpaaaa00000000"
+    ) -> ObservedMetadataPort {
+        ObservedMetadataPort(
+            networkId: networkId, interfaceName: interfaceName, namespacePresent: namespacePresent)
+    }
+
+    @Test("A network with no interface is realized")
+    func realizesMissingNetwork() {
+        #expect(
+            MetadataChassisReconciler.actions(desired: [a], observed: []) == [.realize(networkId: a)])
+    }
+
+    @Test("A fully realized network needs no action")
+    func convergedNeedsNothing() {
+        #expect(MetadataChassisReconciler.actions(desired: [a], observed: [observed(a)]).isEmpty)
+    }
+
+    @Test("An interface whose namespace is gone is realized again")
+    func rebuildsWhenNamespaceMissing() {
+        // The host-reboot case, and the reason `namespacePresent` exists at all.
+        // OVS's conf.db is on disk and the interface row survives; /var/run/netns
+        // is tmpfs and does not. ovn-controller rebinds the localport and starts
+        // answering guest ARP for the metadata address while nothing terminates
+        // it — so guests hang rather than failing fast, which is worse than
+        // having no metadata port at all. Keying the diff on the OVS row alone
+        // would never rebuild this.
+        #expect(
+            MetadataChassisReconciler.actions(
+                desired: [a], observed: [observed(a, namespacePresent: false)])
+                == [.realize(networkId: a)])
+    }
+
+    @Test("A network no longer wanted is removed, by its observed device name")
+    func removesUnwanted() {
+        #expect(
+            MetadataChassisReconciler.actions(
+                desired: [], observed: [observed(b, interfaceName: "mdpbbbb11111111")])
+                == [.remove(networkId: b, interfaceName: "mdpbbbb11111111")])
+    }
+
+    @Test("A nil desired list is silence, not an instruction to remove everything")
+    func nilDesiredConvergesNothing() {
+        // A control plane predating `metadataEnabled` says nothing; reading that
+        // as "remove" would tear down every namespace on the fleet on a
+        // rollback. An empty *non-nil* list is an opinion and does remove.
+        #expect(MetadataChassisReconciler.actions(desired: nil, observed: [observed(a)]).isEmpty)
+        #expect(!MetadataChassisReconciler.actions(desired: [], observed: [observed(a)]).isEmpty)
+    }
+
+    @Test("Realizations are ordered before removals, and both are deterministic")
+    func actionsAreOrderedAndDeterministic() {
+        let actions = MetadataChassisReconciler.actions(
+            desired: [b, a], observed: [observed(b, namespacePresent: false, interfaceName: "mdpb")])
+        // Sorted by id, so a replayed sync produces an identical action list.
+        #expect(
+            actions == [
+                .realize(networkId: a), .realize(networkId: b),
+            ])
+    }
+
+    @Test("A mixed pass realizes, rebuilds, and removes in one go")
+    func mixedPass() {
+        let stale = UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000003")!
+        let actions = MetadataChassisReconciler.actions(
+            desired: [a, b],
+            observed: [
+                observed(a, namespacePresent: false, interfaceName: "mdpa"),
+                observed(stale, interfaceName: "mdpc"),
+            ])
+        #expect(
+            actions == [
+                .realize(networkId: a),
+                .realize(networkId: b),
+                .remove(networkId: stale, interfaceName: "mdpc"),
+            ])
     }
 }

@@ -190,6 +190,18 @@ asking, and "the source address identifies the caller" is the entire security
 model of an instance metadata service. Reply routing breaks on the same
 ambiguity. See [ADR 0003](../adr/0003-imds-chassis-namespace.md).
 
+Source-IP identification is sound only because VM logical switch ports carry
+`port_security`, pinning each to its allocated MAC and addresses — without it a
+guest could spoof a neighbour's address and be served that instance's metadata.
+Nothing in the metadata code references that dependency, so it is recorded in
+the ADR rather than left implicit.
+
+Convergence observes the namespace, not just the OVS interface row: the two have
+different lifetimes (`conf.db` on disk, `/var/run/netns` on tmpfs), so after a
+host reboot the row returns and `ovn-controller` answers ARP while nothing
+terminates the address. Guests would hang rather than fail fast — worse than
+having no metadata port at all.
+
 The IPv6 address is added unconditionally, including on v4-only networks, so
 both halves of the reconcile derive from one input with no drift. In practice a
 guest can only *use* it on a dual-stack network: with no global IPv6 address it
@@ -770,6 +782,13 @@ verification on real multi-node hardware (recipe in
   (STR-56). STR-53 must not land before this one is verified on a live
   deployment: a route to an address with no local binding turns a fast failure
   into cloud-init's minutes-long retry loop.
+- **Downgrading an agent below wire v27 leaks its metadata namespaces.** A
+  pre-STR-49 agent has no concept of `strato-md-*` namespaces or `mdp*` ports, so
+  it neither converges nor removes them — the mirror of the localport's nil
+  protection, which is handled on the control-plane side but has no agent-side
+  equivalent. Sweep by hand after a rollback:
+  `ovs-vsctl --columns=name find Interface external_ids:strato-role=metadata`,
+  then `ovs-vsctl del-port <name>` and `ip netns del strato-md-<uuid>`.
 - **Name resolution** is a separate track: see [dns](./dns.md). What exists on
   this substrate today is DHCP option delivery only (`dns_servers` /
   `domain_name` → OVN `DHCP_Options`); the OVN `DNS` table is not yet written.

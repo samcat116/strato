@@ -36,6 +36,20 @@ geneve tunnels, so the traffic always arrives on the guest's own host — but it
 arrives on a *per-network* interface, one per network the chassis runs a NIC on.
 Something has to keep those interfaces apart.
 
+### The load-bearing precondition
+
+Source-IP identification is only sound because **VM logical switch ports are
+created with `port_security`** (`NetworkServiceLinux.portSecurityEntry`), which
+pins each port to its allocated MAC and addresses. Without it a guest could
+source-spoof a neighbour's tenant address on its own switch and be served that
+instance's metadata — hostname, SSH keys, user data, and eventually a SPIFFE
+identity document.
+
+This is written down because nothing in the metadata code references it, so a
+future change that relaxes port security on VM ports would break the metadata
+service's identity guarantee with no test failing anywhere near it. If port
+security is ever loosened, this design needs revisiting, not just that change.
+
 ## Decision
 
 One network namespace per (chassis, network), named
@@ -120,6 +134,19 @@ here, with no listener in hand.
   reverse-path filtering a guest's request passes, because the reverse lookup
   for its tenant address hits the namespace's default route and resolves to the
   interface the packet arrived on.
+- **Observation cannot key on the OVS row alone.** The interface row and the
+  namespace have different lifetimes: `conf.db` is on disk, `/var/run/netns` is
+  tmpfs. After a host reboot the row returns, `ovs-vswitchd` recreates the
+  netdev, and `ovn-controller` rebinds the localport and answers guest ARP for
+  the metadata address — with no namespace, no addresses, and no routes behind
+  it, so guests hang instead of failing fast. `ObservedMetadataPort` therefore
+  probes the namespace path alongside the row, and a setup that fails partway
+  rolls the namespace back so the next pass observes an honest "not built".
+- **No MTU is set on the namespace interface**, unlike the sandbox NIC path.
+  Deliberate rather than an oversight: OVS derives an internal port's MTU from
+  the bridge minimum, and the guest negotiates TCP MSS from its own side, so
+  there is no path here that a smaller-than-default MTU would fix. The sandbox
+  path sets one because a veth pair defaults to 1500 regardless of the fabric.
 - **Moving an OVS internal port into a namespace is safe**, unlike moving a TAP
   (STR-99, where the OVS port dies silently while the OVSDB rows survive). An
   internal port is a datapath port owned by `ovs-vswitchd`, and relocating one

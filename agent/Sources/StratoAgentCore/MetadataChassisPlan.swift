@@ -76,6 +76,13 @@ public struct MetadataChassisPlan: Sendable, Equatable {
         "strato-md-\(networkId.uuidString.lowercased())"
     }
 
+    /// Where iproute2 keeps that namespace's handle. On tmpfs — which is the
+    /// whole reason observation cannot key on the OVS row alone: `conf.db` is on
+    /// disk and survives a reboot, this does not.
+    public static func netnsPath(networkId: UUID) -> String {
+        "/var/run/netns/\(netnsName(networkId: networkId))"
+    }
+
     /// Builds the full setup-and-teardown plan for one network on this chassis.
     ///
     /// `ipBinaryPath` is injected rather than assumed so the plan stays testable
@@ -188,10 +195,16 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     /// `SandboxNetnsAttachmentPlan.teardownCommands`: cleanup has to work for a
     /// network the agent can no longer describe, and rebuilding the full plan to
     /// throw most of it away invites the two paths to derive different names.
+    ///
+    /// `interfaceName` overrides the derived device name with the one actually
+    /// observed on the bridge, so teardown removes what it found rather than
+    /// what it recomputed. They agree by construction; passing the observation
+    /// is what keeps them agreeing if the derivation ever changes.
     public static func teardownPlan(
-        networkId: UUID, ipBinaryPath: String, bridge: String, ovsTimeoutSeconds: Int
+        networkId: UUID, interfaceName: String? = nil, ipBinaryPath: String, bridge: String,
+        ovsTimeoutSeconds: Int
     ) -> (ovsDetach: [String], commands: [NetnsCommand]) {
-        let device = metadataInterfaceName(networkId: networkId.uuidString)
+        let device = interfaceName ?? metadataInterfaceName(networkId: networkId.uuidString)
         return (
             ovsDetach: ["--timeout=\(ovsTimeoutSeconds)", "--if-exists", "del-port", bridge, device],
             commands: [
@@ -217,4 +230,76 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     /// Carries the network id so teardown can rederive the namespace to delete
     /// from an observed interface alone.
     public static let networkIDKey = "strato-network-id"
+}
+
+// MARK: - Chassis-side reconciliation
+
+/// One metadata interface this chassis owns, as observed on the host.
+public struct ObservedMetadataPort: Equatable, Sendable {
+    public let networkId: UUID
+    /// The device name read off the OVS row, not rederived.
+    public let interfaceName: String
+    /// Whether the namespace that should hold it still exists.
+    ///
+    /// Tracked separately from the OVS row because the two have **different
+    /// lifetimes**, and conflating them is a silent failure. OVS's `conf.db`
+    /// is on disk; `/var/run/netns` is tmpfs. After a host reboot the interface
+    /// row comes back, `ovs-vswitchd` recreates the netdev, and
+    /// `ovn-controller` rebinds the localport and starts answering guest ARP
+    /// for the metadata address — while the namespace, the addresses, and the
+    /// routes are all gone. Guests then hang on a connection that will never be
+    /// answered, which is strictly worse than the fast failure they get with no
+    /// metadata port at all.
+    public let namespacePresent: Bool
+
+    public init(networkId: UUID, interfaceName: String, namespacePresent: Bool) {
+        self.networkId = networkId
+        self.interfaceName = interfaceName
+        self.namespacePresent = namespacePresent
+    }
+}
+
+/// One chassis-side side effect.
+public enum MetadataChassisAction: Equatable, Sendable {
+    /// Run the (idempotent) setup plan: either the network has no interface yet,
+    /// or it has one whose namespace went missing.
+    case realize(networkId: UUID)
+    /// Remove the interface and its namespace. Carries the observed device name
+    /// so teardown deletes what was found.
+    case remove(networkId: UUID, interfaceName: String)
+}
+
+/// Pure diff for the chassis half, mirroring `NetworkReconciler.teardownActions`.
+///
+/// Lives here rather than in the actor because this is the half that *deletes*
+/// namespaces, and `NetworkServiceLinux` is in the executable target where no
+/// test can reach it.
+public enum MetadataChassisReconciler {
+
+    /// The side effects that converge this chassis toward `desired`.
+    ///
+    /// `desired` nil ≙ a control plane that predates `metadataEnabled`: no
+    /// actions at all, so silence is never read as "tear every namespace down".
+    /// An empty (non-nil) list *is* an opinion and removes everything.
+    public static func actions(
+        desired: [UUID]?, observed: [ObservedMetadataPort]
+    ) -> [MetadataChassisAction] {
+        guard let desired else { return [] }
+        let wanted = Set(desired)
+        let byNetwork = Dictionary(observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var actions: [MetadataChassisAction] = []
+        // Realize covers both "never built" and "built, but its namespace is
+        // gone". The plan is idempotent, so one path serves both and there is no
+        // repair-only branch to get subtly wrong.
+        for networkId in wanted.sorted(by: { $0.uuidString < $1.uuidString })
+        where byNetwork[networkId]?.namespacePresent != true {
+            actions.append(.realize(networkId: networkId))
+        }
+        for port in observed.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString })
+        where !wanted.contains(port.networkId) {
+            actions.append(.remove(networkId: port.networkId, interfaceName: port.interfaceName))
+        }
+        return actions
+    }
 }
