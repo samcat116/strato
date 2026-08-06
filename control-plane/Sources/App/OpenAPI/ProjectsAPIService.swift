@@ -186,7 +186,11 @@ struct ProjectsAPIService: APIProtocol {
             // cascades away with it — service accounts (in both directions),
             // images, networks, security groups, floating IPs, DNS zones and
             // records, volumes and their snapshots (STR-137). This reads rows
-            // the delete below removes, so it runs first.
+            // the delete below removes, so it runs first — which also means a
+            // child committed between the sweep and the delete is invisible to
+            // it. `vms.project_id` being RESTRICT backstops the *workload*
+            // race below; nothing backstops this one, and closing it needs the
+            // project row locked rather than merely read.
             try await ResourceBindingCleanup.revokeBindings(forDeletedProject: projectID, on: db)
             // The emptiness checks above and this delete are not one atomic
             // step, and read-committed Postgres will happily commit a VM

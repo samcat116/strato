@@ -197,13 +197,42 @@ enum RoleBindingService {
 
     /// Remove every binding attached to any of `nodeIDs`, all of one type —
     /// the form a cascade delete needs, where removing one row takes a set of
-    /// child nodes with it (a VM's checkpoints, a sandbox's snapshots).
+    /// child nodes with it (a VM's checkpoints, a sandbox's snapshots, or
+    /// every image and volume in an organization).
     static func revokeAll(nodeType: IAMNodeType, nodeIDs: [UUID], on db: Database) async throws {
-        guard !nodeIDs.isEmpty else { return }
-        try await RoleBinding.query(on: db)
-            .filter(\.$nodeType == nodeType.rawValue)
-            .filter(\.$nodeID ~~ nodeIDs)
-            .delete()
+        for chunk in chunked(nodeIDs) {
+            try await RoleBinding.query(on: db)
+                .filter(\.$nodeType == nodeType.rawValue)
+                .filter(\.$nodeID ~~ chunk)
+                .delete()
+        }
+    }
+
+    /// Remove every binding held by any of `principalIDs`, all of one type —
+    /// the principal-side counterpart, for a delete that takes a set of
+    /// principals with it (a project's service accounts, an organization's
+    /// groups and registered workloads).
+    static func revokeAll(
+        principalType: IAMPrincipalType, principalIDs: [UUID], on db: Database
+    ) async throws {
+        for chunk in chunked(principalIDs) {
+            try await RoleBinding.query(on: db)
+                .filter(\.$principalType == principalType.rawValue)
+                .filter(\.$principalID ~~ chunk)
+                .delete()
+        }
+    }
+
+    /// `IN` lists are bounded: Postgres refuses a statement with more than
+    /// 65535 bind parameters, and plans a long list poorly well before that.
+    /// Container deletes hand these sweeps whole-organization id sets, so the
+    /// chunking lives here rather than at each call site.
+    private static let deleteChunkSize = 1000
+
+    private static func chunked(_ ids: [UUID]) -> [ArraySlice<UUID>] {
+        stride(from: 0, to: ids.count, by: deleteChunkSize).map {
+            ids[$0..<min($0 + deleteChunkSize, ids.count)]
+        }
     }
 
     /// The unexpired bindings on a node.

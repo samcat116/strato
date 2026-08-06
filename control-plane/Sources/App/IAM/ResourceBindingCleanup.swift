@@ -53,6 +53,26 @@ enum ResourceBindingCleanup {
         .organization: [.organizationalUnit, .project],
     ]
 
+    /// The *principal* types whose rows cascade away with a parent's, keyed the
+    /// same way and inherited the same way.
+    ///
+    /// A principal is not a node — nothing binds *to* a group or a workload
+    /// registration — so `cascadingChildren` cannot describe them and the
+    /// node-keyed half of the guard is blind to them. They strand rows by the
+    /// mirror-image mechanism: the bindings a vanished principal *holds* have
+    /// no more owner than the bindings on a vanished node, and each one's own
+    /// delete endpoint sweeps them for exactly that reason.
+    static let cascadingPrincipals: [IAMNodeType: [IAMPrincipalType]] = [
+        .project: [.serviceAccount],
+        // `workload_registrations` cascades on `service_account_id` as well as
+        // on `organization_id`, so a project reaches the table through its
+        // accounts. Only `kind == .workload` rows are principals in their own
+        // right, and those never carry a service account — but the sweep is
+        // written to the foreign key rather than to that invariant.
+        .serviceAccount: [.workload],
+        .organization: [.group, .workload],
+    ]
+
     /// Revoke every binding on a VM node and on the checkpoints that cascade
     /// away with it. Call inside the transaction that removes the VM row, so
     /// bindings and rows can never diverge — and *before* the delete, which
@@ -114,10 +134,23 @@ enum ResourceBindingCleanup {
         let serviceAccountIDs = try await ServiceAccount.query(on: db)
             .filter(\.$project.$id ~~ projectIDs)
             .all(\.$id)
-        for accountID in serviceAccountIDs {
-            try await RoleBindingService.revokeAll(principalType: .serviceAccount, principalID: accountID, on: db)
-        }
+        try await RoleBindingService.revokeAll(
+            principalType: .serviceAccount, principalIDs: serviceAccountIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .serviceAccount, nodeIDs: serviceAccountIDs, on: db)
+
+        // Registry rows cascade with the account they name. Only a
+        // `kind == .workload` row is a principal in its own right, and those
+        // carry no service account — so this finds nothing today. It is
+        // written to the foreign key rather than to that invariant, because
+        // the foreign key is what the database will actually act on.
+        if !serviceAccountIDs.isEmpty {
+            let workloadIDs = try await WorkloadRegistration.query(on: db)
+                .filter(\.$serviceAccount.$id ~~ serviceAccountIDs)
+                .filter(\.$kind == .workload)
+                .all(\.$id)
+            try await RoleBindingService.revokeAll(
+                principalType: .workload, principalIDs: workloadIDs, on: db)
+        }
 
         let zoneIDs = try await DNSZone.query(on: db)
             .filter(\.$project.$id ~~ projectIDs)
@@ -152,13 +185,19 @@ enum ResourceBindingCleanup {
     /// subtree with everything each of those projects carries.
     ///
     /// The delete endpoint refuses a folder that still has child folders or
-    /// projects, so in practice there is nothing here to sweep; the subtree
-    /// walk is what makes the answer right anyway when a row lands between the
-    /// check and the delete, which read-committed Postgres allows and the
-    /// CASCADE foreign key then honours.
+    /// projects, so in practice there is nothing below the folder to sweep. The
+    /// subtree walk narrows the window rather than closing it: it covers a row
+    /// committed between the endpoint's check and this sweep, but under READ
+    /// COMMITTED the sweep's reads and the subsequent `DELETE` take different
+    /// snapshots, so a row committed *after* the sweep is still invisible here
+    /// and still cascades away. Closing that last gap needs the folder row
+    /// locked `FOR UPDATE` (an FK child insert takes `FOR KEY SHARE` on it),
+    /// which is a concurrency change worth making deliberately rather than as
+    /// a side effect of this one.
     static func revokeBindings(forDeletedFolder folder: OrganizationalUnit, on db: any Database) async throws {
-        let folderIDs = try await folder.selfAndDescendantIDs(on: db)
-        guard !folderIDs.isEmpty else { return }
+        let folderID = try folder.requireID()
+        let descendantIDs = try await folder.descendants(on: db).compactMap(\.id)
+        let folderIDs = [folderID] + descendantIDs
         let projectIDs = try await Project.query(on: db)
             .filter(\.$organizationalUnit.$id ~~ folderIDs)
             .all(\.$id)
@@ -171,9 +210,10 @@ enum ResourceBindingCleanup {
     /// organization or by any of those folders, and each project's own
     /// cascading children.
     ///
-    /// Groups are swept as principals rather than nodes — a group is not a
-    /// bindable node, but it cascades on `organization_id` and its grants
-    /// elsewhere would outlive it, the cleanup its own delete endpoint does.
+    /// Groups and directly registered workloads are swept as principals rather
+    /// than nodes — neither is a bindable node, but both cascade on
+    /// `organization_id` and their grants elsewhere would outlive them, the
+    /// cleanup each one's own delete endpoint does.
     static func revokeBindings(forDeletedOrganization organizationID: UUID, on db: any Database) async throws {
         let folderIDs = try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organizationID)
@@ -191,9 +231,17 @@ enum ResourceBindingCleanup {
         let groupIDs = try await Group.query(on: db)
             .filter(\.$organization.$id == organizationID)
             .all(\.$id)
-        for groupID in groupIDs {
-            try await RoleBindingService.revokeAll(principalType: .group, principalID: groupID, on: db)
-        }
+        try await RoleBindingService.revokeAll(principalType: .group, principalIDs: groupIDs, on: db)
+
+        // A `kind == .workload` registration *is* the principal (principal id
+        // = row id), and the row is org-scoped. The `kind` filter is documentation
+        // rather than necessity: agent and service-account rows hold nothing
+        // under `.workload`.
+        let workloadIDs = try await WorkloadRegistration.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$kind == .workload)
+            .all(\.$id)
+        try await RoleBindingService.revokeAll(principalType: .workload, principalIDs: workloadIDs, on: db)
 
         try await revokeBindings(forDeletedProjects: projectIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .organizationalUnit, nodeIDs: folderIDs, on: db)

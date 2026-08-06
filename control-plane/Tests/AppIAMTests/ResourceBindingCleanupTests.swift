@@ -68,12 +68,24 @@ struct ResourceBindingCleanupTests {
                 return seen
             }
 
+            // Principals inherit down the same chain: a project's accounts are
+            // an organization's too, because its projects are.
+            func declaredPrincipals(of parent: IAMNodeType) -> Set<IAMPrincipalType> {
+                var principals = Set(ResourceBindingCleanup.cascadingPrincipals[parent] ?? [])
+                for node in declaredDescendants(of: parent) {
+                    principals.formUnion(ResourceBindingCleanup.cascadingPrincipals[node] ?? [])
+                }
+                return principals
+            }
+
             // The set the helper declares is inert on its own; hold it against
             // the schema the database actually enforces. A new child table
             // added with ON DELETE CASCADE would otherwise compile and pass
             // while leaking its bindings on every parent delete — the exact
             // failure STR-112 and STR-137 were.
-            for parent in ResourceBindingCleanup.cascadingChildren.keys {
+            let parents = Set(ResourceBindingCleanup.cascadingChildren.keys)
+                .union(ResourceBindingCleanup.cascadingPrincipals.keys)
+            for parent in parents {
                 let declared = declaredDescendants(of: parent)
                 let tables = try await cascadingTables(from: parent.table)
 
@@ -88,6 +100,22 @@ struct ResourceBindingCleanupTests {
                         \(child.rawValue) rows cascade away with \(parent.rawValue) rows, \
                         so their bindings orphan on every \(parent.rawValue) delete. \
                         Add it to ResourceBindingCleanup.cascadingChildren and revoke it.
+                        """)
+                }
+
+                // The principal half. A cascading principal table strands the
+                // bindings its rows *hold*, which the node-keyed check above
+                // cannot see: nothing binds to a group or a registration, so
+                // neither is an IAMNodeType at all.
+                let declaredHolders = declaredPrincipals(of: parent)
+                let cascadingPrincipals = IAMPrincipalType.allCases.filter { tables.contains($0.table) }
+                for principal in cascadingPrincipals {
+                    #expect(
+                        declaredHolders.contains(principal),
+                        """
+                        \(principal.rawValue) rows cascade away with \(parent.rawValue) rows, \
+                        so the bindings they hold orphan on every \(parent.rawValue) delete. \
+                        Add it to ResourceBindingCleanup.cascadingPrincipals and revoke it.
                         """)
                 }
             }
@@ -297,10 +325,16 @@ struct ResourceBindingCleanupTests {
             nodes += try await Self.populate(project: folderProject, owner: user, on: app.db)
             nodes += try await Self.populate(project: orgProject, owner: user, on: app.db)
 
-            // A group cascades on `organization_id` and is a binding principal,
-            // never a node, so only the principal direction reclaims its grants.
+            // Groups and workload registrations cascade on `organization_id`
+            // and are binding principals, never nodes, so only the principal
+            // direction reclaims their grants.
             let group = try await builder.createGroup(name: "team", description: "", organization: org)
             let groupID = try group.requireID()
+            let workload = WorkloadRegistration(
+                spiffeID: "spiffe://example.org/workload/ci", kind: .workload,
+                organizationID: organizationID, displayName: "ci")
+            try await workload.save(on: app.db)
+            let workloadID = try workload.requireID()
 
             let other = try await builder.createOrganization(name: "Untouched Org")
             let otherID = try other.requireID()
@@ -310,9 +344,13 @@ struct ResourceBindingCleanupTests {
                     principalType: .user, principalID: user.id!, role: .admin,
                     nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
             }
-            try await RoleBindingService.grant(
-                principalType: .group, principalID: groupID, role: .viewer,
-                nodeType: .organization, nodeID: otherID, createdBy: user.id!, on: app.db)
+            for (principalType, principalID) in [
+                (IAMPrincipalType.group, groupID), (.workload, workloadID),
+            ] {
+                try await RoleBindingService.grant(
+                    principalType: principalType, principalID: principalID, role: .viewer,
+                    nodeType: .organization, nodeID: otherID, createdBy: user.id!, on: app.db)
+            }
 
             try await ResourceBindingCleanup.revokeBindings(
                 forDeletedOrganization: organizationID, on: app.db)
@@ -321,15 +359,151 @@ struct ResourceBindingCleanupTests {
                 let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
                 #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the organization delete")
             }
-            let heldByGroup = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.group.rawValue)
-                .filter(\.$principalID == groupID)
-                .count()
-            #expect(heldByGroup == 0)
-            // The other org's own node binding is the group's former grant's
+            for (principalType, principalID) in [
+                (IAMPrincipalType.group, groupID), (.workload, workloadID),
+            ] {
+                let held = try await RoleBinding.query(on: app.db)
+                    .filter(\.$principalType == principalType.rawValue)
+                    .filter(\.$principalID == principalID)
+                    .count()
+                #expect(held == 0, "\(principalType.rawValue) grants survived the organization delete")
+            }
+            // The other org's own node binding is those former grants'
             // neighbour: sweeping the principal must not take the node with it.
             let otherBindings = try await Self.bindingCount(.organization, otherID, on: app.db)
             #expect(otherBindings == 1)
+        }
+    }
+
+    // MARK: - The endpoints, not just the helper
+
+    // The tests above prove the sweeps do what they say. These prove the four
+    // container delete endpoints actually call them: without one, deleting the
+    // helper's call site from a controller leaves the whole suite green and the
+    // leak comes back unnoticed.
+
+    @Test("Deleting a project through the API takes its children's bindings with it")
+    func projectEndpointRevokesCascadingBindings() async throws {
+        try await withContainerDeleteApp { app, user, org, token in
+            let builder = TestDataBuilder(db: app.db)
+            let project = try await builder.createProject(
+                name: "Doomed", description: "", organization: org)
+            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.db)
+
+            try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            try await Self.expectNoBindings(nodes, on: app.db)
+        }
+    }
+
+    @Test("A project delete refused for its workloads leaves every binding in place")
+    func refusedProjectDeleteKeepsBindings() async throws {
+        try await withContainerDeleteApp { app, user, org, token in
+            let builder = TestDataBuilder(db: app.db)
+            let project = try await builder.createProject(
+                name: "Occupied", description: "", organization: org)
+            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.db)
+            _ = try await builder.createVM(name: "resident", project: project)
+
+            try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // The sweep now spans the whole project subtree rather than just
+            // its service accounts, so a refusal has that much more to put
+            // back. This exercises the endpoint's pre-check; the other refusal
+            // path — a VM committed after the check, caught by the RESTRICT
+            // foreign key — rolls back the same transaction but cannot be
+            // provoked without interleaving a commit mid-request.
+            for (nodeType, nodeID) in nodes {
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                #expect(remaining == 1, "\(nodeType.rawValue) bindings were swept by a refused delete")
+            }
+        }
+    }
+
+    @Test("Deleting a folder through the API takes its own bindings with it")
+    func folderEndpointRevokesBindings() async throws {
+        try await withContainerDeleteApp { app, user, org, token in
+            let builder = TestDataBuilder(db: app.db)
+            let folder = try await builder.createOU(name: "team", description: "", organization: org)
+            let folderID = try folder.requireID()
+            try await Self.grantAll([(.organizationalUnit, folderID)], to: user, on: app.db)
+
+            try await app.test(
+                .DELETE, "/api/organizations/\(try org.requireID())/ous/\(folderID)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            try await Self.expectNoBindings([(.organizationalUnit, folderID)], on: app.db)
+        }
+    }
+
+    @Test("Deleting an organization through the API takes its whole subtree's bindings")
+    func organizationEndpointRevokesSubtreeBindings() async throws {
+        try await withContainerDeleteApp { app, user, org, token in
+            let builder = TestDataBuilder(db: app.db)
+            let organizationID = try org.requireID()
+            let folder = try await builder.createOU(name: "team", description: "", organization: org)
+            let project = try await builder.createProject(name: "In Folder", description: "", ou: folder)
+            var nodes: [(IAMNodeType, UUID)] = [
+                (.organization, organizationID), (.organizationalUnit, try folder.requireID()),
+            ]
+            nodes += try await Self.populate(project: project, owner: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.db)
+
+            try await app.test(.DELETE, "/api/organizations/\(organizationID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            try await Self.expectNoBindings(nodes, on: app.db)
+        }
+    }
+
+    /// An app with an org admin holding an API key — the caller every container
+    /// delete endpoint demands.
+    private func withContainerDeleteApp(
+        _ test: (Application, User, Organization, String) async throws -> Void
+    ) async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "container", email: "container@example.com")
+            let org = try await builder.createOrganization(name: "Container Delete Org")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+            let token = try await user.generateAPIKey(on: app.db)
+            try await test(app, user, org, token)
+        }
+    }
+
+    private static func grantAll(
+        _ nodes: [(IAMNodeType, UUID)], to user: User, on db: any Database
+    ) async throws {
+        for (nodeType, nodeID) in nodes {
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: try user.requireID(), role: .admin,
+                nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: db)
+        }
+    }
+
+    private static func expectNoBindings(
+        _ nodes: [(IAMNodeType, UUID)], on db: any Database
+    ) async throws {
+        for (nodeType, nodeID) in nodes {
+            let remaining = try await bindingCount(nodeType, nodeID, on: db)
+            #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the delete endpoint")
         }
     }
 

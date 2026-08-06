@@ -286,18 +286,15 @@ struct OrganizationController: RouteCollection {
         // trusting a snapshot taken outside it.
         let orgProjectIDs = try await Project.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
-            .all()
-            .compactMap { $0.id }
+            .all(\.$id)
         let ouIDs = try await OrganizationalUnit.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
-            .all()
-            .compactMap { $0.id }
+            .all(\.$id)
         var ouProjectIDs: [UUID] = []
         if !ouIDs.isEmpty {
             ouProjectIDs = try await Project.query(on: req.db)
                 .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .all()
-                .compactMap { $0.id }
+                .all(\.$id)
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
 

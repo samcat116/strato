@@ -356,13 +356,15 @@ see "Conditions are not implemented yet" below.
   snapshots, a project takes its images, networks, security groups, floating
   IPs, DNS zones and records, volumes and snapshots, and service accounts, and
   a folder or organization takes the projects under it (STR-137). A path that
-  forgets leaks rows permanently (STR-112). `ResourceBindingCleanup` declares
-  those parent→child sets and its tests hold the declaration against the real
-  `ON DELETE CASCADE` foreign keys, transitively, so a new cascading child that
-  is a bindable node fails the build rather than leaking quietly. It is also
-  why **node ids are never
-  reused**: with UUIDv4 they cannot be, and an orphaned binding on a recycled
-  id would silently start granting again.
+  forgets leaks rows permanently (STR-112). The same applies to cascading
+  *principals*, whose held bindings are orphaned by the mirror-image mechanism:
+  a project takes its service accounts, an organization its groups and directly
+  registered workloads. `ResourceBindingCleanup` declares both parent→child
+  sets and its tests hold the declarations against the real `ON DELETE CASCADE`
+  foreign keys, transitively, so a new cascading child — node or principal —
+  fails the build rather than leaking quietly. It is also why **node ids are
+  never reused**: with UUIDv4 they cannot be, and an orphaned binding on a
+  recycled id would silently start granting again.
 
 ### Conditions are not implemented yet (STR-108)
 

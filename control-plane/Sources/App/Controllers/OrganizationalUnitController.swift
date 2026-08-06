@@ -273,6 +273,8 @@ struct OrganizationalUnitController: RouteCollection {
         // The sweep covers the whole cascading subtree, not just this node
         // (STR-137): the checks above and the delete below are not one atomic
         // step, and nested folders and projects cascade rather than restrict.
+        // It narrows that window without closing it — see the helper's note on
+        // what a row committed after the sweep still gets away with.
         try await req.db.transaction { db in
             try await ResourceBindingCleanup.revokeBindings(forDeletedFolder: ou, on: db)
             try await ou.delete(on: db)
