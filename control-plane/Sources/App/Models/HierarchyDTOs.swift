@@ -10,6 +10,10 @@ struct HierarchyValidationResponse: Content {
 }
 
 struct HierarchyIssue: Content {
+    /// The id of the entity the issue is about. An entity carries at most one
+    /// issue, so this is stable across calls — which is what makes
+    /// `HierarchyRepairRequest.specificIssues` usable against a report from an
+    /// earlier `GET /api/hierarchy/validate`.
     let id: UUID
     let type: String  // "circular_reference", "broken_path", "orphaned_resource", "quota_violation"
     let severity: String  // "critical", "warning", "info"
@@ -28,10 +32,29 @@ struct HierarchyValidationSummary: Content {
     let infoIssues: Int
 }
 
+/// Every field is optional and defaults to off, so an operator can ask for one
+/// repair (`{"repairAll": true, "repairOptions": {"rebuildPaths": true}}`)
+/// without restating the whole option set. Swift's synthesized `Decodable` does
+/// not fall back to property defaults for missing keys, hence the hand-written
+/// initializers.
 struct HierarchyRepairRequest: Content {
     let repairAll: Bool
     let specificIssues: [UUID]?
     let repairOptions: RepairOptions
+
+    init(repairAll: Bool = false, specificIssues: [UUID]? = nil, repairOptions: RepairOptions = RepairOptions()) {
+        self.repairAll = repairAll
+        self.specificIssues = specificIssues
+        self.repairOptions = repairOptions
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.repairAll = try container.decodeIfPresent(Bool.self, forKey: .repairAll) ?? false
+        self.specificIssues = try container.decodeIfPresent([UUID].self, forKey: .specificIssues)
+        self.repairOptions =
+            try container.decodeIfPresent(RepairOptions.self, forKey: .repairOptions) ?? RepairOptions()
+    }
 
     struct RepairOptions: Content {
         let fixCircularReferences: Bool
@@ -39,6 +62,32 @@ struct HierarchyRepairRequest: Content {
         let removeOrphanedResources: Bool
         let adjustQuotas: Bool
         let createMissingDefaults: Bool
+
+        init(
+            fixCircularReferences: Bool = false,
+            rebuildPaths: Bool = false,
+            removeOrphanedResources: Bool = false,
+            adjustQuotas: Bool = false,
+            createMissingDefaults: Bool = false
+        ) {
+            self.fixCircularReferences = fixCircularReferences
+            self.rebuildPaths = rebuildPaths
+            self.removeOrphanedResources = removeOrphanedResources
+            self.adjustQuotas = adjustQuotas
+            self.createMissingDefaults = createMissingDefaults
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.fixCircularReferences =
+                try container.decodeIfPresent(Bool.self, forKey: .fixCircularReferences) ?? false
+            self.rebuildPaths = try container.decodeIfPresent(Bool.self, forKey: .rebuildPaths) ?? false
+            self.removeOrphanedResources =
+                try container.decodeIfPresent(Bool.self, forKey: .removeOrphanedResources) ?? false
+            self.adjustQuotas = try container.decodeIfPresent(Bool.self, forKey: .adjustQuotas) ?? false
+            self.createMissingDefaults =
+                try container.decodeIfPresent(Bool.self, forKey: .createMissingDefaults) ?? false
+        }
     }
 }
 

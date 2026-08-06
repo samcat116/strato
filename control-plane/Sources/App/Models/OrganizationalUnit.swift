@@ -94,6 +94,19 @@ extension OrganizationalUnit {
 // MARK: - Helper Methods
 
 extension OrganizationalUnit {
+    /// The root component every materialized path starts from. Folders and
+    /// projects both hang off it, so both derive it here.
+    static func organizationPath(_ organizationID: UUID) -> String {
+        "/\(organizationID.uuidString)"
+    }
+
+    /// The materialized path a folder carries beneath a parent whose own path is
+    /// `parentPath` — another folder's `path`, or ``organizationPath(_:)`` for a
+    /// top-level folder.
+    static func path(under parentPath: String, folderID: UUID) -> String {
+        "\(parentPath)/\(folderID.uuidString)"
+    }
+
     /// Builds the path string for this OU based on its hierarchy
     func buildPath(on db: Database) async throws -> String {
         var pathComponents: [String] = []

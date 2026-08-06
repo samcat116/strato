@@ -730,6 +730,11 @@ public func configure(_ app: Application) async throws {
     // a grant that looks live in every listing and confers nothing.
     app.migrations.add(RejectConditionedRoleBindings())
 
+    // STR-144: the agent-confirmed tombstone dance generalizes into finalizers
+    // — a list of outstanding cleanup participants that keeps a deleted row
+    // alive until the last one clears its token.
+    app.migrations.add(AddFinalizersToWorkloads())
+
     // STR-142: mirror the agent's reported convergence progress onto the VM
     // and sandbox rows so the API can project a `conditions` block instead of
     // making clients poll an operation to learn the same thing (ADR 0001).
@@ -739,6 +744,11 @@ public func configure(_ app: Application) async throws {
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
     app.migrations.add(DeleteOrphanedResourceRoleBindings())
+
+    // One-time sweep of the project paths folder moves left stale (STR-114).
+    // Also runs late: it recomputes derived data over the folder and project
+    // tables, so it wants them in their final shape.
+    app.migrations.add(RebuildDriftedHierarchyPaths())
 
     try await app.autoMigrate()
 

@@ -61,6 +61,13 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
+    /// Outstanding cleanup participants blocking this VM's removal (ADR 0001,
+    /// stage 3). Empty for a live VM; stamped when a `DELETE` marks
+    /// `desiredStatus = .absent`, and drained a token at a time until the row
+    /// is reaped. See `ResourceFinalizer`.
+    @Field(key: "finalizers")
+    var finalizers: [String]
+
     /// The VM's DNS label (issue #770) — the leftmost label of the name it
     /// registers under in the primary zone of each network it has a NIC on.
     ///
@@ -277,6 +284,7 @@ final class VM: Model, @unchecked Sendable {
         self.desiredStatus = .shutdown
         self.generation = 0
         self.observedGeneration = 0
+        self.finalizers = []
         self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory

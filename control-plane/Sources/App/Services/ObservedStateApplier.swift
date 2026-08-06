@@ -743,27 +743,34 @@ struct ObservedStateApplier {
         let vmID = try vm.requireID()
 
         if vm.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row: if we crash in between, the next report retries the
-            // (idempotent) removal, whereas removing first would leave a
-            // pending operation with nothing to resolve it but the sweep.
+            // Teardown confirmed: this is the `agent.absent` finalizer's
+            // participant (ADR 0001). Complete the operation first, then clear
+            // the token: if we crash in between, the next report retries the
+            // (idempotent) clear, whereas clearing first would leave a pending
+            // operation with nothing to resolve it but the sweep.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            // Bindings first, unlike the delete-then-revoke order the other
-            // controllers use: the revoke reads the VM's checkpoints, whose
-            // rows the delete below cascades away (STR-112).
-            try await db.transaction { db in
-                try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
-                try await vm.delete(on: db)
-                try await QuotaEnforcementService.release(for: vm, on: db)
+            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
+            case .reaped:
+                app.logger.info(
+                    "VM deletion confirmed by agent report; record removed",
+                    metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                // Other participants still owe cleanup. Logged on every report
+                // until they finish, so this stays at debug.
+                app.logger.debug(
+                    "VM teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "vmId": .string(vmID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                // Raced another reaper, or the row went between the query and
+                // here. Nothing to say: whoever removed it logged the removal.
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
-
-            app.logger.info(
-                "VM deletion confirmed by agent report; record removed",
-                metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
             return
         }
 
@@ -908,28 +915,29 @@ struct ObservedStateApplier {
         let sandboxID = try sandbox.requireID()
 
         if sandbox.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row (same crash-ordering rationale as VMs).
+            // Teardown confirmed: the `agent.absent` participant, same
+            // crash-ordering rationale as VMs.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            // Exported snapshot objects first: the snapshot rows cascade with
-            // the sandbox row below (issue #428).
-            await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
-
-            // Bindings first: the revoke reads the sandbox's snapshots, whose
-            // rows the delete below cascades away (STR-112).
-            try await db.transaction { db in
-                try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
-                try await sandbox.delete(on: db)
-                try await QuotaEnforcementService.release(for: sandbox, on: db)
+            switch try await ResourceFinalizerService.clear(
+                .agentAbsent, from: sandbox, on: db, app: app)
+            {
+            case .reaped:
+                app.logger.info(
+                    "Sandbox deletion confirmed by agent report; record removed",
+                    metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                app.logger.debug(
+                    "Sandbox teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
-
-            app.logger.info(
-                "Sandbox deletion confirmed by agent report; record removed",
-                metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
             return
         }
 

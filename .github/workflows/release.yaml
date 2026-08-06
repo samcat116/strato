@@ -619,6 +619,52 @@ jobs:
           cp control-plane/.build/release/App release/strato-control-plane
           cp agent/.build/release/StratoAgent release/strato-agent
           cp cli/.build/release/strato release/strato
+
+          # Strip before archiving (STR-153). A release build keeps its debug
+          # info inside the binary, and it dominates the asset: the CLI alone
+          # measures 139.5 MB -> 78.3 MB on linux-arm64 (35.5 -> 25.9 MiB
+          # gzipped on its own) and 41.1 MB -> 11.8 MB on macos-arm64 (7.2 ->
+          # 3.7 MiB). Full strip rather than `--strip-debug`, which would keep
+          # .symtab: that leaves 4.4 MiB gzipped on the table for the CLI
+          # alone, and nothing here consumes the symbols. install.sh's systemd
+          # unit sets no SWIFT_BACKTRACE, so the Swift backtracer stays at its
+          # enable=tty default and never symbolicates anything into the
+          # journal, and no crash reporter ships backtraces off the node. The
+          # container images DO enable the backtracer with images=all, but
+          # they are built from their own binaries in the jobs above — which
+          # this step does not touch — so they keep full symbols.
+          command -v strip >/dev/null 2>&1 || { echo "strip not found on this runner" >&2; exit 1; }
+          for f in release/strato-control-plane release/strato-agent release/strato; do
+            before=$(wc -c < "$f")
+            strip "$f"
+            # Measured before the macOS re-sign below, so the numbers report
+            # the strip itself rather than strip minus a few KB of signature.
+            after=$(wc -c < "$f")
+            case "${{ matrix.asset_name }}" in
+              strato-macos-*)
+                # strip rewrites the Mach-O, and an Apple Silicon binary whose
+                # signature no longer matches its contents is SIGKILLed on
+                # exec. Current cctools strip re-signs on its own, but that is
+                # toolchain behavior on a runner image we don't pin; re-sign
+                # ad hoc unconditionally, which is what the linker gave these
+                # binaries in the first place (no Developer ID, no notarizing).
+                codesign --force --sign - "$f"
+                ;;
+            esac
+            echo "stripped ${f##*/}: ${before} -> ${after} bytes"
+          done
+          # Smoke-test the two binaries whose --version short-circuits in
+          # ArgumentParser before any config or service handling, so a strip
+          # that broke an executable — or, on macOS, its signature — fails the
+          # release here rather than on someone's node. The agent is the one
+          # that matters: its self-update probes a staged binary with
+          # --version before swapping it in, but install.sh executes nothing
+          # before starting the unit, so a fresh install has no other guard.
+          # Not strato-control-plane: the Vapor executable falls through to
+          # `serve` and would go looking for Postgres.
+          release/strato-agent --version
+          release/strato --version
+
           tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent strato
           # Checksum for install.sh to verify the download.
           if command -v sha256sum >/dev/null 2>&1; then

@@ -21,9 +21,11 @@ struct ResourceConditions: Content, Equatable {
     /// Both halves matter: an agent can acknowledge a generation while the
     /// workload is still, say, `error`.
     ///
-    /// Always false for a resource whose desired state is `absent` — a
-    /// deletion is confirmed by the workload's omission from the agent's
-    /// report, which removes the row rather than converging it.
+    /// Always false for a resource whose desired state is `absent`: a
+    /// terminating row is on its way out, not converging on anything. The
+    /// agent's confirmation clears the `agent.absent` finalizer rather than
+    /// satisfying a desired status (STR-144), and the row is reaped once the
+    /// last participant is done.
     let converged: Bool
     /// The generation the resource is trying to reach: what the last mutation
     /// bumped it to.

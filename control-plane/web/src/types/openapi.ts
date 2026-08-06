@@ -2748,7 +2748,7 @@ export interface paths {
         };
         /**
          * Report hierarchy integrity issues
-         * @description System-admin only. Scans every organization for circular references, broken materialized paths, orphaned resources, and quota violations.
+         * @description System-admin only. Scans every organization for materialized `path` / `depth` values that disagree with the relational parent chain, for parent cycles, and for folders and projects whose parent row is missing. The relational links are the source of truth; the paths are the derived copy that can drift.
          */
         get: operations["validateHierarchy"];
         put?: never;
@@ -2770,7 +2770,7 @@ export interface paths {
         put?: never;
         /**
          * Repair hierarchy integrity issues
-         * @description System-admin only. Applies the requested repairs and reports what was fixed and what remains.
+         * @description System-admin only. Applies the requested repairs and reports what was fixed and what remains. Only `repairOptions.rebuildPaths` does anything today: it rewrites the drifted `path` / `depth` of the folders and projects `validate` reports as `broken_path`.
          */
         post: operations["repairHierarchy"];
         delete?: never;
@@ -5227,7 +5227,7 @@ export interface components {
         };
         /** @description How far a resource is from the state the API was last asked to put it in. Derived on read from the resource's own generation counters and the convergence progress its agent reports — polling this block is the supported alternative to polling the operation a mutation returned. */
         ResourceConditions: {
-            /** @description Whether the owning agent has confirmed converging to `targetGeneration` *and* what it observes satisfies the desired state. Always false while a delete is in flight: a deletion is confirmed by the workload's absence from the agent's report, which removes the resource rather than converging it. */
+            /** @description Whether the owning agent has confirmed converging to `targetGeneration` *and* what it observes satisfies the desired state. Always false once a delete is in flight: a terminating resource is on its way out, not converging on anything, and it disappears when the last finalizer clears rather than settling. */
             converged: boolean;
             /**
              * Format: int64
@@ -6713,7 +6713,10 @@ export interface components {
             };
         };
         HierarchyIssue: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description The id of the entity the issue is about. An entity carries at most one issue, so this is stable across calls and can be replayed into `HierarchyRepairRequest.specificIssues`.
+             */
             id: string;
             /** @enum {string} */
             type: "circular_reference" | "broken_path" | "orphaned_resource" | "quota_violation";
@@ -6728,19 +6731,28 @@ export interface components {
             suggestedFix?: string | null;
             autoRepairable: boolean;
         };
+        /** @description Every field is optional and defaults to off, so one repair can be requested on its own. */
         HierarchyRepairRequest: {
-            repairAll: boolean;
+            /** @description Repair every issue the scan finds. Defaults to false; omit it and name `specificIssues` instead. */
+            repairAll?: boolean;
             /** @description Issue ids to repair when `repairAll` is false. */
             specificIssues?: string[] | null;
-            repairOptions: {
-                fixCircularReferences: boolean;
-                rebuildPaths: boolean;
-                removeOrphanedResources: boolean;
-                adjustQuotas: boolean;
-                createMissingDefaults: boolean;
+            /** @description Which repairs to apply. Every option defaults to false, so an omitted one is not attempted. */
+            repairOptions?: {
+                /** @description Not implemented; a cycle is reported but never repaired. Defaults to false. */
+                fixCircularReferences?: boolean;
+                /** @description Rewrite the drifted `path` / `depth` of folders and projects reported as `broken_path`. Defaults to false. */
+                rebuildPaths?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                removeOrphanedResources?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                adjustQuotas?: boolean;
+                /** @description Not implemented. Defaults to false. */
+                createMissingDefaults?: boolean;
             };
         };
         HierarchyRepairReport: {
+            /** @description True when the tree carries no issues at all afterwards — not merely that the requested repairs applied. A request that asked for nothing, or one that leaves an unrepairable issue such as a parent cycle standing, reports false with the detail in `remainingIssues`. */
             success: boolean;
             repairedIssues: {
                 /** Format: uuid */
