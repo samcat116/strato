@@ -88,6 +88,12 @@ struct DesiredStateAssembler {
         // the attach API refuses new attachments against such agents.
         let sendSecurityGroups =
             agent.map { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) } ?? true
+        // Whether this agent understands the metadata port (STR-49). Omitted
+        // for older agents rather than sent-and-ignored, so a nil on the wire
+        // means exactly one thing on the receiving side: "the sender has no
+        // opinion", which is what keeps a rollback from sweeping live ports.
+        let sendMetadata =
+            agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
         let securityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
             securityGroupsByInterface = try await nicSecurityGroupMemberships(
@@ -97,12 +103,16 @@ struct DesiredStateAssembler {
         }
 
         // Instance metadata (STR-51): what each VM's link-local metadata
-        // service serves. Omitted entirely for pre-v26 agents — they decode and
-        // discard it — following the v20 `securityGroups` pattern, and unlike
-        // v18/v23 this gates only the field, never placement: an old agent
-        // still provisions its guests from the seed ISO, so a VM there loses
-        // mutable metadata, not its ability to boot.
-        let sendMetadata =
+        // service *serves*, as distinct from `sendMetadata` above, which is
+        // whether the agent can realize the port it is served *on* (STR-49).
+        // Two protocol versions because they shipped separately, and an agent
+        // can speak either without the other. Omitted entirely for pre-v26
+        // agents — they decode and discard it — following the v20
+        // `securityGroups` pattern, and unlike v18/v23 this gates only the
+        // field, never placement: an old agent still provisions its guests from
+        // the seed ISO, so a VM there loses mutable metadata, not its ability
+        // to boot.
+        let sendInstanceMetadata =
             agent.map { WireProtocol.supportsInstanceMetadata($0.wireProtocolVersion ?? 0) } ?? true
         // Placement describes the receiving agent, not the VM, so it is
         // resolved once for the whole sync. The site's *name* names the coarse
@@ -125,6 +135,7 @@ struct DesiredStateAssembler {
                 networkInterfaces: vm.networkInterfaces,
                 networks: networksByID,
                 securityGroupsByInterface: securityGroupsByInterface,
+                sendsMetadata: sendMetadata,
                 logger: app.logger
             )
 
@@ -160,7 +171,7 @@ struct DesiredStateAssembler {
             }
 
             let metadata =
-                sendMetadata
+                sendInstanceMetadata
                 ? InstanceMetadata.build(
                     vm: vm, vmId: vmId, networks: networksByID,
                     region: region, availabilityZone: availabilityZone, logger: app.logger)
@@ -217,6 +228,7 @@ struct DesiredStateAssembler {
                     dnsServers: network.dnsServers,
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
+                    metadataEnabled: sendMetadata ? network.metadataEnabled : nil,
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId]
                 )
@@ -301,7 +313,8 @@ struct DesiredStateAssembler {
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
-                network: interface.flatMap { networksByID[$0.logicalNetworkID] })
+                network: interface.flatMap { networksByID[$0.logicalNetworkID] },
+                sendsMetadata: sendMetadata)
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,

@@ -32,11 +32,15 @@ enum SandboxSpecBuilder {
     /// and the DHCP/DNS configuration agents program into OVN. Nil means the
     /// assembly could not load it, which yields no spec at all rather than a
     /// half-configured NIC.
+    ///
+    /// `sendsMetadata` gates `metadataEnabled` on the receiving agent's protocol
+    /// version (STR-49), as on the VM path.
     static func networkSpec(
         from interface: SandboxNetworkInterface?,
-        network: LogicalNetwork?
+        network: LogicalNetwork?,
+        sendsMetadata: Bool = true
     ) -> NetworkSpec? {
         guard guestNetworkingSupported, let interface, let network else { return nil }
-        return NetworkSpec.build(interface: interface, network: network)
+        return NetworkSpec.build(interface: interface, network: network, sendsMetadata: sendsMetadata)
     }
 }

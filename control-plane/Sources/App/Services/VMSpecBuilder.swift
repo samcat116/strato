@@ -120,10 +120,14 @@ struct VMSpecBuilder {
     /// `securityGroupsByInterface` maps NIC id → its security-group ids;
     /// missing entries emit nil (unmanaged), which is also the default so
     /// callers that predate security groups — and tests — need not fetch it.
+    ///
+    /// `sendsMetadata` gates `metadataEnabled` on the receiving agent's protocol
+    /// version, exactly as `securityGroupsByInterface` is gated by its caller.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadata: Bool = true,
         logger: Logger? = nil
     ) -> [NetworkSpec] {
         resolvedInterfaces(from: interfaces, networks: networks, logger: logger)
@@ -131,7 +135,8 @@ struct VMSpecBuilder {
                 NetworkSpec.build(
                     interface: interface,
                     network: network,
-                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] })
+                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
+                    sendsMetadata: sendsMetadata)
             }
     }
 
@@ -196,6 +201,7 @@ struct VMSpecBuilder {
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadata: Bool = true,
         logger: Logger? = nil
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
@@ -225,7 +231,8 @@ struct VMSpecBuilder {
             volumes: volumes,
             networks: networkSpecs(
                 from: networkInterfaces, networks: networks,
-                securityGroupsByInterface: securityGroupsByInterface, logger: logger),
+                securityGroupsByInterface: securityGroupsByInterface,
+                sendsMetadata: sendsMetadata, logger: logger),
             console: ConsoleSpec(
                 console: vm.consoleMode, serial: vm.serialMode,
                 // nil, not an explicit `.headless`, so the key is omitted

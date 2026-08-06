@@ -45,10 +45,20 @@ protocol NetworkServiceProtocol: Sendable {
     /// from control planes without an opinion — never "tear down all port
     /// groups"); `portMemberships` is this host's own VM ports' desired group
     /// membership, converged on *every* agent regardless of authority.
+    ///
+    /// `metadataNetworks` is the same shape for the same reason: the networks
+    /// this host runs a metadata-enabled NIC on, whose link-local metadata
+    /// address it must materialize in a local namespace (STR-49). Derived from
+    /// this agent's own workload specs, not from `networks`, because a
+    /// non-authoritative agent receives an empty topology list and still has
+    /// guests to serve. Nil ≙ a control plane with no opinion — converge
+    /// nothing, rather than reading silence as "tear every namespace down".
+    ///
     /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
-        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
+        metadataNetworks: [UUID]?
     ) async
 }
 
@@ -72,7 +82,8 @@ extension NetworkServiceProtocol {
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
-        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership]
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
+        metadataNetworks: [UUID]?
     ) async {}
 }
 

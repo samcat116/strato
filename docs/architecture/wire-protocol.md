@@ -68,6 +68,7 @@ ad-hoc checks scattered through the code:
 | `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
+| `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -166,6 +167,38 @@ placement, unlike v18/v23: a pre-v26 agent still provisions guests from the
 seed ISO exactly as before, so a VM landing there loses mutable metadata, not
 its ability to boot. Retiring the seed ISO is what will make a placement gate
 load-bearing.
+
+Version 27 adds the metadata dataplane (STR-49): `metadataEnabled` on
+`DesiredNetworkState`, and the same flag per NIC on `NetworkSpec`. The two are
+not redundant — they feed the two halves of a feature with two different
+owners. The OVN `localport` that publishes `InstanceMetadataEndpoint`'s
+addresses (`169.254.169.254` and `fd00:ec2::254`) on a logical switch is one
+row in the shared northbound database, authored only by the site's network
+controller from `networks`. The chassis-local namespace that terminates those
+addresses must exist on *every* host running a NIC on that network, and a
+sited non-controller agent receives an empty `networks` list by design — it may
+not author topology — so its only input is its own workloads' specs. Hence the
+flag on both, and hence the network reconcile converging the chassis half
+*before* its authority guard.
+
+It rides `DesiredNetworkState` rather than only the NIC spec for `dhcpEnabled`'s
+reason: metadata edits don't bump VM generations, so a converged VM never
+re-realizes its NICs, and the level-triggered network reconcile is the only path
+that reaches a live network whose setting changed — including deleting the port
+when it is turned off.
+
+Absence is asymmetric in the v3/v5 sense on both fields, and on
+`DesiredNetworkState` the asymmetry is enforced in code rather than by
+convention. Network teardown is `observed − desired`, so a nil that merely
+planned no port would read as "remove it":
+`NetworkReconciler.metadataProtection(for:)` explicitly protects the ports of
+networks whose `metadataEnabled` is nil, which is what keeps a rollback to v26
+from deleting every live metadata port on the next sync. `false` remains an
+opinion and is honored — that is what makes turning the feature off work.
+Control-plane-side the gate lets sync assembly omit both fields for pre-v27
+agents. Like v26 and unlike v18/v23 it does not refuse placement: a pre-v27
+agent simply doesn't publish the address, and its guests fall back to the seed
+ISO exactly as today.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded

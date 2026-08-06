@@ -1707,6 +1707,11 @@ export interface Network {
   domainName?: string;
   /** DHCP lease time in seconds. */
   leaseTime?: number;
+  /**
+   * Whether the network publishes the link-local instance metadata service
+   * (169.254.169.254 / fd00:ec2::254) to its guests. Defaults on.
+   */
+  metadataEnabled: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1725,6 +1730,8 @@ export interface CreateNetworkRequest {
   dnsServers?: string[];
   domainName?: string;
   leaseTime?: number;
+  /** Omitted → the server's default (on). */
+  metadataEnabled?: boolean;
 }
 
 export interface UpdateNetworkRequest {
@@ -1739,6 +1746,7 @@ export interface UpdateNetworkRequest {
   dnsServers?: string[];
   domainName?: string;
   leaseTime?: number;
+  metadataEnabled?: boolean;
 }
 
 // Security groups (stateful NIC-level firewalls, realized as OVN ACLs)
