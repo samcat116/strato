@@ -778,8 +778,8 @@ final class DNSZoneTests {
                     ])
                 } afterResponse: { res in
                     #expect(res.status == .accepted)
-                    let operation = try res.content.decode(OperationResponse.self)
-                    operationID = operation.resourceId
+                    let body = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                    operationID = body.resource.id
                 }
                 return try #require(operationID)
             }

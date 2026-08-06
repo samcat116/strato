@@ -118,7 +118,7 @@ struct VMCommand: AsyncParsableCommand {
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                 }
 
-                let operation = try await client.createVM(
+                let accepted = try await client.createVM(
                     body: .json(
                         .init(
                             name: name, description: description, imageId: image,
@@ -126,9 +126,9 @@ struct VMCommand: AsyncParsableCommand {
                             environment: environment, cpu: cpu, memory: memory, disk: disk,
                             networkId: network, sshPublicKey: sshPublicKey))
                 ).accepted.body.json
-                try await handleOperation(
-                    operation, client: client, noWait: noWait, format: global.output,
-                    successMessage: "VM '\(name)' created.")
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output, successMessage: "VM '\(name)' created.")
             }
         }
     }
@@ -148,10 +148,10 @@ struct VMCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let operation = try await client.deleteVM(path: .init(vmID: id)).accepted.body.json
-                try await handleOperation(
-                    operation, client: client, noWait: noWait, format: global.output,
-                    successMessage: "VM \(id) deleted.")
+                let accepted = try await client.deleteVM(path: .init(vmID: id)).accepted.body.json
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output, successMessage: "VM \(id) deleted.")
             }
         }
     }
@@ -161,7 +161,9 @@ extension VMCommand {
     struct Start: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Start a virtual machine.")
         static let resourceLabel = "VM"
-        static let action: ResourceAction = { try await $0.startVM(path: .init(vmID: $1)).accepted.body.json }
+        static let action: ResourceAction = {
+            AcceptedMutation(id: try await $0.startVM(path: .init(vmID: $1)).accepted.body.json.mutationId)
+        }
         static let pastTense = "started"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -171,7 +173,9 @@ extension VMCommand {
     struct Stop: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a virtual machine.")
         static let resourceLabel = "VM"
-        static let action: ResourceAction = { try await $0.stopVM(path: .init(vmID: $1)).accepted.body.json }
+        static let action: ResourceAction = {
+            AcceptedMutation(id: try await $0.stopVM(path: .init(vmID: $1)).accepted.body.json.mutationId)
+        }
         static let pastTense = "stopped"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -181,7 +185,12 @@ extension VMCommand {
     struct Reboot: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Reboot a virtual machine.")
         static let resourceLabel = "VM"
-        static let action: ResourceAction = { try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json }
+        // Still an imperative agent RPC with no generation to converge on, so it
+        // answers with a real operation record until STR-151 (reboot as an
+        // edge-nonce on desired state).
+        static let action: ResourceAction = {
+            AcceptedMutation(try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json)
+        }
         static let pastTense = "rebooted"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -191,7 +200,9 @@ extension VMCommand {
     struct Pause: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Pause a virtual machine.")
         static let resourceLabel = "VM"
-        static let action: ResourceAction = { try await $0.pauseVM(path: .init(vmID: $1)).accepted.body.json }
+        static let action: ResourceAction = {
+            AcceptedMutation(id: try await $0.pauseVM(path: .init(vmID: $1)).accepted.body.json.mutationId)
+        }
         static let pastTense = "paused"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String
@@ -201,7 +212,9 @@ extension VMCommand {
     struct Resume: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Resume a paused virtual machine.")
         static let resourceLabel = "VM"
-        static let action: ResourceAction = { try await $0.resumeVM(path: .init(vmID: $1)).accepted.body.json }
+        static let action: ResourceAction = {
+            AcceptedMutation(id: try await $0.resumeVM(path: .init(vmID: $1)).accepted.body.json.mutationId)
+        }
         static let pastTense = "resumed"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "VM id.") var id: String

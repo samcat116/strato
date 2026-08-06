@@ -915,6 +915,12 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Degrade workloads that missed their convergence deadline
+                    // (STR-147). Lock-free — see `sweepStuckConvergence`.
+                    await sweepStuckConvergence()
+
+                    try self.checkTickPreconditions()
+
                     // Fail operations stuck pending past their budget and resolve
                     // VMs stuck in a transitional state
                     await sweepStuckOperations()
@@ -1059,6 +1065,100 @@ actor AgentService {
         }
     }
 
+    /// Marks a VM or sandbox `degraded` once its convergence deadline passes
+    /// with the outstanding mutations still unconverged (ADR 0001 stage 4,
+    /// STR-147).
+    ///
+    /// This is what the stuck-*operation* sweep was for lifecycle mutations,
+    /// now that they keep no operation row: the deadline every accepted
+    /// mutation stamps replaces the row's `created_at` plus its per-kind
+    /// budget, and the resource's own `conditions.degraded` replaces the
+    /// verdict.
+    ///
+    /// **Deliberately not a cluster singleton.** Marking degraded is idempotent
+    /// (`recordFailure` no-ops once `failedGeneration == generation`) and
+    /// commutative (every replica computes the same verdict from the same
+    /// row), so two replicas sweeping the same resource cost one wasted write
+    /// at worst — where the operation sweep genuinely needed the lock, because
+    /// its verdict was a state transition two writers could disagree about.
+    /// One less thing whose correctness depends on Valkey, which is the point
+    /// of ADR 0001's multi-replica argument.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepStuckConvergence() async {
+        guard !isShutDown, !app.didShutdown else { return }
+
+        let db = app.db
+        let now = Date()
+
+        do {
+            try await degradeOverdue(VM.self, now: now, on: db)
+            try await degradeOverdue(Sandbox.self, now: now, on: db)
+        } catch {
+            app.logger.error("Stuck-convergence sweep failed: \(error)")
+        }
+    }
+
+    /// One workload kind's overdue rows. The deadline is the only column the
+    /// query filters on — no kind lookup, which is exactly what stamping a
+    /// deadline instead of a `lastMutationKind` bought.
+    private func degradeOverdue<R: ConvergingResource>(
+        _ type: R.Type, now: Date, on db: any Database
+    ) async throws {
+        let overdue = try await R.overdueForConvergence(at: now, on: db)
+
+        for resource in overdue {
+            guard let id = resource.id else { continue }
+            // Claim the timeout before doing anything with it. Clearing the
+            // deadline is the claim, so of two replicas sweeping the same row
+            // exactly one proceeds — which is what lets this run everywhere
+            // without a lock while still emitting one completion webhook.
+            guard try await resource.claimConvergenceTimeout(on: db) else { continue }
+
+            // The deadline is a backstop, not the verdict: a resource that
+            // converged between the query and here (or whose deadline the
+            // applier has not cleared yet) is left alone — the claim above has
+            // already dropped the deadline, which is all that was owed. A
+            // terminating resource never reports converged — it is on its way
+            // out, not converging on anything — so a stuck delete falls through
+            // and degrades, which is what a delete blocked on a finalizer
+            // should look like.
+            // Nothing to save: the claim already cleared the deadline in SQL,
+            // and writing the whole row from a model read before the claim
+            // would put this sweep's stale snapshot over a concurrent report.
+            guard !resource.isConverged else { continue }
+
+            // The mutation kind is read for one thing — whether a never-settled
+            // `create` should escalate to `.error` — and comes from the audit
+            // trail rather than a column on the resource, so overlapping
+            // mutations cannot make it disagree with what was actually asked
+            // for. A resource with no recorded mutation predates the trail;
+            // `.boot` is the conservative stand-in, since it resolves nothing
+            // a create would not.
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: R.operationResourceKind, resourceID: id, on: db
+                )?.mutation ?? .boot
+
+            let recorded = try await ResourceConvergence.recordFailure(
+                resource, mutation: mutation,
+                reason: "Timed out: the agent did not converge to generation "
+                    + "\(resource.generation) before the deadline",
+                telemetryReason: "stuck_convergence", on: db)
+            guard recorded else { continue }
+
+            app.logger.warning(
+                "Resource did not converge before its deadline; marked degraded",
+                metadata: [
+                    "resourceKind": .string(R.operationResourceKind.rawValue),
+                    "resourceId": .string(id.uuidString),
+                    "mutation": .string(mutation.rawValue),
+                    "targetGeneration": .stringConvertible(resource.generation),
+                    "observedGeneration": .stringConvertible(resource.observedGeneration),
+                ])
+        }
+    }
+
     /// Fails operations stuck `pending` past their per-kind budget and resolves the
     /// affected VM's in-flight status (issue #259). This is the restart backstop:
     /// while the dispatching process lives, the awaited agent response (or its
@@ -1066,6 +1166,13 @@ actor AgentService {
     /// It also broadens the old stuck-VM sweep — transitional VMs with no pending
     /// operation (e.g. a lost statusUpdate after a completed operation) still
     /// resolve to `.error`.
+    ///
+    /// Since STR-147 the operation half covers only what still writes rows —
+    /// VM reboot and the snapshot verbs — while lifecycle mutations are handled
+    /// by `sweepStuckConvergence`. The transitional-resource and volume halves
+    /// are unchanged: neither ever depended on an operation row. The
+    /// cluster-singleton lock stays for the same reason it was taken, and
+    /// retires with the last operation kind.
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStuckOperations() async {
@@ -1482,12 +1589,12 @@ actor AgentService {
     }
 
     /// Deletes one expired sandbox down the same path as `DELETE
-    /// /api/sandboxes/:id`: a pending `.delete` operation and desired
-    /// `.absent` in one transaction, then either agent teardown (the row goes
-    /// once a report confirms absence) or — with no agent to converge on — a
-    /// direct record delete. Sharing the path is the point: quota release,
-    /// reservation release, and operation accounting all come for free, and
-    /// the operation row makes the unattended deletion auditable.
+    /// /api/sandboxes/:id`: desired `.absent` plus its attribution event in one
+    /// transaction, then either agent teardown (the row goes once a report
+    /// confirms absence) or — with no agent to converge on — a direct record
+    /// delete. Sharing the path is the point: quota release, reservation
+    /// release, and the audit trail all come for free, and the `system` actor
+    /// on the event makes the unattended deletion attributable.
     private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
         guard let sandboxID = sandbox.id else { return }
 
@@ -1496,13 +1603,18 @@ actor AgentService {
             onlineAgentID = agentId
         }
 
+        // With no agent to converge on, the expiry owns the teardown itself;
+        // otherwise `.stateSync` nudges the agent holding it.
+        let strategy: ResourceMutation.Dispatch =
+            onlineAgentID == nil
+            ? .directResolution { @Sendable [app = self.app] db in
+                try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+            }
+            : .stateSync
+
         do {
-            let operation = try await ResourceOperation.begin(
-                .delete,
-                resourceKind: .sandbox,
-                resourceID: sandboxID,
-                userID: ResourceOperation.systemUserID,
-                on: db
+            let accepted = try await app.resourceMutation.accept(
+                .delete, on: sandbox, actor: .system, dispatch: strategy, on: db, app: app
             ) { db in
                 try await SandboxController.requireSnapshotLineageDeletable(
                     for: sandboxID, on: db)
@@ -1511,7 +1623,6 @@ actor AgentService {
                 // its participant already cleared.
                 ResourceFinalizerService.stampForDeletion(sandbox)
                 sandbox.setDesiredStatus(.absent)
-                try await sandbox.save(on: db)
             }
 
             app.logger.info(
@@ -1519,23 +1630,17 @@ actor AgentService {
                 metadata: [
                     "sandboxId": .string(sandboxID.uuidString),
                     "reason": .string(reason.description),
-                    "operationId": .string(operation.id?.uuidString ?? ""),
+                    "mutationId": .string(accepted.mutationID.uuidString),
                 ])
-
-            if let onlineAgentID {
-                await syncDesiredState(agentId: onlineAgentID)
-            } else {
-                app.resourceOperationCoordinator.dispatch(
-                    operation, resourceKind: .sandbox, resourceID: sandboxID, hypervisorId: nil,
-                    dispatch: .directResolution { @Sendable [app = self.app] db in
-                        try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
-                    }, app: app)
-            }
         } catch {
-            // `begin` rejects with 409 when an operation is already pending —
-            // a user action owns the sandbox right now. Both clocks are
-            // recomputed next tick, so an expired sandbox is never dropped,
-            // only deferred.
+            // The "operation already pending" `409` that used to defer an
+            // expiry racing a user action is gone with the operation row
+            // (STR-147), and is not missed: marking `.absent` is idempotent and
+            // level-triggered, so an expiry landing on top of a user's own
+            // delete converges on the same thing. What remains here is a real
+            // failure — a snapshot lineage that refuses deletion, or a write
+            // that did not commit — and the next tick recomputes both clocks,
+            // so an expired sandbox is deferred rather than dropped.
             app.logger.debug(
                 "Skipping sandbox expiry: \(error)",
                 metadata: ["sandboxId": .string(sandboxID.uuidString)])

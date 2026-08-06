@@ -9,6 +9,7 @@ import type {
   SandboxExecSession,
   SandboxLogEntry,
   SandboxLogsQueryParams,
+  AcceptedMutation,
   Operation,
   Page,
   SandboxSnapshot,
@@ -16,9 +17,12 @@ import type {
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
-// 202 Accepted with an Operation record and the work completes in the
-// background. Poll operationsApi.get (see OperationWatcher) until the operation
-// is terminal. Sandboxes have no pause/resume or console endpoints.
+// 202 Accepted with the sandbox, the generation it has to converge on, and the
+// mutation's id (backend STR-147). MutationWatcher refetches the sandbox until
+// its `conditions` say it converged — or, for a delete, polls
+// operationsApi.get(mutationId). Sandboxes have no pause/resume or console
+// endpoints; restart rides the desired-state sync, so unlike a VM's it is a
+// generation-backed mutation too.
 export const sandboxesApi = {
   list(organizationId?: string): Promise<Sandbox[]> {
     return api
@@ -33,28 +37,28 @@ export const sandboxesApi = {
     return api.get<Sandbox>(`/api/sandboxes/${id}`);
   },
 
-  create(data: CreateSandboxRequest): Promise<Operation> {
-    return api.post<Operation>("/api/sandboxes", data);
+  create(data: CreateSandboxRequest): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>("/api/sandboxes", data);
   },
 
   update(id: string, data: UpdateSandboxRequest): Promise<Sandbox> {
     return api.put<Sandbox>(`/api/sandboxes/${id}`, data);
   },
 
-  delete(id: string): Promise<Operation> {
-    return api.delete<Operation>(`/api/sandboxes/${id}`);
+  delete(id: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.delete<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}`);
   },
 
-  start(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/sandboxes/${id}/start`);
+  start(id: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/start`);
   },
 
-  stop(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/sandboxes/${id}/stop`);
+  stop(id: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/stop`);
   },
 
-  restart(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/sandboxes/${id}/restart`);
+  restart(id: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/restart`);
   },
 
   listOperations(id: string, limit?: number): Promise<Operation[]> {

@@ -18,7 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { useVMSnapshots } from "@/lib/hooks";
-import { useOperationsStore } from "@/lib/stores/operations-store";
+import {
+  acceptedOperation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import type { VM, VMSnapshot } from "@/types/api";
 
 /**
@@ -42,7 +45,7 @@ function formatStateSize(bytes: number): string {
  */
 export function VMSnapshotsCard({ vm }: { vm: VM }) {
   const { data: snapshots, isLoading, error } = useVMSnapshots(vm.id);
-  const watch = useOperationsStore((state) => state.watch);
+  const watch = useMutationsStore((state) => state.watch);
   const [isCreating, setIsCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -64,7 +67,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
         vm.id,
         trimmed ? { name: trimmed } : undefined
       );
-      watch(operation, trimmed || `${vm.name} checkpoint`);
+      watch(acceptedOperation(operation, trimmed || `${vm.name} checkpoint`));
       toast.success("Checkpointing VM");
       setShowCreate(false);
       setName("");
@@ -84,7 +87,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     setBusyId(restoring.id);
     try {
       const operation = await vmsApi.restoreSnapshot(vm.id, restoring.id);
-      watch(operation, `${restoring.name} restore`);
+      watch(acceptedOperation(operation, `${restoring.name} restore`));
       toast.success(`Restoring “${restoring.name}”`);
       setRestoring(null);
     } catch (restoreError) {
@@ -104,7 +107,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     setBusyId(snapshot.id);
     try {
       const operation = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
-      watch(operation, `${snapshot.name} delete`);
+      watch(acceptedOperation(operation, `${snapshot.name} delete`));
       toast.success(`Deleting “${snapshot.name}”`);
       setDeleting(null);
     } catch (deleteError) {

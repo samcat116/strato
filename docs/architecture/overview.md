@@ -58,21 +58,34 @@ gates) is specified in [wire-protocol](./wire-protocol.md); the agent-side
 engine in [agent](./agent.md); the control-plane side in
 [control-plane](./control-plane.md).
 
-## Async resource operations
+## Async resource mutations
 
-VM and sandbox mutation endpoints (create/start/stop/delete/reboot, plus
-pause/resume for VMs) insert a `ResourceOperation` row in the same
-transaction as the desired-state change and return **202 Accepted** with
-the operation object. The operation completes when an agent's observed
-state catches up (or fails, or a stuck-operation sweep times it out after a
-per-kind budget). Operation rows deliberately have no foreign key to the
-resource, so delete operations survive the row's removal. The frontend
-polls operations to a terminal state and refreshes the affected list.
+VM and sandbox lifecycle endpoints (create/start/stop/delete, VM
+pause/resume/resize, sandbox restart) write the desired-state change and
+return **202 Accepted** with `{resource, targetGeneration, mutationId}`.
+Clients refetch the resource and read its `conditions` block: done once the
+owning agent has confirmed `targetGeneration` and the desired state is
+satisfied, failed when a `degraded` reason names that same generation. A
+**stuck-convergence sweep** degrades a resource that misses the deadline the
+mutation stamped, and runs lock-free on every replica.
+
+There is no "operation already pending" refusal: desired state is
+level-triggered, so overlapping mutations converge on the last write.
 
 The same transaction appends a `resource_events` row — who mutated what, to
 which target generation — an append-only trail that is never updated and
 never swept, with a database trigger enforcing it. It is where mutation
-attribution lives once operation rows stop being the record (ADR 0001).
+attribution lives (ADR 0001), and, for a **delete**, where completion is
+recorded: a delete succeeds by its resource ceasing to exist, which the
+resource itself cannot report, so the reap appends a terminal event and
+clients poll `GET /api/operations/:id` with the `mutationId`.
+
+VM **restart** and the **snapshot** verbs are still imperative agent commands
+with no generation to converge on: they keep `ResourceOperation` rows, the
+`409` double-submit guard, and the operation-polling contract until ADR 0001
+converts them. The operations API otherwise survives as a read-only façade
+synthesized from `resource_events` plus the resource's conditions, so older
+clients keep working.
 
 ## Multi-replica control plane
 
@@ -221,7 +234,7 @@ backends, with retention pruning.
 | [control-plane](./control-plane.md) | Control-plane code architecture: boot, services, request lifecycle, agent socket, sweeps, testing |
 | [agent](./agent.md) | Agent code architecture: targets, driver registry, reconciler, storage, networking, self-update |
 | [wire-protocol](./wire-protocol.md) | The StratoShared package: envelope, message catalog, reconciliation contract, DTOs |
-| [frontend](./frontend.md) | Next.js app structure, data layer, operation polling, auth flow |
+| [frontend](./frontend.md) | Next.js app structure, data layer, refetch-until-converged, auth flow |
 | [scheduler](./scheduler.md) | Placement strategies and integration |
 | [multi-replica](./multi-replica.md) | Running multiple control-plane replicas |
 | [networking](./networking.md) | OVN/OVS design, IPAM, roadmap |

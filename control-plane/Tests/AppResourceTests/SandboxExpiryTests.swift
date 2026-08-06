@@ -75,28 +75,34 @@ final class SandboxExpiryTests {
         Issue.record("Sandbox \(sandboxID) was never deleted")
     }
 
-    private func deleteOperation(for sandboxID: UUID, on db: any Database) async throws -> ResourceOperation? {
-        try await ResourceOperation.query(on: db)
+    /// Whether the sweep recorded a deletion for the sandbox at all — the
+    /// `resource_events` row an expiry appends, which replaced the operation
+    /// row it used to insert (STR-147).
+    private func deletionRequested(for sandboxID: UUID, on db: any Database) async throws -> Bool {
+        try await ResourceEvent.query(on: db)
             .filter(\.$resourceKind == .sandbox)
             .filter(\.$resourceID == sandboxID)
-            .filter(\.$kind == .delete)
-            .first()
+            .filter(\.$mutation == .delete)
+            .first() != nil
     }
 
-    /// Waits for the sandbox's delete operation to reach a verdict. The record
-    /// is removed *before* the operation is completed, so a test that polls on
-    /// the row's absence can still catch the operation mid-flight.
-    private func pollDeleteOperationCompleted(
+    /// The `resource_events` rows recording the sandbox's deletion: the
+    /// `requested` row the expiry appended, and the `completed` row the reap
+    /// appended once the last finalizer cleared (STR-147). Together they are
+    /// what makes an unattended deletion auditable after its row is gone.
+    private func deletionEvents(
         for sandboxID: UUID, on db: any Database
-    ) async throws -> ResourceOperation? {
+    ) async throws -> (requested: ResourceEvent?, completed: ResourceEvent?) {
         for _ in 0..<100 {
-            if let operation = try await deleteOperation(for: sandboxID, on: db), operation.status != .pending {
-                return operation
-            }
+            let requested = try await ResourceEvent.latest(
+                .requested, resourceKind: .sandbox, resourceID: sandboxID, on: db)
+            let completed = try await ResourceEvent.latest(
+                .completed, resourceKind: .sandbox, resourceID: sandboxID, on: db)
+            if requested != nil, completed != nil { return (requested, completed) }
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("Delete operation for sandbox \(sandboxID) never completed")
-        return nil
+        Issue.record("Deletion of sandbox \(sandboxID) was never recorded end to end")
+        return (nil, nil)
     }
 
     // MARK: - expiresAt
@@ -137,7 +143,7 @@ final class SandboxExpiryTests {
 
     // MARK: - TTL expiry
 
-    @Test("The sweep deletes a sandbox past its TTL, recording a delete operation")
+    @Test("The sweep deletes a sandbox past its TTL, recording the deletion end to end")
     func sweepDeletesExpiredSandbox() async throws {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
@@ -148,11 +154,14 @@ final class SandboxExpiryTests {
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
 
-            // The operation outlives the row it removed — that is what makes an
-            // unattended deletion auditable.
-            let operation = try #require(await pollDeleteOperationCompleted(for: sandboxID, on: app.db))
-            #expect(operation.status == .succeeded)
-            #expect(operation.userID == ResourceOperation.systemUserID)
+            // The events outlive the row they name — that is what makes an
+            // unattended deletion auditable, and what a client polling the
+            // delete reads as "done".
+            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            let requested = try #require(events.requested)
+            #expect(requested.mutation == .delete)
+            #expect(requested.actorType == .system)
+            #expect(events.completed?.mutation == .delete)
         }
     }
 
@@ -167,8 +176,7 @@ final class SandboxExpiryTests {
 
             let refreshed = try #require(await Sandbox.find(sandboxID, on: app.db))
             #expect(refreshed.desiredStatus == .stopped)
-            let operation = try await deleteOperation(for: sandboxID, on: app.db)
-            #expect(operation == nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
         }
     }
 
@@ -182,8 +190,7 @@ final class SandboxExpiryTests {
 
             let survivor = try await Sandbox.find(sandboxID, on: app.db)
             #expect(survivor != nil)
-            let operation = try await deleteOperation(for: sandboxID, on: app.db)
-            #expect(operation == nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
         }
     }
 
@@ -228,7 +235,7 @@ final class SandboxExpiryTests {
             #expect(source.desiredStatus != .absent)
             #expect(try await SandboxSnapshot.find(snapshot.requireID(), on: app.db) != nil)
             #expect(try await Sandbox.find(fork.requireID(), on: app.db) != nil)
-            #expect(try await deleteOperation(for: sandboxID, on: app.db) == nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
         }
     }
 
@@ -246,8 +253,9 @@ final class SandboxExpiryTests {
             await app.agentService.sweepExpiredSandboxes()
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
-            let operation = try #require(await pollDeleteOperationCompleted(for: sandboxID, on: app.db))
-            #expect(operation.status == .succeeded)
+            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            #expect(events.requested?.mutation == .delete)
+            #expect(events.completed?.mutation == .delete)
         }
     }
 
@@ -361,33 +369,35 @@ final class SandboxExpiryTests {
 
             let survivor = try await Sandbox.find(sandboxID, on: app.db)
             #expect(survivor != nil)
-            let operation = try await deleteOperation(for: sandboxID, on: app.db)
-            #expect(operation == nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
         }
     }
 
-    @Test("A sandbox with a pending operation is deferred, not double-deleted")
-    func sweepDefersToPendingOperation() async throws {
+    @Test("An expiry proceeds alongside an in-flight snapshot operation")
+    func sweepExpiresAlongsideAnInFlightSnapshot() async throws {
         try await withSandboxTestApp { app, user, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
             try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
 
-            // A user action already owns the sandbox.
+            // A checkpoint in flight — still an operation row, because it is an
+            // imperative agent RPC with no generation to converge on.
             let userID = try user.requireID()
             let pending = try await ResourceOperation.begin(
-                .boot, resourceKind: .sandbox, resourceID: sandboxID,
+                .snapshot, resourceKind: .sandbox, resourceID: sandboxID,
                 userID: userID, on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            // Left intact, and the in-flight operation is untouched.
-            let refreshed = try #require(await Sandbox.find(sandboxID, on: app.db))
-            #expect(refreshed.desiredStatus != .absent)
+            // The `409` that used to defer the expiry went with the lifecycle
+            // operation row (STR-147), and is not missed: marking `.absent` is
+            // idempotent and level-triggered, so the expiry proceeds and the
+            // snapshot's own verdict path is untouched.
+            try await pollSandboxDeleted(sandboxID, on: app.db)
             let stillPending = try #require(await ResourceOperation.find(pending.id, on: app.db))
             #expect(stillPending.status == .pending)
-            let operation = try await deleteOperation(for: sandboxID, on: app.db)
-            #expect(operation == nil)
+            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            #expect(events.requested?.actorType == .system)
         }
     }
 }

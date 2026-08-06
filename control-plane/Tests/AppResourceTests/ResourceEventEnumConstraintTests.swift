@@ -34,12 +34,13 @@ struct ResourceEventEnumConstraintTests {
             let actorType = column == "actor_type" ? quoted : "'user'"
             let resourceKind = column == "resource_kind" ? quoted : "'virtual_machine'"
             let mutation = column == "mutation" ? quoted : "'boot'"
+            let phase = column == "phase" ? quoted : "'requested'"
             try await sql.raw(
                 """
                 INSERT INTO resource_events
-                    (id, actor_type, resource_kind, resource_id, mutation, created_at)
+                    (id, actor_type, resource_kind, resource_id, mutation, phase, created_at)
                 VALUES (gen_random_uuid(), \(unsafeRaw: actorType), \(unsafeRaw: resourceKind),
-                    gen_random_uuid(), \(unsafeRaw: mutation), NOW())
+                    gen_random_uuid(), \(unsafeRaw: mutation), \(unsafeRaw: phase), NOW())
                 """
             ).run()
         }
@@ -60,6 +61,8 @@ struct ResourceEventEnumConstraintTests {
                 column: "resource_kind", values: OperationResourceKind.allCases.map(\.rawValue), on: sql)
             try await self.insert(
                 column: "mutation", values: VMOperationKind.allCases.map(\.rawValue), on: sql)
+            try await self.insert(
+                column: "phase", values: ResourceEventPhase.allCases.map(\.rawValue), on: sql)
         }
     }
 
@@ -67,7 +70,7 @@ struct ResourceEventEnumConstraintTests {
     func constraintsRejectUnknownValues() async throws {
         try await withTestApp { app in
             let sql = try #require(app.db as? any SQLDatabase)
-            for column in ["actor_type", "resource_kind", "mutation"] {
+            for column in ["actor_type", "resource_kind", "mutation", "phase"] {
                 await #expect(throws: (any Error).self) {
                     try await self.insert(column: column, values: ["not_a_real_value"], on: sql)
                 }

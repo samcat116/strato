@@ -98,15 +98,15 @@ struct SandboxCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let operation = try await client.createSandbox(
+                let accepted = try await client.createSandbox(
                     body: .json(
                         .init(
                             name: name, image: image, projectId: project ?? env.context.project,
                             environment: environment, cpus: cpus, memory: memory, ttlSeconds: ttl))
                 ).accepted.body.json
-                try await handleOperation(
-                    operation, client: client, noWait: noWait, format: global.output,
-                    successMessage: "Sandbox '\(name)' created.")
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output, successMessage: "Sandbox '\(name)' created.")
             }
         }
     }
@@ -126,10 +126,11 @@ struct SandboxCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let operation = try await client.deleteSandbox(path: .init(sandboxID: id)).accepted.body.json
-                try await handleOperation(
-                    operation, client: client, noWait: noWait, format: global.output,
-                    successMessage: "Sandbox \(id) deleted.")
+                let accepted = try await client.deleteSandbox(path: .init(sandboxID: id))
+                    .accepted.body.json
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output, successMessage: "Sandbox \(id) deleted.")
             }
         }
     }
@@ -138,7 +139,8 @@ struct SandboxCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Start a sandbox.")
         static let resourceLabel = "Sandbox"
         static let action: ResourceAction = {
-            try await $0.startSandbox(path: .init(sandboxID: $1)).accepted.body.json
+            AcceptedMutation(
+                id: try await $0.startSandbox(path: .init(sandboxID: $1)).accepted.body.json.mutationId)
         }
         static let pastTense = "started"
         @OptionGroup var global: GlobalOptions
@@ -150,7 +152,8 @@ struct SandboxCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a sandbox.")
         static let resourceLabel = "Sandbox"
         static let action: ResourceAction = {
-            try await $0.stopSandbox(path: .init(sandboxID: $1)).accepted.body.json
+            AcceptedMutation(
+                id: try await $0.stopSandbox(path: .init(sandboxID: $1)).accepted.body.json.mutationId)
         }
         static let pastTense = "stopped"
         @OptionGroup var global: GlobalOptions
@@ -162,7 +165,8 @@ struct SandboxCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Restart a sandbox.")
         static let resourceLabel = "Sandbox"
         static let action: ResourceAction = {
-            try await $0.restartSandbox(path: .init(sandboxID: $1)).accepted.body.json
+            AcceptedMutation(
+                id: try await $0.restartSandbox(path: .init(sandboxID: $1)).accepted.body.json.mutationId)
         }
         static let pastTense = "restarted"
         @OptionGroup var global: GlobalOptions

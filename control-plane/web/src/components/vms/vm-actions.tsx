@@ -29,9 +29,11 @@ import {
 import { vmsApi } from "@/lib/api/vms";
 import { friendlyErrorMessage } from "@/lib/errors";
 import {
-  usePendingOperation,
-  useOperationsStore,
-} from "@/lib/stores/operations-store";
+  acceptedMutation,
+  acceptedOperation,
+  usePendingMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { VM, OperationKind } from "@/types/api";
 
@@ -42,8 +44,20 @@ interface VMActionsProps {
 
 type VMAction = "start" | "stop" | "restart" | "pause" | "resume" | "delete";
 
-// Maps an in-flight operation (which may have been started elsewhere, e.g. on
+// Maps an in-flight mutation (which may have been started elsewhere, e.g. on
 // the detail page) back to the action button that should show the spinner.
+// The other direction: a lifecycle mutation answers with the VM rather than an
+// operation, so the verb the toast reports has to come from the button that
+// was pressed. `restart` is absent — it takes the operation path, which names
+// its own kind.
+const actionToKind: Record<Exclude<VMAction, "restart">, OperationKind> = {
+  start: "boot",
+  stop: "shutdown",
+  pause: "pause",
+  resume: "resume",
+  delete: "delete",
+};
+
 const kindToAction: Record<OperationKind, VMAction | null> = {
   create: null,
   boot: "start",
@@ -66,25 +80,36 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const watch = useOperationsStore((state) => state.watch);
-  const pendingOperation = usePendingOperation(vm.id);
+  const watch = useMutationsStore((state) => state.watch);
+  const pendingMutation = usePendingMutation(vm.id);
 
-  // Busy while the request is in flight OR while an accepted operation is still
-  // pending on the server — mutations no longer resolve synchronously.
-  const isLoading = isSubmitting || !!pendingOperation;
+  // Busy while the request is in flight OR while an accepted mutation is still
+  // converging on the server — mutations no longer resolve synchronously.
+  const isLoading = isSubmitting || !!pendingMutation;
   const activeAction =
     submittingAction ??
-    (pendingOperation ? kindToAction[pendingOperation.kind] : null);
+    (pendingMutation ? kindToAction[pendingMutation.kind] : null);
 
   const handleAction = async (action: VMAction) => {
     setIsSubmitting(true);
     setSubmittingAction(action);
 
     try {
-      // Each call returns 202 with an operation record; the OperationWatcher
-      // polls it to a terminal state and toasts the outcome.
-      const operation = await vmsApi[action](vm.id);
-      watch(operation, vm.name);
+      // Each call returns 202; the MutationWatcher follows it to a terminal
+      // state and toasts the outcome. Restart is the odd one out — it is still
+      // an imperative agent command, so it answers with an operation record
+      // rather than the VM (backend STR-151 converts it).
+      if (action === "restart") {
+        watch(acceptedOperation(await vmsApi.restart(vm.id), vm.name));
+      } else {
+        watch(
+          acceptedMutation(await vmsApi[action](vm.id), {
+            kind: actionToKind[action],
+            resourceKind: "virtual_machine",
+            resourceName: vm.name,
+          })
+        );
+      }
 
       switch (action) {
         case "start":

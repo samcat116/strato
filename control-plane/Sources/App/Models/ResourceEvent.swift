@@ -50,6 +50,26 @@ extension MutationActor {
     }
 }
 
+/// Which half of a mutation's life a `ResourceEvent` row records.
+///
+/// The table is append-only, so a mutation that finishes does not update its
+/// request — it appends a second row. Only deletes do this today, and for one
+/// reason: every other mutation's outcome is readable off the resource's own
+/// `conditions`, while a delete's success is the resource *not being there*,
+/// which a client cannot tell from never-existed or not-authorized (STR-147).
+enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
+    /// A mutation was accepted. Every row written at mutation time.
+    case requested
+    /// The mutation reached its goal. Appended by the finalizer reap for a
+    /// delete; the resource's `conditions` say it for everything else.
+    case completed
+    /// The mutation will not reach its goal. Reserved: nothing appends this
+    /// yet, because a failed mutation leaves a resource whose `conditions`
+    /// carry the reason. It exists so the façade's terminal lookup does not
+    /// have to change shape when a delete gains a way to fail permanently.
+    case failed
+}
+
 /// One append-only record of a resource mutation: who asked for it, what it
 /// acted on, which mutation it was, and the generation the owning agent has to
 /// reach for it to be converged (ADR 0001, stage 2).
@@ -94,6 +114,12 @@ final class ResourceEvent: Model, @unchecked Sendable {
 
     @Enum(key: "mutation")
     var mutation: VMOperationKind
+
+    /// Whether this row records the request or its outcome (STR-147). Rows
+    /// written before the column existed are `requested`, which is what every
+    /// one of them was.
+    @Enum(key: "phase")
+    var phase: ResourceEventPhase
 
     /// The resource's generation once the mutation applied — the generation an
     /// agent's observed report has to reach before this mutation counts as
@@ -197,12 +223,17 @@ extension ResourceEvent {
     /// `scope` is a parameter because `ResourceOperation.begin` already
     /// resolves one for the operation's webhook delivery context; anyone else
     /// leaves it nil and this resolves its own.
+    ///
+    /// `phase` defaults to `.requested`, which is what a mutation records. The
+    /// terminal counterpart is appended by whoever observes the outcome — for
+    /// a delete, `FinalizableResource.reap`.
     @discardableResult
     static func record(
         _ mutation: VMOperationKind,
         resourceKind: OperationResourceKind,
         resourceID: UUID,
         actor: MutationActor,
+        phase: ResourceEventPhase = .requested,
         scope: Scope? = nil,
         on db: any Database
     ) async throws -> ResourceEvent {
@@ -220,10 +251,31 @@ extension ResourceEvent {
         event.resourceID = resourceID
         event.resourceName = resolved.resourceName
         event.mutation = mutation
+        event.phase = phase
         event.targetGeneration = resolved.generation
         event.organizationID = resolved.organizationID
         event.projectID = resolved.projectID
         try await event.save(on: db)
         return event
+    }
+
+    /// The newest event of `phase` for a resource, or nil if it has none.
+    ///
+    /// Two readers: the operations façade, asking "did this delete finish?"
+    /// (`.completed`) after the row it names is gone, and the observed-state
+    /// applier, asking "which mutation just converged?" (`.requested`) to name
+    /// it in the completion webhook.
+    static func latest(
+        _ phase: ResourceEventPhase,
+        resourceKind: OperationResourceKind,
+        resourceID: UUID,
+        on db: any Database
+    ) async throws -> ResourceEvent? {
+        try await ResourceEvent.query(on: db)
+            .filter(\.$resourceKind == resourceKind)
+            .filter(\.$resourceID == resourceID)
+            .filter(\.$phase == phase)
+            .sort(\.$createdAt, .descending)
+            .first()
     }
 }

@@ -7,13 +7,17 @@ import AppTestSupport
 @testable import App
 
 /// Tests for the sandbox resource surface (issue #413): `/api/sandboxes` CRUD
-/// and lifecycle endpoints return 202-Accepted async operations, mutations
-/// write desired state atomically with the operation row, the Cedar evaluator
-/// guards the routes through the generalized prefix mapping, desired-state syncs carry
-/// sandboxes, and observed-state reports complete operations by generation —
-/// all mirroring the VM contracts.
+/// and lifecycle endpoints return `202 Accepted` with the sandbox and the
+/// generation it is converging on, mutations write desired state atomically
+/// with their attribution event, the Cedar evaluator guards the routes through
+/// the generalized prefix mapping, desired-state syncs carry sandboxes, and
+/// observed-state reports settle convergence by generation — all mirroring the
+/// VM contracts.
 @Suite("Sandbox Tests", .serialized)
 final class SandboxTests {
+
+    /// The `202` body a sandbox lifecycle mutation answers with (STR-147).
+    typealias AcceptedSandbox = AcceptedMutation<SandboxDetailResponse>
 
     /// Same harness shape as `VMOperationTests`: full middleware stack,
     /// role-binding-backed authorization, API-key auth, one org/project and
@@ -124,19 +128,28 @@ final class SandboxTests {
         Issue.record("Sandbox \(sandboxID) never reached status \(expected.rawValue)")
     }
 
-    private func pollOperationCompleted(
-        _ operationId: UUID, on db: any Database
-    ) async throws -> ResourceOperation? {
+    /// Waits for the background dispatch to degrade the sandbox — the shape a
+    /// failed mutation takes now that there is no operation row to fail
+    /// (STR-147).
+    private func pollSandboxDegraded(_ sandboxID: UUID, on db: any Database) async throws {
         for _ in 0..<100 {
-            if let operation = try await ResourceOperation.find(operationId, on: db),
-                operation.status != .pending
+            if let sandbox = try await Sandbox.find(sandboxID, on: db),
+                sandbox.conditions.degraded != nil
             {
-                return operation
+                return
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("Operation \(operationId) never completed")
-        return nil
+        Issue.record("Sandbox \(sandboxID) never went degraded")
+    }
+
+    /// Waits for the delete's background dispatch to reap the row.
+    private func pollSandboxRemoved(_ sandboxID: UUID, on db: any Database) async throws {
+        for _ in 0..<100 {
+            if try await Sandbox.find(sandboxID, on: db) == nil { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("Sandbox \(sandboxID) was never removed")
     }
 
     // MARK: - Model defaults
@@ -234,7 +247,7 @@ final class SandboxTests {
     @Test("POST /api/sandboxes returns 202 with a pending create operation")
     func createReturnsAccepted() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -244,14 +257,16 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .create)
-            #expect(accepted.resourceKind == .sandbox)
+            let body = try #require(accepted)
+            // The generation the client waits for, and the mutation id the
+            // operations façade still answers for.
+            #expect(body.targetGeneration == 1)
+            #expect(body.resource.conditions.targetGeneration == 1)
 
-            let sandbox = try #require(await Sandbox.find(accepted.resourceId, on: app.db))
+            let sandbox = try #require(await Sandbox.find(body.resource.id!, on: app.db))
             #expect(sandbox.name == "worker")
             #expect(sandbox.image == "ghcr.io/acme/worker:v3")
             #expect(sandbox.desiredStatus == .stopped)
@@ -266,15 +281,15 @@ final class SandboxTests {
                 .filter(\.$principalID == user.id!)
                 .filter(\.$role == IAMRole.admin.seededID.uuidString)
                 .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
-                .filter(\.$nodeID == accepted.resourceId)
+                .filter(\.$nodeID == body.resource.id!)
                 .count()
             #expect(ownerBindings == 1)
 
-            // No schedulable agent exists, so background placement must fail
-            // the operation and surface the sandbox as error.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            try await self.pollSandboxStatus(accepted.resourceId, until: .error, on: app.db)
+            // No schedulable agent exists, so background placement must degrade
+            // the sandbox and surface it as error.
+            try await self.pollSandboxStatus(body.resource.id!, until: .error, on: app.db)
+            let degraded = try #require(await Sandbox.find(body.resource.id!, on: app.db))
+            #expect(degraded.conditions.degraded != nil)
         }
     }
 
@@ -318,7 +333,7 @@ final class SandboxTests {
             snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -329,11 +344,11 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
 
-            let accepted = try #require(operation)
-            let forkID = accepted.resourceId
+            let body = try #require(accepted)
+            let forkID = body.resource.id!
             var fork = try #require(await Sandbox.find(forkID, on: app.db))
             #expect(fork.restoredFromSnapshotId == snapshot.id)
             #expect(fork.image == source.image)
@@ -507,7 +522,7 @@ final class SandboxTests {
             snapshot.exportedAt = Date()
             try await snapshot.save(on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -517,10 +532,10 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
-            let accepted = try #require(operation)
-            let fork = try #require(await Sandbox.find(accepted.resourceId, on: app.db))
+            let body = try #require(accepted)
+            let fork = try #require(await Sandbox.find(body.resource.id!, on: app.db))
             #expect(fork.restoredFromSnapshotId == snapshot.id)
         }
     }
@@ -570,7 +585,7 @@ final class SandboxTests {
                 #expect(res.body.string.contains("cpuTemplate"))
             }
 
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -581,10 +596,10 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
-            let accepted = try #require(operation)
-            let created = try #require(await Sandbox.find(accepted.resourceId, on: app.db))
+            let body = try #require(accepted)
+            let created = try #require(await Sandbox.find(body.resource.id!, on: app.db))
             #expect(created.cpuTemplate == "T2")
 
             // The template travels on the wire spec (issue #428).
@@ -667,24 +682,21 @@ final class SandboxTests {
     @Test("POST /api/sandboxes/:id/start returns 202 and fails fast without an agent")
     func startFailsFastWithoutAgent() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, token in
-            var operationId: UUID?
+            var mutationId: UUID?
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                let operation = try res.content.decode(OperationResponse.self)
-                #expect(operation.kind == .boot)
-                #expect(operation.status == .pending)
-                #expect(operation.resourceId == sandbox.id)
-                operationId = operation.id
+                let body = try res.content.decode(AcceptedSandbox.self)
+                #expect(body.resource.id == sandbox.id)
+                #expect(!body.resource.conditions.converged)
+                mutationId = body.mutationId
             }
 
-            // No agent is mapped, so the background dispatch fails
-            // immediately and realigns desired state with observed.
-            let operation = try await self.pollOperationCompleted(operationId!, on: app.db)
-            #expect(operation?.status == .failed)
-            #expect(operation?.error?.isEmpty == false)
+            // No agent is mapped, so the background dispatch degrades the
+            // sandbox and realigns desired state with observed.
+            _ = mutationId
 
             for _ in 0..<100 {
                 if let refreshed = try await Sandbox.find(sandbox.id, on: app.db),
@@ -694,8 +706,9 @@ final class SandboxTests {
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            let refreshed = try await Sandbox.find(sandbox.id, on: app.db)
-            #expect(refreshed?.desiredStatus == .stopped)
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.desiredStatus == .stopped)
+            #expect(refreshed.conditions.degraded?.reason.isEmpty == false)
         }
     }
 
@@ -713,28 +726,35 @@ final class SandboxTests {
         }
     }
 
-    @Test("A second mutation while one is pending is rejected with 409")
-    func conflictingOperationRejected() async throws {
+    @Test("A pending snapshot operation no longer blocks a lifecycle mutation")
+    func pendingOperationDoesNotBlockLifecycleMutation() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in
-            // Running, so the stop below passes its state guard and reaches
-            // the double-submit check.
+            // Running, so the stop below passes its state guard.
             sandbox.setStatus(.running)
             try await sandbox.save(on: app.db)
 
-            // Pin a pending operation directly so no background completion races it.
+            // A checkpoint in flight: still an operation row, because it is an
+            // imperative agent RPC with no generation to converge on.
             let pending = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
+                sandboxID: sandbox.id!, userID: user.id!, kind: .snapshot)
             try await pending.save(on: app.db)
 
+            // The double-submit `409` went with the operation row (STR-147):
+            // desired state is level-triggered, so the stop is accepted and the
+            // agent converges on whichever write lands last.
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/stop") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
+
+            let shutdown = try await ResourceEvent.latest(
+                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db)
+            #expect(shutdown?.mutation == .shutdown)
         }
     }
 
-    @Test("DELETE without an agent removes the record and succeeds the operation")
+    @Test("DELETE without an agent removes the record and appends its terminal event")
     func deleteWithoutAgentRemovesRecord() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in
             let sandboxID = try sandbox.requireID()
@@ -754,18 +774,28 @@ final class SandboxTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
 
-            var operationId: UUID?
+            var mutationId: UUID?
             try await app.test(.DELETE, "/api/sandboxes/\(sandboxID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operationId = try res.content.decode(OperationResponse.self).id
+                mutationId = try res.content.decode(AcceptedSandbox.self).mutationId
             }
 
-            let operation = try await self.pollOperationCompleted(operationId!, on: app.db)
-            #expect(operation?.status == .succeeded)
+            try await self.pollSandboxRemoved(sandboxID, on: app.db)
             let gone = try await Sandbox.find(sandboxID, on: app.db)
             #expect(gone == nil)
+
+            // The reap's terminal event is what lets the façade answer a delete
+            // after the row it names is gone (STR-147).
+            try await app.test(.GET, "/api/operations/\(mutationId!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .succeeded)
+                #expect(operation.kind == .delete)
+            }
 
             let sandboxBindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
@@ -959,7 +989,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, project, _, token in
             let network = try await self.projectNetwork(project: project, on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -970,10 +1000,10 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
 
-            let sandboxID = try #require(operation).resourceId
+            let sandboxID = try #require(accepted?.resource.id)
             let interfaces = try await SandboxNetworkInterface.query(on: app.db)
                 .filter(\.$sandbox.$id == sandboxID)
                 .with(\.$addresses)
@@ -998,7 +1028,7 @@ final class SandboxTests {
             // project with no network — or one whose caller named none — is
             // created without a NIC rather than refused (issue #765). No
             // phantom address is reserved.
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -1008,10 +1038,10 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
 
-            let sandboxID = try #require(operation).resourceId
+            let sandboxID = try #require(accepted?.resource.id)
             let interfaces = try await SandboxNetworkInterface.query(on: app.db)
                 .filter(\.$sandbox.$id == sandboxID)
                 .all()
@@ -1084,7 +1114,7 @@ final class SandboxTests {
     func createdSandboxWireSpecHasNoNetwork() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
             let network = try await self.projectNetwork(project: project, on: app.db)
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -1095,13 +1125,13 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
-            let sandboxID = try #require(operation).resourceId
+            let sandboxID = try #require(accepted?.resource.id)
             // Drain the background placement attempt (it fails — no
             // sandbox-capable agent is registered yet) so its save cannot race
             // the manual placement below.
-            _ = try await self.pollOperationCompleted(try #require(operation).id!, on: app.db)
+            try await self.pollSandboxDegraded(sandboxID, on: app.db)
             let created = try #require(await Sandbox.find(sandboxID, on: app.db))
             let agentId = try await self.registerAgent(app: app, sandbox: created)
 
@@ -1132,7 +1162,7 @@ final class SandboxTests {
     func deleteCascadesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
             let network = try await self.projectNetwork(project: project, on: app.db)
-            var operation: OperationResponse?
+            var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -1142,9 +1172,9 @@ final class SandboxTests {
                     "networkId": try network.requireID().uuidString,
                 ])
             } afterResponse: { res in
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedSandbox.self)
             }
-            let sandboxID = try #require(operation).resourceId
+            let sandboxID = try #require(accepted?.resource.id)
 
             // Sanity: rows exist before deletion.
             let nicIDs = try await SandboxNetworkInterface.query(on: app.db)
@@ -1171,10 +1201,8 @@ final class SandboxTests {
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setDesiredStatus(.running)
+            sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1188,9 +1216,10 @@ final class SandboxTests {
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .running)
             #expect(refreshed.observedGeneration == sandbox.generation)
-
-            let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(completed.status == .succeeded)
+            #expect(refreshed.conditions.converged)
+            // Converged means nothing is outstanding, so there is no deadline
+            // left for the stuck-convergence sweep to judge.
+            #expect(refreshed.convergenceDeadline == nil)
         }
     }
 
@@ -1201,9 +1230,6 @@ final class SandboxTests {
 
             sandbox.setDesiredStatus(.running)
             try await sandbox.save(on: app.db)
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1217,23 +1243,22 @@ final class SandboxTests {
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
             #expect(refreshed.status == .exited)
             #expect(refreshed.exitCode == 0)
-
-            let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(completed.status == .succeeded)
+            #expect(refreshed.conditions.converged)
         }
     }
 
-    @Test("A failed convergence at the current generation fails the operation and reverts desired")
-    func observedFailureFailsOperation() async throws {
+    @Test("A failed convergence at the current generation degrades the sandbox and reverts desired")
+    func observedFailureDegradesSandbox() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setDesiredStatus(.running)
+            sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
             let generation = sandbox.generation
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .sandbox, resourceID: sandbox.id!,
+                actor: .user(user.id!), on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1246,12 +1271,12 @@ final class SandboxTests {
                 ])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(completed.status == .failed)
-            #expect(completed.error == "image pull failed")
-
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let degraded = try #require(refreshed.conditions.degraded)
+            #expect(degraded.reason == "image pull failed")
+            #expect(degraded.sinceGeneration == generation)
             #expect(refreshed.desiredStatus == .stopped)
+            #expect(refreshed.convergenceDeadline == nil)
         }
     }
 
@@ -1260,11 +1285,12 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
+            ResourceFinalizerService.stampForDeletion(sandbox)
             sandbox.setDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .delete)
-            try await operation.save(on: app.db)
+            let request = try await ResourceEvent.record(
+                .delete, resourceKind: .sandbox, resourceID: sandbox.id!,
+                actor: .user(user.id!), on: app.db)
 
             // The creator binding sandbox creation writes, plus a snapshot
             // whose row cascades away with the sandbox: bindings have no FK to
@@ -1285,10 +1311,16 @@ final class SandboxTests {
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let completed = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(completed.status == .succeeded)
             let gone = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(gone == nil)
+
+            // The reap appended the terminal event the operations façade — and
+            // any client polling a delete — reads as "done" (STR-147).
+            let terminal = try #require(
+                await ResourceEvent.latest(
+                    .completed, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db))
+            #expect(terminal.mutation == .delete)
+            #expect(terminal.id != request.id)
 
             let bindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)

@@ -257,19 +257,16 @@ final class ResourceEventTests {
 
     @Test("A rejected mutation appends nothing")
     func rejectedMutationAppendsNothing() async throws {
-        try await withEventTestApp { app, user, _, _, vm, token in
+        try await withEventTestApp { app, _, _, _, vm, token in
             let vmID = try vm.requireID()
 
-            // An operation already pending for the VM: the double-submit guard
-            // rejects with 409 before any mutation applies, so the trail must
-            // not claim a boot was requested.
-            let pending = ResourceOperation(vmID: vmID, userID: try user.requireID(), kind: .shutdown)
-            try await pending.save(on: app.db)
-
-            try await app.test(.POST, "/api/vms/\(vmID)/start") { req in
+            // A state guard rejects the pause before any mutation applies (the
+            // VM is `.created`, not running), so the trail must not claim a
+            // pause was requested.
+            try await app.test(.POST, "/api/vms/\(vmID)/pause") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .badRequest)
             }
 
             #expect(try await self.events(for: vmID, on: app.db).isEmpty)

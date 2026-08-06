@@ -242,7 +242,7 @@ final class WorkloadSizeValidationTests {
                 // The bounds are inclusive: an off-by-one in any of the three
                 // comparisons, or a later tightening of a constant, fails here.
                 #expect(res.status == .accepted)
-                createdVMID = try res.content.decode(OperationResponse.self).resourceId
+                createdVMID = try res.content.decode(AcceptedMutation<VMDetailResponse>.self).resource.id
             }
 
             let vmID = try #require(createdVMID)
@@ -359,7 +359,7 @@ final class WorkloadSizeValidationTests {
                         memory: WorkloadSizeLimits.maxMemoryBytes))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                createdSandboxID = try res.content.decode(OperationResponse.self).resourceId
+                createdSandboxID = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self).resource.id
             }
 
             let sandboxID = try #require(createdSandboxID)

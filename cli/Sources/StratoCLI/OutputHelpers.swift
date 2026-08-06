@@ -22,11 +22,17 @@ func formatDate(_ date: Date?) -> String {
     return formatter.string(from: date)
 }
 
-/// Handles a 202 mutation response: waits for the operation to finish
-/// (default) or prints its id and returns (`--no-wait`). A failed operation
-/// throws `CLIError.operationFailed`, which exits nonzero.
-func handleOperation(
-    _ operation: ResourceOperation,
+/// Handles a 202 mutation response: waits for the mutation to finish (default)
+/// or prints its id and returns (`--no-wait`). A failed mutation throws
+/// `CLIError.operationFailed`, which exits nonzero.
+///
+/// Both `202` shapes funnel through here (STR-147): the operation record the
+/// imperative verbs still return, and the `mutationId` a lifecycle mutation
+/// answers with alongside the resource. Waiting goes through the operations
+/// endpoint either way — which is also what makes `strato vm delete --wait`
+/// keep working, since a deleted VM has nothing left to poll.
+func handleMutation(
+    _ accepted: AcceptedMutation,
     client: any APIProtocol,
     noWait: Bool,
     format: OutputFormat,
@@ -35,16 +41,19 @@ func handleOperation(
     if noWait {
         switch format {
         case .table:
-            let id = operation.id ?? "unknown"
-            print("Accepted: operation \(id) (\(operation.kind.rawValue)) is \(operation.status.rawValue).")
-            print("Track it with 'strato operation wait \(id)'.")
+            print("Accepted: operation \(accepted.id).")
+            print("Track it with 'strato operation wait \(accepted.id)'.")
         case .json:
-            print(try renderJSON(operation))
+            if let seed = accepted.seed {
+                print(try renderJSON(seed))
+            } else {
+                print(try renderJSON(["operationId": accepted.id]))
+            }
         }
         return
     }
 
-    let final = try await OperationWaiter().wait(for: operation, client: client)
+    let final = try await OperationWaiter().wait(for: accepted, client: client)
     switch format {
     case .table:
         print(successMessage)
@@ -56,7 +65,7 @@ func handleOperation(
 /// One lifecycle action on a resource, as the generated operation that
 /// performs it. Each verb is its own operation in the spec, so the action is a
 /// function rather than a path fragment.
-typealias ResourceAction = @Sendable (any APIProtocol, String) async throws -> ResourceOperation
+typealias ResourceAction = @Sendable (any APIProtocol, String) async throws -> AcceptedMutation
 
 /// One lifecycle action (start/stop/reboot/...) as a reusable command. A
 /// conformer supplies the generated operation to call plus the wording of the
@@ -76,9 +85,9 @@ extension ResourceActionCommand {
         try await runHandlingCLIErrors {
             let env = try CLIEnvironment.resolve(global)
             let client = env.makeClient()
-            let operation = try await Self.action(client, id)
-            try await handleOperation(
-                operation, client: client, noWait: noWait, format: global.output,
+            let accepted = try await Self.action(client, id)
+            try await handleMutation(
+                accepted, client: client, noWait: noWait, format: global.output,
                 successMessage: "\(Self.resourceLabel) \(id) \(Self.pastTense).")
         }
     }
