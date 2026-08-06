@@ -58,6 +58,7 @@ struct NetworkCommand: AsyncParsableCommand {
                     table.addRow(["gateway", network.gateway ?? ""])
                     table.addRow(["ipv6 subnet", network.subnet6 ?? ""])
                     table.addRow(["dhcp", network.dhcpEnabled ? "enabled" : "disabled"])
+                    table.addRow(["metadata service", network.metadataEnabled ? "enabled" : "disabled"])
                     table.addRow(["dns servers", network.dnsServers.joined(separator: ", ")])
                     table.addRow(["domain name", network.domainName ?? ""])
                     table.addRow(["primary dns zone", network.primaryDnsZoneId ?? ""])
@@ -97,6 +98,11 @@ struct NetworkCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Search domain advertised over DHCP (the domain_name option).")
         var domainName: String?
 
+        @Flag(
+            name: .long, inversion: .prefixedNo,
+            help: "Publish the link-local instance metadata service to guests. Enabled by default.")
+        var metadata: Bool?
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
@@ -105,7 +111,8 @@ struct NetworkCommand: AsyncParsableCommand {
                         .init(
                             name: name, subnet: subnet, gateway: gateway,
                             projectId: project ?? env.context.project, dhcpEnabled: dhcp,
-                            dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName))
+                            dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName,
+                            metadataEnabled: metadata))
                 ).ok.body.json
                 switch global.output {
                 case .table:
@@ -119,7 +126,7 @@ struct NetworkCommand: AsyncParsableCommand {
 
     struct Update: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Update a network's DHCP-delivered DNS settings or its primary DNS zone.")
+            abstract: "Update a network's DNS settings, primary DNS zone, or metadata service.")
 
         @OptionGroup var global: GlobalOptions
 
@@ -142,6 +149,11 @@ struct NetworkCommand: AsyncParsableCommand {
         @Flag(name: .long, help: "Unset the network's primary DNS zone.")
         var clearPrimaryDnsZone = false
 
+        @Flag(
+            name: .long, inversion: .prefixedNo,
+            help: "Publish the link-local instance metadata service to guests.")
+        var metadata: Bool?
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
@@ -151,6 +163,7 @@ struct NetworkCommand: AsyncParsableCommand {
                         .init(
                             dnsServers: dnsServers.isEmpty ? nil : dnsServers,
                             domainName: domainName,
+                            metadataEnabled: metadata,
                             primaryDnsZoneId: primaryDnsZone,
                             clearPrimaryDnsZone: clearPrimaryDnsZone ? true : nil))
                 ).ok.body.json

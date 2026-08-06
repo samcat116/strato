@@ -400,7 +400,31 @@ public enum WireProtocol {
     /// loses mutability, not its ability to boot. That changes when the seed
     /// ISO is retired, and retiring it is what will make a placement gate
     /// load-bearing.
-    public static let currentVersion = 26
+    ///
+    /// Version 27: the metadata dataplane (STR-49). `DesiredNetworkState` gains
+    /// `metadataEnabled`, and `NetworkSpec` gains the same flag per NIC. The
+    /// two are not redundant — they feed the two halves of a feature with two
+    /// different owners. The OVN `localport` that publishes
+    /// `InstanceMetadataEndpoint`'s addresses on a logical switch is authored
+    /// only by the site's network controller, from `networks`; the chassis-local
+    /// namespace that terminates them must exist on *every* host running a NIC
+    /// on that network, and a non-controller host receives an empty `networks`
+    /// list by design (it may not author topology), so its only input is its own
+    /// workloads' specs. Hence the flag on both.
+    ///
+    /// Absence is asymmetric in the v3/v5 sense on both fields, and on
+    /// `DesiredNetworkState` the asymmetry is enforced in code, not by
+    /// convention: network teardown is `observed − desired`, so
+    /// `NetworkReconciler.metadataProtection(for:)` explicitly protects the
+    /// ports of networks whose `metadataEnabled` is nil. Without it, rolling a
+    /// control plane back to v26 would delete every live metadata port on the
+    /// next sync. `false` remains an opinion and is honored, which is what makes
+    /// turning the feature off work.
+    ///
+    /// Like v26 and unlike v18/v23, the gate does not refuse placement. A
+    /// pre-v27 agent simply doesn't publish the address; its guests fall back to
+    /// the seed ISO exactly as today.
+    public static let currentVersion = 27
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -687,6 +711,25 @@ public enum WireProtocol {
     /// omit the field for agents that would discard it.
     public static func supportsInstanceMetadata(_ version: Int) -> Bool {
         version >= instanceMetadataMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks `metadataEnabled` on
+    /// `DesiredNetworkState` and `NetworkSpec` (see `currentVersion` version 27
+    /// notes).
+    public static let metadataPortMinimumVersion = 27
+
+    /// Whether a peer at `version` understands the metadata port.
+    ///
+    /// Agent-side this decides whether a nil `metadataEnabled` *means* anything:
+    /// from a v27+ control plane it is authoritative silence about a network the
+    /// sender knows the field for, from an older one the sender has never heard
+    /// of the feature and the agent must leave existing ports alone. Since
+    /// network teardown is a set difference, that reading is enforced by
+    /// `NetworkReconciler.metadataProtection(for:)` rather than left to each
+    /// call site. Control-plane-side it lets sync assembly omit the field for
+    /// agents that would discard it.
+    public static func supportsMetadataPort(_ version: Int) -> Bool {
+        version >= metadataPortMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

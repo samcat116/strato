@@ -9555,6 +9555,11 @@ components:
           type: integer
         externalAccess:
           type: boolean
+        metadataEnabled:
+          type: boolean
+          description: >-
+            Whether the network publishes the link-local instance metadata
+            service to its guests. Defaults true; this is an opt-out.
         siteId:
           type: string
           format: uuid
@@ -9585,6 +9590,11 @@ components:
           type: integer
         externalAccess:
           type: boolean
+        metadataEnabled:
+          type: boolean
+          description: >-
+            Whether the network publishes the link-local instance metadata
+            service to its guests. Defaults true; this is an opt-out.
         primaryDnsZoneId:
           type: string
           format: uuid
@@ -9606,6 +9616,7 @@ components:
         - dhcpEnabled
         - dnsServers
         - externalAccess
+        - metadataEnabled
       properties:
         id:
           type: string
@@ -9639,6 +9650,11 @@ components:
           type: integer
         externalAccess:
           type: boolean
+        metadataEnabled:
+          type: boolean
+          description: >-
+            Whether the network publishes the link-local instance metadata
+            service to its guests. Defaults true; this is an opt-out.
         siteId:
           type: string
           format: uuid

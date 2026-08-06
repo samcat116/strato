@@ -22,6 +22,7 @@ import {
   parseDhcpForm,
   type DhcpFormState,
 } from "./dhcp-fields";
+import { MetadataField } from "./metadata-field";
 
 interface CreateNetworkDialogProps {
   open: boolean;
@@ -49,6 +50,7 @@ export function CreateNetworkDialog({
   });
   const [ipv6Enabled, setIpv6Enabled] = useState(true);
   const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
+  const [metadataEnabled, setMetadataEnabled] = useState(true);
 
   // The network is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
@@ -58,6 +60,7 @@ export function CreateNetworkDialog({
     setFormData({ name: "", subnet: "", gateway: "", subnet6: "" });
     setIpv6Enabled(true);
     setDhcp(emptyDhcpForm);
+    setMetadataEnabled(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -92,6 +95,7 @@ export function CreateNetworkDialog({
         ipv6Enabled: ipv6Enabled ? undefined : false,
         projectId,
         ...parseDhcpForm(dhcp),
+        metadataEnabled,
       });
       toast.success(`Network "${name}" created`);
       onOpenChange(false);
@@ -207,6 +211,11 @@ export function CreateNetworkDialog({
               )}
             </div>
             <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
+            <MetadataField
+              value={metadataEnabled}
+              onChange={setMetadataEnabled}
+              disabled={isLoading}
+            />
           </div>
           <DialogFooter>
             <Button

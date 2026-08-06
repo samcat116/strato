@@ -16,6 +16,7 @@ struct NetworkReconcilerTests {
         gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool = true,
+        metadataEnabled: Bool? = nil,
         generation: Int64 = 1,
         id: UUID = UUID(),
         floatingIPs: [DesiredFloatingIP]? = nil
@@ -29,6 +30,7 @@ struct NetworkReconcilerTests {
             gateway6: gateway6,
             routerKey: routerKey,
             externalAccess: externalAccess,
+            metadataEnabled: metadataEnabled,
             generation: generation,
             floatingIPs: floatingIPs)
     }
@@ -469,6 +471,177 @@ struct NetworkReconcilerTests {
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
 
+    // MARK: - Metadata localport (STR-49)
+
+    @Test("An enabled network plans a dual-stack metadata localport on its switch")
+    func metadataPortPlanned() throws {
+        let id = UUID()
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+                metadataEnabled: true, id: id)
+        ])
+
+        // `try #require`, not `try?` + optional chaining: a missing port should
+        // fail once, here, rather than cascade into five confusing comparisons.
+        let port = try #require(plan.switches[0].metadataPort)
+        #expect(port.name == OVNNaming.metadataPortName(networkId: id))
+        #expect(port.switchName == OVNNaming.switchName(networkId: id))
+        #expect(port.mac == OVNNaming.metadataPortMAC(networkId: id))
+        #expect(port.ips == ["169.254.169.254", "fd00:ec2::254"])
+        // One whitespace-separated entry, not one per address: that is the
+        // shape OVN's `addresses` column expects, and getting it wrong yields a
+        // port that never answers.
+        #expect(port.addresses == ["\(OVNNaming.metadataPortMAC(networkId: id)) 169.254.169.254 fd00:ec2::254"])
+        #expect(plan.expectedTopology.metadataPortNames == [OVNNaming.metadataPortName(networkId: id)])
+    }
+
+    @Test("A gateway-less network still gets a metadata port")
+    func metadataPortOnSwitchOnlyNetwork() {
+        // The port hangs off the switch precisely so this case works: no
+        // gateway means no router at all, and those guests need metadata too.
+        let id = UUID()
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "isolated", subnet: "10.9.0.0/24", gateway: nil, routerKey: "p", metadataEnabled: true, id: id)
+        ])
+
+        #expect(plan.routers.isEmpty)
+        #expect(plan.switches[0].metadataPort?.name == OVNNaming.metadataPortName(networkId: id))
+    }
+
+    @Test("Disabling metadata plans no port and tears the existing one down")
+    func metadataPortTornDownWhenDisabled() {
+        let id = UUID()
+        let portName = OVNNaming.metadataPortName(networkId: id)
+        let disabled = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: false, id: id)
+        let plan = NetworkReconciler.plan(networks: [disabled])
+
+        #expect(plan.switches[0].metadataPort == nil)
+
+        let actions = NetworkReconciler.teardownActions(
+            desired: plan,
+            observed: ObservedNetworkTopology(metadataPortNames: [portName]),
+            protected: NetworkReconciler.metadataProtection(for: [disabled]))
+        #expect(actions == [.metadataPort(name: portName)])
+    }
+
+    @Test("A nil metadataEnabled protects a live port instead of deleting it")
+    func metadataPortProtectedWhenOpinionless() {
+        // The rollback case: a control plane older than the field says nothing,
+        // and teardown is `observed - desired`. Without the protection this
+        // would delete every live metadata port on the next sync.
+        let id = UUID()
+        let portName = OVNNaming.metadataPortName(networkId: id)
+        let silent = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: nil, id: id)
+        let plan = NetworkReconciler.plan(networks: [silent])
+
+        #expect(plan.switches[0].metadataPort == nil)
+
+        let actions = NetworkReconciler.teardownActions(
+            desired: plan,
+            observed: ObservedNetworkTopology(metadataPortNames: [portName]),
+            protected: NetworkReconciler.metadataProtection(for: [silent]))
+        #expect(actions.isEmpty)
+    }
+
+    @Test("A stale network's metadata port survives teardown")
+    func metadataPortProtectedWhenStale() {
+        let stale = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: true)
+        let portName = OVNNaming.metadataPortName(networkId: stale.networkId)
+        let protected = NetworkReconciler.protectedTopology(forStale: [stale])
+
+        #expect(protected.metadataPortNames.contains(portName))
+        #expect(!protected.isEmpty)
+
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkTopologyPlan(switches: [], routers: []),
+            observed: ObservedNetworkTopology(metadataPortNames: [portName]),
+            protected: protected)
+        #expect(actions.isEmpty)
+    }
+
+    @Test("Networks sharing a subnet get distinct metadata port names and MACs")
+    func metadataPortsDistinctAcrossOverlappingSubnets() {
+        // Two projects may use the same subnet, which is exactly why the port
+        // name and MAC derive from the network id rather than an address.
+        let a = network(
+            name: "web", subnet: "10.0.0.0/24", gateway: "10.0.0.1", routerKey: "a", metadataEnabled: true)
+        let b = network(
+            name: "web", subnet: "10.0.0.0/24", gateway: "10.0.0.1", routerKey: "b", metadataEnabled: true)
+        let plan = NetworkReconciler.plan(networks: [a, b])
+
+        let ports = plan.switches.compactMap(\.metadataPort)
+        #expect(ports.count == 2)
+        #expect(ports[0].name != ports[1].name)
+        #expect(ports[0].mac != ports[1].mac)
+    }
+
+    @Test("A metadata MAC is stable per network and disjoint from router/FIP MACs")
+    func metadataPortMACIsStable() {
+        let id = UUID()
+        // Stability across calls is what a process-seeded hash would break, and
+        // a churning MAC rewrites the port on every agent restart.
+        #expect(OVNNaming.metadataPortMAC(networkId: id) == OVNNaming.metadataPortMAC(networkId: id))
+        #expect(OVNNaming.metadataPortMAC(networkId: id) != OVNNaming.metadataPortMAC(networkId: UUID()))
+        #expect(OVNNaming.metadataPortMAC(networkId: id).hasPrefix("02:02:"))
+    }
+
+    @Test("A realized metadata plan is a fixed point")
+    func metadataPortIdempotent() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+                metadataEnabled: true)
+        ])
+        #expect(
+            NetworkReconciler.teardownActions(desired: plan, observed: plan.expectedTopology).isEmpty)
+    }
+
+    @Test("reconcile ensures the metadata port after its switch")
+    func reconcileEnsuresMetadataPort() async throws {
+        let id = UUID()
+        let web = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: true, id: id)
+        let actuator = RecordingNetworkActuator(observed: ObservedNetworkTopology())
+
+        try await NetworkReconciler.reconcile(
+            networks: [web], actuator: actuator, logger: Logger(label: "test"))
+
+        let calls = await actuator.calls
+        let switchName = OVNNaming.switchName(networkId: id)
+        let ensureSwitch = try #require(calls.firstIndex(of: "ensureSwitch(\(switchName))"))
+        let ensurePort = try #require(
+            calls.firstIndex(of: "ensureMetadataPort(\(OVNNaming.metadataPortName(networkId: id))@\(switchName))"))
+        #expect(ensureSwitch < ensurePort)
+    }
+
+    @Test("reconcile removes a metadata port the plan no longer wants")
+    func reconcileRemovesMetadataPort() async throws {
+        let id = UUID()
+        let portName = OVNNaming.metadataPortName(networkId: id)
+        let disabled = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: false, id: id)
+        let actuator = RecordingNetworkActuator(
+            observed: ObservedNetworkTopology(metadataPortNames: [portName]))
+
+        try await NetworkReconciler.reconcile(
+            networks: [disabled], actuator: actuator, logger: Logger(label: "test"),
+            protected: NetworkReconciler.metadataProtection(for: [disabled]))
+
+        let calls = await actuator.calls
+        #expect(calls.contains("removeMetadataPort(\(portName))"))
+        #expect(!calls.contains(where: { $0.hasPrefix("ensureMetadataPort") }))
+    }
+
     // MARK: - Floating IPs (issue #344)
 
     @Test("A floating IP plans a distributed dnat_and_snat rule on the network's router")
@@ -694,6 +867,10 @@ private actor RecordingNetworkActuator: NetworkActuator {
 
     func observeTopology() async throws -> ObservedNetworkTopology { observed }
     func ensureSwitch(_ desired: DesiredSwitch) async throws { calls.append("ensureSwitch(\(desired.name))") }
+    func ensureMetadataPort(_ port: DesiredMetadataPort) async throws {
+        calls.append("ensureMetadataPort(\(port.name)@\(port.switchName))")
+    }
+    func removeMetadataPort(name: String) async throws { calls.append("removeMetadataPort(\(name))") }
     func ensureRouter(_ router: DesiredRouter) async throws { calls.append("ensureRouter(\(router.name))") }
     func ensureRouterPort(_ port: DesiredRouterPort, onRouter routerName: String) async throws {
         calls.append("ensureRouterPort(\(port.name)@\(routerName))")

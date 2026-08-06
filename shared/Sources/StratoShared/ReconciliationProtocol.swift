@@ -493,6 +493,25 @@ public struct DesiredNetworkState: Codable, Sendable {
     public let domainName: String?
     /// DHCPv4 lease time in seconds; agents default it when nil.
     public let leaseTime: Int?
+    /// Whether this network's guests can reach the instance metadata service at
+    /// `InstanceMetadataEndpoint`. Realized as an OVN `localport` on the
+    /// network's logical switch — instantiated on every chassis, never
+    /// forwarded across tunnels — converged level-triggered by the network
+    /// reconcile, including deletion when turned off.
+    ///
+    /// Carried here rather than only on per-NIC specs for `dhcpEnabled`'s
+    /// reason: metadata edits don't bump VM generations, so a converged VM
+    /// never re-realizes its NICs and the network reconcile is the only path
+    /// that reaches a live network whose setting changed.
+    ///
+    /// Nil ≙ a control plane that predates the field: the agent neither creates
+    /// nor *deletes* the port. The deletion half is load-bearing in a way it is
+    /// not for `dhcpEnabled`, because network teardown is `observed − desired`:
+    /// a nil that merely planned no port would read as "remove it", so a
+    /// rollback would sweep every live metadata port. `false` is an opinion and
+    /// *is* honored — that is what makes turning the feature off work. See
+    /// `NetworkReconciler.metadataProtection(for:)`.
+    public let metadataEnabled: Bool?
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
     /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
@@ -519,6 +538,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         dnsServers: [String]? = nil,
         domainName: String? = nil,
         leaseTime: Int? = nil,
+        metadataEnabled: Bool? = nil,
         generation: Int64,
         floatingIPs: [DesiredFloatingIP]? = nil
     ) {
@@ -534,6 +554,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.metadataEnabled = metadataEnabled
         self.generation = generation
         self.floatingIPs = floatingIPs
     }
