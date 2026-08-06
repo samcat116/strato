@@ -694,8 +694,6 @@ jobs:
           CLI_ASSET="strato-cli-${ASSET_NAME#strato-}"
           tar czf "${CLI_ASSET}.tar.gz" -C release strato
           checksum "${CLI_ASSET}.tar.gz"
-          # Handed to the upload step, which runs in its own shell.
-          echo "CLI_ASSET=$CLI_ASSET" >> "$GITHUB_ENV"
 
       # Raw REST upload rather than `gh release upload`: the static
       # self-hosted runner has no gh CLI, and curl exists everywhere. This
@@ -705,10 +703,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          # Exported to $GITHUB_ENV by the packaging step above; fail loudly
-          # rather than POSTing a file named ".tar.gz" if that ever stops
-          # happening.
-          : "${CLI_ASSET:?CLI_ASSET not set by the packaging step}"
+          # Recomputed from the matrix rather than handed over from the
+          # packaging step: it is a pure function of asset_name, and every
+          # other name in this job is likewise read straight off the matrix.
+          # One formula, no cross-step channel to get out of sync.
+          ASSET_NAME="${{ matrix.asset_name }}"
+          CLI_ASSET="strato-cli-${ASSET_NAME#strato-}"
           for f in "${{ matrix.asset_name }}.tar.gz" "${{ matrix.asset_name }}.tar.gz.sha256" \
                    "${CLI_ASSET}.tar.gz" "${CLI_ASSET}.tar.gz.sha256"; do
             case "$f" in
@@ -744,15 +744,29 @@ jobs:
       # directly after `strato-`: `cli` is not an os, so those names never
       # match and can never be parsed as os=cli. The arch alternation is
       # likewise spelled out rather than left as a `[a-z0-9_]+` class, pinning
-      # the pattern to the platform vocabulary install.sh derives from `uname`
-      # so a differently-shaped future asset has to be added deliberately.
-      # Also excludes the strato-<version>-source.tar.gz archive.
+      # the pattern to the platform vocabulary install.sh derives from `uname`.
+      # Narrowing that class trades a false positive for a false negative — an
+      # arch outside the pair would upload fine and just never reach the
+      # manifest — so it is only safe because the build step below asserts the
+      # complement: any bundle-shaped asset this pattern does not select fails
+      # the release. Adding a matrix leg without updating the pattern is
+      # therefore loud, not silent. Also excludes the
+      # strato-<version>-source.tar.gz archive.
       BUNDLE_ASSET_PATTERN: '^strato-(linux|macos)-(x86_64|arm64)\.tar\.gz$'
     steps:
       # Pin the selection down against a fixture rather than trusting the
       # pattern by inspection: this is the one place a newly added release
       # asset could quietly land in the manifest and be handed to agents as an
       # update. Runs before the manifest build so a regression fails cheaply.
+      #
+      # Two limits worth knowing before editing the pattern. This step runs it
+      # under the runner's jq (Oniguruma); the manifest build runs the same
+      # string under `gh api --jq`, which is gojq on Go's regexp — identical
+      # for anchors, alternation, and escaped literals, divergent for lookahead
+      # and backreferences, so keep the pattern in the common subset. And the
+      # fixture is a hand-maintained literal, so it only catches a pattern that
+      # stopped matching these names; a genuinely new asset name is caught by
+      # the complement assertion against the live release below.
       - name: Verify the asset pattern selects bundles only
         run: |
           selected="$(jq -rn '
@@ -788,6 +802,29 @@ jobs:
                   | [.name, .browser_download_url, (.size | tostring)] | @tsv' \
             > assets.tsv
           [ -s assets.tsv ] || { echo "no strato-<os>-<arch>.tar.gz assets on $TAG" >&2; exit 1; }
+
+          # Non-emptiness only proves *some* bundle matched, which every
+          # interesting regression survives: a matrix leg added without
+          # updating BUNDLE_ASSET_PATTERN, a leg that uploaded under an
+          # unexpected name, a partial upload. Assert the complement too — a
+          # strato-*.tar.gz asset the pattern did not select is a pattern that
+          # fell behind the build matrix, not an asset to skip silently. The
+          # two deliberate non-bundles are subtracted by name: the CLI-only
+          # assets (STR-45) and the source archive. Checked against the live
+          # release rather than a fixture, so it needs no maintenance when a
+          # leg is added — it just fails until the pattern catches up.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[].name
+                  | select(startswith("strato-") and endswith(".tar.gz"))
+                  | select(test($ENV.BUNDLE_ASSET_PATTERN) | not)
+                  | select((startswith("strato-cli-")
+                            or test("-source\\.tar\\.gz$")) | not)' \
+            > unmatched.txt
+          if [ -s unmatched.txt ]; then
+            echo "bundle-shaped assets missing from the manifest: $(tr '\n' ' ' < unmatched.txt)" >&2
+            echo "update BUNDLE_ASSET_PATTERN (and the fixture above) to cover them" >&2
+            exit 1
+          fi
 
           # Pulls the strato-cli-* sidecars too; harmless, since each entry
           # below reads the one sidecar named for its asset.
