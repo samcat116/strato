@@ -4766,8 +4766,11 @@ paths:
       summary: Update agent properties
       description: >-
         Currently only `autoUpdate` (declarative auto-update enrollment).
-        Withdrawing clears any assigned desired version and pushes a fresh
-        desired-state sync. Requires `manage` on the agent.
+        Withdrawing clears an assignment the fleet rollout made and pushes a
+        fresh desired-state sync; an update an operator assigned directly
+        survives, since that path needs no enrollment (cancel it with `DELETE
+        /api/agents/{agentId}/actions/update`). Re-enrolling clears a recorded
+        failure and restarts the health budget. Requires `manage` on the agent.
       tags: [Agents]
       requestBody:
         required: true
@@ -4846,11 +4849,19 @@ paths:
       operationId: updateAgentBinary
       summary: Update an agent's binary
       description: >-
-        Resolves the release artifact for the agent's OS/architecture,
-        dispatches an update command over the agent socket, and reports the
-        agent's own outcome synchronously (the call blocks while the agent
-        downloads and verifies the artifact, up to 300s). On success the agent
-        restarts and re-registers with its new version.
+        Assigns the target version to the agent as desired state and nudges a
+        sync, which carries it as `desiredAgentUpdate`. The agent downloads and
+        verifies the artifact, restarts, and proves the update by re-registering
+        with its new version. Returns 202 immediately: the assignment is durable
+        on the agent row, so it survives disconnects and control-plane restarts.
+
+
+        Poll the agent (`GET /api/agents/{agentId}`) for progress —
+        `updateDesiredVersion` clears on convergence, `updateBlockedReason`
+        carries the agent's reason for waiting, and `updateFailureReason` a
+        terminal failure. This is the same machinery as the fleet auto-update
+        rollout, and an in-flight update from either source holds the other:
+        only one agent restarts at a time.
 
 
         The request body is optional. Supplying `artifactUrl`/`sha256`
@@ -4865,8 +4876,8 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentUpdateRequest"
       responses:
-        "200":
-          description: The agent accepted the update and is restarting.
+        "202":
+          description: The update was assigned; the agent converges on it.
           content:
             application/json:
               schema:
@@ -4877,28 +4888,40 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: >-
-            The agent is offline, already at the target version, hosts
+            The agent is offline, already runs the target version, hosts
             sandboxes that would not survive a restart, speaks a wire protocol
-            older than remote updates, or has not reported its OS/architecture.
-            Several of these are waivable with `force`.
+            older than declarative updates (v7), or has not reported its
+            OS/architecture. Only the sandbox caveat is waivable with `force`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "502":
-          description: The agent could not be reached, or it reported a failure.
+    delete:
+      operationId: cancelAgentUpdate
+      summary: Cancel an agent's update assignment
+      description: >-
+        Withdraws the assigned version, any pinned artifact, the health-budget
+        clock, and any recorded blocker or failure, whoever assigned it; the
+        next sync stops carrying the update.
+
+
+        Deliberately has no online requirement, unlike assigning: an update
+        that can never converge is usually one whose agent is gone, and that is
+        exactly when it needs withdrawing. Idempotent — cancelling an agent
+        with no assignment succeeds and changes nothing. Requires `manage` on
+        the agent.
+      tags: [Agents]
+      responses:
+        "200":
+          description: The agent, with no update assignment.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-        "504":
-          description: >-
-            The agent did not reply within the update window. The update may
-            still complete; the agent re-registers with its new version if so.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/AgentDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/agents/{agentId}/actions/adopt-workloads:
     parameters:
       - $ref: "#/components/parameters/AgentID"
@@ -12372,8 +12395,16 @@ components:
           type: string
           nullable: true
           description: >-
-            The version the fleet rollout has assigned this agent while it
-            converges; null once converged or never assigned.
+            The version this agent has been assigned while it converges; null
+            once converged or never assigned. Set by the fleet rollout and by
+            an operator's update action alike.
+        updateAssignmentSource:
+          type: string
+          nullable: true
+          enum: [rollout, manual]
+          description: >-
+            Who assigned `updateDesiredVersion` — the fleet auto-update rollout
+            or an operator's update action. Null when there is no assignment.
         updateAttemptedAt:
           type: string
           format: date-time
@@ -12658,8 +12689,11 @@ components:
         force:
           type: boolean
           description: >-
-            Proceed despite caveats that would otherwise be refused: hosted
-            sandboxes, or an agent already at the target version.
+            Proceed despite the one caveat that is otherwise refused: hosted
+            sandboxes, which the sandbox runtime does not yet re-adopt after an
+            agent restart. An agent already at the target version is refused
+            regardless — an update converges on a version, so reinstalling the
+            same build is not expressible.
         artifactUrl:
           type: string
           description: >-
@@ -12678,8 +12712,11 @@ components:
         targetVersion:
           type: string
           description: >-
-            Informational version label for an explicit artifact; defaults to
-            the configured target.
+            Version label for an explicit artifact; defaults to the configured
+            target, and is required when the deployment has none. Load-bearing:
+            convergence is "the agent re-registered at this version", so a label
+            the artifact's binary does not report leaves the update stuck until
+            it is recorded as failed.
 
     AgentUpdateArtifactKind:
       type: string
@@ -12691,12 +12728,12 @@ components:
 
     AgentUpdateResult:
       type: object
-      description: Outcome the agent reported for a dispatched update.
+      description: The update assignment the agent will converge on.
       required: [status, targetVersion, artifactUrl]
       properties:
         status:
           type: string
-          description: Always `updating` on success.
+          description: Always `assigned`.
         targetVersion:
           type: string
         artifactUrl:

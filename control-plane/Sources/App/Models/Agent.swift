@@ -131,16 +131,50 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "auto_update")
     var autoUpdate: Bool
 
-    /// The version the auto-update rollout has assigned this agent, carried
-    /// on its desired-state syncs as `desiredAgentUpdate` until the agent
-    /// re-registers at it. Nil when the rollout has no opinion (not enrolled,
-    /// not reached, or already converged). Owned by the rollout sweep.
+    /// The version this agent has been assigned, carried on its desired-state
+    /// syncs as `desiredAgentUpdate` until the agent re-registers at it. Nil
+    /// when nobody has an opinion (not enrolled, not reached, or already
+    /// converged). Assigned either by the fleet rollout sweep or by an
+    /// operator's "update now" — `updateAssignmentSource` says which.
     @OptionalField(key: "update_desired_version")
     var updateDesiredVersion: String?
 
-    /// When `updateDesiredVersion` was assigned — the rollout's health-budget
-    /// clock: an assigned agent that neither converges nor reports a blocker
-    /// within the budget halts the rollout.
+    /// Who assigned `updateDesiredVersion` (STR-145). Nil exactly when there is
+    /// no assignment; a row written before this column existed reads as
+    /// `.rollout`, which is what it was. The distinction is load-bearing in one
+    /// place: the sweep resets a *rollout* assignment the deployment target has
+    /// moved past, and must not do that to an operator's explicitly chosen
+    /// version.
+    @OptionalField(key: "update_assignment_source")
+    var updateAssignmentSourceRaw: String?
+
+    var updateAssignmentSource: AgentUpdateAssignmentSource? {
+        get {
+            guard updateDesiredVersion != nil else { return nil }
+            return updateAssignmentSourceRaw.flatMap(AgentUpdateAssignmentSource.init(rawValue:)) ?? .rollout
+        }
+        set { updateAssignmentSourceRaw = newValue?.rawValue }
+    }
+
+    /// The artifact an operator pinned to a manual assignment (`artifactUrl` +
+    /// `sha256`, system-admin only). Nil for the release path, which is
+    /// re-resolved at every sync assembly instead of stored — an override has no
+    /// release to re-resolve from, so it rides the row.
+    ///
+    /// **The URL may be a credential.** Everything else that touches an artifact
+    /// URL redacts it (`DesiredAgentUpdate.redactURL`) precisely because a
+    /// presigned query token or userinfo is often the only way to authenticate a
+    /// private mirror — and none of that redaction reaches a database column, a
+    /// backup, or a read replica. So the assignment is the credential's lifetime:
+    /// `clearUpdateAssignment()` drops it on convergence and withdrawal, and a
+    /// terminal failure drops it too, rather than leaving a live token on a row
+    /// whose update is never going to finish.
+    @OptionalField(key: "update_artifact_override")
+    var updateArtifactOverride: ResolvedAgentArtifact?
+
+    /// When `updateDesiredVersion` was assigned — the health-budget clock: an
+    /// assigned agent that neither converges nor reports a blocker within the
+    /// budget halts the rollout.
     @Timestamp(key: "update_attempted_at", on: .none)
     var updateAttemptedAt: Date?
 
@@ -249,6 +283,67 @@ enum AgentStatus: String, Codable, CaseIterable, Sendable {
     case offline = "offline"
     case connecting = "connecting"
     case error = "error"
+}
+
+/// Who assigned an agent's `updateDesiredVersion` (STR-145). Both sources feed
+/// the same declarative field — there is only one update path since wire v28 —
+/// but they differ in who may reset the assignment.
+enum AgentUpdateAssignmentSource: String, Codable, Sendable {
+    /// The fleet auto-update sweep, advancing enrolled agents to the
+    /// deployment's target version one at a time.
+    case rollout = "rollout"
+    /// An operator's `POST /api/agents/:id/actions/update`. Needs no
+    /// auto-update enrollment, may carry an explicit artifact, and is never
+    /// reset as "stale" — the version was chosen deliberately.
+    case manual = "manual"
+}
+
+extension Agent {
+    /// Assigns an update, writing every field the assignment consists of at
+    /// once. Both assigners go through here rather than setting the fields
+    /// themselves, because `updateAssignmentSource` reads as nil without a
+    /// version: written in the other order, a manual assignment would read back
+    /// as `.rollout` and be swept away as stale — silently, at the next tick.
+    /// Callers save.
+    func assignUpdate(
+        version: String,
+        source: AgentUpdateAssignmentSource,
+        artifact: ResolvedAgentArtifact? = nil,
+        at now: Date = Date()
+    ) {
+        updateDesiredVersion = version
+        updateAssignmentSource = source
+        updateArtifactOverride = artifact
+        updateAttemptedAt = now
+        updateBlockedReason = nil
+        updateFailureReason = nil
+    }
+
+    /// Clears every update-assignment field: the version, who assigned it, any
+    /// pinned artifact, the health-budget clock, and the reported
+    /// blocker/failure. Used when the assignment converges, when its target
+    /// goes stale, when an operator cancels it, and when an operator withdraws
+    /// auto-update. Callers save.
+    func clearUpdateAssignment() {
+        updateDesiredVersion = nil
+        updateAssignmentSource = nil
+        updateArtifactOverride = nil
+        updateAttemptedAt = nil
+        updateBlockedReason = nil
+        updateFailureReason = nil
+    }
+
+    /// Records a terminal failure for the current assignment. The assignment
+    /// itself stays — it is what an operator sees, and what a returning agent
+    /// could still converge on if the blocker was environmental — but the
+    /// pinned artifact goes, because it may carry a presigned credential and
+    /// this update is not finishing on its own. Re-issuing the update supplies
+    /// a fresh one. Callers save.
+    func recordUpdateFailure(_ reason: String) {
+        updateFailureReason = reason
+        updateBlockedReason = nil
+        updateArtifactOverride = nil
+    }
 }
 
 // MARK: - Agent Extensions for Registration
@@ -429,9 +524,14 @@ struct AgentResponse: Content {
     let updateAvailable: Bool
     /// Declarative auto-update enrollment and rollout state (issue #434).
     let autoUpdate: Bool
-    /// The version the fleet rollout has assigned this agent, while it is
-    /// converging; nil once converged (or never assigned).
+    /// The version this agent has been assigned, while it is converging; nil
+    /// once converged (or never assigned). Present for an operator's "update
+    /// now" as much as for the fleet rollout — since STR-145 both assign this
+    /// same field — so it is not conditional on `autoUpdate`.
     let updateDesiredVersion: String?
+    /// Who assigned it: `rollout` or `manual`. Nil exactly when there is no
+    /// assignment.
+    let updateAssignmentSource: String?
     let updateAttemptedAt: Date?
     /// The agent's self-reported reason for not converging yet.
     let updateBlockedReason: String?
@@ -508,6 +608,7 @@ struct AgentResponse: Content {
         )
         self.autoUpdate = agent.autoUpdate
         self.updateDesiredVersion = agent.updateDesiredVersion
+        self.updateAssignmentSource = agent.updateAssignmentSource?.rawValue
         self.updateAttemptedAt = agent.updateAttemptedAt
         self.updateBlockedReason = agent.updateBlockedReason
         self.updateFailureReason = agent.updateFailureReason

@@ -22,6 +22,10 @@ struct AgentController: RouteCollection {
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
         agents.post(":agentId", "actions", "update", use: updateAgent)
+        // Withdraws an update assignment. The only way back from an update that
+        // can never converge, since the agent it was assigned to is usually the
+        // reason it can't.
+        agents.delete(":agentId", "actions", "update", use: cancelAgentUpdate)
         // Finishes a node's re-identification (STR-98): moves the workloads it
         // is demonstrably running off the agent record it was enrolled under
         // before.
@@ -960,9 +964,8 @@ struct AgentController: RouteCollection {
     // MARK: - Agent Update
 
     struct AgentUpdateRequest: Content {
-        /// Proceed despite caveats the endpoint would otherwise refuse on:
-        /// hosted sandboxes (whose runtime does not yet re-adopt them after a
-        /// restart) and an agent already at the target version.
+        /// Proceed despite the one caveat the endpoint refuses on: hosted
+        /// sandboxes, whose runtime does not yet re-adopt them after a restart.
         var force: Bool?
         /// Explicit artifact override for deployments the URL-convention
         /// resolver can't serve (air-gapped without a mirror, main-branch
@@ -978,8 +981,11 @@ struct AgentController: RouteCollection {
         /// Member to extract from an explicit tarball artifact.
         /// Defaults to `strato-agent`.
         var tarballMember: String?
-        /// Version label for an explicit artifact (informational; shown in
-        /// logs and the response). Defaults to the configured target.
+        /// Version label for an explicit artifact. Defaults to the configured
+        /// target. **Load-bearing**, unlike the imperative dispatch this
+        /// replaced: convergence is "the agent re-registered at this version",
+        /// so a label the artifact's binary does not report leaves the update
+        /// stuck until the health budget records a failure.
         var targetVersion: String?
     }
 
@@ -993,13 +999,21 @@ struct AgentController: RouteCollection {
         let message: String?
     }
 
-    /// Operator-triggered self-update of one agent (issue #432): resolves the
-    /// release artifact for the agent's OS/arch, dispatches an
-    /// `AgentUpdateMessage` over the agent socket (local or cross-replica via
-    /// the RPC bridge), and reports the agent's own outcome synchronously.
-    /// On success the agent restarts; the new binary proves itself by
-    /// re-registering with its new version, which `registerAgent` logs.
-    func updateAgent(req: Request) async throws -> AgentUpdateResponse {
+    /// Operator-triggered self-update of one agent (issue #432), as desired
+    /// state (ADR 0001 stage 6): assigns the target version — and any explicit
+    /// artifact — to the agent row and nudges a sync, which carries it as
+    /// `desiredAgentUpdate`. The agent converges when its own preconditions
+    /// allow and proves the update by re-registering with the new version.
+    ///
+    /// This used to dispatch an imperative `agent_update` over the socket and
+    /// block on the reply, which made the outcome synchronous at the cost of a
+    /// 300s hostage request, a cross-replica RPC hop when the socket lived
+    /// elsewhere, and an update that vanished if the agent was mid-reconnect.
+    /// The response is now a 202: the assignment is durable on the row, so it
+    /// survives disconnects and replica death, and the caller watches
+    /// `updateDesiredVersion` / `updateBlockedReason` / `updateFailureReason`
+    /// on the agent (the same fields the fleet rollout has always used).
+    func updateAgent(req: Request) async throws -> Response {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -1026,15 +1040,15 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
         }
 
-        // A pre-v6 agent cannot even decode the update envelope — it would
-        // silently drop it and this request would only ever time out. Refuse
-        // with the real reason instead.
+        // A pre-v7 agent decodes the sync but ignores `desiredAgentUpdate`, so
+        // the assignment would sit there converging on nothing until the health
+        // budget recorded a failure. Refuse with the real reason instead.
         let wireVersion = agent.wireProtocolVersion ?? 0
-        guard WireProtocol.supportsAgentUpdate(wireVersion) else {
+        guard WireProtocol.supportsDesiredAgentUpdate(wireVersion) else {
             throw Abort(
                 .conflict,
                 reason:
-                    "Agent registered with wire protocol v\(wireVersion), which predates remote updates (v\(WireProtocol.agentUpdateMinimumVersion)). Update it manually once (re-run install.sh, or pull a new image); remote updates work from then on."
+                    "Agent registered with wire protocol v\(wireVersion), which predates remote updates (v\(WireProtocol.desiredAgentUpdateMinimumVersion)). Update it manually once (re-run install.sh, or pull a new image); remote updates work from then on."
             )
         }
 
@@ -1058,7 +1072,12 @@ struct AgentController: RouteCollection {
         }
 
         let targetVersion: String
-        let artifact: ResolvedAgentArtifact
+        // Only an explicit override is pinned to the row. A release artifact is
+        // resolved here to fail fast on a platform the release does not serve,
+        // then thrown away: sync assembly re-resolves it every time, so a
+        // long-assigned update never carries a stale (possibly presigned) link.
+        let artifactOverride: ResolvedAgentArtifact?
+        let artifactURL: String
         if let explicitURL = request.artifactUrl {
             // An explicit artifact is arbitrary code the agent will install and
             // run as itself on the hypervisor host — a strictly larger power
@@ -1078,26 +1097,32 @@ struct AgentController: RouteCollection {
             else {
                 throw Abort(.badRequest, reason: "artifactUrl requires a hex SHA-256 digest in sha256")
             }
-            targetVersion = request.targetVersion ?? AgentVersionTarget.version ?? "unspecified"
-            artifact = ResolvedAgentArtifact(
+            // The label is what convergence is measured against, so it cannot
+            // be invented. A deployment with no target of its own (a dev build,
+            // or a main-branch image — exactly when overrides get used) must
+            // say what the artifact's binary will report.
+            guard let explicitVersion = request.targetVersion ?? AgentVersionTarget.version else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "No agent target version is configured, so an explicit artifact must state its targetVersion — the version the artifact's binary reports, which is what convergence is measured against."
+                )
+            }
+            targetVersion = explicitVersion
+            let override = ResolvedAgentArtifact(
                 url: explicitURL,
                 sha256: explicitDigest,
                 kind: request.artifactKind ?? .tarball,
                 tarballMember: request.tarballMember ?? AgentUpdateArtifacts.defaultTarballMember
             )
+            artifactOverride = override
+            artifactURL = override.url
         } else {
             guard let target = AgentVersionTarget.version else {
                 throw Abort(
                     .badRequest,
                     reason:
                         "No agent target version is configured (dev build). Set AGENT_TARGET_VERSION, or pass artifactUrl and sha256 explicitly."
-                )
-            }
-            if !force, !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target) {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Agent already runs the target version (\(agent.version)). Pass force to reinstall it anyway."
                 )
             }
             guard let os = agent.hostOperatingSystem else {
@@ -1115,16 +1140,38 @@ struct AgentController: RouteCollection {
                 )
             }
             targetVersion = target
-            artifact = try await req.application.agentArtifactResolver.resolve(
+            artifactOverride = nil
+            artifactURL = try await req.application.agentArtifactResolver.resolve(
                 version: target,
                 operatingSystem: os,
                 architecture: architecture
+            ).url
+        }
+
+        // An update is now convergence on a version, so "already there" is not
+        // a caveat an operator can wave through: the agent no-ops a desired
+        // version it already runs, and the assignment would hang until the
+        // health budget called it failed. `force` no longer reinstalls — that
+        // needs an edge-as-nonce the protocol does not carry (ADR 0001 stage 9).
+        guard AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: targetVersion) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent already runs \(targetVersion). Updates converge on a version, so there is nothing to do — reinstalling the same build is no longer expressible (pass artifactUrl with a targetVersion the artifact's binary actually reports to move it somewhere else)."
             )
         }
-        let artifactURL = artifact.url
 
-        req.logger.info(
-            "Dispatching agent update",
+        // The assignment *is* the update: durable on the row, re-read by every
+        // sync assembly, and cleared by the auto-update sweep once the agent
+        // re-registers at the target. Overwriting an in-flight assignment is
+        // deliberate — re-issuing the update is how an operator retries past a
+        // recorded failure, and it restarts the health budget with a freshly
+        // supplied artifact.
+        agent.assignUpdate(version: targetVersion, source: .manual, artifact: artifactOverride)
+        try await agent.save(on: req.db)
+
+        req.logger.notice(
+            "Agent update assigned",
             metadata: [
                 "agentId": .string(agentId.uuidString),
                 "agentName": .string(agent.name),
@@ -1132,57 +1179,66 @@ struct AgentController: RouteCollection {
                 "targetVersion": .string(targetVersion),
                 // Redacted: explicit overrides may be presigned URLs whose
                 // query string is a credential.
-                "artifactUrl": .string(AgentUpdateMessage.redactURL(artifactURL)),
+                "artifactUrl": .string(DesiredAgentUpdate.redactURL(artifactURL)),
             ])
 
-        let message = AgentUpdateMessage(
-            targetVersion: targetVersion,
-            artifactURL: artifact.url,
-            sha256: artifact.sha256,
-            artifactKind: artifact.kind,
-            tarballMember: artifact.kind == .tarball ? artifact.tarballMember : nil
-        )
+        // Push the sync now; the periodic timer is only the backstop.
+        await req.agentService.syncDesiredState(agentId: agentId.uuidString)
 
-        // Generous timeout: the reply comes only after the agent has
-        // downloaded and verified the artifact.
-        let response: AgentServiceResponse
-        do {
-            response = try await req.agentService.sendMessageToAgentWithResponse(
-                message, agentId: agentId.uuidString, timeout: .seconds(300))
-        } catch let error as AgentServiceError {
-            switch error {
-            case .requestTimeout:
-                throw Abort(
-                    .gatewayTimeout,
-                    reason:
-                        "The agent did not reply within the update window. The update may still complete — the agent re-registers with its new version if it does."
-                )
-            default:
-                throw Abort(.badGateway, reason: "Could not reach the agent: \(error)")
-            }
-        }
-
-        switch response {
-        case .success:
-            req.logger.notice(
-                "Agent accepted update and is restarting",
-                metadata: [
-                    "agentId": .string(agentId.uuidString),
-                    "agentName": .string(agent.name),
-                    "targetVersion": .string(targetVersion),
-                ])
-            return AgentUpdateResponse(
-                status: "updating",
+        let response = Response(status: .accepted)
+        try response.content.encode(
+            AgentUpdateResponse(
+                status: "assigned",
                 targetVersion: targetVersion,
-                artifactUrl: AgentUpdateMessage.redactURL(artifactURL),
+                artifactUrl: DesiredAgentUpdate.redactURL(artifactURL),
                 message:
-                    "Agent verified and installed the new binary and is restarting; it will re-register as \(targetVersion)."
-            )
-        case .error(let error, let details):
-            throw Abort(
-                .badGateway,
-                reason: details.map { "\(error): \($0)" } ?? error)
+                    "Agent is converging on \(targetVersion): it downloads and verifies the artifact, then restarts and re-registers with the new version. Watch the agent's update status for progress."
+            ))
+        return response
+    }
+
+    /// Withdraws an agent's update assignment, whoever made it: the version,
+    /// the pinned artifact, the health-budget clock, and any recorded
+    /// blocker/failure. The next sync stops carrying the desired update.
+    ///
+    /// This is the counterpart the declarative rewrite needs. An imperative
+    /// dispatch had nothing to cancel — it either returned or timed out — but an
+    /// assignment is durable, so an update that can never converge (a bad
+    /// artifact, a host that died mid-swap) would otherwise sit on the row with
+    /// no API able to remove it: it never converges, it is exempt from the
+    /// rollout's stale reset, and re-issuing the update is refused while the
+    /// agent is offline, which is exactly when it failed. Hence no `isOnline`
+    /// guard here — cancelling has to work precisely when assigning does not.
+    ///
+    /// Idempotent: cancelling an agent with no assignment is a no-op success.
+    func cancelAgentUpdate(req: Request) async throws -> AgentResponse {
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
         }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+
+        guard let assigned = agent.updateDesiredVersion else {
+            return try AgentResponse(from: agent)
+        }
+
+        agent.clearUpdateAssignment()
+        try await agent.save(on: req.db)
+        req.logger.notice(
+            "Agent update assignment cancelled",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+                "targetVersion": .string(assigned),
+            ])
+
+        // Push the sync now so a connected agent stops seeing the desired
+        // update rather than waiting for the periodic backstop.
+        await req.agentService.syncDesiredState(agentId: agentId.uuidString)
+
+        return try AgentResponse(from: agent)
     }
 
     // MARK: - Agent Properties
@@ -1193,8 +1249,8 @@ struct AgentController: RouteCollection {
     }
 
     /// Updates mutable agent properties. Currently only `autoUpdate`; scoped
-    /// to `agent#manage` like the imperative update action, since enrollment
-    /// authorizes future restarts of this capacity.
+    /// to `agent#manage` like the update action, since enrollment authorizes
+    /// future restarts of this capacity.
     func patchAgent(req: Request) async throws -> AgentResponse {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
@@ -1211,16 +1267,22 @@ struct AgentController: RouteCollection {
             if autoUpdate {
                 // Fresh enrollment gets a fresh chance: a failure recorded
                 // under a previous enrollment must not keep the fleet rollout
-                // halted at an agent the operator just re-opted in.
+                // halted at an agent the operator just re-opted in. The budget
+                // clock has to restart with it — leaving the original
+                // `updateAttemptedAt` in place means the next sweep tick
+                // recomputes `age > budget` and re-records the same failure,
+                // which is a retry that never had a chance.
                 agent.updateFailureReason = nil
-            } else {
-                // Withdrawing clears any assignment: the next sync stops
-                // carrying the desired update and the agent clears its
-                // blocked status.
-                agent.updateDesiredVersion = nil
-                agent.updateAttemptedAt = nil
-                agent.updateBlockedReason = nil
-                agent.updateFailureReason = nil
+                if agent.updateDesiredVersion != nil {
+                    agent.updateAttemptedAt = Date()
+                }
+            } else if agent.updateAssignmentSource != .manual {
+                // Withdrawing clears the rollout's assignment: the next sync
+                // stops carrying the desired update and the agent clears its
+                // blocked status. An operator's own "update now" survives —
+                // that path needs no enrollment in the first place, so
+                // withdrawing from the fleet rollout must not cancel it.
+                agent.clearUpdateAssignment()
             }
             try await agent.save(on: req.db)
             req.logger.info(

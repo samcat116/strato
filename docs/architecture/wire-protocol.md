@@ -42,7 +42,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 26), stamped on
+`WireProtocol.swift` holds the protocol version (currently 28), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -57,8 +57,7 @@ ad-hoc checks scattered through the code:
 | `supportsNetworkSync` | 3 | Networks in the desired-state sync |
 | `supportsSiteAuthority` | 4 | `networksAuthoritative` site-topology flag |
 | `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
-| `supportsAgentUpdate` | 6 | Imperative agent self-update |
-| `supportsDesiredAgentUpdate` | 7 | Declarative agent update in the sync |
+| `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v28) |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
 | `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
@@ -200,6 +199,17 @@ agents. Like v26 and unlike v18/v23 it does not refuse placement: a pre-v27
 agent simply doesn't publish the address, and its guests fall back to the seed
 ISO exactly as today.
 
+Version 28 removes the imperative `agent_update` message (ADR 0001 stage 6). An
+agent's build is a durable fact about the host rather than an action, so it
+belongs in the sync — where `desiredAgentUpdate` has carried it since v7 — and
+the operator's "update now" endpoint now assigns that field instead of
+dispatching a command, leaving the message with no sender. Removing a
+`MessageType` case breaks in exactly one direction, and only across a skew that
+upgrades backwards: a pre-v28 *control plane* driving a v28 agent would send
+`agent_update` into an envelope the agent can no longer decode and burn its
+timeout against silence. Upgrade the control plane first, as everywhere else
+here.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -222,7 +232,6 @@ dual-mode rollout.
 | `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
-| `agent_update` | Imperative agent self-update (v6+) |
 
 **Agent → control plane**
 

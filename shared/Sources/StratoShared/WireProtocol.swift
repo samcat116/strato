@@ -91,9 +91,10 @@ public enum WireProtocol {
     /// release artifacts). The gate is load-bearing on the send side: an older
     /// agent has no `agent_update` case in its `MessageType` enum, so the
     /// envelope decode fails silently and no reply is ever sent — the control
-    /// plane would see only a timeout. The update endpoint therefore refuses
+    /// plane would see only a timeout. The update endpoint therefore refused
     /// agents that registered with a pre-v6 version instead of sending and
-    /// hoping (see `supportsAgentUpdate(_:)`).
+    /// hoping. (The message itself is gone as of v28; only the OS reporting
+    /// remains from this version.)
     ///
     /// Version 7: declarative agent auto-update (issue #434).
     /// `DesiredStateMessage` carries an optional `desiredAgentUpdate` and
@@ -424,7 +425,24 @@ public enum WireProtocol {
     /// Like v26 and unlike v18/v23, the gate does not refuse placement. A
     /// pre-v27 agent simply doesn't publish the address; its guests fall back to
     /// the seed ISO exactly as today.
-    public static let currentVersion = 27
+    ///
+    /// Version 28: the imperative `agent_update` message is removed (ADR 0001
+    /// stage 6). An agent's build is a durable fact about the host, not an
+    /// action, so it belongs in the sync — where `desiredAgentUpdate` has
+    /// carried it since v7. The operator's "update now" endpoint now assigns
+    /// that field and nudges a sync instead of dispatching a command, which
+    /// leaves the message with no sender.
+    ///
+    /// Removing a `MessageType` case is breaking in exactly one direction, and
+    /// only across a skew that upgrades backwards: a *pre-v28 control plane*
+    /// driving a v28 agent would send `agent_update` (from its own manual
+    /// endpoint) into an envelope the agent can no longer decode, and the
+    /// request would burn its 300s timeout against silence. Nothing else
+    /// regresses — a v28 control plane never sends the message to any agent,
+    /// old or new, and the declarative path it uses instead has been
+    /// understood by every agent since v7. Upgrade the control plane first,
+    /// which is the deployment order everywhere else in this document.
+    public static let currentVersion = 28
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -486,18 +504,6 @@ public enum WireProtocol {
         version >= sandboxForkMinimumVersion
     }
 
-    /// The lowest protocol version that understands the `agentUpdate` command
-    /// (see `currentVersion` version 6 notes).
-    public static let agentUpdateMinimumVersion = 6
-
-    /// Whether an agent registered with `version` can be sent an
-    /// `AgentUpdateMessage`. A pre-v6 agent cannot even decode the envelope
-    /// (unknown `MessageType` case) and never replies, so the control plane
-    /// must refuse the update up front rather than time out against silence.
-    public static func supportsAgentUpdate(_ version: Int) -> Bool {
-        version >= agentUpdateMinimumVersion
-    }
-
     /// The lowest protocol version that acts on
     /// `DesiredStateMessage.desiredAgentUpdate` (see `currentVersion` version 7
     /// notes).
@@ -505,9 +511,11 @@ public enum WireProtocol {
 
     /// Whether an agent registered with `version` converges on a
     /// `desiredAgentUpdate` carried by the sync. An older agent decodes the
-    /// sync fine but never acts on the field, so the fleet rollout must not
-    /// select such an agent — its health budget would expire against silence
-    /// and halt the rollout.
+    /// sync fine but never acts on the field, so neither assigner may select
+    /// such an agent — the fleet rollout's health budget would expire against
+    /// silence and halt, and an operator's "update now" would report an
+    /// assignment that never converges. Since v28 this is the *only* way an
+    /// agent is updated, so it is also the update endpoint's floor.
     public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
         version >= desiredAgentUpdateMinimumVersion
     }

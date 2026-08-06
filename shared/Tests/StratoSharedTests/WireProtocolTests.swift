@@ -38,15 +38,16 @@ struct WireProtocolTests {
         #expect(try envelope.decode(as: VMOperationMessage.self).vmId == "vm-1")
     }
 
-    @Test("agent update gate: only v6+ agents can be sent the update command")
-    func agentUpdateGate() {
-        // A pre-v6 agent has no `agent_update` MessageType case: it fails the
-        // envelope decode silently and never replies, so the control plane
-        // must refuse rather than send and time out.
-        #expect(!WireProtocol.supportsAgentUpdate(0))
-        #expect(!WireProtocol.supportsAgentUpdate(5))
-        #expect(WireProtocol.supportsAgentUpdate(6))
-        #expect(WireProtocol.supportsAgentUpdate(WireProtocol.currentVersion))
+    @Test("declarative agent-update gate starts at wire protocol v7")
+    func desiredAgentUpdateGate() {
+        // Since v28 there is no imperative `agent_update` message: this is the
+        // only gate on updating an agent, for the fleet rollout and the
+        // operator's "update now" alike. A pre-v7 agent decodes the sync but
+        // ignores the field, so an assignment would never converge.
+        #expect(WireProtocol.desiredAgentUpdateMinimumVersion == 7)
+        #expect(!WireProtocol.supportsDesiredAgentUpdate(6))
+        #expect(WireProtocol.supportsDesiredAgentUpdate(7))
+        #expect(WireProtocol.supportsDesiredAgentUpdate(WireProtocol.currentVersion))
     }
 
     @Test("sandbox fork gate starts at wire protocol v12")

@@ -1547,8 +1547,7 @@ actor AgentService {
     /// How long an assigned agent has to either re-register at its target
     /// version or report a blocker before the sweep treats the silence as a
     /// failed update and halts the rollout. Generous on purpose: it spans the
-    /// artifact download (the imperative endpoint already allows 300s for
-    /// that alone), the restart, and re-registration.
+    /// artifact download, the restart, and re-registration.
     static let autoUpdateHealthBudgetSeconds: TimeInterval = 600
 
     /// Advances the fleet's declarative agent updates one agent at a time
@@ -1556,13 +1555,24 @@ actor AgentService {
     /// lives on the agent rows, so any replica can pick up where another
     /// stopped.
     ///
-    /// Per tick, each enrolled-and-assigned agent is classified:
+    /// Per tick, each *assigned* agent is classified — an operator's "update
+    /// now" writes the same assignment (STR-145), so it is tracked, budgeted,
+    /// and reported exactly like a rollout one, and an in-flight manual update
+    /// holds the fleet rollout for the same reason a rollout assignment does:
+    /// one agent restarts at a time.
     /// - **converged** — re-registered at the target: assignment cleared.
-    /// - **stale** — assigned a version the deployment target has moved past:
-    ///   reset, including failures, so an old halt never blocks a new target.
+    /// - **stale** — a *rollout* assignment whose version the deployment target
+    ///   has moved past: reset, including failures, so an old halt never blocks
+    ///   a new target. Manual assignments are exempt — the operator named that
+    ///   version (possibly a one-off build) deliberately.
     /// - **failed** — a recorded failure (agent-reported, or silence past the
-    ///   health budget, recorded here): the rollout halts until an operator
-    ///   intervenes or the target changes.
+    ///   health budget, recorded here). A *rollout* failure halts the fleet
+    ///   until an operator intervenes or the target changes: the next agent
+    ///   would most likely hit the same bad artifact. A *manual* one does not —
+    ///   one operator action on one agent must not stop every other agent's
+    ///   auto-update, especially since the manual assignment's own escapes
+    ///   (converge, stale reset) are exactly what a terminal failure closes off.
+    ///   Cancelling the assignment is what clears it.
     /// - **parked** — blocked past the health budget (e.g. running
     ///   Firecracker VMs): the assignment stays, level-triggered, so the
     ///   agent converges whenever its blocker clears — but advancement stops
@@ -1570,11 +1580,10 @@ actor AgentService {
     /// - **waiting** — within budget: the rollout holds.
     ///
     /// Only when nothing is failed or waiting does the sweep assign the next
-    /// eligible agent (deterministic name order), after proving the release
-    /// actually publishes an artifact for that agent's platform.
+    /// eligible *enrolled* agent (deterministic name order), after proving the
+    /// release actually publishes an artifact for that agent's platform.
     func sweepAgentAutoUpdates() async {
         guard !isShutDown, !app.didShutdown else { return }
-        guard let target = autoUpdateTarget else { return }
         guard await app.coordination.acquireSweepLock("agent_auto_update") else {
             app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
             return
@@ -1582,25 +1591,45 @@ actor AgentService {
 
         let db = app.db
         let now = Date()
-        let canonicalTarget = AgentVersionTarget.canonical(target)
+        // Nil on a dev build with no configured target: no *rollout* can run,
+        // but assignments an operator made by hand (which supply their own
+        // artifact, precisely for builds a release does not serve) still need
+        // their convergence bookkeeping, so classification runs regardless.
+        let target = autoUpdateTarget
+        let canonicalTarget = target.map(AgentVersionTarget.canonical)
 
         do {
-            let enrolled = try await Agent.query(on: db)
-                .filter(\.$autoUpdate == true)
+            // Enrolled agents (candidates for the next assignment) plus anyone
+            // already carrying one — an operator's manual update assigns the
+            // same field without requiring enrollment (STR-145), and it needs
+            // the same convergence bookkeeping.
+            let candidates = try await Agent.query(on: db)
+                .group(.or) { group in
+                    group
+                        .filter(\.$autoUpdate == true)
+                        .filter(\.$updateDesiredVersion != nil)
+                }
                 .sort(\.$name)
                 .all()
 
             var rolloutHalted = false
             var waitingOnAgent = false
 
-            for agent in enrolled {
+            for agent in candidates {
                 guard let assigned = agent.updateDesiredVersion else { continue }
 
                 // The deployment target moved past this assignment
                 // (mid-rollout upgrade): reset everything, including a
                 // failure — the old target's halt must not block the new one.
-                guard AgentVersionTarget.canonical(assigned) == canonicalTarget else {
-                    clearRolloutAssignment(agent)
+                // Only for rollout assignments: a manual one names a version
+                // the operator chose, which the deployment target has no
+                // opinion about.
+                guard
+                    agent.updateAssignmentSource == .manual
+                        || canonicalTarget == nil
+                        || AgentVersionTarget.canonical(assigned) == canonicalTarget
+                else {
+                    agent.clearUpdateAssignment()
                     try await agent.save(on: db)
                     continue
                 }
@@ -1608,7 +1637,7 @@ actor AgentService {
                 // Converged: the agent re-registered at the target (or was
                 // updated by hand, which counts just the same).
                 if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
-                    clearRolloutAssignment(agent)
+                    agent.clearUpdateAssignment()
                     try await agent.save(on: db)
                     Telemetry.agentAutoUpdateConverged()
                     app.logger.notice(
@@ -1621,7 +1650,20 @@ actor AgentService {
                 }
 
                 if agent.updateFailureReason != nil {
-                    rolloutHalted = true
+                    // A *rollout* failure halts the fleet until an operator
+                    // intervenes: the next agent would most likely hit the same
+                    // bad artifact. A manual one does not. It is one operator's
+                    // action on one agent — possibly not even an enrolled one —
+                    // and letting it stop every other agent's auto-update means
+                    // a single failed "update now" wedges the fleet with no
+                    // automatic way out (the assignment is exempt from the
+                    // stale reset by design, and the agent that would clear it
+                    // by converging is the one that just died). Cancelling the
+                    // assignment is the operator's escape; until then this
+                    // agent simply holds its own failure.
+                    if agent.updateAssignmentSource != .manual {
+                        rolloutHalted = true
+                    }
                     continue
                 }
 
@@ -1651,31 +1693,38 @@ actor AgentService {
                 if age > Self.autoUpdateHealthBudgetSeconds {
                     // Silence past the budget: the agent neither converged
                     // nor explained itself — most likely it attempted the
-                    // update and never came back. Halt the rollout.
-                    agent.updateFailureReason =
+                    // update and never came back.
+                    let manual = agent.updateAssignmentSource == .manual
+                    agent.recordUpdateFailure(
                         "did not re-register at \(assigned) within \(Int(Self.autoUpdateHealthBudgetSeconds))s of assignment"
+                    )
                     try await agent.save(on: db)
                     Telemetry.agentAutoUpdateFailed(reason: "health_budget")
                     app.logger.error(
-                        "Agent auto-update failed: agent went silent past the health budget; rollout halted",
+                        manual
+                            ? "Agent update failed: agent went silent past the health budget"
+                            : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
                             "agentName": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
-                    rolloutHalted = true
+                    rolloutHalted = rolloutHalted || !manual
                 } else {
                     waitingOnAgent = true
                 }
             }
 
             guard !rolloutHalted && !waitingOnAgent else { return }
+            // Bookkeeping is done; advancing the fleet needs a target version.
+            guard let target else { return }
 
             // Nothing in flight and nothing failed: assign the next agent.
-            // Eligibility mirrors the imperative endpoint's checks, minus the
-            // Firecracker guard — that precondition is evaluated live on the
-            // agent, which is the only side that actually knows.
-            let next = enrolled.first { agent in
-                agent.updateDesiredVersion == nil
+            // Eligibility mirrors the update endpoint's checks, minus the
+            // hosted-workload guard — that precondition is evaluated live on
+            // the agent, which is the only side that actually knows.
+            let next = candidates.first { agent in
+                agent.autoUpdate
+                    && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
                     && agent.isOnline
                     && WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0)
@@ -1704,10 +1753,7 @@ actor AgentService {
                 return
             }
 
-            next.updateDesiredVersion = target
-            next.updateAttemptedAt = now
-            next.updateBlockedReason = nil
-            next.updateFailureReason = nil
+            next.assignUpdate(version: target, source: .rollout, at: now)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(
@@ -1722,15 +1768,6 @@ actor AgentService {
         } catch {
             app.logger.error("Agent auto-update sweep failed: \(error)")
         }
-    }
-
-    /// Clears every rollout field on an agent row (converged, stale target,
-    /// or withdrawn). Callers save.
-    private func clearRolloutAssignment(_ agent: Agent) {
-        agent.updateDesiredVersion = nil
-        agent.updateAttemptedAt = nil
-        agent.updateBlockedReason = nil
-        agent.updateFailureReason = nil
     }
 
     // MARK: - Desired-state sync (issues #260, #261)
@@ -2157,11 +2194,12 @@ actor AgentService {
 
         switch status.disposition {
         case ObservedAgentUpdateStatus.dispositionFailed:
-            // Terminal for this artifact and process lifetime: halt the
-            // rollout on the real error instead of waiting out the budget.
+            // Terminal for this artifact and process lifetime: record the real
+            // error instead of waiting out the budget (and, for a rollout
+            // assignment, halt on it).
             agent.updateBlockedReason = nil
             if agent.updateFailureReason != status.reason {
-                agent.updateFailureReason = status.reason
+                agent.recordUpdateFailure(status.reason)
                 app.logger.error(
                     "Agent reported its assigned update failed",
                     metadata: [

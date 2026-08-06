@@ -749,6 +749,11 @@ public func configure(_ app: Application) async throws {
     // Per-network switch for the instance metadata service (STR-49).
     app.migrations.add(AddMetadataEnabledToLogicalNetwork())
 
+    // ADR 0001 stage 6 (STR-145): the operator's "update now" assigns the same
+    // declarative field as the fleet rollout, so the row records who assigned
+    // it and any explicit artifact the operator pinned to it.
+    app.migrations.add(AddManualAgentUpdateAssignment())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
