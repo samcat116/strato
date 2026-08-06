@@ -98,8 +98,12 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           PRERELEASE=false
           CREATE_FLAGS=""
+          # Anchored to the semver prerelease separator rather than matching the
+          # words anywhere in the tag: unanchored, any tag containing "rc" —
+          # v1.2.3-a<rc>h-fix — reads as a prerelease, and since STR-47 that
+          # decision also silently skips the Homebrew tap bump.
           case "$TAG" in
-            *alpha*|*beta*|*rc*) PRERELEASE=true; CREATE_FLAGS="--prerelease" ;;
+            *-alpha*|*-beta*|*-rc*) PRERELEASE=true; CREATE_FLAGS="--prerelease" ;;
           esac
           gh release create "$TAG" --title "Release $TAG" --notes-file release_notes.md $CREATE_FLAGS
           echo "release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)" >> "$GITHUB_OUTPUT"
@@ -878,6 +882,10 @@ jobs:
     # should never hand someone an rc. Reuses create-release's decision rather
     # than re-matching the tag here, so the two cannot disagree.
     if: needs.create-release.outputs.prerelease != 'true'
+    # Everything this job writes goes through TAP_TOKEN; GITHUB_TOKEN is only
+    # used to read this release's sidecars.
+    permissions:
+      contents: read
     env:
       TAP_REPO: stratocloud/homebrew-strato
     steps:
@@ -910,72 +918,57 @@ jobs:
           gh release download "$GITHUB_REF_NAME" \
             --pattern 'strato-cli-*.tar.gz.sha256' --dir sidecars
 
-      # The template carries the whole formula (see .github/homebrew/); this
-      # only fills in the per-release urls and checksums.
+      # The template carries the whole formula (see .github/homebrew/); the
+      # script only fills in the per-release urls and checksums. Same script
+      # build.yaml runs on PRs that touch the template, so what is validated
+      # pre-merge is what runs here.
       - name: Render the formula
         run: |
-          TAG="$GITHUB_REF_NAME"
-          # Homebrew versions carry no leading "v"; the tag does.
-          VERSION="${TAG#v}"
-
-          cp .github/homebrew/strato.rb.tmpl strato.rb
-          sed -i "s|@@VERSION@@|${VERSION}|g" strato.rb
-
-          # `gh release download` above fails only when the pattern matched
-          # NOTHING, so a partially-uploaded release still gets here; each
-          # platform's sidecar is therefore checked by name.
-          for platform in macos-arm64 linux-x86_64 linux-arm64; do
-            asset="strato-cli-${platform}.tar.gz"
-            sidecar="sidecars/${asset}.sha256"
-            [ -f "$sidecar" ] || { echo "missing checksum sidecar for $asset on $TAG" >&2; exit 1; }
-            sha="$(awk '{print $1}' "$sidecar")"
-            [ -n "$sha" ] || { echo "empty checksum in $sidecar" >&2; exit 1; }
-            # macos-arm64 -> MACOS_ARM64 (the underscore in x86_64 survives).
-            token="$(printf '%s' "$platform" | tr 'a-z-' 'A-Z_')"
-            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${asset}"
-            sed -i -e "s|@@${token}_URL@@|${url}|g" -e "s|@@${token}_SHA256@@|${sha}|g" strato.rb
-          done
-
-          # A leftover placeholder means the template grew a token this loop
-          # does not fill — catch it here, not as a 404 in someone's `brew
-          # install`.
-          if grep -n '@@' strato.rb; then
-            echo "unsubstituted placeholders remain in the rendered formula" >&2
-            exit 1
-          fi
-
-          # Cheap guard against a template edit that broke the Ruby.
-          ruby -c strato.rb
+          .github/scripts/render-homebrew-formula.sh \
+            "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" sidecars strato.rb
           cat strato.rb
 
+      # Install and test the rendered formula before publishing it. This is the
+      # only check that compares the sha256 the formula CLAIMS against the bytes
+      # GitHub actually serves — a checksum/asset mismatch is precisely the
+      # failure this job can introduce — and it gives the formula's `test do`
+      # block its only caller, so a release that skipped the CompiledBuildInfo
+      # bake fails here instead of shipping a formula whose `strato --version`
+      # says "dev". Only the leg matching the runner (linux-x86_64) is
+      # exercised; the other two ride the same rendering and sidecar plumbing.
+      #
+      # Runs BEFORE the push, so the job fails closed: a bad formula never
+      # reaches the tap.
+      - name: Smoke-test the formula
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_ANALYTICS: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          # Homebrew refuses to install a formula that is not in a tap
+          # ("Homebrew requires formulae to be in a tap"), so stage the
+          # rendered file in a local tap under the name users actually type.
+          # Nothing is published from here — the next step does the real
+          # update. Naming the formula fully-qualified also satisfies the
+          # third-party tap trust check without a separate `brew trust`.
+          # stratocloud/homebrew-strato -> the tap name stratocloud/strato.
+          BREW_TAP="${TAP_REPO/homebrew-/}"
+          TAP_DIR="$(brew --repository)/Library/Taps/${TAP_REPO}"
+          mkdir -p "$TAP_DIR/Formula"
+          cp strato.rb "$TAP_DIR/Formula/strato.rb"
+
+          brew install --formula "${BREW_TAP}/strato"
+          brew test "${BREW_TAP}/strato"
+
+      # The script owns the clone/guard/commit/push and its retries; see it for
+      # the two no-op outcomes (re-run, backport) it treats as success.
       - name: Push the formula to the tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          # Works on a tap that has no commits yet: git takes the branch name
-          # from the remote's advertised HEAD (its default branch) even when
-          # there is nothing to check out, so `git push origin HEAD` below
-          # creates the branch `brew tap` will clone rather than whatever the
-          # runner's init.defaultBranch happens to be.
-          git clone --depth 1 \
-            "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
-          mkdir -p tap/Formula
-          cp strato.rb tap/Formula/strato.rb
-
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/strato.rb
-          # Re-running the job for a tag already in the tap is a no-op, not an
-          # empty-commit failure.
-          if git diff --cached --quiet; then
-            echo "tap already at $GITHUB_REF_NAME; nothing to push"
-            exit 0
-          fi
-          git commit \
-            -m "strato ${GITHUB_REF_NAME#v}" \
-            -m "Released from ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
-          git push origin HEAD
+          .github/scripts/push-homebrew-formula.sh \
+            "$TAP_REPO" strato.rb "${GITHUB_REF_NAME#v}" \
+            "${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
   # Lightweight (git archive + heredocs + uploads) — runs hosted so the static
   # self-hosted runner is free for the Linux tarball build. Everything is

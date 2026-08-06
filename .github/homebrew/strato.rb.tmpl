@@ -35,6 +35,12 @@ class Strato < Formula
     # config bans inline disable directives, so they cannot be silenced. The
     # offenses are accepted deliberately — the shape that cop asks for is the
     # one that breaks formula loading on Intel. Don't "fix" it.
+    #
+    # The third shape, for the record: repeat this url and sha256 in BOTH an
+    # `on_intel` and an `on_arm` block. That satisfies the cop and stays
+    # loadable — the Intel copy is unreachable, since the requirement above is
+    # fatal — at the cost of a duplicated checksum that must be kept in sync
+    # for a branch nothing can take. Rejected as the worse trade.
     url "@@MACOS_ARM64_URL@@"
     sha256 "@@MACOS_ARM64_SHA256@@"
   end
@@ -56,8 +62,9 @@ class Strato < Formula
   end
 
   # Exercises the CompiledBuildInfo baking in release.yaml: the CLI prints
-  # "<tag> (<git sha>)", and a binary built without that step reports "dev",
-  # so a release that skipped it fails `brew test` here rather than confusing
+  # "<tag> (<git sha>)", and a binary built without that step reports "dev".
+  # The release job runs `brew test` against the rendered formula before
+  # pushing it here, so that regression fails the release instead of confusing
   # someone reading `strato --version` in a bug report. The formula version has
   # no leading "v", so this is a substring match against the tag.
   test do

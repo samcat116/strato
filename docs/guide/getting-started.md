@@ -108,8 +108,14 @@ brew install stratocloud/strato/strato
 ```
 
 The formula installs the released binary — nothing is compiled — and
-`brew upgrade` picks up each new stable release. The same tap works under
-Homebrew on Linux (x86_64 and arm64). macOS builds are Apple Silicon only.
+`brew upgrade` picks up each new stable release. macOS builds are Apple
+Silicon only.
+
+The same tap works under Homebrew on Linux (x86_64 and arm64), with one
+caveat: only the Swift runtime is statically linked, so the binaries still
+link the host's glibc and are built on current Ubuntu (24.04 for arm64). A
+distribution older than that will not run them, even though Homebrew itself
+supports it.
 
 ### Direct download
 
@@ -118,10 +124,15 @@ Every release also publishes a CLI-only tarball per platform
 `strato-cli-linux-arm64`), each with a `.sha256` sidecar:
 
 ```bash
-curl -fsSLO https://github.com/samcat116/strato/releases/latest/download/strato-cli-macos-arm64.tar.gz
+base=https://github.com/samcat116/strato/releases/latest/download
+curl -fsSLO "$base/strato-cli-macos-arm64.tar.gz"
+curl -fsSLO "$base/strato-cli-macos-arm64.tar.gz.sha256"
+shasum -a 256 -c strato-cli-macos-arm64.tar.gz.sha256
 tar xzf strato-cli-macos-arm64.tar.gz
 sudo install strato /usr/local/bin/strato
 ```
+
+(On Linux, `sha256sum -c` instead of `shasum -a 256 -c`.)
 
 ### Sign in
 
