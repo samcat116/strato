@@ -95,6 +95,44 @@ values (Gateway exposure, TLS, WebAuthn hostname), see the
    altogether and create the rest of your users by invitation
 4. Complete onboarding to create your organization
 
+## Install the CLI
+
+`strato` is a single binary that drives the same API the UI uses — VMs,
+sandboxes, volumes, images, networks, projects, and quotas from a terminal.
+It is optional; everything in this guide can also be done in the browser.
+
+### Homebrew (recommended on macOS)
+
+```bash
+brew install stratocloud/strato/strato
+```
+
+The formula installs the released binary — nothing is compiled — and
+`brew upgrade` picks up each new stable release. The same tap works under
+Homebrew on Linux (x86_64 and arm64). macOS builds are Apple Silicon only.
+
+### Direct download
+
+Every release also publishes a CLI-only tarball per platform
+(`strato-cli-macos-arm64`, `strato-cli-linux-x86_64`,
+`strato-cli-linux-arm64`), each with a `.sha256` sidecar:
+
+```bash
+curl -fsSLO https://github.com/samcat116/strato/releases/latest/download/strato-cli-macos-arm64.tar.gz
+tar xzf strato-cli-macos-arm64.tar.gz
+sudo install strato /usr/local/bin/strato
+```
+
+### Sign in
+
+```bash
+strato login --server https://strato.example.com
+strato vm list
+```
+
+`login` opens your browser to approve the device code and stores the token
+per context, so `strato context` can switch between control planes.
+
 ## Add a hypervisor
 
 VMs run on agents — Linux hosts with KVM.

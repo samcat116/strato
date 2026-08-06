@@ -1,0 +1,66 @@
+# Generated on every stable tag by the bump-homebrew-formula job in
+# samcat116/strato .github/workflows/release.yaml, from the template at
+# .github/homebrew/strato.rb.tmpl in that repo. Edit the template — changes
+# made directly in the tap are overwritten by the next release.
+#
+# (The placeholder tokens the job substitutes are the only lines below that
+# differ between the template and the published formula.)
+#
+# Deliberately a binary install rather than a source build: `url` points at the
+# release's CLI-only tarball (strato-cli-<os>-<arch>.tar.gz), which holds
+# exactly one stripped `strato` binary. Building from source would make every
+# user compile a Swift package and download the whole monorepo.
+class Strato < Formula
+  desc "Command-line interface for the Strato private cloud platform"
+  homepage "https://github.com/samcat116/strato"
+  version "@@VERSION@@"
+  # FSL-1.1-MIT (see LICENSE.md) has no SPDX identifier, which is exactly what
+  # this symbol is for.
+  license :cannot_represent
+
+  on_macos do
+    # Releases publish no Intel macOS CLI asset — release.yaml's only macOS
+    # build leg is `macos-latest`, which is Apple Silicon — and an arm64
+    # Mach-O will not run under Rosetta. This fatal requirement is the only
+    # thing stopping an Intel Mac from installing that binary, because the url
+    # below is shared by both macOS architectures. Nesting the url in an
+    # `on_arm` block instead leaves the stable spec with no url on Intel, and
+    # Homebrew then fails to *load* the formula ("formula requires at least a
+    # URL"), which breaks `brew info`/`brew search` for those users rather
+    # than printing "The arm64 architecture is required for this software."
+    depends_on arch: :arm64
+
+    # `brew style` reports two FormulaAudit/ComponentsOrder offenses for the
+    # two lines below ("on_macos cannot include url"), and Homebrew's rubocop
+    # config bans inline disable directives, so they cannot be silenced. The
+    # offenses are accepted deliberately — the shape that cop asks for is the
+    # one that breaks formula loading on Intel. Don't "fix" it.
+    url "@@MACOS_ARM64_URL@@"
+    sha256 "@@MACOS_ARM64_SHA256@@"
+  end
+
+  on_linux do
+    on_intel do
+      url "@@LINUX_X86_64_URL@@"
+      sha256 "@@LINUX_X86_64_SHA256@@"
+    end
+
+    on_arm do
+      url "@@LINUX_ARM64_URL@@"
+      sha256 "@@LINUX_ARM64_SHA256@@"
+    end
+  end
+
+  def install
+    bin.install "strato"
+  end
+
+  # Exercises the CompiledBuildInfo baking in release.yaml: the CLI prints
+  # "<tag> (<git sha>)", and a binary built without that step reports "dev",
+  # so a release that skipped it fails `brew test` here rather than confusing
+  # someone reading `strato --version` in a bug report. The formula version has
+  # no leading "v", so this is a substring match against the tag.
+  test do
+    assert_match version.to_s, shell_output("#{bin}/strato --version")
+  end
+end

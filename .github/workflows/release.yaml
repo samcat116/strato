@@ -29,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create_release.outputs.release_id }}
+      # "true" for alpha/beta/rc tags. Published so downstream jobs that must
+      # only run for stable releases (bump-homebrew-formula) reuse the one
+      # prerelease decision instead of re-deriving it from the tag.
+      prerelease: ${{ steps.create_release.outputs.prerelease }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -92,12 +96,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="$GITHUB_REF_NAME"
-          PRERELEASE=""
+          PRERELEASE=false
+          CREATE_FLAGS=""
           case "$TAG" in
-            *alpha*|*beta*|*rc*) PRERELEASE="--prerelease" ;;
+            *alpha*|*beta*|*rc*) PRERELEASE=true; CREATE_FLAGS="--prerelease" ;;
           esac
-          gh release create "$TAG" --title "Release $TAG" --notes-file release_notes.md $PRERELEASE
+          gh release create "$TAG" --title "Release $TAG" --notes-file release_notes.md $CREATE_FLAGS
           echo "release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
   # Compile the release binaries that the container images copy in, mirroring
   # main-build.yaml's prebuilt split: amd64 builds on the swift-runners-strato
@@ -850,6 +856,126 @@ jobs:
           # --clobber so a re-run of this job replaces the manifest instead of
           # failing on the existing asset.
           gh release upload "$TAG" agent-manifest.json --clobber
+
+  # Point the Homebrew tap at this release (STR-47). The tap is its own repo —
+  # a formula's `url` only cares which release produced the asset, not which
+  # repo the source lives in — so the CLI stays in this monorepo.
+  #
+  # `needs: build-swift-binaries` is the correctness gate: that job succeeds
+  # only after EVERY leg uploaded its tarball and sidecar, so the formula can
+  # never point at an asset that failed to upload. Only the CLI-only assets
+  # (strato-cli-<os>-<arch>.tar.gz, STR-45) are referenced — a `brew install`
+  # onto a laptop has no use for a Vapor server and a node agent.
+  #
+  # Requires a HOMEBREW_TAP_TOKEN secret: GITHUB_TOKEN is scoped to this
+  # repository and cannot write to stratocloud/homebrew-strato. Use a
+  # fine-grained PAT limited to that one repo with Contents: read and write.
+  bump-homebrew-formula:
+    name: Bump Homebrew Formula
+    runs-on: ubuntu-latest
+    needs: [create-release, build-swift-binaries]
+    # Prereleases keep the tap on the last stable version: `brew install`
+    # should never hand someone an rc. Reuses create-release's decision rather
+    # than re-matching the tag here, so the two cannot disagree.
+    if: needs.create-release.outputs.prerelease != 'true'
+    env:
+      TAP_REPO: stratocloud/homebrew-strato
+    steps:
+      # Fail before touching the release rather than half-way through: a
+      # missing/expired token is a repo-settings problem, and skipping quietly
+      # would leave the tap silently pinned to an older version.
+      - name: Require the tap token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || {
+            echo "HOMEBREW_TAP_TOKEN is not set." >&2
+            echo "Create a fine-grained PAT with Contents: read and write on ${TAP_REPO}" >&2
+            echo "and store it as the HOMEBREW_TAP_TOKEN repository secret." >&2
+            exit 1
+          }
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Checksums come from the sidecars the build legs already computed, same
+      # as publish-agent-manifest — no need to re-download the tarballs to
+      # hash them.
+      - name: Download CLI checksum sidecars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir sidecars
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern 'strato-cli-*.tar.gz.sha256' --dir sidecars
+
+      # The template carries the whole formula (see .github/homebrew/); this
+      # only fills in the per-release urls and checksums.
+      - name: Render the formula
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          # Homebrew versions carry no leading "v"; the tag does.
+          VERSION="${TAG#v}"
+
+          cp .github/homebrew/strato.rb.tmpl strato.rb
+          sed -i "s|@@VERSION@@|${VERSION}|g" strato.rb
+
+          # `gh release download` above fails only when the pattern matched
+          # NOTHING, so a partially-uploaded release still gets here; each
+          # platform's sidecar is therefore checked by name.
+          for platform in macos-arm64 linux-x86_64 linux-arm64; do
+            asset="strato-cli-${platform}.tar.gz"
+            sidecar="sidecars/${asset}.sha256"
+            [ -f "$sidecar" ] || { echo "missing checksum sidecar for $asset on $TAG" >&2; exit 1; }
+            sha="$(awk '{print $1}' "$sidecar")"
+            [ -n "$sha" ] || { echo "empty checksum in $sidecar" >&2; exit 1; }
+            # macos-arm64 -> MACOS_ARM64 (the underscore in x86_64 survives).
+            token="$(printf '%s' "$platform" | tr 'a-z-' 'A-Z_')"
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${asset}"
+            sed -i -e "s|@@${token}_URL@@|${url}|g" -e "s|@@${token}_SHA256@@|${sha}|g" strato.rb
+          done
+
+          # A leftover placeholder means the template grew a token this loop
+          # does not fill — catch it here, not as a 404 in someone's `brew
+          # install`.
+          if grep -n '@@' strato.rb; then
+            echo "unsubstituted placeholders remain in the rendered formula" >&2
+            exit 1
+          fi
+
+          # Cheap guard against a template edit that broke the Ruby.
+          ruby -c strato.rb
+          cat strato.rb
+
+      - name: Push the formula to the tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          # Works on a tap that has no commits yet: git takes the branch name
+          # from the remote's advertised HEAD (its default branch) even when
+          # there is nothing to check out, so `git push origin HEAD` below
+          # creates the branch `brew tap` will clone rather than whatever the
+          # runner's init.defaultBranch happens to be.
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp strato.rb tap/Formula/strato.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/strato.rb
+          # Re-running the job for a tag already in the tap is a no-op, not an
+          # empty-commit failure.
+          if git diff --cached --quiet; then
+            echo "tap already at $GITHUB_REF_NAME; nothing to push"
+            exit 0
+          fi
+          git commit \
+            -m "strato ${GITHUB_REF_NAME#v}" \
+            -m "Released from ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
+          git push origin HEAD
 
   # Lightweight (git archive + heredocs + uploads) — runs hosted so the static
   # self-hosted runner is free for the Linux tarball build. Everything is
