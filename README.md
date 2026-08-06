@@ -9,11 +9,12 @@ Strato is a fast, secure, and easy to deploy private cloud platform based on bat
 ## Features
 
 - 🚀 **High Performance**: Swift control plane and agent, QEMU with KVM/HVF acceleration
-- 🔒 **WebAuthn/Passkey Authentication**: Modern passwordless authentication
-- 🏗️ **VM Management**: Full lifecycle management via QEMU (and Firecracker on Linux)
-- 🔐 **Fine-grained Authorization**: built-in Cedar policy engine (IAM roles + resource hierarchy) — no external authz service
-- 🛡️ **Secure by Default**: Deployments generate strong secrets on first run — no baked-in credentials
-- 🌐 **Software-defined Networking**: OVN/OVS integration on Linux hypervisors
+- 📦 **VM Management**: Full lifecycle management via QEMU, with snapshots, live resize, graphics consoles, and cloud-init provisioning
+- ⚡ **Sandboxes**: Fast, disposable Firecracker microVMs booted straight from OCI images, with exec, fork, and snapshot/restore
+- 🔒 **WebAuthn/Passkey Authentication**: Modern passwordless authentication, plus API keys and optional OIDC/SCIM federation
+- 🔐 **Fine-grained Authorization**: built-in Cedar policy engine (IAM roles, guardrails, decision logs) — no external authz service
+- 🛡️ **Secure by Default**: Deployments generate strong secrets on first run; agents authenticate only by SPIFFE/SPIRE mTLS
+- 🌐 **Software-defined Networking**: OVN/OVS on Linux — multi-node overlay networks, security groups, floating IPs, IPv4/IPv6 dual-stack
 - 📊 **PostgreSQL Backend**: Reliable data persistence with Fluent ORM
 
 ## Quick Start
@@ -32,9 +33,9 @@ docker compose up -d
 ```
 
 Open `http://localhost` and register — the first user automatically becomes
-the system administrator. Database migrations run automatically. See
-[deploy/compose/README.md](deploy/compose/README.md) for real-hostname/TLS
-deployments.
+the system administrator. Database migrations run automatically. See the
+[Docker Compose guide](docs/deployment/docker-compose.md) for
+real-hostname/TLS deployments.
 
 ### Kubernetes (Helm)
 
@@ -46,13 +47,13 @@ helm install strato .
 ```
 
 Strong credentials are auto-generated on first install and reused across
-upgrades (stored in the `<release>-strato-credentials` secret). See
-[helm/strato-control-plane/README.md](helm/strato-control-plane/README.md)
-for production values (ingress, TLS, WebAuthn hostname).
+upgrades (stored in the `<release>-strato-credentials` secret). See the
+[Kubernetes guide](docs/deployment/kubernetes.md) for production values
+(Gateway exposure, TLS, WebAuthn hostname).
 
 ### Adding a hypervisor
 
-In the web UI: **Agents → Enroll node** (or `POST /api/agent-enrollments`),
+In the web UI: **Agents → Add Agent** (or `POST /api/agent-enrollments`),
 which provisions the node's identity in SPIRE and returns a
 `bootstrapCommand` — a single pre-filled line to run on the hypervisor host:
 
@@ -66,15 +67,16 @@ curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/
   --trust-domain 'strato.local'
 ```
 
-The script installs the agent and its host dependencies, attests the node to
-SPIRE, and enables `strato-agent.service`. Agents authenticate only with
-SPIFFE/SPIRE X.509 SVIDs over mTLS — there is no token or password join, and
-no credential is stored on disk, so restarts and reboots just work. See the
+The script installs the agent and its host dependencies (QEMU, libvirt, OVN,
+swtpm/OVMF), attests the node to SPIRE, and enables `strato-agent.service`.
+Agents authenticate only with SPIFFE/SPIRE X.509 SVIDs over mTLS — there is
+no token or password join, and no long-lived shared secret sits on disk, so
+restarts and reboots just work. See the
 [agent deployment guide](docs/deployment/agents.md).
 
 ### Local development
 
-The three Swift packages build and test independently. The agent and shared
+The Swift packages build and test independently. The agent, shared, and CLI
 suites need no infrastructure; the control-plane suite runs against Postgres
 (`DATABASE_*` env vars, defaults `localhost:5432` / `strato` / `strato_test` —
 the [local development guide](docs/development/local-development.md) has a
@@ -84,6 +86,7 @@ matching `docker run` one-liner):
 swift test --package-path control-plane
 swift test --package-path agent
 swift test --package-path shared
+swift test --package-path cli
 ```
 
 To run the full stack, use the Docker Compose deployment above; it can build
@@ -95,9 +98,11 @@ image. See the [local development guide](docs/development/local-development.md).
 - **[Swift](https://swift.org)** - Modern, safe, and performant programming language
 - **[Vapor](https://vapor.codes)** - Server-side Swift web framework
 - **[QEMU](https://www.qemu.org)** - VM execution with KVM (Linux) / HVF (macOS) acceleration
+- **[Firecracker](https://firecracker-microvm.github.io)** - MicroVMs for sandboxes and lightweight Linux VMs
 - **[PostgreSQL](https://www.postgresql.org)** - Advanced open source database
 - **[Cedar](https://www.cedarpolicy.com)** - Policy language powering the built-in authorization engine
 - **[OVN/OVS](https://www.ovn.org)** - Software-defined networking (Linux)
+- **[SPIFFE/SPIRE](https://spiffe.io)** - Workload identity and mTLS for agent authentication
 - **[Next.js](https://nextjs.org)** - Web frontend
 
 ## Authentication
@@ -115,11 +120,18 @@ paths configure it from your hostname (see the deployment docs).
 
 ```
 strato/
-├── control-plane/       # Web UI, API, database, user management (Vapor)
-│   └── web/             # Next.js frontend
+├── control-plane/       # API, database, scheduler, IAM (Vapor)
+│   └── web/             # Next.js frontend (separate strato-frontend service)
 ├── agent/               # Hypervisor node agent (QEMU/Firecracker)
-├── shared/              # Common models and WebSocket protocol
-├── deploy/compose/      # Single-host Docker Compose deployment
+├── shared/              # Wire protocol and DTOs shared by both
+├── cli/                 # strato CLI
+├── clients/swift/       # Generated Swift API client
+├── SwiftFirecracker/    # Vendored Swift wrapper for the Firecracker API
+├── sandbox-guest/       # Guest init + kernel build for sandbox microVMs
+├── deploy/
+│   ├── compose/         # Single-host Docker Compose deployment
+│   ├── agent/           # Agent install script
+│   └── ovn-central/     # Per-site OVN central services
 ├── helm/                # Kubernetes Helm chart
 └── docs/                # VitePress documentation site
 ```
@@ -134,7 +146,8 @@ architecture, deployment guides, and troubleshooting.
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes and add tests
-4. Ensure all tests pass: `swift test`
+4. Ensure the tests pass for each package you touched:
+   `swift test --package-path <package>`
 5. Submit a pull request
 
 ## License

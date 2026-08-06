@@ -23,7 +23,7 @@ Everything lives under `control-plane/web/src/`:
 - **`(dashboard)` group** — `(dashboard)/layout.tsx` is the auth wall: it
   redirects unauthenticated users to `/login` (and users with zero orgs to
   `/onboarding`), and mounts the `Sidebar`, `Header`, and the global
-  `OperationWatcher`. Pages cover VMs, sandboxes, images, agents, networks,
+  `MutationWatcher`. Pages cover VMs, sandboxes, images, agents, networks,
   sites, storage (volumes/snapshots), projects, hierarchy, quotas,
   workload identity, admin (users/audit), and settings (API keys/org).
 
@@ -45,8 +45,14 @@ no tokens are stored in JS. It parses Vapor `{reason}`/`{error}` bodies into
 an `ApiError`, hard-redirects to `/login` on 401 (except on auth endpoints),
 and rewrites generic 403s into a permissions message. Per-resource endpoint
 modules (`lib/api/vms.ts`, `sandboxes.ts`, `agents.ts`, `images.ts`,
-`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) are typed against the
-hand-maintained DTO definitions in `types/api.ts` (there is no codegen).
+`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) carry the types, in
+two regimes: `bun run generate:api-types` (openapi-typescript) generates
+`src/types/openapi.ts` from the control plane's OpenAPI document — the same
+one its handlers are generated from, so the types cannot drift from the
+server, and CI fails when the committed file is stale — and
+`lib/api/projects.ts` is the first module typed against it (issue #583). The
+remaining ~28 modules are still typed against the hand-maintained DTO
+definitions in `types/api.ts`, migrating surface by surface.
 Domain-specific error prettifying lives in `lib/errors.ts`.
 
 **Server state — TanStack Query** (`providers/query-provider.tsx`; defaults:
@@ -61,20 +67,35 @@ resource under `lib/hooks/`:
   authorization API and caches them fail-closed — UI gating asks the backend
   rather than hardcoding roles.
 
-**Async operation polling.** VM and sandbox lifecycle mutations return a
-**202 + Operation** rather than the resource (see the async-operations
-section of [overview](./overview.md)). The frontend flow:
+**Refetch until converged.** VM and sandbox lifecycle mutations answer
+**202 + `{resource, targetGeneration, mutationId}`** (see the
+async-mutations section of [overview](./overview.md)). The frontend flow:
 
-1. The mutating component passes the returned operation to
-   `useOperationsStore().watch(operation, resourceName)`.
-2. `components/vms/operation-watcher.tsx` — a singleton mounted in the
-   dashboard layout so it survives navigation — polls each watched operation
-   every 2s until terminal, then toasts the outcome and invalidates the
-   resource list for the operation's `resourceKind`.
+1. The mutating component passes what came back to
+   `useMutationsStore().watch(acceptedMutation(...))`.
+2. `components/vms/mutation-watcher.tsx` — a singleton mounted in the
+   dashboard layout so it survives navigation — refetches the resource every
+   2s and reads its `conditions` against `targetGeneration`, then toasts the
+   outcome and invalidates the resource list for its `resourceKind`. The poll
+   re-schedules itself rather than running on an interval, so passes over
+   several watched mutations cannot pile up, and a mutation is given up on only
+   after several consecutive read failures — one 502 from the proxy must not
+   silently kill the toast for a create the user is waiting on.
+
+Two things take a different path, and the watched entry says which
+(`source`) rather than the watcher guessing from the verb: the verbs that
+still answer with an `Operation` (VM restart, the snapshot verbs, wrapped with
+`acceptedOperation(...)`), and **deletes**, whose success is the resource
+being gone — a `404` on it means deleted, never-existed and not-authorized
+alike — so they poll `operationsApi.get(mutationId)` instead.
+
+`degraded` is matched by generation, not presence: a failure can stand against
+an older generation while a newer mutation is in flight, and reporting that as
+*this* mutation's failure would be wrong.
 
 **Client state — Zustand.** Exactly one store:
-`lib/stores/operations-store.ts` (the watched-operations map above, plus a
-`usePendingOperation(resourceId)` selector for status badges). Everything
+`lib/stores/mutations-store.ts` (the watched-mutations map above, plus a
+`usePendingMutation(resourceId)` selector for status badges). Everything
 else is server cache or React context: the provider stack
 (`providers/index.tsx`) nests Theme → Query → Auth → Organization → Project,
 and project selection persists to `localStorage` per organization.
@@ -144,9 +165,11 @@ environment, development included, goes through the same passkey flows.
   natively-running control plane.
 - **Deployed**: `control-plane/web/Dockerfile` builds with Bun and runs the
   standalone server on Node as a non-root user. In the compose deployment,
-  `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/agent/`,
-  `/health`, `/organizations/` go to the control plane (with hour-long read
-  timeouts for the WebSockets), everything else to the frontend.
+  `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/oauth/`
+  (the CLI's OAuth device grant), `/agent/`, `/health`, `/organizations/`,
+  and `/ssf/` (the Shared Signals receiver) go to the control plane (with
+  hour-long read timeouts for the WebSockets), everything else to the
+  frontend.
 - **Tailwind v4** is configured CSS-first: no `tailwind.config`; the theme
   lives in `app/globals.css` via `@theme`, processed by
   `@tailwindcss/postcss`.

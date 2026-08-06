@@ -11,17 +11,24 @@ controllers so throttled requests are rejected before doing real work.
 
 Two fixed-window policies are enforced per identity:
 
-- **Auth** — `/auth/*` and `POST /api/users/register`. Strict: **10 requests / 60s**
-  by default.
+- **Auth** — `/auth/*`, `POST /api/users/register`,
+  `/oauth/device_authorization`, and `/oauth/revoke` (the OAuth endpoints
+  that create rows or probe token hashes). Strict: **10 requests / 60s** by
+  default.
 - **API** — every other route. Looser: **300 requests / 60s** by default.
+  This deliberately includes `/oauth/token`: the device grant polls it every
+  ~5s per login, device codes are 256-bit, and per-code interval enforcement
+  returns `slow_down`, so it needs the roomy bucket.
 
 Health probes (`/health`, `/health/*`) and WebSocket upgrades are never
 throttled.
 
 **Identity** is the authenticated user (`user:<uuid>`) when the request carries a
 valid session or API key, otherwise the client IP (`ip:<addr>`). The client IP is
-taken from `X-Forwarded-For` / `X-Real-IP` when present (the control plane is
-expected to sit behind a trusted ingress), falling back to the socket peer.
+read from `X-Forwarded-For`, counting in from the right by the configured
+trusted-hop count (the control plane is expected to sit behind a trusted
+ingress), falling back to the socket peer. `X-Real-IP` is deliberately never
+consulted — see the warning at the bottom of this page.
 
 ## Exponential backoff on repeated auth failures
 

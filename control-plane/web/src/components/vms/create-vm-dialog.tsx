@@ -18,7 +18,10 @@ import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import { useOperationsStore } from "@/lib/stores/operations-store";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { useProjectContext } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 import { toast } from "sonner";
@@ -34,7 +37,7 @@ export function CreateVMDialog({
   onOpenChange,
   onCreated,
 }: CreateVMDialogProps) {
-  const watch = useOperationsStore((state) => state.watch);
+  const watch = useMutationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -130,9 +133,10 @@ export function CreateVMDialog({
     setQuotaError(null);
     try {
       const GB = 1024 * 1024 * 1024; // 1 GB in bytes
-      // Creation is asynchronous: the server accepts the request and returns an
-      // operation, which the OperationWatcher polls and reports on completion.
-      const operation = await vmsApi.create({
+      // Creation is asynchronous: the server accepts the request and returns the
+      // VM with the generation it is converging on, which the MutationWatcher
+      // follows and reports on completion.
+      const accepted = await vmsApi.create({
         name: formData.name,
         description: formData.description || undefined,
         projectId,
@@ -157,7 +161,13 @@ export function CreateVMDialog({
         securityGroupIds:
           securityGroupIds.length > 0 ? securityGroupIds : undefined,
       });
-      watch(operation, formData.name);
+      watch(
+        acceptedMutation(accepted, {
+          kind: "create",
+          resourceKind: "virtual_machine",
+          resourceName: formData.name,
+        })
+      );
       toast.success(`Creating VM "${formData.name}"`);
       onOpenChange(false);
       onCreated?.();

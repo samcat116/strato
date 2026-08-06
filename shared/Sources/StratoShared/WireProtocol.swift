@@ -91,9 +91,10 @@ public enum WireProtocol {
     /// release artifacts). The gate is load-bearing on the send side: an older
     /// agent has no `agent_update` case in its `MessageType` enum, so the
     /// envelope decode fails silently and no reply is ever sent — the control
-    /// plane would see only a timeout. The update endpoint therefore refuses
+    /// plane would see only a timeout. The update endpoint therefore refused
     /// agents that registered with a pre-v6 version instead of sending and
-    /// hoping (see `supportsAgentUpdate(_:)`).
+    /// hoping. (The message itself is gone as of v28; only the OS reporting
+    /// remains from this version.)
     ///
     /// Version 7: declarative agent auto-update (issue #434).
     /// `DesiredStateMessage` carries an optional `desiredAgentUpdate` and
@@ -424,7 +425,47 @@ public enum WireProtocol {
     /// Like v26 and unlike v18/v23, the gate does not refuse placement. A
     /// pre-v27 agent simply doesn't publish the address; its guests fall back to
     /// the seed ISO exactly as today.
-    public static let currentVersion = 27
+    ///
+    /// Version 28: the imperative `agent_update` message is removed (ADR 0001
+    /// stage 6). An agent's build is a durable fact about the host, not an
+    /// action, so it belongs in the sync — where `desiredAgentUpdate` has
+    /// carried it since v7. The operator's "update now" endpoint now assigns
+    /// that field and nudges a sync instead of dispatching a command, which
+    /// leaves the message with no sender.
+    ///
+    /// Removing a `MessageType` case is breaking in exactly one direction, and
+    /// only across a skew that upgrades backwards: a *pre-v28 control plane*
+    /// driving a v28 agent would send `agent_update` (from its own manual
+    /// endpoint) into an envelope the agent can no longer decode, and the
+    /// request would burn its 300s timeout against silence. Nothing else
+    /// regresses — a v28 control plane never sends the message to any agent,
+    /// old or new, and the declarative path it uses instead has been
+    /// understood by every agent since v7. Upgrade the control plane first,
+    /// which is the deployment order everywhere else in this document.
+    ///
+    /// Version 29: the control plane serves desired state over a long-poll
+    /// `GET /agent/desired-state` on the Envoy SVID-mTLS listener, and the
+    /// agent may fetch it there instead of waiting for a pushed
+    /// `desired_state` frame (ADR 0001 stage 10). Nothing about the payload
+    /// changes — the response body is the same `MessageEnvelope` wrapping the
+    /// same `DesiredStateMessage` — so this version gates the *transport*, not
+    /// the schema.
+    ///
+    /// Both directions of skew are safe, which is why this is a plain version
+    /// bump rather than a break. A v29 agent against a pre-v29 control plane
+    /// sees `protocolVersion < 29` in its registration response and never
+    /// starts polling; the control plane keeps pushing. A pre-v29 agent
+    /// against a v29 control plane never sends `pullsDesiredState`, so the
+    /// control plane keeps pushing to it specifically while newer agents on
+    /// the same fleet pull. The two modes coexist per agent, not per fleet.
+    ///
+    /// Speaking v29 is deliberately *not* sufficient to be driven by pull:
+    /// `AgentRegisterMessage.pullsDesiredState` is a separate explicit signal,
+    /// for the same reason `sandboxCapable` is. A v29 build understands the
+    /// endpoint, but an operator can pin it back to push mode with one config
+    /// key, and the control plane has its own kill switch — neither of which a
+    /// version number can express.
+    public static let currentVersion = 29
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -486,18 +527,6 @@ public enum WireProtocol {
         version >= sandboxForkMinimumVersion
     }
 
-    /// The lowest protocol version that understands the `agentUpdate` command
-    /// (see `currentVersion` version 6 notes).
-    public static let agentUpdateMinimumVersion = 6
-
-    /// Whether an agent registered with `version` can be sent an
-    /// `AgentUpdateMessage`. A pre-v6 agent cannot even decode the envelope
-    /// (unknown `MessageType` case) and never replies, so the control plane
-    /// must refuse the update up front rather than time out against silence.
-    public static func supportsAgentUpdate(_ version: Int) -> Bool {
-        version >= agentUpdateMinimumVersion
-    }
-
     /// The lowest protocol version that acts on
     /// `DesiredStateMessage.desiredAgentUpdate` (see `currentVersion` version 7
     /// notes).
@@ -505,9 +534,11 @@ public enum WireProtocol {
 
     /// Whether an agent registered with `version` converges on a
     /// `desiredAgentUpdate` carried by the sync. An older agent decodes the
-    /// sync fine but never acts on the field, so the fleet rollout must not
-    /// select such an agent — its health budget would expire against silence
-    /// and halt the rollout.
+    /// sync fine but never acts on the field, so neither assigner may select
+    /// such an agent — the fleet rollout's health budget would expire against
+    /// silence and halt, and an operator's "update now" would report an
+    /// assignment that never converges. Since v28 this is the *only* way an
+    /// agent is updated, so it is also the update endpoint's floor.
     public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
         version >= desiredAgentUpdateMinimumVersion
     }
@@ -730,6 +761,24 @@ public enum WireProtocol {
     /// agents that would discard it.
     public static func supportsMetadataPort(_ version: Int) -> Bool {
         version >= metadataPortMinimumVersion
+    }
+
+    /// The lowest protocol version that serves desired state over the
+    /// long-poll `GET /agent/desired-state` endpoint (see `currentVersion`
+    /// version 29 notes).
+    public static let desiredStatePullMinimumVersion = 29
+
+    /// Whether a peer at `version` speaks the desired-state pull transport.
+    ///
+    /// Read in both directions, and neither reading is sufficient on its own.
+    /// Agent-side it answers "does this control plane serve the endpoint?" —
+    /// the agent additionally needs its own `desired_state_pull` config to be
+    /// on. Control-plane-side it answers "could this agent be polling?" — the
+    /// control plane additionally needs the agent's explicit
+    /// `pullsDesiredState` flag before it stops pushing, because an agent that
+    /// merely *understands* the endpoint may have been pinned to push mode.
+    public static func supportsDesiredStatePull(_ version: Int) -> Bool {
+        version >= desiredStatePullMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

@@ -128,6 +128,12 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
+    /// When the stuck-convergence sweep marks this sandbox degraded — the VM
+    /// contract exactly (STR-147). Written by the mutation path as
+    /// `max(existing, now + budget)`; nil means nothing is outstanding.
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
+
     /// Outstanding cleanup participants blocking this sandbox's removal
     /// (ADR 0001, stage 3) — the VM contract exactly. See `ResourceFinalizer`.
     @Field(key: "finalizers")
@@ -275,13 +281,18 @@ extension Sandbox {
     /// `.created`-style pre-placement status) — to `.error`, then realigns
     /// desired state with observed reality (a stuck *delete* is exempt, so it
     /// cannot resurrect the sandbox). Shared by
-    /// `ResourceOperationCoordinator.recordVerdict` and the stuck-operation
-    /// sweep. Returns whether anything changed; does not persist — call
-    /// `save(on:)` afterwards.
+    /// `ResourceOperationCoordinator.recordVerdict` and the stuck-convergence
+    /// sweep. Takes the mutation kind rather than an operation row, for the
+    /// reason the VM's does (STR-147). Returns whether anything changed; does
+    /// not persist — call `save(on:)` afterwards.
+    ///
+    /// `telemetryReason` is accepted and ignored: there is no sandbox
+    /// counterpart to `Telemetry.vmEnteredError` yet, and the parameter is here
+    /// so both workload kinds present one signature to `ConvergingResource`.
     @discardableResult
-    func resolveForStuckOperation(_ operation: ResourceOperation) -> Bool {
+    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
         var changed = false
-        if status.isTransitional || (operation.kind == .create && observedGeneration == 0) {
+        if status.isTransitional || (mutation == .create && observedGeneration == 0) {
             setStatus(.error)
             changed = true
         }

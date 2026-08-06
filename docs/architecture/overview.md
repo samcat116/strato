@@ -38,15 +38,22 @@ need no inbound connectivity.
 
 The control plane is declarative, not imperative:
 
-- The database stores each VM's and sandbox's **desired state** (`running`,
-  `shutdown`, `paused`, `absent`) alongside its observed status. API
-  mutations update desired state; agents converge on it.
-- The control plane periodically sends each agent a full, authoritative
-  `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
-  Each desired record carries a monotonic **generation** counter guarding
-  against reordering; syncs are level-triggered and safe to drop or replay.
-  Image download URLs are control-plane-relative paths the agent fetches
-  over SVID mTLS, so nothing in a sync expires.
+- The database stores each VM's **desired state** (`running`, `shutdown`,
+  `paused`, `absent`) — and each sandbox's (`running`, `stopped`, `absent`)
+  — alongside its observed status. API mutations update desired state;
+  agents converge on it.
+- Each agent gets a full, authoritative `DesiredStateMessage` covering its
+  VMs, sandboxes, and logical networks. Each desired record carries a
+  monotonic **generation** counter guarding against reordering; syncs are
+  level-triggered and safe to drop or replay. Image download URLs are
+  control-plane-relative paths the agent fetches over SVID mTLS, so nothing
+  in a sync expires.
+- The agent **fetches** that sync by long-poll (`GET /agent/desired-state`,
+  wire v29), rather than the control plane pushing it. Mutations ring a
+  contentless broadcast doorbell so a parked poll answers immediately; the
+  agent also re-fetches unconditionally on a slow timer, which is the
+  correctness invariant behind every optimization in the path. Agents that
+  predate v29 are still pushed to, per agent, through the transition.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence
@@ -57,31 +64,46 @@ gates) is specified in [wire-protocol](./wire-protocol.md); the agent-side
 engine in [agent](./agent.md); the control-plane side in
 [control-plane](./control-plane.md).
 
-## Async resource operations
+## Async resource mutations
 
-VM and sandbox mutation endpoints (create/start/stop/delete/reboot, plus
-pause/resume for VMs) insert a `ResourceOperation` row in the same
-transaction as the desired-state change and return **202 Accepted** with
-the operation object. The operation completes when an agent's observed
-state catches up (or fails, or a stuck-operation sweep times it out after a
-per-kind budget). Operation rows deliberately have no foreign key to the
-resource, so delete operations survive the row's removal. The frontend
-polls operations to a terminal state and refreshes the affected list.
+VM and sandbox lifecycle endpoints (create/start/stop/delete, VM
+pause/resume/resize, sandbox restart) write the desired-state change and
+return **202 Accepted** with `{resource, targetGeneration, mutationId}`.
+Clients refetch the resource and read its `conditions` block: done once the
+owning agent has confirmed `targetGeneration` and the desired state is
+satisfied, failed when a `degraded` reason names that same generation. A
+**stuck-convergence sweep** degrades a resource that misses the deadline the
+mutation stamped, and runs lock-free on every replica.
+
+There is no "operation already pending" refusal: desired state is
+level-triggered, so overlapping mutations converge on the last write.
 
 The same transaction appends a `resource_events` row — who mutated what, to
 which target generation — an append-only trail that is never updated and
 never swept, with a database trigger enforcing it. It is where mutation
-attribution lives once operation rows stop being the record (ADR 0001).
+attribution lives (ADR 0001), and, for a **delete**, where completion is
+recorded: a delete succeeds by its resource ceasing to exist, which the
+resource itself cannot report, so the reap appends a terminal event and
+clients poll `GET /api/operations/:id` with the `mutationId`.
+
+VM **restart** and the **snapshot** verbs are still imperative agent commands
+with no generation to converge on: they keep `ResourceOperation` rows, the
+`409` double-submit guard, and the operation-polling contract until ADR 0001
+converts them. The operations API otherwise survives as a read-only façade
+synthesized from `resource_events` plus the resource's conditions, so older
+clients keep working.
 
 ## Multi-replica control plane
 
 Multiple control-plane replicas are supported. PostgreSQL is the only
 source of durable truth; **Valkey** holds ephemeral coordination state
-(agent presence, socket routing, placement reservations, singleton sweep
-locks) and the system fails open if it's unavailable — agents still
-converge via the periodic sync. A mutation on one replica for an agent
-socketed to another publishes a **sync nudge** over pub/sub; lost nudges
-are backstopped by the periodic sync timer. Details:
+(agent presence, socket routing for the remaining imperative RPCs,
+placement reservations, singleton sweep locks) and the system fails open if
+it's unavailable — agents still converge on their own re-fetch. A mutation
+on any replica publishes a contentless **doorbell** on one fleet-wide
+channel; every replica checks whether it holds that agent's parked poll (or
+socket), at most one does, and lost doorbells are backstopped by the
+agent's unconditional re-fetch. Details:
 [multi-replica](./multi-replica.md).
 
 ## Scheduler
@@ -144,18 +166,17 @@ listener authenticated by their SPIFFE SVID (issue #493).
 
 ### Authentication
 
-- **WebAuthn/Passkeys** (swift-server/webauthn-swift) with Vapor sessions
-  is the primary human login; **API keys** (bearer tokens with scoping)
-  serve programmatic access; optional **OIDC** providers federate sign-in,
-  with **SCIM** provisioning for users and groups and a Shared Signals
-  (SSF) receiver for revocation events.
-- Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in
-  front of the control plane. The listener prefers **X25519MLKEM768**, a
-  hybrid post-quantum key exchange, so a recorded handshake cannot be
-  decrypted retroactively once quantum computers arrive; the classical
-  X25519 half keeps the connection safe if ML-KEM is ever broken. Agents
-  negotiate it automatically from swift-nio-ssl 2.37.1 onward, and it needs
-  Envoy >= v1.39.0.
+**WebAuthn/Passkeys** (swift-server/webauthn-swift) with Vapor sessions is
+the primary human login; **API keys** (bearer tokens with scoping) serve
+programmatic access; optional **OIDC** providers federate sign-in, with
+**SCIM** provisioning for users and groups and a Shared Signals (SSF)
+receiver for revocation events. Agent transport security is
+SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane
+(the only agent auth path); the listener prefers **X25519MLKEM768**, a
+hybrid post-quantum key exchange, so a recorded handshake cannot be
+decrypted retroactively once quantum computers arrive, while the classical
+X25519 half keeps the connection safe if ML-KEM is ever broken (agents
+negotiate it from swift-nio-ssl 2.37.1 onward; it needs Envoy >= v1.39.0).
 
 ### Authorization (built-in Cedar IAM)
 
@@ -163,44 +184,27 @@ Authorization is a built-in IAM system evaluated **in-process** by an
 embedded [Cedar](https://www.cedarpolicy.com/) policy engine — there is no
 external authorization service. Postgres is the only authorization store
 (role bindings, guardrails, the resource tree), which makes grants
-transactional with the resources they protect. The full design — including
-why it replaced the earlier SpiceDB deployment — is the
-[iam](./iam.md) decision record.
+transactional with the resources they protect. Access derives from walking
+up the resource hierarchy — `organization` → folder (`organizational_unit`
+on the wire, pending rename) → `project` → resource; explicit `forbid`
+beats explicit `permit` beats default deny. The full design — the model,
+roles, guardrails, decision logging — is documented in [iam](./iam.md); why
+it replaced the earlier SpiceDB deployment, and the migration that did, is
+recorded in [ADR 0004](../adr/0004-cedar-for-authorization.md).
 
-Access derives from walking up the resource hierarchy — `organization` →
-folder (`organizational_unit` on the wire, pending rename) → `project` →
-resource — with hierarchy inheritance a Cedar language primitive rather than
-hand-rolled recursion. Explicit `forbid` beats explicit `permit` beats
-default deny.
-
-Integration points:
-
-- `AuthorizationMiddleware` (registered globally, including in tests) is
-  **structurally default-deny**: every registered route must fall into
-  exactly one class — public allowlist (health checks, `/auth/*`, the agent
-  mTLS surfaces, the SCIM data plane), login-only identity-plane surfaces,
-  resource-mapped (`/api/vms`, `/api/sandboxes` — the middleware maps HTTP
-  method + path to the checked action, including lifecycle verbs such as
-  `start`, `stop`, `restart`, `pause`, `resume`, and sandbox `exec`), or
-  handler-checked. An unclassified route fails boot; an unmatched path is
-  denied.
-- Checks funnel into `IAMAuthorizer`, which evaluates the compiled Cedar
-  policy set against `role_bindings` rows and the relational
-  org/folder/project hierarchy. Handlers use `req.can` / `req.authorize`
-  for per-object checks. System admins are allowed by a tier-1 policy
-  inside the evaluator, not by a bypass.
-- **Roles** are nested global action groups
-  (`viewer ⊂ operator ⊂ editor ⊂ admin`); bindings attach a principal
-  (user or group) with a role to an org, folder, project, or individual
-  resource. Creating a resource writes an ordinary binding for the creator
-  in the same transaction — visible, listable, revocable.
-- **Guardrails** are forbid-only ceilings authored by org/folder admins;
-  they inherit downward, intersect along the ancestry chain, and bind
-  system admins like everyone else.
-- Every decision lands in the `iam_decision_logs` decision log with the
-  deciding policy ids, the policy-set version, and the tier; the
-  **can-i / who-can** API (`/api/authorization/*`) answers hypothetical and
-  reverse queries.
+Integration points, briefly: `AuthorizationMiddleware` (registered globally,
+tests included) is **structurally default-deny** — every route must fall
+into exactly one class (public allowlist, login-only, resource-mapped, or
+handler-checked), an unclassified route fails boot, and an unmatched path is
+denied. Checks funnel into `IAMAuthorizer`; handlers use `req.can` /
+`req.authorize` for per-object checks, and system admins are allowed by a
+tier-1 policy inside the evaluator, not by a bypass. **Roles** are nested
+global action groups (`viewer ⊂ operator ⊂ editor ⊂ admin`) bound at org,
+folder, project, or resource level, with the creator's binding written in
+the same transaction as the resource. **Guardrails** are forbid-only
+ceilings that inherit downward and bind system admins like everyone else.
+Every decision lands in the decision log, and the **can-i / who-can** API
+(`/api/authorization/*`) answers hypothetical and reverse queries.
 
 ### Hierarchy, groups, and quotas
 
@@ -213,12 +217,15 @@ create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 
 ## Observability
 
-The control plane emits OTLP metrics, logs, and traces via swift-otel to
-an OTel collector, which exports to Prometheus, Loki, and Jaeger
-(`OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`).
-VM and sandbox console/workload logs flow from agents over the WebSocket
-and are pushed to Loki. Audit events fan out to the database and optional
-external backends, with retention pruning.
+The control plane emits OTLP metrics, logs, and traces via swift-otel
+(`OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`). The
+Helm chart ships an OTel collector that exports metrics to Prometheus (a
+remote-write to the bundled instance, plus a scrape endpoint) and traces to
+a configurable OTLP endpoint; collected logs go to the debug exporter. The
+compose deployment leaves OTLP export off and runs Loki directly. VM and
+sandbox console/workload logs flow from agents over the WebSocket and are
+pushed to Loki. Audit events fan out to the database and optional external
+backends, with retention pruning.
 
 ## Deployment shapes
 
@@ -235,7 +242,7 @@ external backends, with retention pruning.
 | [control-plane](./control-plane.md) | Control-plane code architecture: boot, services, request lifecycle, agent socket, sweeps, testing |
 | [agent](./agent.md) | Agent code architecture: targets, driver registry, reconciler, storage, networking, self-update |
 | [wire-protocol](./wire-protocol.md) | The StratoShared package: envelope, message catalog, reconciliation contract, DTOs |
-| [frontend](./frontend.md) | Next.js app structure, data layer, operation polling, auth flow |
+| [frontend](./frontend.md) | Next.js app structure, data layer, refetch-until-converged, auth flow |
 | [scheduler](./scheduler.md) | Placement strategies and integration |
 | [multi-replica](./multi-replica.md) | Running multiple control-plane replicas |
 | [networking](./networking.md) | OVN/OVS design, IPAM, roadmap |
@@ -243,6 +250,8 @@ external backends, with retention pruning.
 | [storage](./storage.md) | StorageBackend, volumes, snapshots, image materialization |
 | [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
 | [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |
-| [iam](./iam.md) | The Cedar migration decision record |
+| [iam](./iam.md) | Cedar-based authorization: invariants, tiers, roles, guardrails, enforcement |
+| [authorization-edge-audit](./authorization-edge-audit.md) | Point-in-time audit of the authorization enforcement edge (July 2026) |
+| [guest-identity](./guest-identity.md) | SPIFFE SVIDs for guest VMs and sandboxes (design proposal) |
 | [webhooks](./webhooks.md) | User-managed event notifications: event catalog, signing, transactional outbox |
 | [agent-updates](./agent-updates.md) | Operator-triggered and declarative agent updates |

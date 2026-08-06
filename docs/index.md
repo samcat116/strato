@@ -54,9 +54,9 @@ administrator. For clusters, see the
 
 Strato uses a distributed **Control Plane** and **Agent** architecture:
 
-- **Control Plane**: Vapor-based web application managing the UI, API, database, and user management
-- **Agents**: Swift applications running on hypervisor nodes, managing VMs via QEMU
-- **Communication**: WebSocket-based real-time messaging between components
+- **Control Plane**: Vapor-based application owning the API, database, scheduler, and IAM
+- **Agents**: Swift daemons on hypervisor nodes, managing VMs (QEMU) and sandboxes (Firecracker)
+- **Communication**: WebSocket-based declarative state sync between components
 
 ## Platform Support
 

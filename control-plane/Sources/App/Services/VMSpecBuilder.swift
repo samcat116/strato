@@ -71,40 +71,37 @@ struct VMSpecBuilder {
         return .disk(firmware: firmware)
     }
 
-    /// Builds network specs from the VM's interfaces, ordered by order index
-    /// (then device name, for stability when orders collide). Interfaces must
-    /// have `addresses` eager-loaded — the per-family address rows are the
-    /// source of NIC addressing (the legacy single-address columns are dead).
+    /// The VM's NICs in device order, each paired with the logical network it
+    /// attaches to. Interfaces must have `addresses` eager-loaded — the
+    /// per-family address rows are the source of NIC addressing (the legacy
+    /// single-address columns are dead).
+    ///
+    /// The one decision point for both halves of what a sync says about a NIC:
+    /// the `VMSpec`'s `NetworkSpec` list and the `InstanceMetadata.nics` the
+    /// guest reads. Ordering and the drop policy are settled here so the two
+    /// cannot disagree — a guest whose metadata lists NICs its spec doesn't
+    /// (or in another order) has no way to tell which is right.
     ///
     /// `networks` maps logical-network id → its model, supplying the network's
     /// name and the DHCP/DNS configuration agents program into OVN. A NIC whose
-    /// network is absent from the map emits no spec at all: the row it points
+    /// network is absent from the map is dropped entirely: the row it points
     /// at is guaranteed by a foreign key, so a miss means the caller under-
     /// fetched, and a half-built spec would put the port on the wrong switch.
-    /// `securityGroupsByInterface` maps NIC id → its security-group ids;
-    /// missing entries emit nil (unmanaged), which is also the default so
-    /// callers that predate security groups — and tests — need not fetch it.
     ///
     /// `logger`, when supplied, records a dropped NIC. A miss is only reachable
     /// through an assembly bug, but dropping one silently costs a VM a NIC with
     /// no symptom anywhere — so the sync paths pass a logger and the pure
     /// callers (tests) need not.
-    ///
-    /// `sendsMetadata` gates `metadataEnabled` on the receiving agent's protocol
-    /// version, exactly as `securityGroupsByInterface` is gated by its caller.
-    static func networkSpecs(
+    static func resolvedInterfaces(
         from interfaces: [VMNetworkInterface],
-        networks: [UUID: LogicalNetwork] = [:],
-        securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadata: Bool = true,
+        networks: [UUID: LogicalNetwork],
         logger: Logger? = nil
-    ) -> [NetworkSpec] {
-        interfaces
-            .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+    ) -> [(interface: VMNetworkInterface, network: LogicalNetwork)] {
+        interfaces.inDeviceOrder
             .compactMap { interface in
                 guard let network = networks[interface.logicalNetworkID] else {
                     logger?.error(
-                        "NIC's logical network was not loaded; omitting it from the VM spec",
+                        "NIC's logical network was not loaded; omitting it from the VM's desired state",
                         metadata: [
                             "interfaceId": .string(interface.id?.uuidString ?? "unsaved"),
                             "networkId": .string(interface.logicalNetworkID.uuidString),
@@ -112,12 +109,49 @@ struct VMSpecBuilder {
                         ])
                     return nil
                 }
-                return NetworkSpec.build(
-                    interface: interface,
-                    network: network,
-                    securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
-                    sendsMetadata: sendsMetadata)
+                return (interface, network)
             }
+    }
+
+    /// Builds network specs from the VM's interfaces (see
+    /// `resolvedInterfaces(from:networks:logger:)` for ordering, the eager-load
+    /// requirement, and what happens to a NIC whose network wasn't loaded).
+    ///
+    /// `securityGroupsByInterface` maps NIC id → its security-group ids;
+    /// missing entries emit nil (unmanaged), which is also the default so
+    /// callers that predate security groups — and tests — need not fetch it.
+    ///
+    /// `sendsMetadataPort` gates `metadataEnabled` on the receiving agent's protocol
+    /// version, exactly as `securityGroupsByInterface` is gated by its caller.
+    static func networkSpecs(
+        from interfaces: [VMNetworkInterface],
+        networks: [UUID: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true,
+        logger: Logger? = nil
+    ) -> [NetworkSpec] {
+        networkSpecs(
+            fromResolved: resolvedInterfaces(from: interfaces, networks: networks, logger: logger),
+            securityGroupsByInterface: securityGroupsByInterface,
+            sendsMetadataPort: sendsMetadataPort)
+    }
+
+    /// The same, for a caller that resolved the NICs itself — the sync, which
+    /// hands one resolution to both the spec and the VM's instance metadata so
+    /// the two lists agree by construction and an under-fetched NIC is logged
+    /// once rather than once per consumer.
+    static func networkSpecs(
+        fromResolved resolved: [(interface: VMNetworkInterface, network: LogicalNetwork)],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true
+    ) -> [NetworkSpec] {
+        resolved.map { interface, network in
+            NetworkSpec.build(
+                interface: interface,
+                network: network,
+                securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
+                sendsMetadataPort: sendsMetadataPort)
+        }
     }
 
     /// Legacy single-disk volume list from `vm.diskPath`.
@@ -181,8 +215,24 @@ struct VMSpecBuilder {
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadata: Bool = true,
+        sendsMetadataPort: Bool = true,
         logger: Logger? = nil
+    ) -> VMSpec {
+        buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: volumes,
+            resolvedInterfaces: resolvedInterfaces(
+                from: networkInterfaces, networks: networks, logger: logger),
+            securityGroupsByInterface: securityGroupsByInterface,
+            sendsMetadataPort: sendsMetadataPort)
+    }
+
+    /// The same, for a caller holding an already-resolved NIC list (see
+    /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
+    static func buildVMSpecWithVolumes(
+        from vm: VM, image: Image?, volumes: [Volume],
+        resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -210,9 +260,9 @@ struct VMSpecBuilder {
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: volumes,
             networks: networkSpecs(
-                from: networkInterfaces, networks: networks,
+                fromResolved: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadata: sendsMetadata, logger: logger),
+                sendsMetadataPort: sendsMetadataPort),
             console: ConsoleSpec(
                 console: vm.consoleMode, serial: vm.serialMode,
                 // nil, not an explicit `.headless`, so the key is omitted

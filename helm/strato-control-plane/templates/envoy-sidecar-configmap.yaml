@@ -171,11 +171,24 @@ data:
                                                     # the /ingest/* routes would break, since the platform
                                                     # alternative keeps working.
                                                     regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
+                            # The agent control channel: the WebSocket at
+                            # /agent/ws and the desired-state long-poll at
+                            # /agent/desired-state (STR-146). Both are
+                            # long-lived by design, hence no route timeout.
+                            #
+                            # `timeout: 0s` is the route timeout only. The
+                            # connection manager's stream_idle_timeout (5 min by
+                            # default, unset here) still applies to a stream
+                            # with no bytes flowing — exactly what a parked poll
+                            # is. The 45s hold window in
+                            # AgentDesiredStateController sits well under it;
+                            # raising that would need an explicit per-route
+                            # idle_timeout here.
                             - match:
                                 prefix: "/agent/"
                               route:
                                 cluster: control_plane_local
-                                timeout: 0s  # Disable timeout for WebSocket
+                                timeout: 0s
                             - match:
                                 prefix: "/"
                               route:

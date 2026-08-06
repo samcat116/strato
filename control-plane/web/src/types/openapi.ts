@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create a virtual machine
-         * @description Records the VM and a pending `create` operation, returning the operation to poll. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
+         * @description Records the VM and returns it with the generation it is converging on; refetch it until its `conditions` report `converged`. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
          */
         post: operations["createVM"];
         delete?: never;
@@ -148,7 +148,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a virtual machine
-         * @description Sets desired state to absent and returns a pending `delete` operation.
+         * @description Sets desired state to absent. The row survives until every finalizer clears, so poll `GET /api/operations/{operationID}` with the returned `mutationId` rather than the VM: once the VM is gone, a `404` on it is indistinguishable from never-existed and not-authorized.
          */
         delete: operations["deleteVM"];
         options?: never;
@@ -435,7 +435,10 @@ export interface paths {
          */
         put: operations["updateSandbox"];
         post?: never;
-        /** Delete a sandbox */
+        /**
+         * Delete a sandbox
+         * @description Sets desired state to absent. Poll `GET /api/operations/{operationID}` with the returned `mutationId` rather than the sandbox — see `deleteVM` for why.
+         */
         delete: operations["deleteSandbox"];
         options?: never;
         head?: never;
@@ -899,6 +902,8 @@ export interface paths {
         /**
          * Attach a volume to a VM
          * @description Requires `attach` on the volume and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the volume, never to the VM.
          */
         post: operations["attachVolume"];
         delete?: never;
@@ -1163,6 +1168,8 @@ export interface paths {
         /**
          * Attach a floating IP to a VM NIC
          * @description Requires `update` on the floating IP and on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the floating IP, never to the VM.
          */
         post: operations["attachFloatingIP"];
         delete?: never;
@@ -1294,6 +1301,8 @@ export interface paths {
         /**
          * Attach a security group to a VM NIC
          * @description Requires `attach` on the group and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the security group, never to the VM. A `sandboxId` still separates the two — `404` absent, `403` forbidden.
          */
         post: operations["attachSecurityGroup"];
         delete?: never;
@@ -1317,6 +1326,8 @@ export interface paths {
         /**
          * Detach a security group from a VM NIC
          * @description Refused when it would leave the NIC with no security group — every NIC keeps at least one.
+         *
+         *     Resolves the target the same way attach does: a `vmId` this caller cannot reach is answered `404` whether no such VM exists or the caller merely lacks `update` on it, so the two are indistinguishable and the endpoint cannot be used to probe which VM ids exist. `403` therefore refers to the security group, never to the VM; a `sandboxId` still separates the two.
          */
         post: operations["detachSecurityGroup"];
         delete?: never;
@@ -3396,7 +3407,7 @@ export interface paths {
         head?: never;
         /**
          * Update agent properties
-         * @description Currently only `autoUpdate` (declarative auto-update enrollment). Withdrawing clears any assigned desired version and pushes a fresh desired-state sync. Requires `manage` on the agent.
+         * @description Currently only `autoUpdate` (declarative auto-update enrollment). Withdrawing clears an assignment the fleet rollout made and pushes a fresh desired-state sync; an update an operator assigned directly survives, since that path needs no enrollment (cancel it with `DELETE /api/agents/{agentId}/actions/update`). Re-enrolling clears a recorded failure and restarts the health budget. Requires `manage` on the agent.
          */
         patch: operations["updateAgentProperties"];
         trace?: never;
@@ -3438,12 +3449,20 @@ export interface paths {
         put?: never;
         /**
          * Update an agent's binary
-         * @description Resolves the release artifact for the agent's OS/architecture, dispatches an update command over the agent socket, and reports the agent's own outcome synchronously (the call blocks while the agent downloads and verifies the artifact, up to 300s). On success the agent restarts and re-registers with its new version.
+         * @description Assigns the target version to the agent as desired state and nudges a sync, which carries it as `desiredAgentUpdate`. The agent downloads and verifies the artifact, restarts, and proves the update by re-registering with its new version. Returns 202 immediately: the assignment is durable on the agent row, so it survives disconnects and control-plane restarts.
+         *
+         *     Poll the agent (`GET /api/agents/{agentId}`) for progress — `updateDesiredVersion` clears on convergence, `updateBlockedReason` carries the agent's reason for waiting, and `updateFailureReason` a terminal failure. This is the same machinery as the fleet auto-update rollout, and an in-flight update from either source holds the other: only one agent restarts at a time.
          *
          *     The request body is optional. Supplying `artifactUrl`/`sha256` overrides the release path and is system-admin only, since it installs an arbitrary binary on the host. Requires `manage` on the agent, and system admin while the agent hosts foreign-organization workloads.
          */
         post: operations["updateAgentBinary"];
-        delete?: never;
+        /**
+         * Cancel an agent's update assignment
+         * @description Withdraws the assigned version, any pinned artifact, the health-budget clock, and any recorded blocker or failure, whoever assigned it; the next sync stops carrying the update.
+         *
+         *     Deliberately has no online requirement, unlike assigning: an update that can never converge is usually one whose agent is gone, and that is exactly when it needs withdrawing. Idempotent — cancelling an agent with no assignment succeeds and changes nothing. Requires `manage` on the agent.
+         */
+        delete: operations["cancelAgentUpdate"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5070,7 +5089,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal. */
+        /**
+         * @description The body of a `202` from a VM lifecycle mutation. The VM as the mutation left it, plus the generation it now has to converge on.
+         *
+         *     Done means the VM's `conditions` report `converged` with `observedGeneration >= targetGeneration`; failed means `conditions.degraded.sinceGeneration == targetGeneration`, with the agent's reason. Both are readable from `GET /api/vms/{vmID}` — no operation object is involved.
+         *
+         *     `mutationId` names the audit record of the request, and is what `GET /api/operations/{operationID}` answers for. Its one *necessary* use is `deleteVM`: a delete succeeds by the VM ceasing to exist, and a client polling the VM would see a `404` that means deleted, never-existed and not-authorized alike.
+         */
+        AcceptedVMMutation: {
+            resource: components["schemas"]["VMDetail"];
+            /**
+             * Format: int64
+             * @description The generation the VM's `observedGeneration` must reach.
+             */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /** @description The body of a `202` from a sandbox lifecycle mutation — the sandbox counterpart of `AcceptedVMMutation`, with the same contract. */
+        AcceptedSandboxMutation: {
+            resource: components["schemas"]["SandboxDetail"];
+            /**
+             * Format: int64
+             * @description The generation the sandbox's `observedGeneration` must reach.
+             */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /**
+         * @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
+         *
+         *     Served from two sources. The verbs still dispatched as imperative agent commands — VM restart, and every snapshot verb — have real operation records. Everything else is synthesized on read from the mutation's audit record and the resource's `conditions`, so a client written against the older contract keeps working; those responses report no `completedAt` except for a completed delete.
+         */
         ResourceOperation: {
             /** Format: uuid */
             id?: string;
@@ -7152,8 +7203,13 @@ export interface components {
             updateAvailable: boolean;
             /** @description Whether the agent is enrolled in declarative auto-update. */
             autoUpdate: boolean;
-            /** @description The version the fleet rollout has assigned this agent while it converges; null once converged or never assigned. */
+            /** @description The version this agent has been assigned while it converges; null once converged or never assigned. Set by the fleet rollout and by an operator's update action alike. */
             updateDesiredVersion?: string | null;
+            /**
+             * @description Who assigned `updateDesiredVersion` — the fleet auto-update rollout or an operator's update action. Null when there is no assignment.
+             * @enum {string|null}
+             */
+            updateAssignmentSource?: "rollout" | "manual" | null;
             /** Format: date-time */
             updateAttemptedAt?: string | null;
             /** @description The agent's self-reported reason for not converging yet. */
@@ -7298,7 +7354,7 @@ export interface components {
         };
         /** @description Optional overrides for an operator-triggered agent self-update. With no body at all, the agent updates to the configured target version along the release path. */
         AgentUpdateRequest: {
-            /** @description Proceed despite caveats that would otherwise be refused: hosted sandboxes, or an agent already at the target version. */
+            /** @description Proceed despite the one caveat that is otherwise refused: hosted sandboxes, which the sandbox runtime does not yet re-adopt after an agent restart. An agent already at the target version is refused regardless — an update converges on a version, so reinstalling the same build is not expressible. */
             force?: boolean;
             /** @description Explicit artifact override for deployments the URL-convention resolver cannot serve. Requires `sha256`, and system admin. */
             artifactUrl?: string;
@@ -7307,7 +7363,7 @@ export interface components {
             artifactKind?: components["schemas"]["AgentUpdateArtifactKind"];
             /** @description Member to extract from an explicit tarball artifact. Defaults to `strato-agent`. */
             tarballMember?: string;
-            /** @description Informational version label for an explicit artifact; defaults to the configured target. */
+            /** @description Version label for an explicit artifact; defaults to the configured target, and is required when the deployment has none. Load-bearing: convergence is "the agent re-registered at this version", so a label the artifact's binary does not report leaves the update stuck until it is recorded as failed. */
             targetVersion?: string;
         };
         /**
@@ -7315,9 +7371,9 @@ export interface components {
          * @enum {string}
          */
         AgentUpdateArtifactKind: "tarball" | "binary";
-        /** @description Outcome the agent reported for a dispatched update. */
+        /** @description The update assignment the agent will converge on. */
         AgentUpdateResult: {
-            /** @description Always `updating` on success. */
+            /** @description Always `assigned`. */
             status: string;
             targetVersion: string;
             /** @description The artifact URL with query and userinfo stripped — an override may resolve to a presigned URL whose query string is a credential. */
@@ -8787,6 +8843,24 @@ export interface components {
                 "application/json": components["schemas"]["ResourceOperation"];
             };
         };
+        /** @description The mutation was accepted. Refetch the VM until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedVMMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedVMMutation"];
+            };
+        };
+        /** @description The mutation was accepted. Refetch the sandbox until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedSandboxMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedSandboxMutation"];
+            };
+        };
         /** @description The log backend (Loki) could not be queried. */
         LogBackendUnavailable: {
             headers: {
@@ -9134,7 +9208,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9194,7 +9268,7 @@ export interface operations {
                     "application/json": components["schemas"]["VMDetail"];
                 };
             };
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9221,7 +9295,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9241,7 +9315,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9261,7 +9335,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9301,7 +9375,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9321,7 +9395,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9554,7 +9628,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9631,7 +9705,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9651,7 +9725,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9671,7 +9745,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9691,7 +9765,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -14938,8 +15012,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The agent accepted the update and is restarting. */
-            200: {
+            /** @description The update was assigned; the agent converges on it. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14951,7 +15025,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            /** @description The agent is offline, already at the target version, hosts sandboxes that would not survive a restart, speaks a wire protocol older than remote updates, or has not reported its OS/architecture. Several of these are waivable with `force`. */
+            /** @description The agent is offline, already runs the target version, hosts sandboxes that would not survive a restart, speaks a wire protocol older than declarative updates (v7), or has not reported its OS/architecture. Only the sandbox caveat is waivable with `force`. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -14960,24 +15034,33 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The agent could not be reached, or it reported a failure. */
-            502: {
+        };
+    };
+    cancelAgentUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent, with no update assignment. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Error"];
+                    "application/json": components["schemas"]["AgentDetail"];
                 };
             };
-            /** @description The agent did not reply within the update window. The update may still complete; the agent re-registers with its new version if so. */
-            504: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     adoptAgentWorkloads: {

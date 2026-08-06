@@ -26,8 +26,7 @@ export default defineConfig({
         text: 'Introduction',
         items: [
           { text: 'What is Strato?', link: '/guide/what-is-strato' },
-          { text: 'Getting Started', link: '/guide/getting-started' },
-          { text: 'Quick Start', link: '/guide/quick-start' }
+          { text: 'Getting Started', link: '/guide/getting-started' }
         ]
       },
       {
@@ -53,6 +52,7 @@ export default defineConfig({
           { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
           { text: 'IAM', link: '/architecture/iam' },
+          { text: 'Guest Identity (Proposal)', link: '/architecture/guest-identity' },
           { text: 'Webhooks', link: '/architecture/webhooks' },
           { text: 'Agent Updates', link: '/architecture/agent-updates' }
         ]
@@ -61,7 +61,10 @@ export default defineConfig({
         text: 'Architecture Decisions',
         items: [
           { text: 'ADR 0001: Declarative Agent Protocol', link: '/adr/0001-declarative-agent-protocol' },
-          { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' }
+          { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' },
+          { text: 'ADR 0003: IMDS Chassis Namespace', link: '/adr/0003-imds-chassis-namespace' },
+          { text: 'ADR 0004: Cedar for Authorization', link: '/adr/0004-cedar-for-authorization' },
+          { text: 'Authorization Edge Audit (July 2026)', link: '/architecture/authorization-edge-audit' }
         ]
       },
       {

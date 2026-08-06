@@ -6,4 +6,4 @@ export { LogViewer } from "./log-viewer";
 export { VMVolumesCard } from "./vm-volumes-card";
 export { VMNetworkCard } from "./vm-network-card";
 export { VMSnapshotsCard } from "./vm-snapshots-card";
-export { OperationWatcher } from "./operation-watcher";
+export { MutationWatcher } from "./mutation-watcher";

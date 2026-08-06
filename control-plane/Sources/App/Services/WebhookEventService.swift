@@ -209,6 +209,92 @@ enum WebhookEvents {
         try await enqueue(event, on: db)
     }
 
+    /// Enqueue `operation.completed`/`operation.failed` for a lifecycle
+    /// mutation whose outcome is now settled by the resource's own conditions
+    /// (ADR 0001 stage 4, STR-147).
+    ///
+    /// The subscriber-facing shape is deliberately unchanged — same event
+    /// types, same `operationId`/`operationKind`/`status` keys — because
+    /// nothing about a webhook consumer should have to notice that the id now
+    /// names a `resource_events` row instead of a `resource_operations` one.
+    /// `operationId` is the newest `requested` event for the resource, which
+    /// is the mutation the convergence just settled.
+    ///
+    /// Reached only through `ResourceConvergence.recordSuccess`/`recordFailure`,
+    /// which call it inside the transaction that also persists the write
+    /// closing the transition — so the outbox row and the guard that stops the
+    /// transition being detected twice commit together, and the event fires
+    /// exactly once. Do not call it outside that transaction: committing the
+    /// guard without the event loses the event permanently, because nothing
+    /// re-enters.
+    static func enqueueMutationOutcome<R: ConvergingResource>(
+        for resource: R, succeeded: Bool, error: String?, on db: Database
+    ) async throws {
+        let resourceID = try resource.requireID()
+        let mutation = try await ResourceEvent.latest(
+            .requested, resourceKind: R.operationResourceKind, resourceID: resourceID, on: db)
+
+        // The event's captured context first: it was resolved at mutation time,
+        // while the row was certainly still there.
+        var context: (organizationID: UUID, projectID: UUID?, resourceName: String?)?
+        if let organizationID = mutation?.organizationID {
+            context = (organizationID, mutation?.projectID, mutation?.resourceName ?? resource.name)
+        } else {
+            context = try await resourceContext(
+                kind: R.operationResourceKind, id: resourceID, on: db)
+        }
+        guard let context else { return }
+
+        var data: [String: CodableValue] = [
+            "operationId": .string(mutation?.id?.uuidString ?? ""),
+            "operationKind": .string(mutation?.mutation.rawValue ?? ""),
+            "status": .string((succeeded ? VMOperationStatus.succeeded : .failed).rawValue),
+        ]
+        if let error {
+            data["error"] = .string(error)
+        }
+
+        let event = WebhookEvent(
+            type: succeeded ? .operationCompleted : .operationFailed,
+            organizationID: context.organizationID,
+            projectID: context.projectID,
+            resource: WebhookEvent.Resource(
+                kind: R.operationResourceKind.rawValue, id: resourceID, name: context.resourceName),
+            data: data)
+        try await enqueue(event, on: db)
+    }
+
+    /// The delete counterpart of `enqueueMutationOutcome`, for the one mutation
+    /// whose success is the resource's absence: called from the finalizer reap,
+    /// which has the terminal `resource_events` row and no resource left to
+    /// read context off.
+    ///
+    /// `operationId` is the **request** event's id, not the terminal one's.
+    /// That is the `mutationId` the `202` handed the client and the id
+    /// `GET /api/operations/{id}` answers for, so a subscriber correlating the
+    /// completion against the delete it issued matches — which is the whole
+    /// promise `enqueueMutationOutcome` makes for every other verb. Nil only
+    /// for a reap with no recorded request, where there is nothing to
+    /// correlate against anyway.
+    static func enqueueDeletionCompleted(
+        _ terminalEvent: ResourceEvent, requestID: UUID?, on db: Database
+    ) async throws {
+        guard let organizationID = terminalEvent.organizationID else { return }
+        let event = WebhookEvent(
+            type: .operationCompleted,
+            organizationID: organizationID,
+            projectID: terminalEvent.projectID,
+            resource: WebhookEvent.Resource(
+                kind: terminalEvent.resourceKind.rawValue, id: terminalEvent.resourceID,
+                name: terminalEvent.resourceName),
+            data: [
+                "operationId": .string(requestID?.uuidString ?? ""),
+                "operationKind": .string(terminalEvent.mutation.rawValue),
+                "status": .string(VMOperationStatus.succeeded.rawValue),
+            ])
+        try await enqueue(event, on: db)
+    }
+
     /// Resolves the owning organization/project and display name for an
     /// operation's resource. Nil when the resource row no longer exists, or
     /// sits under no organization — there is nowhere to deliver to either way.

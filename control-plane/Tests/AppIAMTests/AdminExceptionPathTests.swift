@@ -60,7 +60,7 @@ final class AdminExceptionPathTests {
             lastHeartbeat: Date()
         )
         agent.organizationScope = .organization(try org.requireID())
-        agent.wireProtocolVersion = WireProtocol.agentUpdateMinimumVersion
+        agent.wireProtocolVersion = WireProtocol.desiredAgentUpdateMinimumVersion
         try await agent.save(on: app.db)
         return agent
     }

@@ -2,12 +2,13 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// The local-socket operations the bridge forwards back to its owner: running
-/// a correlated exchange over a held socket (the RPC holder half) and turning
-/// a nudge into a local desired-state sync. Production's delegate is
-/// `AgentService`; tests can substitute a fake. Kept to exactly these two
-/// methods so the seam stays narrow — everything else the bridge needs it
-/// reaches through `CoordinationService` and `Application` directly.
+/// The local operations the bridge forwards back to its owner: running a
+/// correlated exchange over a held socket (the RPC holder half) and turning a
+/// broadcast doorbell into whatever this replica can locally do about it.
+/// Production's delegate is `AgentService`; tests can substitute a fake. Kept
+/// to exactly these two methods so the seam stays narrow — everything else the
+/// bridge needs it reaches through `CoordinationService` and `Application`
+/// directly.
 protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     /// Run a forwarded exchange over the locally held socket and await the
     /// agent's correlated response. Called only after the bridge has confirmed
@@ -21,9 +22,12 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
         timeout: Duration
     ) async throws -> AgentServiceResponse
 
-    /// Deliver a sync nudge: push a fresh desired-state sync if this process
-    /// (still) holds the agent's socket, otherwise ignore it.
-    func deliverNudge(agentKey: String) async
+    /// Act on a broadcast doorbell for `agentKey`: wake a poll parked here and
+    /// push a fresh sync if this process holds the socket of a push-mode agent.
+    /// A replica that can do neither does nothing, which is the common case —
+    /// the doorbell is broadcast to everyone precisely so no one has to know
+    /// in advance who can act on it.
+    func deliverDoorbell(agentKey: String) async
 }
 
 /// Cross-replica message bridge (issue #261).
@@ -31,20 +35,28 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// The control plane runs as multiple replicas and an agent's WebSocket lives
 /// on exactly one of them. This is how any replica reaches an agent whose
 /// socket it does not hold: it owns the socket-route bookkeeping, the
-/// sync-nudge fan-out, and the correlated request/reply RPC forwarding — the
-/// cross-replica machinery that used to sit inside `AgentService`.
+/// desired-state doorbell, and the correlated request/reply RPC forwarding —
+/// the cross-replica machinery that used to sit inside `AgentService`.
+///
+/// The two halves now work differently on purpose. **Desired state** is
+/// broadcast (STR-146): one `agent:doorbell` channel every replica listens on,
+/// no routing directory, no targeted delivery. **Imperative RPC** still routes,
+/// because it needs a reply and needs to fail fast when nobody holds the socket
+/// — broadcasting it would turn "agent is offline" from an immediate error into
+/// a 30s timeout. So `agent:{name}:replica` survives here and only here, until
+/// stages 5–9 convert the last imperative exchange and STR-152 deletes both.
 ///
 /// It composes `CoordinationService` (pub/sub channels and route keys, itself
 /// backed by the Valkey / in-memory `CoordinationStore` adapters) and delegates
-/// the two operations that require the local socket back to its owner through
+/// the two operations that require local state back to its owner through
 /// `ReplicaBridgeDelegate`. `AgentService` keeps the local-socket mechanics;
 /// everything about *which replica* holds a socket and *how to forward* to it
 /// lives here.
 ///
-/// Everything the bridge does is a latency optimization over the periodic
-/// desired-state sync, which stays the correctness backstop: a lost nudge, a
-/// dropped subscription, or a failed RPC never corrupts state — the agent
-/// converges on the next periodic sync regardless.
+/// Everything the bridge does is a latency optimization: a lost doorbell, a
+/// dropped subscription, or a failed RPC never corrupts state — a pull-mode
+/// agent converges on its own unconditional re-fetch, and a push-mode agent on
+/// the periodic sync timer.
 actor ReplicaMessageBridge {
     private let app: Application
 
@@ -68,7 +80,7 @@ actor ReplicaMessageBridge {
     /// Health bookkeeping for the replica's pub/sub subscriptions (issue #261
     /// review): RediStack pins subscriptions to one dedicated connection and
     /// does not restore them when it drops, so liveness is verified by probing
-    /// our own nudge channel from the heartbeat loop.
+    /// the doorbell channel from the heartbeat loop.
     private var subscriptionsEstablished = false
     private var lastProbeSent: Date?
     private var lastProbeReceived: Date?
@@ -107,7 +119,7 @@ actor ReplicaMessageBridge {
     // MARK: - Socket routing
 
     /// Advertise that this replica holds `agentKey`'s socket so other replicas
-    /// can route sync nudges and RPCs here. Binds this process's replica id so
+    /// can forward imperative RPCs here. Binds this process's replica id so
     /// callers never thread it through.
     func recordRoute(agentKey: String) async {
         await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
@@ -119,10 +131,12 @@ actor ReplicaMessageBridge {
         await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
     }
 
-    /// Where a message for `agentKey` should go when this replica does *not*
-    /// hold the socket locally. A pure function of the route key relative to
-    /// this replica's id, so both the imperative RPC path and the sync-nudge
-    /// path share one decision.
+    /// Where an imperative exchange for `agentKey` should go when this replica
+    /// does *not* hold the socket locally. A pure function of the route key
+    /// relative to this replica's id.
+    ///
+    /// Desired state no longer asks: it rings the broadcast doorbell, which
+    /// needs no answer to this question at all.
     enum RemoteRoute: Sendable, Equatable {
         /// Another replica holds the socket; forward to it.
         case forward(replicaId: String)
@@ -141,9 +155,12 @@ actor ReplicaMessageBridge {
         return route == app.replicaID ? .ownReplica : .forward(replicaId: route)
     }
 
-    /// Publish a sync nudge for `agentKey` to the replica holding its socket.
-    func nudge(agentKey: String, toReplica replicaId: String) async {
-        await app.coordination.publishNudge(agentKey: agentKey, toReplica: replicaId)
+    // MARK: - Desired-state doorbell (STR-146)
+
+    /// Ring the fleet-wide doorbell for `agentKey`. The caller has already run
+    /// the local half inline, so this replica ignores its own echo.
+    func ringDoorbell(agentKey: String) async {
+        await app.coordination.publishDoorbell(agentKey: agentKey, fromReplica: app.replicaID)
     }
 
     // MARK: - Cross-replica RPC bridge (issue #261)
@@ -345,16 +362,22 @@ actor ReplicaMessageBridge {
 
     // MARK: - Replica pub/sub subscriptions (issue #261)
 
-    /// Sentinel published to our own nudge channel to verify the subscription
-    /// connection is alive. Cannot collide with a real nudge: nudges carry
-    /// agent names, and a leading NUL is not a legal agent name.
+    /// Agent-key sentinel published on the doorbell channel to verify the
+    /// subscription connection is alive. Cannot collide with a real doorbell:
+    /// those carry SPIFFE IDs, and a leading NUL is not a legal one.
+    ///
+    /// The doorbell channel is shared by the whole fleet, so a probe is only
+    /// ours when the payload's publisher id is ours — every replica sees every
+    /// other replica's probes and must ignore them, or a dead subscription
+    /// would look alive on the strength of a neighbor's traffic.
     static let subscriptionProbeMessage = "\u{0}subscription-probe"
 
-    /// Subscribe to this replica's nudge and RPC channels. Called from `start`
-    /// and re-armed by `verifySubscriptions()`; failure is logged and fails
-    /// open — the replica misses nudge latency (its periodic timer still
-    /// converges its own agents) and cannot serve cross-replica exchanges, but
-    /// stays available.
+    /// Subscribe to the doorbell channel and this replica's RPC channels.
+    /// Called from `start` and re-armed by `verifySubscriptions()`; failure is
+    /// logged and fails open — the replica misses doorbell latency (agents
+    /// still converge on their own re-fetch, and push-mode agents on the
+    /// periodic timer) and cannot serve cross-replica exchanges, but stays
+    /// available.
     ///
     /// Safe to call repeatedly: RediStack replaces the receiver when the
     /// channel is already subscribed on a live connection, and leases a fresh
@@ -364,9 +387,9 @@ actor ReplicaMessageBridge {
         let replicaId = app.replicaID
         do {
             try await app.coordination.subscribe(
-                channel: CoordinationService.nudgeChannel(replicaId: replicaId)
-            ) { [weak self] agentKey in
-                Task { await self?.handleNudge(agentKey: agentKey) }
+                channel: CoordinationService.doorbellChannel
+            ) { [weak self] payload in
+                Task { await self?.handleDoorbell(payload) }
             }
             try await app.coordination.subscribe(
                 channel: CoordinationService.rpcChannel(replicaId: replicaId)
@@ -384,7 +407,7 @@ actor ReplicaMessageBridge {
         } catch {
             subscriptionsEstablished = false
             app.logger.error(
-                "Failed to subscribe to replica coordination channels; cross-replica nudges and RPCs are unavailable on this replica: \(error)"
+                "Failed to subscribe to replica coordination channels; desired-state doorbells and cross-replica RPCs are unavailable on this replica: \(error)"
             )
         }
     }
@@ -394,11 +417,13 @@ actor ReplicaMessageBridge {
     /// connection and never restores them after a drop (Valkey restart,
     /// failover, network blip) — and a dead subscription is silent: this
     /// replica would keep *publishing* RPCs whose replies it can no longer
-    /// hear, failing every cross-replica exchange by timeout. So each heartbeat
-    /// tick publishes a probe to our own nudge channel; a probe that hasn't
-    /// come back by the next tick means the subscription connection is dead,
-    /// and everything is re-armed. Runs on the 30s heartbeat tick, bounding the
-    /// silent window to about two ticks.
+    /// hear, failing every cross-replica exchange by timeout — and it would
+    /// stop hearing doorbells, silently parking every poll it holds for the
+    /// full hold window. So each heartbeat tick publishes a self-addressed
+    /// probe on the doorbell channel; a probe that hasn't come back by the next
+    /// tick means the subscription connection is dead, and everything is
+    /// re-armed. Runs on the 30s heartbeat tick, bounding the silent window to
+    /// about two ticks.
     func verifySubscriptions() async {
         guard !isShutDown, !app.didShutdown else { return }
 
@@ -420,8 +445,9 @@ actor ReplicaMessageBridge {
         lastProbeSent = Date()
         do {
             try await app.coordination.publish(
-                channel: CoordinationService.nudgeChannel(replicaId: app.replicaID),
-                message: Self.subscriptionProbeMessage
+                channel: CoordinationService.doorbellChannel,
+                message: CoordinationService.doorbellPayload(
+                    agentKey: Self.subscriptionProbeMessage, fromReplica: app.replicaID)
             )
         } catch {
             // Publishing needs Valkey too; when it's down entirely the next
@@ -431,29 +457,40 @@ actor ReplicaMessageBridge {
     }
 
     /// Test seam: whether the most recently published subscription probe has
-    /// been received back on the nudge channel.
+    /// been received back on the doorbell channel.
     var lastSubscriptionProbeRoundTripped: Bool {
         guard let sent = lastProbeSent else { return false }
         return (lastProbeReceived ?? .distantPast) >= sent
     }
 
-    /// A nudge names an agent whose desired state changed on another replica.
-    /// The probe sentinel is consumed here for subscription liveness; a real
-    /// nudge is handed to the delegate, which syncs the agent if it still holds
-    /// its socket (and otherwise ignores it — the nudge raced a disconnect and
-    /// the periodic timer wherever the agent lands is the backstop).
-    func handleNudge(agentKey: String) async {
-        if agentKey == Self.subscriptionProbeMessage {
-            lastProbeReceived = Date()
+    /// A doorbell names an agent whose desired state changed somewhere in the
+    /// fleet. Two payloads are dropped before the delegate ever sees them:
+    ///
+    /// - **Our own echo.** The publisher already ran the local half inline
+    ///   before broadcasting, so acting again here would assemble and push the
+    ///   same sync twice.
+    /// - **Another replica's probe.** Probes are self-addressed liveness
+    ///   checks; counting a neighbor's would make a dead subscription look
+    ///   alive on the strength of someone else's traffic.
+    func handleDoorbell(_ payload: String) async {
+        guard let (replicaId, agentKey) = CoordinationService.parseDoorbell(payload) else {
+            app.logger.warning(
+                "Malformed desired-state doorbell payload; ignoring",
+                metadata: ["payload": .string(payload)])
             return
         }
+        if agentKey == Self.subscriptionProbeMessage {
+            if replicaId == app.replicaID { lastProbeReceived = Date() }
+            return
+        }
+        guard replicaId != app.replicaID else { return }
         guard let delegate else {
             app.logger.debug(
-                "Nudge received before the bridge delegate was set; ignoring",
+                "Doorbell received before the bridge delegate was set; ignoring",
                 metadata: ["agentKey": .string(agentKey)])
             return
         }
-        await delegate.deliverNudge(agentKey: agentKey)
+        await delegate.deliverDoorbell(agentKey: agentKey)
     }
 }
 

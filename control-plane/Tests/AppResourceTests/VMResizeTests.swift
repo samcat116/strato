@@ -152,7 +152,7 @@ final class VMResizeTests {
 
     // MARK: - Running VM
 
-    @Test("Resizing a running VM returns 202 with a resize operation and bumps the generation")
+    @Test("Resizing a running VM returns 202 with the VM and bumps the generation")
     func runningResizeAccepted() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
             try await running(vm, on: app.db)
@@ -160,10 +160,10 @@ final class VMResizeTests {
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .accepted)
-                let operation = try res.content.decode(OperationResponse.self)
-                #expect(operation.kind == .resize)
-                #expect(operation.status == .pending)
-                #expect(operation.vmId == vm.id)
+                let body = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                #expect(body.resource.id == vm.id)
+                #expect(body.resource.cpu == 6)
+                #expect(body.targetGeneration == body.resource.conditions.targetGeneration)
             }
 
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
@@ -254,16 +254,41 @@ final class VMResizeTests {
         }
     }
 
-    @Test("A pending operation on the VM rejects a resize with 409")
-    func pendingOperationBlocksResize() async throws {
-        try await withResizeTestApp { app, user, vm, _, token in
+    @Test("Two overlapping resizes charge quota once each, against the committed sizing")
+    func overlappingResizesChargeQuotaCorrectly() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
             try await running(vm, on: app.db)
-            let pending = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
-            try await pending.save(on: app.db)
 
-            try await put(app, vm, token: token, body: ["cpu": 4]) { res in
-                #expect(res.status == .conflict)
+            // The "operation already pending" mutex is gone (STR-147), so
+            // nothing refuses the second resize. What replaces it is the row
+            // lock the resize takes inside its own transaction: the loser
+            // recomputes its delta against the winner's committed sizing rather
+            // than against the stale value it read before the request.
+            let vmID = try vm.requireID()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for cpu in [4, 6] {
+                    group.addTask {
+                        try await app.test(.PUT, "/api/vms/\(vmID)") { req in
+                            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                            req.headers.contentType = .json
+                            req.body = ByteBuffer(
+                                data: try JSONSerialization.data(withJSONObject: ["cpu": cpu]))
+                        } afterResponse: { res in
+                            #expect(res.status == .accepted)
+                        }
+                    }
+                }
+                try await group.waitForAll()
             }
+
+            // Whichever landed last owns the sizing, and the project is charged
+            // exactly the difference from the VM's original 2 vCPUs — never
+            // both deltas computed from the same base.
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let quotas = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            let quota = try #require(quotas.first)
+            #expect(quota.reservedVCPUs == refreshed.cpu)
         }
     }
 
@@ -278,8 +303,8 @@ final class VMResizeTests {
 
             try await put(app, vm, token: token, body: ["balloonTarget": oneGB]) { res in
                 #expect(res.status == .accepted)
-                let operation = try res.content.decode(OperationResponse.self)
-                #expect(operation.kind == .resize)
+                let body = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                #expect(body.resource.balloonTarget == oneGB)
             }
 
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))

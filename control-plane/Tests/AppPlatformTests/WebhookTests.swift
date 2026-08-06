@@ -408,6 +408,98 @@ struct WebhookOutboxTests {
         }
     }
 
+    // MARK: - Convergence transitions (STR-147)
+
+    @Test("Converging emits operation.completed once, naming the recorded mutation")
+    func convergenceTransitionEnqueuesCompletion() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            _ = try await makeSubscription(app, fixture: fixture)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "converging-vm", project: fixture.project)
+
+            // A lifecycle mutation as `ResourceMutation.accept` leaves it: the
+            // desired-state change, the deadline, and the attribution event.
+            vm.setDesiredStatus(.running)
+            vm.extendConvergenceDeadline(by: 180)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
+                actor: .user(fixture.user.requireID()), on: app.db)
+
+            vm.observedGeneration = vm.generation
+            vm.setStatus(.running)
+            try await ResourceConvergence.recordSuccess(vm, on: app.db)
+
+            let deliveries = try await WebhookDelivery.query(on: app.db).all()
+            #expect(deliveries.count == 1)
+            let delivery = try #require(deliveries.first)
+            #expect(delivery.eventType == "operation.completed")
+            #expect(delivery.payload.contains("\"operationKind\":\"boot\""))
+            #expect(delivery.payload.contains(vm.id!.uuidString))
+
+            // The transition is what fires, not the state: the deadline is
+            // cleared, so a repeat is a no-op rather than a second delivery.
+            try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            #expect(try await WebhookDelivery.query(on: app.db).count() == 1)
+        }
+    }
+
+    @Test("A convergence failure emits operation.failed with the agent's reason")
+    func convergenceFailureEnqueuesFailure() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            _ = try await makeSubscription(app, fixture: fixture)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "failing-vm", project: fixture.project)
+
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
+                actor: .user(fixture.user.requireID()), on: app.db)
+
+            let recorded = try await ResourceConvergence.recordFailure(
+                vm, mutation: .boot, reason: "no bootable device",
+                telemetryReason: "convergence_failed", on: app.db)
+            #expect(recorded)
+
+            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            #expect(delivery.eventType == "operation.failed")
+            #expect(delivery.payload.contains("no bootable device"))
+            #expect(delivery.payload.contains("\"operationKind\":\"boot\""))
+        }
+    }
+
+    @Test("The finalizer reap emits completion for a delete after the row is gone")
+    func reapEnqueuesDeletionCompletion() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            _ = try await makeSubscription(app, fixture: fixture)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "reaped-vm", project: fixture.project)
+            let vmID = try vm.requireID()
+
+            ResourceFinalizerService.stampForDeletion(vm)
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            // The request event is where the reap reads its delivery context —
+            // by the time it runs there is no resource left to resolve one.
+            _ = try await ResourceEvent.record(
+                .delete, resourceKind: .virtualMachine, resourceID: vmID,
+                actor: .user(fixture.user.requireID()), on: app.db)
+
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+
+            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            #expect(delivery.eventType == "operation.completed")
+            #expect(delivery.payload.contains("\"operationKind\":\"delete\""))
+            #expect(delivery.payload.contains("reaped-vm"))
+            #expect(delivery.payload.contains(fixture.organization.id!.uuidString))
+        }
+    }
+
     @Test("A successful delete emits completion after the resource row is gone")
     func deleteCompletionSurvivesRowRemoval() async throws {
         try await withTestApp { app in

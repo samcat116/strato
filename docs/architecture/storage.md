@@ -121,6 +121,9 @@ a local directory. Future backends (LVM, Ceph RBD, ZFS, raw-file layouts for
 Virtualization.framework) implement the same protocol and can realize
 `createVolumeFromImage`/`cloneVolume` efficiently — backing files, reflinks,
 COW snapshots — instead of full copies.
+[ADR 0002](../adr/0002-ceph-for-distributed-block-storage.md) has since
+chosen Ceph/RBD per site as the distributed backend (see
+[distributed-storage](./distributed-storage.md)).
 
 ## Key design points
 
@@ -146,6 +149,20 @@ unbootable guest). Materialization writes to a staging path and publishes via
 atomic rename, so the final path never holds a half-written disk; that makes
 the operation safely idempotent — an existing disk at the target path is
 reused.
+
+### Deleting a VM removes its directory whole
+
+A materialized boot disk has no volume row, so nothing in the volume lifecycle
+reclaims it; the hypervisor driver's delete does, by removing
+`<vmStoragePath>/<vmId>` recursively (`VMDirectoryLayout.removeDirectory`)
+once the hypervisor process is torn down and swtpm is stopped. Everything the
+VM owns on the host lives there — boot disk, cloud-init ISO, UEFI varstore,
+TPM state, sockets — and removing the directory rather than a list of known
+filenames is deliberate: the earlier file-by-file cleanup grew one unlink per
+feature and never included the boot disk, leaking it on every delete. Attached
+volumes are unaffected: they live under `volume_storage_path` and are reclaimed
+by `deleteVolume`. Sandboxes already tore their directory and jail chroot down
+this way.
 
 ### The host image cache
 

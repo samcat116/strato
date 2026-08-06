@@ -8,10 +8,10 @@ public enum MessageType: String, Codable, Sendable {
     case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
-    // Operator-triggered self-update of the agent binary (protocol version >= 6).
-    // Like `vmReboot`, an update is an action, not a state, so it cannot ride
-    // the level-triggered desired-state sync.
-    case agentUpdate = "agent_update"
+    // `agent_update` (v6–v27) is gone: the agent's build is desired state, not
+    // an action, and rides the sync as `DesiredStateMessage.desiredAgentUpdate`
+    // (v7+). The operator's "update now" assigns that field rather than
+    // dispatching a command (ADR 0001 stage 6).
 
     // Reboot is an action, not a state, so it cannot ride the level-triggered
     // desired-state sync.
@@ -154,6 +154,19 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// registrations from agents that predate host-info reporting decode fine,
     /// and any individual field the agent couldn't probe is absent.
     public let hostInfo: HostInfo?
+    /// Whether this agent fetches its desired state from
+    /// `GET /agent/desired-state` rather than waiting for pushed
+    /// `desired_state` frames (ADR 0001 stage 10). True means "stop pushing to
+    /// me" — the control plane skips this agent in its periodic push pass and
+    /// rings the broadcast doorbell instead of writing to its socket.
+    ///
+    /// Like `sandboxCapable`, speaking the wire version is deliberately not
+    /// sufficient: a v29 agent understands the endpoint but may be pinned to
+    /// push mode by config, and the control plane must not stop pushing to an
+    /// agent that isn't actually polling. Optional so registrations from older
+    /// agents decode fine; absent means push mode, which is the safe default
+    /// in both directions of skew.
+    public let pullsDesiredState: Bool?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -171,7 +184,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         sandboxCapable: Bool? = nil,
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
-        hostInfo: HostInfo? = nil
+        hostInfo: HostInfo? = nil,
+        pullsDesiredState: Bool? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -189,6 +203,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.tpmCapable = tpmCapable
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
+        self.pullsDesiredState = pullsDesiredState
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent
@@ -261,81 +276,14 @@ public struct AgentUnregisterMessage: WebSocketMessage {
     }
 }
 
-/// Shape of the artifact an `AgentUpdateMessage` points at.
+/// Shape of the artifact a `DesiredAgentUpdate` points at.
 public enum AgentUpdateArtifactKind: String, Codable, Sendable {
     /// A gzipped tarball containing the agent binary as a member
-    /// (`AgentUpdateMessage.tarballMember`) — the shape of the published
+    /// (`DesiredAgentUpdate.tarballMember`) — the shape of the published
     /// release assets, which bundle control plane and agent together.
     case tarball = "tarball"
     /// A bare executable: the downloaded file *is* the new agent binary.
     case binary = "binary"
-}
-
-/// Control plane → agent command to replace the agent's own binary and restart
-/// into it (issue #432). An update is an action, not a reconcilable state, so
-/// it follows the `vmReboot` pattern: dispatched imperatively and answered with
-/// a correlated `SuccessMessage`/`ErrorMessage`.
-///
-/// The agent downloads the artifact, verifies `sha256`, stages the new binary
-/// next to the running one, atomically renames it over its own executable path,
-/// replies, and exits for its supervisor to restart. Agents that run inside a
-/// container refuse with an error (the image is the update mechanism there).
-public struct AgentUpdateMessage: WebSocketMessage {
-    public var type: MessageType { .agentUpdate }
-    public let requestId: String
-    public let timestamp: Date
-    /// The version the artifact is expected to contain. Informational: the
-    /// agent logs it and the control plane confirms the outcome when the
-    /// restarted binary re-registers with its new reported version.
-    public let targetVersion: String
-    /// Where to download the artifact from. Must be an HTTPS URL the agent
-    /// host can reach.
-    public let artifactURL: String
-    /// Hex SHA-256 digest of the artifact file (the tarball itself for
-    /// `.tarball`, the executable for `.binary`). Verified before anything is
-    /// swapped; a mismatch aborts with the old binary untouched.
-    public let sha256: String
-    public let artifactKind: AgentUpdateArtifactKind
-    /// Member path of the agent binary inside a `.tarball` artifact.
-    /// Ignored for `.binary`.
-    public let tarballMember: String?
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        targetVersion: String,
-        artifactURL: String,
-        sha256: String,
-        artifactKind: AgentUpdateArtifactKind = .tarball,
-        tarballMember: String? = "strato-agent"
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.targetVersion = targetVersion
-        self.artifactURL = artifactURL
-        self.sha256 = sha256
-        self.artifactKind = artifactKind
-        self.tarballMember = tarballMember
-    }
-}
-
-extension AgentUpdateMessage {
-    /// Artifact URLs may carry credentials — presigned query tokens or
-    /// userinfo are often the only way to authenticate a private mirror
-    /// download. Log this form, never the raw value, on both sides of the
-    /// wire.
-    public static func redactURL(_ raw: String) -> String {
-        guard var components = URLComponents(string: raw) else { return "<unparseable-url>" }
-        let hadQuery = components.query != nil
-        components.query = nil
-        components.fragment = nil
-        components.user = nil
-        components.password = nil
-        guard let base = components.string else { return "<unparseable-url>" }
-        return hadQuery ? base + "?[redacted]" : base
-    }
-
-    public var redactedArtifactURL: String { Self.redactURL(artifactURL) }
 }
 
 public struct AgentRegisterResponseMessage: WebSocketMessage {
@@ -833,27 +781,24 @@ public struct VolumeCreateMessage: WebSocketMessage {
     }
 }
 
-/// Message to delete a volume from an agent. The agent owns volume path
-/// layout and derives the volume's location from its ID; `volumePath` is a
-/// legacy hint that new control planes no longer send, so deletion also
-/// cleans up volumes whose create failed before a path was ever recorded.
+/// Message to delete a volume from an agent. Carries no file path: the agent
+/// owns volume path layout and derives the volume's location from its ID, so
+/// deletion also cleans up volumes whose create failed before a path was ever
+/// recorded.
 public struct VolumeDeleteMessage: WebSocketMessage {
     public var type: MessageType { .volumeDelete }
     public let requestId: String
     public let timestamp: Date
     public let volumeId: String
-    public let volumePath: String?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String? = nil
+        volumeId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.volumeId = volumeId
-        self.volumePath = volumePath
     }
 }
 
@@ -936,8 +881,7 @@ public struct VolumeResizeMessage: WebSocketMessage {
 }
 
 /// Message to create a snapshot of a volume. The agent owns snapshot path
-/// layout and reports the resulting path back in the response; `snapshotPath`
-/// is a legacy hint that new control planes no longer send.
+/// layout and reports the resulting path back in the response.
 public struct VolumeSnapshotMessage: WebSocketMessage {
     public var type: MessageType { .volumeSnapshot }
     public let requestId: String
@@ -945,7 +889,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
     public let volumeId: String
     public let snapshotId: String
     public let volumePath: String
-    public let snapshotPath: String?
     /// The VM this volume is currently attached to, when the control plane
     /// knows it (`Volume.$vm`). Nil for a detached volume, or from an older
     /// control plane.
@@ -964,7 +907,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         volumeId: String,
         snapshotId: String,
         volumePath: String,
-        snapshotPath: String? = nil,
         attachedVMId: String? = nil
     ) {
         self.requestId = requestId
@@ -972,7 +914,6 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         self.volumeId = volumeId
         self.snapshotId = snapshotId
         self.volumePath = volumePath
-        self.snapshotPath = snapshotPath
         self.attachedVMId = attachedVMId
     }
 }
@@ -1003,8 +944,7 @@ public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
 }
 
 /// Message to clone a volume. The agent owns volume path layout and reports
-/// the clone's path back in the response; `targetVolumePath` is a legacy hint
-/// that new control planes no longer send.
+/// the clone's path back in the response.
 public struct VolumeCloneMessage: WebSocketMessage {
     public var type: MessageType { .volumeClone }
     public let requestId: String
@@ -1012,22 +952,19 @@ public struct VolumeCloneMessage: WebSocketMessage {
     public let sourceVolumeId: String
     public let sourceVolumePath: String
     public let targetVolumeId: String
-    public let targetVolumePath: String?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sourceVolumeId: String,
         sourceVolumePath: String,
-        targetVolumeId: String,
-        targetVolumePath: String? = nil
+        targetVolumeId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.sourceVolumeId = sourceVolumeId
         self.sourceVolumePath = sourceVolumePath
         self.targetVolumeId = targetVolumeId
-        self.targetVolumePath = targetVolumePath
     }
 }
 

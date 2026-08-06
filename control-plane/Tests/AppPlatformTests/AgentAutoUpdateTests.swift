@@ -252,6 +252,187 @@ final class AgentAutoUpdateTests {
         }
     }
 
+    // MARK: - Manual assignments (STR-145)
+
+    @Test("a manual assignment is tracked like a rollout one, but never reset as stale")
+    func manualAssignmentIsTrackedButNotReset() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            // An operator's "update now" on an agent that isn't even enrolled,
+            // pinned to a one-off build the deployment target knows nothing
+            // about. The sweep must leave the assignment alone — resetting it
+            // as "stale" would cancel the operator's update.
+            let manual = try await self.makeAgent(
+                app: app, org: org, name: "aa-manual", autoUpdate: false)
+            manual.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            try await manual.save(on: app.db)
+
+            await self.sweep(app)
+
+            let row = try await self.reload(manual, on: app)
+            #expect(row.updateDesiredVersion == "1.9.0-rc1")
+            #expect(row.updateAssignmentSource == .manual)
+
+            // And it converges the same way: re-registering at the assigned
+            // version clears the assignment.
+            row.version = "1.9.0-rc1"
+            try await row.save(on: app.db)
+            await self.sweep(app)
+            let converged = try await self.reload(manual, on: app)
+            #expect(converged.updateDesiredVersion == nil)
+            #expect(converged.updateAssignmentSource == nil)
+        }
+    }
+
+    @Test("a manual assignment converges even with no deployment target configured")
+    func manualAssignmentConvergesWithoutATarget() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            // A dev/main-branch deployment has no target version, so no fleet
+            // rollout runs — but that is exactly when explicit-artifact manual
+            // updates get used, and their assignment still has to be cleared
+            // once the agent comes back on the new build.
+            await app.agentService.setAutoUpdateTargetForTesting(nil)
+            let agent = try await self.makeAgent(
+                app: app, org: org, name: "aa-manual", autoUpdate: false)
+            agent.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            try await agent.save(on: app.db)
+
+            await self.sweep(app)
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == "1.9.0-rc1")
+
+            let row = try await self.reload(agent, on: app)
+            row.version = "1.9.0-rc1"
+            try await row.save(on: app.db)
+            await self.sweep(app)
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("an in-flight manual update holds the fleet rollout: one agent restarts at a time")
+    func manualAssignmentHoldsTheRollout() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let manual = try await self.makeAgent(
+                app: app, org: org, name: "aa-manual", autoUpdate: false)
+            manual.assignUpdate(version: Self.target, source: .manual)
+            try await manual.save(on: app.db)
+            let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
+
+            await self.sweep(app)
+
+            #expect(try await self.reload(enrolled, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("a failed manual assignment does not halt the fleet rollout")
+    func manualFailureDoesNotHaltTheRollout() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            // The wedge this guards against: an operator updates an agent that
+            // isn't enrolled, the agent never comes back, and 600s later the
+            // sweep records a failure. If that halted the rollout, no enrolled
+            // agent would ever be assigned again — the assignment can't
+            // converge (the agent is gone), can't go stale (manual), and can't
+            // be re-issued (the endpoint refuses offline agents).
+            let manual = try await self.makeAgent(
+                app: app, org: org, name: "aa-manual", autoUpdate: false)
+            manual.assignUpdate(
+                version: "1.9.0-rc1",
+                source: .manual,
+                artifact: Self.stubArtifact,
+                at: Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60)))
+            try await manual.save(on: app.db)
+            let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
+
+            // First tick records the failure.
+            await self.sweep(app)
+            let failed = try await self.reload(manual, on: app)
+            #expect(failed.updateFailureReason?.contains("did not re-register") == true)
+            // The credential does not outlive the update that needed it.
+            #expect(failed.updateArtifactOverride == nil)
+
+            // The fleet keeps moving.
+            await self.sweep(app)
+            #expect(try await self.reload(enrolled, on: app).updateDesiredVersion == Self.target)
+        }
+    }
+
+    @Test("a failed rollout assignment still halts the fleet")
+    func rolloutFailureStillHalts() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            // The other half of the same rule: a rollout failure means the next
+            // agent would most likely hit the same bad artifact, so it halts.
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+
+            await self.sweep(app)
+            let firstRow = try await self.reload(first, on: app)
+            #expect(firstRow.updateAssignmentSource == .rollout)
+            firstRow.updateAttemptedAt = Date(
+                timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+            try await firstRow.save(on: app.db)
+
+            await self.sweep(app)
+            await self.sweep(app)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("cancelling withdraws the assignment, offline agent and all")
+    func cancelClearsTheAssignment() async throws {
+        try await withAutoUpdateApp { app, _, org, token in
+            // Offline on purpose: this is the state a stuck update leaves the
+            // agent in, and the one in which re-issuing the update is refused.
+            let agent = try await self.makeAgent(
+                app: app, org: org, name: "aa-agent", autoUpdate: false, online: false)
+            agent.assignUpdate(version: "1.9.0-rc1", source: .manual, artifact: Self.stubArtifact)
+            agent.recordUpdateFailure("did not re-register at 1.9.0-rc1")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(AgentResponse.self)
+                #expect(body.updateDesiredVersion == nil)
+                #expect(body.updateAssignmentSource == nil)
+                #expect(body.updateFailureReason == nil)
+            }
+
+            let row = try await self.reload(agent, on: app)
+            #expect(row.updateDesiredVersion == nil)
+            #expect(row.updateArtifactOverride == nil)
+            #expect(row.updateAttemptedAt == nil)
+
+            // Idempotent: cancelling again is a no-op success.
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("withdrawing auto-update leaves an operator's own update assignment alone")
+    func withdrawalKeepsManualAssignment() async throws {
+        try await withAutoUpdateApp { app, _, org, token in
+            let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            agent.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            try await agent.save(on: app.db)
+
+            try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["autoUpdate": false])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(AgentResponse.self)
+                #expect(!body.autoUpdate)
+                // Withdrawing from the fleet rollout is not a cancellation of
+                // an update the operator asked for directly — that path needs
+                // no enrollment in the first place.
+                #expect(body.updateDesiredVersion == "1.9.0-rc1")
+                #expect(body.updateAssignmentSource == "manual")
+            }
+        }
+    }
+
     @Test("an unresolvable artifact defers assignment instead of burning the agent's budget")
     func unresolvableArtifactDefersAssignment() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
@@ -481,6 +662,59 @@ final class AgentAutoUpdateTests {
             let after = try await self.reload(agent, on: app)
             #expect(after.autoUpdate)
             #expect(after.updateFailureReason == nil)
+        }
+    }
+
+    @Test("re-enrolling with an assignment in place restarts the health budget")
+    func reenrollRestartsTheBudgetClock() async throws {
+        try await withAutoUpdateApp { app, _, org, token in
+            // Clearing the failure alone is a retry that never had a chance:
+            // the original `updateAttemptedAt` is already past the budget, so
+            // the next sweep tick re-records the same failure immediately.
+            let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent", autoUpdate: false)
+            let staleClock = Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+            agent.assignUpdate(version: Self.target, source: .rollout, at: staleClock)
+            agent.recordUpdateFailure("did not re-register at \(Self.target)")
+            try await agent.save(on: app.db)
+
+            try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["autoUpdate": true])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let after = try await self.reload(agent, on: app)
+            #expect(after.updateFailureReason == nil)
+            #expect((after.updateAttemptedAt ?? staleClock) > staleClock)
+
+            // And the retry survives a sweep instead of re-failing on the spot.
+            await self.sweep(app)
+            #expect(try await self.reload(agent, on: app).updateFailureReason == nil)
+        }
+    }
+
+    @Test("an agent-reported failure drops the pinned artifact")
+    func reportedFailureDropsTheArtifact() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            agent.assignUpdate(version: Self.target, source: .manual, artifact: Self.stubArtifact)
+            try await agent.save(on: app.db)
+
+            let failed = ObservedAgentUpdateStatus(
+                targetVersion: Self.target,
+                disposition: ObservedAgentUpdateStatus.dispositionFailed,
+                reason: "artifact checksum mismatch"
+            )
+            await app.agentService.applyObservedStateReport(
+                try self.report(from: agent, status: failed), fromAgentKey: agent.identity.key)
+
+            let row = try await self.reload(agent, on: app)
+            #expect(row.updateFailureReason == "artifact checksum mismatch")
+            #expect(row.updateArtifactOverride == nil)
+            // The assignment itself stays: it is what the operator sees, and
+            // what a returning agent could still converge on.
+            #expect(row.updateDesiredVersion == Self.target)
         }
     }
 }

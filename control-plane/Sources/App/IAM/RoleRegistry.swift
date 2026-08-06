@@ -18,6 +18,21 @@ enum IAMPrincipalType: String, Codable, Sendable, CaseIterable {
     case group
     case serviceAccount = "service_account"
     case workload
+
+    /// The table whose rows this principal type names — the model's own
+    /// `schema`, the same contract `IAMNodeType.table` carries and for the
+    /// same reason: `ResourceBindingCleanup`'s tests hold the declared
+    /// cascading principals against the real foreign keys, and a principal
+    /// table that cascades away with a container strands its bindings exactly
+    /// as a node table does.
+    var table: String {
+        switch self {
+        case .user: return User.schema
+        case .group: return Group.schema
+        case .serviceAccount: return ServiceAccount.schema
+        case .workload: return WorkloadRegistration.schema
+        }
+    }
 }
 
 /// A typed principal reference — the subject of an authorization check.

@@ -146,6 +146,19 @@ actor AgentService {
     private var cleanDesiredStateRevisions: [String: UInt64] = [:]
     private var periodicDesiredStateSyncTask: Task<Void, Never>?
 
+    /// Agent row ids (as strings) whose desired state travels by long-poll
+    /// rather than by push (STR-146). Pushes are skipped for these — both the
+    /// periodic fan-out and the doorbell's local half — because the agent is
+    /// not listening for them and a redundant push would assemble the whole
+    /// sync a second time for nothing.
+    ///
+    /// Replica-local and socket-scoped, like `livenessRefreshedAt`: it records
+    /// what an agent said when it registered *here*, so it is populated on
+    /// registration and dropped on unregister. A replica that never saw the
+    /// registration defaults to push mode, which is the safe direction — an
+    /// unnecessary push is wasted work, a suppressed one is a stranded agent.
+    private var pullModeAgents: Set<String> = []
+
     /// The last refused sync this replica has logged per agent (STR-98).
     /// A refusal rides on every observed report until the agent's guard
     /// clears, so without this one stuck refusal would log and count on every
@@ -575,6 +588,12 @@ actor AgentService {
         // without a database read. No-op when no socket exists (tests).
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
+        recordDesiredStateTransport(
+            agentId: agentUUID.uuidString,
+            agentName: agentName,
+            protocolVersion: protocolVersion,
+            claimsPull: message.pullsDesiredState ?? false)
+
         // Publish liveness and socket location to the coordination store so
         // every control-plane process — not just the one holding this socket —
         // can see the agent and route mutations to it.
@@ -687,6 +706,7 @@ actor AgentService {
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
+        pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
@@ -722,6 +742,7 @@ actor AgentService {
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
+        pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
@@ -745,6 +766,9 @@ actor AgentService {
         // where the agent lives now.
         if let agentId = await agentId(forKey: agentKey) {
             failPendingRequests(for: agentId)
+            // The claim came with the socket and goes with it. If the agent
+            // reconnects here it re-declares its transport at registration.
+            pullModeAgents.remove(agentId)
         }
 
         if case .forward = await app.replicaBridge.remoteRoute(agentKey: agentKey) {
@@ -909,9 +933,17 @@ actor AgentService {
                         // Dirty agents are the minute-level fast path. Every
                         // tenth such pass (10 minutes at the production
                         // interval) is the level-triggered backstop for a lost
-                        // cross-replica nudge.
+                        // doorbell. Pull-mode agents are skipped by the pass
+                        // itself — their backstop is their own unconditional
+                        // re-fetch, which runs on a much tighter interval.
                         scheduleDesiredStateSyncToAllAgents(force: tick.isMultiple(of: 20))
                     }
+
+                    try self.checkTickPreconditions()
+
+                    // Degrade workloads that missed their convergence deadline
+                    // (STR-147). Lock-free — see `sweepStuckConvergence`.
+                    await sweepStuckConvergence()
 
                     try self.checkTickPreconditions()
 
@@ -1059,6 +1091,100 @@ actor AgentService {
         }
     }
 
+    /// Marks a VM or sandbox `degraded` once its convergence deadline passes
+    /// with the outstanding mutations still unconverged (ADR 0001 stage 4,
+    /// STR-147).
+    ///
+    /// This is what the stuck-*operation* sweep was for lifecycle mutations,
+    /// now that they keep no operation row: the deadline every accepted
+    /// mutation stamps replaces the row's `created_at` plus its per-kind
+    /// budget, and the resource's own `conditions.degraded` replaces the
+    /// verdict.
+    ///
+    /// **Deliberately not a cluster singleton.** Marking degraded is idempotent
+    /// (`recordFailure` no-ops once `failedGeneration == generation`) and
+    /// commutative (every replica computes the same verdict from the same
+    /// row), so two replicas sweeping the same resource cost one wasted write
+    /// at worst — where the operation sweep genuinely needed the lock, because
+    /// its verdict was a state transition two writers could disagree about.
+    /// One less thing whose correctness depends on Valkey, which is the point
+    /// of ADR 0001's multi-replica argument.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepStuckConvergence() async {
+        guard !isShutDown, !app.didShutdown else { return }
+
+        let db = app.db
+        let now = Date()
+
+        do {
+            try await degradeOverdue(VM.self, now: now, on: db)
+            try await degradeOverdue(Sandbox.self, now: now, on: db)
+        } catch {
+            app.logger.error("Stuck-convergence sweep failed: \(error)")
+        }
+    }
+
+    /// One workload kind's overdue rows. The deadline is the only column the
+    /// query filters on — no kind lookup, which is exactly what stamping a
+    /// deadline instead of a `lastMutationKind` bought.
+    private func degradeOverdue<R: ConvergingResource>(
+        _ type: R.Type, now: Date, on db: any Database
+    ) async throws {
+        let overdue = try await R.overdueForConvergence(at: now, on: db)
+
+        for resource in overdue {
+            guard let id = resource.id else { continue }
+            // Claim the timeout before doing anything with it. Clearing the
+            // deadline is the claim, so of two replicas sweeping the same row
+            // exactly one proceeds — which is what lets this run everywhere
+            // without a lock while still emitting one completion webhook.
+            guard try await resource.claimConvergenceTimeout(on: db) else { continue }
+
+            // The deadline is a backstop, not the verdict: a resource that
+            // converged between the query and here (or whose deadline the
+            // applier has not cleared yet) is left alone — the claim above has
+            // already dropped the deadline, which is all that was owed. A
+            // terminating resource never reports converged — it is on its way
+            // out, not converging on anything — so a stuck delete falls through
+            // and degrades, which is what a delete blocked on a finalizer
+            // should look like.
+            // Nothing to save: the claim already cleared the deadline in SQL,
+            // and writing the whole row from a model read before the claim
+            // would put this sweep's stale snapshot over a concurrent report.
+            guard !resource.isConverged else { continue }
+
+            // The mutation kind is read for one thing — whether a never-settled
+            // `create` should escalate to `.error` — and comes from the audit
+            // trail rather than a column on the resource, so overlapping
+            // mutations cannot make it disagree with what was actually asked
+            // for. A resource with no recorded mutation predates the trail;
+            // `.boot` is the conservative stand-in, since it resolves nothing
+            // a create would not.
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: R.operationResourceKind, resourceID: id, on: db
+                )?.mutation ?? .boot
+
+            let recorded = try await ResourceConvergence.recordFailure(
+                resource, mutation: mutation,
+                reason: "Timed out: the agent did not converge to generation "
+                    + "\(resource.generation) before the deadline",
+                telemetryReason: "stuck_convergence", on: db)
+            guard recorded else { continue }
+
+            app.logger.warning(
+                "Resource did not converge before its deadline; marked degraded",
+                metadata: [
+                    "resourceKind": .string(R.operationResourceKind.rawValue),
+                    "resourceId": .string(id.uuidString),
+                    "mutation": .string(mutation.rawValue),
+                    "targetGeneration": .stringConvertible(resource.generation),
+                    "observedGeneration": .stringConvertible(resource.observedGeneration),
+                ])
+        }
+    }
+
     /// Fails operations stuck `pending` past their per-kind budget and resolves the
     /// affected VM's in-flight status (issue #259). This is the restart backstop:
     /// while the dispatching process lives, the awaited agent response (or its
@@ -1066,6 +1192,13 @@ actor AgentService {
     /// It also broadens the old stuck-VM sweep — transitional VMs with no pending
     /// operation (e.g. a lost statusUpdate after a completed operation) still
     /// resolve to `.error`.
+    ///
+    /// Since STR-147 the operation half covers only what still writes rows —
+    /// VM reboot and the snapshot verbs — while lifecycle mutations are handled
+    /// by `sweepStuckConvergence`. The transitional-resource and volume halves
+    /// are unchanged: neither ever depended on an operation row. The
+    /// cluster-singleton lock stays for the same reason it was taken, and
+    /// retires with the last operation kind.
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStuckOperations() async {
@@ -1482,12 +1615,12 @@ actor AgentService {
     }
 
     /// Deletes one expired sandbox down the same path as `DELETE
-    /// /api/sandboxes/:id`: a pending `.delete` operation and desired
-    /// `.absent` in one transaction, then either agent teardown (the row goes
-    /// once a report confirms absence) or — with no agent to converge on — a
-    /// direct record delete. Sharing the path is the point: quota release,
-    /// reservation release, and operation accounting all come for free, and
-    /// the operation row makes the unattended deletion auditable.
+    /// /api/sandboxes/:id`: desired `.absent` plus its attribution event in one
+    /// transaction, then either agent teardown (the row goes once a report
+    /// confirms absence) or — with no agent to converge on — a direct record
+    /// delete. Sharing the path is the point: quota release, reservation
+    /// release, and the audit trail all come for free, and the `system` actor
+    /// on the event makes the unattended deletion attributable.
     private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
         guard let sandboxID = sandbox.id else { return }
 
@@ -1496,13 +1629,18 @@ actor AgentService {
             onlineAgentID = agentId
         }
 
+        // With no agent to converge on, the expiry owns the teardown itself;
+        // otherwise `.stateSync` nudges the agent holding it.
+        let strategy: ResourceMutation.Dispatch =
+            onlineAgentID == nil
+            ? .directResolution { @Sendable [app = self.app] db in
+                try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+            }
+            : .stateSync
+
         do {
-            let operation = try await ResourceOperation.begin(
-                .delete,
-                resourceKind: .sandbox,
-                resourceID: sandboxID,
-                userID: ResourceOperation.systemUserID,
-                on: db
+            let accepted = try await app.resourceMutation.accept(
+                .delete, on: sandbox, actor: .system, dispatch: strategy, on: db, app: app
             ) { db in
                 try await SandboxController.requireSnapshotLineageDeletable(
                     for: sandboxID, on: db)
@@ -1511,7 +1649,6 @@ actor AgentService {
                 // its participant already cleared.
                 ResourceFinalizerService.stampForDeletion(sandbox)
                 sandbox.setDesiredStatus(.absent)
-                try await sandbox.save(on: db)
             }
 
             app.logger.info(
@@ -1519,23 +1656,17 @@ actor AgentService {
                 metadata: [
                     "sandboxId": .string(sandboxID.uuidString),
                     "reason": .string(reason.description),
-                    "operationId": .string(operation.id?.uuidString ?? ""),
+                    "mutationId": .string(accepted.mutationID.uuidString),
                 ])
-
-            if let onlineAgentID {
-                await syncDesiredState(agentId: onlineAgentID)
-            } else {
-                app.resourceOperationCoordinator.dispatch(
-                    operation, resourceKind: .sandbox, resourceID: sandboxID, hypervisorId: nil,
-                    dispatch: .directResolution { @Sendable [app = self.app] db in
-                        try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
-                    }, app: app)
-            }
         } catch {
-            // `begin` rejects with 409 when an operation is already pending —
-            // a user action owns the sandbox right now. Both clocks are
-            // recomputed next tick, so an expired sandbox is never dropped,
-            // only deferred.
+            // The "operation already pending" `409` that used to defer an
+            // expiry racing a user action is gone with the operation row
+            // (STR-147), and is not missed: marking `.absent` is idempotent and
+            // level-triggered, so an expiry landing on top of a user's own
+            // delete converges on the same thing. What remains here is a real
+            // failure — a snapshot lineage that refuses deletion, or a write
+            // that did not commit — and the next tick recomputes both clocks,
+            // so an expired sandbox is deferred rather than dropped.
             app.logger.debug(
                 "Skipping sandbox expiry: \(error)",
                 metadata: ["sandboxId": .string(sandboxID.uuidString)])
@@ -1547,8 +1678,7 @@ actor AgentService {
     /// How long an assigned agent has to either re-register at its target
     /// version or report a blocker before the sweep treats the silence as a
     /// failed update and halts the rollout. Generous on purpose: it spans the
-    /// artifact download (the imperative endpoint already allows 300s for
-    /// that alone), the restart, and re-registration.
+    /// artifact download, the restart, and re-registration.
     static let autoUpdateHealthBudgetSeconds: TimeInterval = 600
 
     /// Advances the fleet's declarative agent updates one agent at a time
@@ -1556,13 +1686,24 @@ actor AgentService {
     /// lives on the agent rows, so any replica can pick up where another
     /// stopped.
     ///
-    /// Per tick, each enrolled-and-assigned agent is classified:
+    /// Per tick, each *assigned* agent is classified — an operator's "update
+    /// now" writes the same assignment (STR-145), so it is tracked, budgeted,
+    /// and reported exactly like a rollout one, and an in-flight manual update
+    /// holds the fleet rollout for the same reason a rollout assignment does:
+    /// one agent restarts at a time.
     /// - **converged** — re-registered at the target: assignment cleared.
-    /// - **stale** — assigned a version the deployment target has moved past:
-    ///   reset, including failures, so an old halt never blocks a new target.
+    /// - **stale** — a *rollout* assignment whose version the deployment target
+    ///   has moved past: reset, including failures, so an old halt never blocks
+    ///   a new target. Manual assignments are exempt — the operator named that
+    ///   version (possibly a one-off build) deliberately.
     /// - **failed** — a recorded failure (agent-reported, or silence past the
-    ///   health budget, recorded here): the rollout halts until an operator
-    ///   intervenes or the target changes.
+    ///   health budget, recorded here). A *rollout* failure halts the fleet
+    ///   until an operator intervenes or the target changes: the next agent
+    ///   would most likely hit the same bad artifact. A *manual* one does not —
+    ///   one operator action on one agent must not stop every other agent's
+    ///   auto-update, especially since the manual assignment's own escapes
+    ///   (converge, stale reset) are exactly what a terminal failure closes off.
+    ///   Cancelling the assignment is what clears it.
     /// - **parked** — blocked past the health budget (e.g. running
     ///   Firecracker VMs): the assignment stays, level-triggered, so the
     ///   agent converges whenever its blocker clears — but advancement stops
@@ -1570,11 +1711,10 @@ actor AgentService {
     /// - **waiting** — within budget: the rollout holds.
     ///
     /// Only when nothing is failed or waiting does the sweep assign the next
-    /// eligible agent (deterministic name order), after proving the release
-    /// actually publishes an artifact for that agent's platform.
+    /// eligible *enrolled* agent (deterministic name order), after proving the
+    /// release actually publishes an artifact for that agent's platform.
     func sweepAgentAutoUpdates() async {
         guard !isShutDown, !app.didShutdown else { return }
-        guard let target = autoUpdateTarget else { return }
         guard await app.coordination.acquireSweepLock("agent_auto_update") else {
             app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
             return
@@ -1582,25 +1722,45 @@ actor AgentService {
 
         let db = app.db
         let now = Date()
-        let canonicalTarget = AgentVersionTarget.canonical(target)
+        // Nil on a dev build with no configured target: no *rollout* can run,
+        // but assignments an operator made by hand (which supply their own
+        // artifact, precisely for builds a release does not serve) still need
+        // their convergence bookkeeping, so classification runs regardless.
+        let target = autoUpdateTarget
+        let canonicalTarget = target.map(AgentVersionTarget.canonical)
 
         do {
-            let enrolled = try await Agent.query(on: db)
-                .filter(\.$autoUpdate == true)
+            // Enrolled agents (candidates for the next assignment) plus anyone
+            // already carrying one — an operator's manual update assigns the
+            // same field without requiring enrollment (STR-145), and it needs
+            // the same convergence bookkeeping.
+            let candidates = try await Agent.query(on: db)
+                .group(.or) { group in
+                    group
+                        .filter(\.$autoUpdate == true)
+                        .filter(\.$updateDesiredVersion != nil)
+                }
                 .sort(\.$name)
                 .all()
 
             var rolloutHalted = false
             var waitingOnAgent = false
 
-            for agent in enrolled {
+            for agent in candidates {
                 guard let assigned = agent.updateDesiredVersion else { continue }
 
                 // The deployment target moved past this assignment
                 // (mid-rollout upgrade): reset everything, including a
                 // failure — the old target's halt must not block the new one.
-                guard AgentVersionTarget.canonical(assigned) == canonicalTarget else {
-                    clearRolloutAssignment(agent)
+                // Only for rollout assignments: a manual one names a version
+                // the operator chose, which the deployment target has no
+                // opinion about.
+                guard
+                    agent.updateAssignmentSource == .manual
+                        || canonicalTarget == nil
+                        || AgentVersionTarget.canonical(assigned) == canonicalTarget
+                else {
+                    agent.clearUpdateAssignment()
                     try await agent.save(on: db)
                     continue
                 }
@@ -1608,7 +1768,7 @@ actor AgentService {
                 // Converged: the agent re-registered at the target (or was
                 // updated by hand, which counts just the same).
                 if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
-                    clearRolloutAssignment(agent)
+                    agent.clearUpdateAssignment()
                     try await agent.save(on: db)
                     Telemetry.agentAutoUpdateConverged()
                     app.logger.notice(
@@ -1621,7 +1781,20 @@ actor AgentService {
                 }
 
                 if agent.updateFailureReason != nil {
-                    rolloutHalted = true
+                    // A *rollout* failure halts the fleet until an operator
+                    // intervenes: the next agent would most likely hit the same
+                    // bad artifact. A manual one does not. It is one operator's
+                    // action on one agent — possibly not even an enrolled one —
+                    // and letting it stop every other agent's auto-update means
+                    // a single failed "update now" wedges the fleet with no
+                    // automatic way out (the assignment is exempt from the
+                    // stale reset by design, and the agent that would clear it
+                    // by converging is the one that just died). Cancelling the
+                    // assignment is the operator's escape; until then this
+                    // agent simply holds its own failure.
+                    if agent.updateAssignmentSource != .manual {
+                        rolloutHalted = true
+                    }
                     continue
                 }
 
@@ -1651,31 +1824,38 @@ actor AgentService {
                 if age > Self.autoUpdateHealthBudgetSeconds {
                     // Silence past the budget: the agent neither converged
                     // nor explained itself — most likely it attempted the
-                    // update and never came back. Halt the rollout.
-                    agent.updateFailureReason =
+                    // update and never came back.
+                    let manual = agent.updateAssignmentSource == .manual
+                    agent.recordUpdateFailure(
                         "did not re-register at \(assigned) within \(Int(Self.autoUpdateHealthBudgetSeconds))s of assignment"
+                    )
                     try await agent.save(on: db)
                     Telemetry.agentAutoUpdateFailed(reason: "health_budget")
                     app.logger.error(
-                        "Agent auto-update failed: agent went silent past the health budget; rollout halted",
+                        manual
+                            ? "Agent update failed: agent went silent past the health budget"
+                            : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
                             "agentName": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
-                    rolloutHalted = true
+                    rolloutHalted = rolloutHalted || !manual
                 } else {
                     waitingOnAgent = true
                 }
             }
 
             guard !rolloutHalted && !waitingOnAgent else { return }
+            // Bookkeeping is done; advancing the fleet needs a target version.
+            guard let target else { return }
 
             // Nothing in flight and nothing failed: assign the next agent.
-            // Eligibility mirrors the imperative endpoint's checks, minus the
-            // Firecracker guard — that precondition is evaluated live on the
-            // agent, which is the only side that actually knows.
-            let next = enrolled.first { agent in
-                agent.updateDesiredVersion == nil
+            // Eligibility mirrors the update endpoint's checks, minus the
+            // hosted-workload guard — that precondition is evaluated live on
+            // the agent, which is the only side that actually knows.
+            let next = candidates.first { agent in
+                agent.autoUpdate
+                    && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
                     && agent.isOnline
                     && WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0)
@@ -1704,10 +1884,7 @@ actor AgentService {
                 return
             }
 
-            next.updateDesiredVersion = target
-            next.updateAttemptedAt = now
-            next.updateBlockedReason = nil
-            next.updateFailureReason = nil
+            next.assignUpdate(version: target, source: .rollout, at: now)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(
@@ -1724,15 +1901,6 @@ actor AgentService {
         }
     }
 
-    /// Clears every rollout field on an agent row (converged, stale target,
-    /// or withdrawn). Callers save.
-    private func clearRolloutAssignment(_ agent: Agent) {
-        agent.updateDesiredVersion = nil
-        agent.updateAttemptedAt = nil
-        agent.updateBlockedReason = nil
-        agent.updateFailureReason = nil
-    }
-
     // MARK: - Desired-state sync (issues #260, #261)
 
     /// Push the authoritative desired state to every registered agent whose
@@ -1744,6 +1912,11 @@ actor AgentService {
         let targets = app.websocketManager.registeredAgents().compactMap {
             registered
                 -> DesiredStateSyncTarget? in
+            // A pull-mode agent's backstop is its own unconditional re-fetch,
+            // not ours. Pushing to it anyway would assemble the full sync a
+            // second time and write it to a socket nothing is reading for
+            // desired state.
+            guard !pullModeAgents.contains(registered.agentId) else { return nil }
             let revision = desiredStateRevisions[registered.agentId, default: 0]
             guard force || cleanDesiredStateRevisions[registered.agentId] != revision else {
                 return nil
@@ -1792,12 +1965,17 @@ actor AgentService {
         periodicDesiredStateSyncTask = nil
     }
 
-    /// Trigger a desired-state sync for an agent from any replica. When this
-    /// process holds the agent's socket the sync is assembled and pushed
-    /// directly (the local short-circuit); otherwise the replica named by the
-    /// routing key is nudged over pub/sub and assembles it from Postgres
-    /// there. Both halves are latency optimizations — a lost nudge is
-    /// repaired by the holder's periodic sync timer.
+    /// Trigger a desired-state sync for an agent from any replica.
+    ///
+    /// This rings the contentless broadcast doorbell (STR-146): the local half
+    /// runs inline, and the same signal goes out on `agent:doorbell` so
+    /// whichever *other* replica happens to hold the agent's parked poll or
+    /// socket can act on it. Nothing here consults a routing directory — that
+    /// question is what the doorbell exists to not have to answer.
+    ///
+    /// Purely a latency optimization, in both modes: a pull-mode agent
+    /// converges on its own unconditional re-fetch and a push-mode agent on the
+    /// holder's periodic sync timer, doorbell or no doorbell.
     ///
     /// A mutation on one agent can change what its site's network controller
     /// must realize (a VM landing on any site node may reference a network
@@ -1807,12 +1985,10 @@ actor AgentService {
     /// common case (first VM on a fresh network) converge on the peer's first
     /// attempt instead of waiting out a dependency-pending retry.
     func syncDesiredState(agentId: String) async {
-        markDesiredStateDirty(agentId)
         if let controllerId = await siteNetworkControllerID(forAgentId: agentId), controllerId != agentId {
-            markDesiredStateDirty(controllerId)
-            await routeDesiredStateSync(agentId: controllerId)
+            await ringDesiredStateDoorbell(agentId: controllerId)
         }
-        await routeDesiredStateSync(agentId: agentId)
+        await ringDesiredStateDoorbell(agentId: agentId)
     }
 
     /// The agent id of the site network controller responsible for the given
@@ -1833,34 +2009,74 @@ actor AgentService {
         }
     }
 
-    private func routeDesiredStateSync(agentId: String) async {
-        if let localName = app.websocketManager.agentKey(agentId: agentId) {
-            await syncDesiredStateLocally(agentId: agentId, agentKey: localName)
-            return
-        }
-
-        guard let name = await agentKey(forId: agentId) else {
+    /// Ring the doorbell for one agent: act on it locally, then broadcast so
+    /// every other replica gets the same chance.
+    ///
+    /// Both halves always run. The local half is not an optimization that
+    /// makes the broadcast redundant — this replica may hold the socket while
+    /// another holds the poll, or vice versa — and the broadcast is not a
+    /// substitute for the local half, because Valkey may be down. Ringing
+    /// twice is free; the doorbell is contentless and every recipient
+    /// re-derives the truth from Postgres.
+    private func ringDesiredStateDoorbell(agentId: String) async {
+        guard let agentKey = await agentKey(forId: agentId) else {
             app.logger.warning(
-                "Cannot route sync for unknown agent", metadata: ["agentId": .string(agentId)])
+                "Cannot ring the desired-state doorbell for an unknown agent",
+                metadata: ["agentId": .string(agentId)])
+            return
+        }
+        await applyDoorbell(agentKey: agentKey)
+        await app.replicaBridge.ringDoorbell(agentKey: agentKey)
+    }
+
+    /// The local half of a doorbell, shared by the in-process ring and the
+    /// broadcast subscriber. Does whatever this replica can do about the agent
+    /// and nothing else — which for most replicas, most of the time, is
+    /// nothing at all. That is the design, not a degraded path: "at most one
+    /// replica can act" is what removes the need for a routing directory.
+    private func applyDoorbell(agentKey: String) async {
+        guard agentKey != CoordinationService.doorbellAllAgents else {
+            await applyFleetDoorbell()
             return
         }
 
-        switch await app.replicaBridge.remoteRoute(agentKey: name) {
-        case .forward(let replicaId):
-            await app.replicaBridge.nudge(agentKey: name, toReplica: replicaId)
-        case .noRoute:
-            // No route: the agent is offline everywhere. The sync it missed
-            // is delivered by the registration-triggered sync on reconnect.
-            app.logger.debug(
-                "No socket route for agent; sync deferred to reconnect",
-                metadata: ["agentKey": .string(name)])
-        case .ownReplica:
-            // The route says us, but no local socket exists — a connection
-            // torn down before its route expired. The reconnect sync (or the
-            // holder's periodic timer, wherever the agent lands) is the
-            // backstop; nudging ourselves would find the same missing socket.
-            break
-        }
+        // Wake a parked long-poll, if this is where it happens to be parked.
+        await app.desiredStatePollRegistry.ring(agentKey: agentKey)
+
+        // Push over a locally held socket, if the agent is still push-mode.
+        // An agent with neither a poll nor a socket here needs nothing from
+        // us: it will fetch (or be pushed to) wherever it actually lives.
+        guard let agentId = app.websocketManager.agentId(agentKey: agentKey),
+            !pullModeAgents.contains(agentId)
+        else { return }
+        markDesiredStateDirty(agentId)
+        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
+    }
+
+    /// The local half of a fleet-wide doorbell: wake every poll parked here
+    /// and force a push pass over every push-mode socket here.
+    ///
+    /// Forced rather than dirty-filtered because a fleet-wide change (a
+    /// security-group rule, a network edit, a site's controller moving) is
+    /// exactly the kind that never went through `markDesiredStateDirty` per
+    /// affected agent — its blast radius is computed inside sync assembly, not
+    /// known at the mutation site.
+    private func applyFleetDoorbell() async {
+        await app.desiredStatePollRegistry.ringAll()
+        await syncDesiredStateToAllAgents(force: true)
+    }
+
+    /// Ring the fleet-wide doorbell: every agent's desired state may have
+    /// changed. The entry point for mutations whose effect is not scoped to a
+    /// placement — security groups, networks, site topology, floating IPs.
+    ///
+    /// Before STR-146 these callers reached only the agents socketed to the
+    /// calling replica, so in a multi-replica deployment the rest waited out
+    /// the forced periodic pass. Broadcasting fixes that as a side effect of
+    /// being the only way to reach a parked poll on another replica.
+    func syncDesiredStateToFleet() async {
+        await applyFleetDoorbell()
+        await app.replicaBridge.ringDoorbell(agentKey: CoordinationService.doorbellAllAgents)
     }
 
     /// Assemble and send the full desired-state sync over a locally held
@@ -1951,19 +2167,53 @@ actor AgentService {
         }
     }
 
-    /// Deliver a cross-replica sync nudge (the `ReplicaBridgeDelegate` hook).
-    /// If we (still) hold the agent's socket, push a fresh sync; if not, the
-    /// nudge raced a disconnect and the periodic timer wherever the agent lands
-    /// is the backstop.
-    func deliverNudge(agentKey: String) async {
-        guard let agentId = app.websocketManager.agentId(agentKey: agentKey) else {
-            app.logger.debug(
-                "Nudge for agent without a local socket; ignoring",
-                metadata: ["agentKey": .string(agentKey)])
-            return
+    /// Deliver a broadcast doorbell from another replica (the
+    /// `ReplicaBridgeDelegate` hook). Identical to the local ring — the whole
+    /// point of a contentless broadcast is that the recipient does not need to
+    /// know where it came from.
+    func deliverDoorbell(agentKey: String) async {
+        await applyDoorbell(agentKey: agentKey)
+    }
+
+    /// Whether this control plane will let agents drive themselves by
+    /// long-poll. The kill switch for the transport rollout: with it off,
+    /// every agent is pushed to regardless of what it claims at registration,
+    /// which is the pre-STR-146 behavior exactly.
+    static let desiredStatePullEnabled: Bool = {
+        guard let raw = Environment.get("AGENT_DESIRED_STATE_PULL_ENABLED") else { return true }
+        return !["0", "false", "no", "off"].contains(raw.lowercased())
+    }()
+
+    /// Record which transport an agent's desired state travels over, from what
+    /// it declared at registration.
+    ///
+    /// Three things must all agree before pushes stop, and each rules out a
+    /// different way of stranding an agent: the wire version (it knows the
+    /// endpoint exists), the agent's own `pullsDesiredState` flag (it is
+    /// actually polling, rather than merely capable and pinned to push mode by
+    /// config), and this control plane's kill switch. Any disagreement leaves
+    /// the agent in push mode, which is the only safe direction — a redundant
+    /// push wastes an assembly, a wrongly suppressed one strands a host.
+    private func recordDesiredStateTransport(
+        agentId: String,
+        agentName: String,
+        protocolVersion: Int,
+        claimsPull: Bool
+    ) {
+        let pulls =
+            claimsPull && Self.desiredStatePullEnabled
+            && WireProtocol.supportsDesiredStatePull(protocolVersion)
+        if pulls {
+            guard pullModeAgents.insert(agentId).inserted else { return }
+            app.logger.info(
+                "Agent drives itself by desired-state long-poll; suppressing pushes",
+                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
+        } else {
+            guard pullModeAgents.remove(agentId) != nil else { return }
+            app.logger.info(
+                "Agent reverted to pushed desired state",
+                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
         }
-        markDesiredStateDirty(agentId)
-        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
     }
 
     // MARK: - Observed-state reports (issue #260)
@@ -2157,11 +2407,12 @@ actor AgentService {
 
         switch status.disposition {
         case ObservedAgentUpdateStatus.dispositionFailed:
-            // Terminal for this artifact and process lifetime: halt the
-            // rollout on the real error instead of waiting out the budget.
+            // Terminal for this artifact and process lifetime: record the real
+            // error instead of waiting out the budget (and, for a rollout
+            // assignment, halt on it).
             agent.updateBlockedReason = nil
             if agent.updateFailureReason != status.reason {
-                agent.updateFailureReason = status.reason
+                agent.recordUpdateFailure(status.reason)
                 app.logger.error(
                     "Agent reported its assigned update failed",
                     metadata: [
@@ -2866,8 +3117,8 @@ actor AgentService {
 extension AgentService: ReplicaBridgeDelegate {
     /// Holder half of a cross-replica RPC (`ReplicaMessageBridge` hook): run the
     /// forwarded exchange over the locally held socket and await the agent's
-    /// correlated response. `deliverNudge` — the delegate's other half — lives
-    /// with the desired-state sync code above.
+    /// correlated response. `deliverDoorbell` — the delegate's other half —
+    /// lives with the desired-state sync code above.
     func runLocalExchange(
         _ envelope: MessageEnvelope,
         requestId: String,
@@ -2923,7 +3174,7 @@ extension Application {
 /// core teardown is the "Core not configured" CI crash).
 struct AgentServiceLifecycleHandler: LifecycleHandler {
     /// Force creation at boot: the service's heartbeat/sweep loop and — since
-    /// issue #261 — this replica's nudge/RPC channel subscriptions must be
+    /// issue #261 — the doorbell and RPC channel subscriptions must be
     /// live even before the first request or agent connection would have
     /// created it lazily. Runs in `didBootAsync` so the Redis pools the
     /// subscriptions need already exist.

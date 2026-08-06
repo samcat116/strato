@@ -83,7 +83,7 @@ reporting the problem rather than dead alongside it.
 
 ## Enrolling a node
 
-Enrollment is one API call — or **Agents → Enroll node** in the web UI:
+Enrollment is one API call — or **Agents → Add Agent** in the web UI:
 
 ```bash
 curl -X POST https://strato.example.com/api/agent-enrollments \
@@ -362,35 +362,58 @@ curl -X POST https://strato.example.com/api/agents/<agent-id>/actions/update \
   -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' -d '{}'
 ```
 
-The control plane resolves the artifact for the agent's OS/arch from the
-release's [`agent-manifest.json`](#agent-manifestjson) (falling back to the
+The call returns `202 Accepted` as soon as the target version is recorded on
+the agent: the update is desired state, not a command, so it rides the agent's
+next desired-state sync and survives a disconnected agent or a control-plane
+restart. The control plane resolves the artifact for the agent's OS/arch from
+the release's [`agent-manifest.json`](#agent-manifestjson) (falling back to the
 `strato-<os>-<arch>.tar.gz` naming convention plus `.sha256` sidecar for
 releases that predate the manifest; `AGENT_UPDATE_ARTIFACT_BASE_URL` points
-both at a mirror) and sends the agent an update command. The agent then:
+both at a mirror), afresh on every sync. The agent then:
 
 1. downloads the artifact into a staging workspace next to its own binary,
 2. verifies the SHA-256 checksum and extracts the `strato-agent` member,
 3. runs the staged binary's `--version` as a sanity probe,
 4. preserves the current binary as `strato-agent.prev`, atomically renames
    the new one over its own executable path,
-5. reports success, shuts down cleanly, and exits with code 75 so systemd
+5. shuts down cleanly and exits with code 75 so systemd
    (`Restart=on-failure`) starts the new binary.
 
 The updated agent proves itself by re-registering with its new version; the
-control plane logs the old→new transition and the badge clears. Any failure
-before the final rename (download error, checksum mismatch, failed probe)
-aborts with the running binary untouched and is reported back as the request's
-error. A crash-looping update can be rolled back by hand:
+control plane logs the old→new transition and the badge clears. Watch progress
+on the agent itself (`GET /api/agents/<agent-id>`, or the agent detail page):
+`updateDesiredVersion` clears when it converges, `updateBlockedReason` says
+why it is waiting (a containerized install, in-flight reconcile work), and
+`updateFailureReason` records a terminal failure. Any failure before the final
+rename (download error, checksum mismatch, failed probe) aborts with the
+running binary untouched. A crash-looping update can be rolled back by hand:
 `mv /usr/local/bin/strato-agent.prev /usr/local/bin/strato-agent`.
 
-Caveats the UI confirms before dispatching:
+An agent updates one at a time across the fleet: a manual update and the
+[auto-update rollout](/architecture/agent-updates) share one assignment field,
+so neither starts while the other is in flight.
+
+If an update can never land — a bad artifact, or a host that died mid-swap —
+withdraw the assignment rather than waiting it out:
+
+```bash
+curl -X DELETE https://strato.example.com/api/agents/<agent-id>/actions/update \
+  -H 'Authorization: Bearer <api-key>'
+```
+
+(or **Cancel** on the agent's auto-update card). This works while the agent is
+offline, which re-issuing the update does not.
+
+Caveats the UI confirms before assigning:
 
 - The agent disconnects briefly and re-registers on restart.
 - Running VMs keep running and are re-adopted via their deterministic control
   sockets (QMP for QEMU, the Firecracker API socket for Firecracker).
 - Running **sandboxes are not yet re-adopted** — they keep running as orphans
   that can only be deleted afterwards. The endpoint refuses in this case
-  unless `{"force": true}` is passed.
+  unless `{"force": true}` is passed. That is the only refusal `force` waives:
+  an agent already running the target version is refused regardless, because
+  an update converges on a version and there is nothing to converge on.
 
 Request-body overrides for air-gapped deployments or unreleased builds
 (**system admin only** — an explicit artifact is arbitrary code the host will
@@ -401,18 +424,29 @@ host*; a `file:///path/on/the/host` URL works for artifacts already copied
 onto the node). The override defaults to the release tarball shape; add
 `"artifactKind": "binary"` when the URL points at a bare `strato-agent`
 executable, or `"tarballMember": "..."` for a tarball whose agent binary
-lives at a different member path. Main-branch builds have no release
-tarballs, so updating to them always requires this override.
+lives at a different member path. Pass `"targetVersion"` alongside it whenever
+the artifact's binary reports a version other than the deployment target (and
+always when the deployment has no target of its own): convergence is "the agent
+re-registered at this version", so a label that never shows up leaves the update
+recorded as failed after its health budget.
 
-Remote updates need an agent new enough to understand the command (wire
-protocol v6+); older agents must be updated manually once — re-run install.sh
-or replace the binary — after which remote updates work.
+That is also the limit of remote updates on **main-branch builds**: every main
+image reports its version as `main`, so the control plane cannot tell an agent
+that took the update from one that did not, and it refuses to assign an update
+whose target the agent already reports. This has always been true of the
+auto-update rollout; since the manual path converges the same way, it holds
+there too. Update between main builds by replacing the binary on the host (or
+pulling a new image), or deploy tagged releases.
+
+Remote updates need an agent new enough to act on the desired-state field
+(wire protocol v7+); older agents must be updated manually once — re-run
+install.sh or replace the binary — after which remote updates work.
 
 ### Docker / Kubernetes (managed externally)
 
 Agents running in a container refuse remote updates with a "managed
-externally" error: the binary is part of an immutable image layer, so the
-image is the update mechanism. Pull the new image and recreate the container
+externally" reason (reported on the agent as `updateBlockedReason`): the binary
+is part of an immutable image layer, so the image is the update mechanism. Pull the new image and recreate the container
 (or roll the Deployment). The refusal is automatic — the agent image carries
 `STRATO_INSTALL_MODE=container`, and agents also detect standard container
 fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
@@ -421,8 +455,8 @@ fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
 
 Most settings have platform defaults; see
 [`config.toml.example`](https://github.com/samcat116/strato/blob/main/config.toml.example)
-for the full list (QEMU paths, storage directories, network mode, SPIFFE/mTLS,
-`state_file` location). Command-line flags override the config file.
+for the full list (QEMU paths, storage directories, network mode,
+SPIFFE/mTLS). Command-line flags override the config file.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
@@ -528,25 +562,8 @@ is exposed depends on the deployment:
   Each must be reachable from the hypervisor.
 - **Kubernetes (Helm chart, `gateway.enabled`)** collapses all three onto a
   single LoadBalancer on **:443**, routed by SNI with Gateway API (Envoy
-  Gateway) so nothing extra needs opening:
-
-  | SNI host | Gateway route | Terminates where | Backend |
-  | --- | --- | --- | --- |
-  | `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (web UI and JSON API) |
-  | `agents.<host>` | `TLSRoute` passthrough | at the Envoy sidecar (sees the SVID) | control-plane `agent-mtls` `:8443` |
-  | `spire.<host>` | `TLSRoute` passthrough | at the SPIRE server | SPIRE node API `:8081` |
-
-  So an SVID node connects to `wss://agents.<host>/agent/ws` and attests against
-  `spire.<host>:443` — outbound-443-only, the friendliest shape for nodes behind
-  home networks. The chart points
-  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the bootstrap command and
-  telemetry-ingest origin the UI hands you already target the
-  passthrough listener — no manual rewrite needed. `TLSRoute` is an experimental
-  Gateway API channel; the chart pins `gateway.networking.k8s.io/v1alpha2` for
-  it, matching Envoy Gateway's experimental install. See the `gateway:` block in
-  the chart's `values.yaml`.
-
-  > Deploying Envoy Gateway and cutting the LoadBalancer/DNS over from
-  > ingress-nginx are infrastructure concerns handled outside the chart; by
-  > default the chart only attaches its routes to an operator-provided Gateway
-  > (`gateway.create=false`).
+  Gateway): an SVID node connects to `wss://agents.<host>/agent/ws` and
+  attests against `spire.<host>:443` — outbound-443-only, the friendliest
+  shape for nodes behind home networks. The SNI routing table and the
+  `gateway:` values live in
+  [Kubernetes Deployment](/deployment/kubernetes#production-configuration).

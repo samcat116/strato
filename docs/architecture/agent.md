@@ -12,11 +12,12 @@ package) for contributors; the protocol it speaks is documented in
 `agent/Package.swift` defines four targets, split around one constraint —
 SwiftPM cannot unit-test an executable target:
 
-- **`StratoAgentCore`** (library) — the testable core. Depends only on
-  `StratoShared`, Logging, Toml, and Crypto — deliberately **no SwiftQEMU,
-  SwiftFirecracker, or SwiftOVN** — so the reconcile engine, config parsing,
-  storage backend, OCI pipeline, manifest store, and updater are all unit
-  tests away from any hypervisor.
+- **`StratoAgentCore`** (library) — the testable core. Depends on
+  `StratoShared`, Logging, Toml, Crypto, and the transport/file plumbing its
+  services need (NIOCore/NIOPosix/`_NIOFileSystem`, NIOSSL, AsyncHTTPClient)
+  — deliberately **no SwiftQEMU, SwiftFirecracker, or SwiftOVN** — so the
+  reconcile engine, config parsing, storage backend, OCI pipeline, manifest
+  store, and updater are all unit tests away from any hypervisor.
 - **`StratoAgentSPIFFE`** (library) — SPIFFE/SPIRE support (SVID types, TLS
   config, Workload API client), split out so tests can import it.
 - **`StratoAgent`** (executable) — the binary and everything touching native
@@ -35,9 +36,10 @@ default) funnels into `launchAgent`.
 
 - **Config**: TOML (`AgentConfig` in `StratoAgentCore/AgentConfig.swift`),
   resolved field-by-field with precedence **CLI flag > config file >
-  platform default**. Default path is `/etc/strato/config.toml` on Linux,
-  falling back to `./config.toml`. Enum-valued fields (network mode,
-  hypervisor type, jailer mode) are validated at load.
+  platform default**. Default path is `/etc/strato/config.toml` on Linux and
+  `~/Library/Application Support/strato/config.toml` on macOS, falling back
+  to `./config.toml`. Enum-valued fields (network mode, hypervisor type,
+  jailer mode) are validated at load.
 - **Which URL to dial** (helpers in `StratoAgentCore/WebSocketURLs.swift`):
   the configured `control_plane_url`
   with the agent's name appended as a `?name=` query parameter. There is no
@@ -50,7 +52,11 @@ default) funnels into `launchAgent`.
   bookkeeping; a node that loses its SPIRE registration simply stops being
   able to connect. The agent persists no credential state at all — its name
   comes from `--agent-id` (defaulting to the hostname) and its identity from
-  SPIRE, so there is nothing on disk to rotate, corrupt, or leak.
+  SPIRE, so there is nothing on disk to rotate, corrupt, or leak. That is the
+  agent's *own* SVID; a separate proposal
+  ([guest-identity](./guest-identity.md), #496) has the agent additionally act as
+  a SPIRE **delegate**, brokering SVIDs for the VMs and sandboxes it hosts.
+  `strato-agent spiffe-delegated-probe` is the node-side diagnostic for it.
 - **Server identity is pinned, not just chain-verified**: every workload in
   the trust domain holds a bundle-signed SVID, so "chains to the bundle"
   would accept a compromised workload impersonating the control plane. The
@@ -64,13 +70,35 @@ default) funnels into `launchAgent`.
   shared `SPIFFEVerification` target holds the verifier, which the control
   plane also uses to pin the SPIRE server's identity. See issue #552.
 - **`WebSocketClient`** (actor, executable target): WebSocketKit with a
-  16 MiB max frame (the desired-state sync is one frame; must match the
+  16 MiB max frame (a pushed desired-state sync is one frame; must match the
   control plane), inbound frames decoded and yielded into an `AsyncStream`
   to preserve arrival order, and a connection-scoped 20s heartbeat.
   Connection loss triggers `Agent.runReconnectLoop`: exponential backoff
   (1s → 30s cap, with jitter), re-registering on success; a
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
+- **Desired state arrives by long-poll** (`DesiredStatePoller` in
+  `StratoAgentCore`, STR-146). Against a control plane at wire v29+, and unless
+  `desired_state_pull = false` pins it back, the agent starts a loop over
+  `GET /agent/desired-state` after registration — over
+  `MTLSArtifactDownloader` with the `.longPoll` timeout profile, so the same
+  SVID mTLS transport as image downloads, resolved fresh per request so a
+  rotated SVID needs no re-wiring. A received payload goes straight into
+  `routeInboundMessage`, the same path a pushed frame takes, so it lands on the
+  `.desiredState` serialization lane with the ordering guarantees the
+  reconciler already relies on.
+
+  Most fetches carry `If-None-Match` so the control plane can park them and
+  answer `304`; that is a bandwidth optimization. Every
+  `desired_state_full_refetch_seconds` (default 300) the loop omits the
+  validator entirely and the control plane must answer with a full payload —
+  the correctness invariant, and deliberately a rule rather than a tuning knob.
+  Making *every* request conditional is the natural way to write an HTTP client
+  and is exactly the bug: a wrong server-side "unchanged" would then strand the
+  agent on stale desired state forever, with no error anywhere.
+
+  The WebSocket is still dialed and still carries consoles, exec, log
+  forwarding, heartbeats, and observed state. Only desired state moves.
 
 ## Shutdown
 
@@ -96,8 +124,9 @@ VM in the cgroup with it (issue #522).
 
 `HypervisorProtocol.swift` defines `protocol HypervisorService: Actor` —
 create/boot/shutdown/reboot/pause/resume/delete, status/info queries,
-console endpoints, disk hot-(de)attach, `reservedResources()`, and an
-opt-in `adoptVM` for orphan re-adoption.
+console endpoints, disk hot-(de)attach, `reservedResources()`, an
+opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
+delete path that has no session to tear down (below).
 
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
@@ -118,6 +147,14 @@ host cleanly rejects placements it can't serve.
 - **`MockHypervisorService`**: the no-op backend used as a build fallback
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
+
+A migration of the QEMU driver onto **libvirt** is in flight but has not cut
+over: `StratoAgentCore` already holds the domain-document layer —
+`DomainXMLBuilder`/`DomainXMLNode` (spec → domain XML), `ResolvedDisk`, and
+`VMDirectoryLayout` (STR-131) — and `deploy/agent/install.sh` provisions and
+preflights libvirtd (STR-132), including the `qemu.conf` ownership settings
+the agent's own-every-path invariant needs. Today `QEMUService` still drives
+VMs through SwiftQEMU; nothing below reflects libvirt yet.
 
 ### Diagnosing a failed QEMU spawn
 
@@ -260,6 +297,27 @@ QEMU disk-boot VMs consume (`meta-data`, `user-data`, and — when the control
 plane allocated static addressing — a v2 `network-config`). Guest bootstrap
 is deliberately per-backend: Firecracker VMs inject configuration through
 kernel args instead and do not use this path.
+
+The seed's `local-hostname` is the VM's **desired hostname**, taken from
+`DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside
+the spec. It must be the name the control plane publishes, because a VM's DNS
+zone is assembled from that same `VM.hostname` (see [dns](./dns.md)) — a seed
+that invented its own name would leave forward and reverse DNS naming a host
+that does not answer to it. The historical `vm-<id-prefix>` derivation survives
+only as the fallback for VMs that have no hostname at all (those predating the
+column, and control planes predating the metadata field); the agent also
+re-checks the label against the RFC 1123 rule before rendering it, since the
+value lands unquoted in a YAML document. An unusable label falls back too and
+logs a warning rather than failing the create — a guest with a wrong name beats
+a guest that will not boot — but a control plane that validated on write cannot
+produce one.
+
+The ISO is written once at create, so a later hostname change reaches the guest
+through the metadata service rather than this seed. That also bounds what
+fixing this repaired: **VMs created before it keep booting under their
+`vm-<prefix>` name until something re-runs `createVM` for them** — a recreate,
+or a migration, whose destination agent renders a fresh seed from current
+metadata. Existing DNS drift is not repaired in place.
 
 The `user-data` document has two shapes:
 
@@ -514,6 +572,47 @@ deletes — the ones someone asked for through the API, with an operation row
 and an audit trail — are deliberately not counted, so normal bulk deletes are
 unaffected.
 
+### Deleting a VM with no live session
+
+A delete normally converges through the driver's `deleteVM`, which tears the
+hypervisor process down and then removes `<vm_storage_dir>/<vmId>` whole —
+boot disk, cloud-init ISO, UEFI varstore, TPM state, sockets (#969). Two
+deletes never reach that removal, and both used to leave the directory on the
+host permanently (STR-179):
+
+- **An orphan that cannot be re-adopted.** `reconcileDelete` re-adopts first,
+  so a surviving process is really destroyed rather than abandoned. The failure
+  is then classified by `OrphanDeleteAdoption.classify` (in `StratoAgentCore`,
+  so the table is unit-tested): only `adoptionTargetGone` — no live process
+  behind the VM's control socket — reaches the driver's `reclaimVMDirectory`,
+  and it runs *before* the manifest entry is released, since that entry is the
+  host's last record the VM existed. Every other failure is ambiguous (the VM
+  may be alive and merely unreachable) and keeps the older contract: release
+  the entry, log, leave the files for manual cleanup.
+- **A VM the driver holds no session for.** `QEMUService.deleteVM` used to
+  throw `vmNotFound` and leave the directory behind on every retry; the
+  Firecracker driver had the same shape, one layer down, where
+  `FirecrackerClient.destroyVM` throws for a VM it does not track. Both now ask
+  the VM's deterministic control socket whether anything is still running from
+  that directory: a socket that answers is torn down for real (so the delete
+  converges), one that refuses outlived its process, and only a connect that
+  hangs is ambiguous enough to fail the delete and be retried by the next sync.
+
+The evidence is the socket, not the process, so an *absent* socket is the weak
+case — it is the ordinary trace of a hypervisor that exited and unlinked it,
+but also what a still-running VM created before deterministic sockets (#260 /
+#433) looks like. Both drivers treat it as gone and log it at `warning`,
+matching what `Agent.adoptVM` already does with the same error (it re-creates
+from the manifest spec, over the very same disks). Where a live process *is*
+found, `AdoptedQEMUVM.destroy` now waits for the QMP socket to stop accepting
+connections before returning: `quit` cannot report an exit — it legitimately
+errors when QEMU exits before replying — so without that wait a wedged guest
+could keep running from unlinked inodes.
+
+Directories leaked before this are not reclaimed by either path. A startup
+sweep would have to distinguish a leaked directory from one belonging to a
+running VM whose manifest entry is missing, which needs its own design.
+
 ## Sandboxes on the agent
 
 The driver seam is `StratoAgentCore/SandboxRuntimeProtocol.swift`
@@ -585,6 +684,26 @@ site-topology authority, per-network generation guards) and
 network reconciliation (`reconcileNetworks`) defaults to a no-op on
 non-SDN platforms. See [networking](./networking.md).
 
+### Instance metadata chassis (IMDS)
+
+The chassis-local half of the metadata dataplane (wire v27, STR-49) is
+planned by `StratoAgentCore/MetadataChassisPlan.swift`: the OVS internal
+port and per-network namespace (`strato-md-<network-uuid>`) that terminate
+the metadata addresses on this host, kept a pure plan (like
+`SandboxNetnsAttachmentPlan`) so the command sequence stays unit-testable,
+and executed by `NetworkServiceLinux`. Its input is the agent's own workload
+specs (`NetworkSpec.metadataEnabled`), not the `networks` list — it must
+exist on every chassis running a NIC on the network, including sited
+non-controller agents, which receive an empty `networks` list by design. The
+`NetworkReconciler` converges the OVN `localport` itself from
+`DesiredNetworkState.metadataEnabled` on authoritative agents, and
+`metadataProtection(for:)` shields existing ports from teardown when the
+field is nil (a pre-v27 control plane's silence must not delete live ports).
+Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
+listener is future work. See
+[ADR 0003](../adr/0003-imds-chassis-namespace.md) and
+[networking](./networking.md).
+
 ## Self-update
 
 `StratoAgentCore/AgentUpdater.swift`: stages next to the binary (same
@@ -609,7 +728,7 @@ host↔guest handshake.
 
 ## Tests
 
-`agent/Tests/StratoAgentTests/` (~41 files) mirrors the Core units:
+`agent/Tests/StratoAgentTests/` (~68 files) mirrors the Core units:
 reconciliation (VM + sandbox), config/state/URL handling, message ordering,
 the storage backends, the manifest store, the updater and its gate, the
 full OCI suite, the sandbox suite (config drive, control protocol, jail,

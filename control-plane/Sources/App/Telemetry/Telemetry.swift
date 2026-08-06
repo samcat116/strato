@@ -26,8 +26,9 @@ enum Telemetry {
         Counter(label: "strato_agent_disconnections_total", dimensions: [("reason", reason)]).increment()
     }
 
-    /// A registration attempt was rejected. `reason` is e.g. `invalid_token`,
-    /// `expired_token`, `register_error`, or `token_save_failed`.
+    /// A registration attempt was rejected. `reason` is e.g. `register_error`,
+    /// `unsupported_protocol`, `organization_scope_mismatch`,
+    /// `missing_organization_scope`, or `same_named_networks_unsupported`.
     static func agentRegistrationFailed(reason: String) {
         Counter(label: "strato_agent_registration_failures_total", dimensions: [("reason", reason)]).increment()
     }
@@ -242,5 +243,18 @@ enum Telemetry {
     static func recordDesiredStateSync(outcome: String, durationSeconds: Double) {
         Counter(label: "strato_agent_sync_total", dimensions: [("outcome", outcome)]).increment()
         Timer(label: "strato_agent_sync_duration_seconds").recordSeconds(durationSeconds)
+    }
+
+    /// A desired-state long-poll resolved (STR-146). `outcome` is `served` (a
+    /// full payload went out) or `not_modified` (the poll parked out its hold
+    /// window with nothing to say).
+    ///
+    /// The ratio is the health signal for the pull transport: a fleet that is
+    /// converged should sit almost entirely on `not_modified`, so a sustained
+    /// `served` rate with no mutation traffic means the digest is churning —
+    /// some per-assembly value escaped `DesiredStateDigest.volatilePaths` and
+    /// every agent is refetching its full state on every poll.
+    static func recordDesiredStatePoll(outcome: String) {
+        Counter(label: "strato_agent_poll_total", dimensions: [("outcome", outcome)]).increment()
     }
 }

@@ -103,10 +103,7 @@ catches. Check the parts it can't:
   - `CONTEXT.md` when a new domain term is introduced.
   - `docs/adr/` when a decision is made that a future reader would otherwise
     relitigate. If the diff contradicts an existing ADR, say so in review
-    rather than letting it land silently. (The directory doesn't exist yet —
-    ADRs get created lazily when a decision actually needs recording, per
-    `docs/agents/domain.md`. Don't go looking for it; the first one to write
-    an ADR creates it.)
+    rather than letting it land silently.
   - `CLAUDE.md` when a build/test/deploy workflow changes.
 - **Dead code and TODOs** — a TODO without an issue number is a comment that
   will never be actioned. Either file it or delete it.

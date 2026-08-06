@@ -276,23 +276,7 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
         socketPath: String,
         _ body: @Sendable @escaping (GRPCClient<HTTP2ClientTransport.Posix>) async throws -> Result
     ) async throws -> Result {
-        guard FileManager.default.fileExists(atPath: socketPath) else {
-            throw SPIFFEError.workloadAPIUnavailable("Socket not found: \(socketPath)")
-        }
-
-        let transport: HTTP2ClientTransport.Posix
-        do {
-            transport = try HTTP2ClientTransport.Posix(
-                target: .unixDomainSocket(path: socketPath),
-                transportSecurity: .plaintext
-            )
-        } catch {
-            throw SPIFFEError.connectionFailed("Failed to create Workload API transport: \(error)")
-        }
-
-        return try await withGRPCClient(transport: transport) { client in
-            try await body(client)
-        }
+        try await SPIFFEUnixGRPC.withClient(socketPath: socketPath, body)
     }
 }
 

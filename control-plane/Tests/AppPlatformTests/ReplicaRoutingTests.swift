@@ -100,22 +100,43 @@ struct ReplicaRoutingPrimitiveTests {
         #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == nil)
     }
 
-    @Test("Nudges land on the holder replica's channel")
-    func nudgePublish() async {
+    @Test("Doorbells land on the one fleet-wide channel, tagged with the publisher")
+    func doorbellPublish() async {
         let (service, store) = makeService()
         let collector = MessageCollector()
 
-        await store.subscribe(channel: CoordinationService.nudgeChannel(replicaId: "replica-9")) { message in
+        await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
             Task { await collector.append(message) }
         }
 
-        await service.publishNudge(agentKey: agentKey("agent-a"), toReplica: "replica-9")
-        #expect(await collector.waitFor(count: 1) == [agentKey("agent-a")])
+        await service.publishDoorbell(agentKey: agentKey("agent-a"), fromReplica: "replica-9")
+
+        let received = await collector.waitFor(count: 1)
+        #expect(received.count == 1)
+        let parsed = received.first.flatMap(CoordinationService.parseDoorbell)
+        #expect(parsed?.replicaId == "replica-9")
+        #expect(parsed?.agentKey == agentKey("agent-a"))
+    }
+
+    /// A SPIFFE ID contains no `|`, so one separator is enough to split the
+    /// payload — but a payload that arrives malformed must be recognizable as
+    /// such rather than silently splitting somewhere arbitrary.
+    @Test("Doorbell payloads round-trip and malformed ones parse to nil")
+    func doorbellPayloadRoundTrip() {
+        let payload = CoordinationService.doorbellPayload(
+            agentKey: agentKey("agent-a"), fromReplica: "replica-9")
+        let parsed = CoordinationService.parseDoorbell(payload)
+        #expect(parsed?.replicaId == "replica-9")
+        #expect(parsed?.agentKey == agentKey("agent-a"))
+
+        #expect(CoordinationService.parseDoorbell("no-separator") == nil)
+        #expect(CoordinationService.parseDoorbell("|agent") == nil)
+        #expect(CoordinationService.parseDoorbell("replica|") == nil)
     }
 }
 
 /// AgentService-level routing tests (issue #261): registration claims the
-/// route, mutations nudge the socket-holding replica, socket close respects a
+/// route, mutations ring the broadcast doorbell, socket close respects a
 /// foreign route, and the RPC bridge forwards correlated exchanges.
 @Suite("Replica Routing AgentService Tests", .serialized)
 final class ReplicaRoutingAgentServiceTests {
@@ -187,8 +208,11 @@ final class ReplicaRoutingAgentServiceTests {
         }
     }
 
-    @Test("A sync for an agent socketed elsewhere nudges the holder replica")
-    func syncNudgesHolderReplica() async throws {
+    /// The point of the broadcast: a mutation publishes without consulting
+    /// any routing key, so wherever the agent's poll or socket happens to live
+    /// is not this replica's problem.
+    @Test("A sync rings the broadcast doorbell regardless of where the agent is")
+    func syncRingsBroadcastDoorbell() async throws {
         try await withApp { app, coordination, store in
             let agentId = try await self.registerAgent(app: app)
 
@@ -197,35 +221,62 @@ final class ReplicaRoutingAgentServiceTests {
             await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
 
             let collector = MessageCollector()
-            await store.subscribe(
-                channel: CoordinationService.nudgeChannel(replicaId: "replica-b")
-            ) { message in
+            await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
                 Task { await collector.append(message) }
             }
 
             await app.agentService.syncDesiredState(agentId: agentId)
 
-            #expect(await collector.waitFor(count: 1) == [agentKey("routed-agent")])
+            let received = await collector.waitFor(count: 1)
+            #expect(
+                received.compactMap { CoordinationService.parseDoorbell($0)?.agentKey }
+                    == [agentKey("routed-agent")])
         }
     }
 
-    @Test("A sync for an offline agent publishes nothing")
-    func syncForOfflineAgentIsDeferred() async throws {
+    /// An offline agent still gets a doorbell — over-ringing is free, and
+    /// suppressing it would mean re-introducing the routing lookup the
+    /// broadcast exists to remove. What matters is that nothing waits on it.
+    @Test("A sync for an offline agent still rings, and nothing blocks on it")
+    func syncForOfflineAgentStillRings() async throws {
         try await withApp { app, coordination, store in
             let agentId = try await self.registerAgent(app: app)
             // No socket anywhere: clear the route registration wrote.
             await coordination.clearAgentRoute(agentKey: agentKey("routed-agent"), replicaId: app.replicaID)
 
             let collector = MessageCollector()
-            await store.subscribe(
-                channel: CoordinationService.nudgeChannel(replicaId: "replica-b")
-            ) { message in
+            await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
                 Task { await collector.append(message) }
             }
 
             await app.agentService.syncDesiredState(agentId: agentId)
 
-            #expect(await collector.waitFor(count: 1, timeoutMilliseconds: 200).isEmpty)
+            let received = await collector.waitFor(count: 1)
+            #expect(
+                received.compactMap { CoordinationService.parseDoorbell($0)?.agentKey }
+                    == [agentKey("routed-agent")])
+        }
+    }
+
+    /// Fleet-wide mutations (security groups, networks, sites) have no single
+    /// agent to name, so they ring the wildcard rather than enumerating the
+    /// fleet from the database.
+    @Test("A fleet sync rings the wildcard doorbell")
+    func fleetSyncRingsWildcard() async throws {
+        try await withApp { app, _, store in
+            _ = try await self.registerAgent(app: app)
+
+            let collector = MessageCollector()
+            await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
+                Task { await collector.append(message) }
+            }
+
+            await app.agentService.syncDesiredStateToFleet()
+
+            let received = await collector.waitFor(count: 1)
+            #expect(
+                received.compactMap { CoordinationService.parseDoorbell($0)?.agentKey }
+                    == [CoordinationService.doorbellAllAgents])
         }
     }
 
@@ -356,7 +407,7 @@ final class ReplicaRoutingAgentServiceTests {
         }
     }
 
-    @Test("Subscription probes round-trip through the replica's own nudge channel")
+    @Test("Subscription probes round-trip through the doorbell channel")
     func subscriptionProbeRoundTrips() async throws {
         try await withApp { app, _, _ in
             // First call arms the subscriptions (idempotent) and publishes a

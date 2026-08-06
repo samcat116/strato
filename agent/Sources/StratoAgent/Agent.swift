@@ -272,6 +272,13 @@ actor Agent {
     // How much of this host one sync's confirmed teardowns may remove (STR-98).
     private let teardownGuard: TeardownGuard
 
+    // Desired-state transport (STR-146). `desiredStatePullEnabled` is what the
+    // operator asked for; the poller only actually starts once a registration
+    // response confirms the control plane serves the endpoint.
+    private let desiredStatePullEnabled: Bool
+    private let desiredStateFullRefetchInterval: Duration
+    private var desiredStatePoller: DesiredStatePoller?
+
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
@@ -325,7 +332,9 @@ actor Agent {
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
-        teardownGuard: TeardownGuard = TeardownGuard()
+        teardownGuard: TeardownGuard = TeardownGuard(),
+        desiredStatePull: Bool = true,
+        desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -360,6 +369,8 @@ actor Agent {
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
+        self.desiredStatePullEnabled = desiredStatePull
+        self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
@@ -806,6 +817,11 @@ actor Agent {
         networkConnectTask?.cancel()
         networkConnectTask = nil
 
+        // Stop polling before the inbound stream is finished, so an in-flight
+        // poll cannot deliver into a consumer that is already gone.
+        await desiredStatePoller?.stop()
+        desiredStatePoller = nil
+
         // Fail any in-flight registration wait so a caller parked on it (and its
         // timeout timer) doesn't linger past shutdown.
         if let continuation = takeRegistrationContinuation() {
@@ -1130,7 +1146,13 @@ actor Agent {
             sandboxCapable: sandboxCapable,
             tpmCapable: swtpmAvailable,
             operatingSystem: OperatingSystem.current,
-            hostInfo: HostInfoProbe.gather()
+            hostInfo: HostInfoProbe.gather(),
+            // Declared up front so the control plane can stop pushing to this
+            // agent from the moment it registers. Claiming pull mode here does
+            // not commit us to it — if the control plane turns out to predate
+            // the endpoint we never start the poller, and it never stopped
+            // pushing either, because it applies the same version gate.
+            pullsDesiredState: desiredStatePullEnabled
         )
 
         if let client = websocketClient {
@@ -1227,6 +1249,7 @@ actor Agent {
                 ])
         }
         controlPlaneSupportsStateSync = WireProtocol.supportsStateSync(controlPlaneProtocolVersion)
+        await startDesiredStatePollerIfSupported(controlPlaneVersion: controlPlaneProtocolVersion)
 
         guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
@@ -1234,6 +1257,76 @@ actor Agent {
         }
         continuation.resume(returning: response.agentId)
     }
+
+    /// Start the desired-state long-poll loop, if both sides want it
+    /// (STR-146). Called from every registration response, initial and
+    /// reconnect; `DesiredStatePoller.start()` is idempotent, so a reconnect
+    /// keeps the existing loop and its ETag rather than restarting from a full
+    /// fetch.
+    ///
+    /// A control plane too old to serve the endpoint leaves the agent on the
+    /// pushed transport, which is exactly what that control plane is still
+    /// doing — it ignores the `pullsDesiredState` field it has never heard of.
+    private func startDesiredStatePollerIfSupported(controlPlaneVersion: Int) async {
+        guard desiredStatePullEnabled else { return }
+        guard WireProtocol.supportsDesiredStatePull(controlPlaneVersion) else {
+            logger.notice(
+                "Control plane predates the desired-state pull endpoint; staying on pushed syncs",
+                metadata: ["controlPlaneProtocolVersion": .stringConvertible(controlPlaneVersion)])
+            return
+        }
+        guard desiredStatePoller == nil else {
+            await desiredStatePoller?.start()
+            return
+        }
+
+        guard let url = URL(string: controlPlaneHTTPBase + Self.desiredStatePollPath) else {
+            logger.error(
+                "Could not build the desired-state poll URL; staying on pushed syncs",
+                metadata: ["base": .string(controlPlaneHTTPBase)])
+            return
+        }
+
+        // The downloader is built per poller rather than per request, but it
+        // still resolves the TLS configuration on every call, so a rotated SVID
+        // is picked up by the next poll without restarting anything.
+        let downloader = MTLSArtifactDownloader(
+            tlsConfigurationProvider: { [weak self] in
+                guard let self else {
+                    throw AgentError.spiffeConfigurationError("agent is shutting down")
+                }
+                return try await self.currentSVIDTLSConfiguration()
+            },
+            logger: logger,
+            timeouts: .longPoll
+        )
+
+        let poller = DesiredStatePoller(
+            fetch: { ifNoneMatch in
+                try await downloader.poll(url: url, ifNoneMatch: ifNoneMatch)
+            },
+            deliver: { [weak self] envelope in
+                // Straight onto the same inbound path a pushed frame takes, so
+                // a polled sync lands on the `.desiredState` serialization lane
+                // and inherits the ordering guarantees the reconciler relies on.
+                await self?.routeInboundMessage(envelope)
+            },
+            logger: logger,
+            fullRefetchInterval: desiredStateFullRefetchInterval
+        )
+        desiredStatePoller = poller
+        await poller.start()
+        logger.info(
+            "Desired state is now fetched by long-poll",
+            metadata: [
+                "url": .string(url.absoluteString),
+                "fullRefetchSeconds": .stringConvertible(desiredStateFullRefetchInterval.components.seconds),
+            ])
+    }
+
+    /// The control-plane path serving the desired-state long-poll. Under
+    /// `/agent/` because that is the prefix Envoy routes with no timeout.
+    private static let desiredStatePollPath = "/agent/desired-state"
 
     /// Handle an `error` envelope from the control plane.
     ///
@@ -2009,9 +2102,6 @@ extension Agent {
             case .vmSnapshotDelete:
                 let message = try envelope.decode(as: VMSnapshotDeleteMessage.self)
                 await handleVMSnapshotDelete(message)
-            case .agentUpdate:
-                let message = try envelope.decode(as: AgentUpdateMessage.self)
-                await handleAgentUpdate(message)
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
                 // Realize logical networks (per-project routers, SNAT uplinks)
@@ -2320,80 +2410,15 @@ extension Agent {
         }
     }
 
-    /// Operator-triggered self-update (issue #432): download, verify, and swap
-    /// this process's own binary, then shut down and exit for the supervisor
-    /// to restart the new build. The success reply is sent *after* the swap
-    /// (so it reports the real outcome) but *before* the shutdown that closes
-    /// the socket. Any failure leaves the running binary untouched and is
-    /// reported as a correlated error.
-    private func handleAgentUpdate(_ message: AgentUpdateMessage) async {
-        logger.notice(
-            "Received agent update command",
-            metadata: [
-                "targetVersion": .string(message.targetVersion),
-                // Redacted: the URL's query string may be a presigned credential.
-                "artifactURL": .string(message.redactedArtifactURL),
-                "currentVersion": .string(BuildInfo.version),
-            ])
-
-        guard !updateRestartPending else {
-            await sendError(
-                for: message.requestId,
-                error: "An update was already applied; the agent is restarting")
-            return
-        }
-
-        let outcome: AgentUpdateOutcome
-        do {
-            let updater = AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
-            outcome = try await updater.applyUpdate(
-                artifactURL: message.artifactURL,
-                sha256: message.sha256,
-                artifactKind: message.artifactKind,
-                tarballMember: message.tarballMember
-            )
-        } catch let error as AgentUpdateError {
-            logger.error("Agent update failed", metadata: ["error": .string(error.description)])
-            await sendError(for: message.requestId, error: "Agent update failed", details: error.description)
-            return
-        } catch {
-            logger.error("Agent update failed", metadata: ["error": .string("\(error)")])
-            await sendError(for: message.requestId, error: "Agent update failed", details: "\(error)")
-            return
-        }
-
-        updateRestartPending = true
-        await sendSuccess(
-            for: message.requestId,
-            message:
-                "Binary updated to \(message.targetVersion) (previous preserved at \(outcome.previousBinaryPath)); restarting"
-        )
-
-        // Shut down from a separate task: this handler runs on the inbound
-        // message pipeline, and stop() tears that pipeline down — stopping
-        // inline would cancel ourselves mid-teardown. start() returns once
-        // stop() completes and launchAgent exits with the restart code.
-        logger.notice(
-            "Agent update applied; shutting down for supervisor restart",
-            metadata: ["binaryPath": .string(outcome.binaryPath)])
-        Task {
-            // Grace period before dropping the socket: the control plane
-            // handles frames in independent tasks, so an immediate close can
-            // still fail the awaiting update request as connectionLost before
-            // the success reply's task resumes it. stop() also skips the
-            // unregister message on this path for the same reason.
-            try? await Task.sleep(for: .seconds(1))
-            await self.stop()
-        }
-    }
-
-    /// Declarative self-update (issue #434): converge on the desired agent
-    /// build carried by the sync, through the same download/verify/swap/
-    /// restart path as the operator-triggered update — but gated on local
-    /// preconditions instead of an operator's `force`. Level-triggered: a
-    /// blocked update is re-evaluated on every sync and the current reason is
-    /// reported back on observed-state reports; a failed artifact is not
-    /// retried within this process lifetime.
+    /// Self-update (issue #434): converge on the desired agent build carried by
+    /// the sync — download, verify, swap, restart — gated on local
+    /// preconditions. Since wire v28 this is the only update path there is: an
+    /// operator's "update now" reaches the agent as this same field, assigned
+    /// by the control plane rather than dispatched as a command, so the
+    /// preconditions below hold for it too. Level-triggered: a blocked update
+    /// is re-evaluated on every sync and the current reason is reported back on
+    /// observed-state reports; a failed artifact is not retried within this
+    /// process lifetime.
     private func handleDesiredAgentUpdate(_ update: DesiredAgentUpdate?) async {
         guard let update else {
             // No opinion from the control plane (rollout not reached us,
@@ -2486,10 +2511,9 @@ extension Agent {
 
         updateRestartPending = true
         autoUpdateStatus = nil
-        // Same restart choreography as the operator-triggered path: stop()
-        // from a separate task (this handler runs on the inbound pipeline
-        // stop() tears down), then launchAgent exits with the restart code
-        // for the supervisor. The new binary proves the update by
+        // stop() from a separate task (this handler runs on the inbound
+        // pipeline stop() tears down), then launchAgent exits with the restart
+        // code for the supervisor. The new binary proves the update by
         // re-registering with its version.
         logger.notice(
             "Desired agent update applied; shutting down for supervisor restart",
@@ -3761,7 +3785,7 @@ extension Agent: ReconcileActuator {
         do {
             try await service.createVM(
                 vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
-                networkAttachments: attachments)
+                networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
             throw error
@@ -3800,27 +3824,68 @@ extension Agent: ReconcileActuator {
             operation: "resize")
     }
 
+    /// Re-adopts an orphan that is being deleted, classifying a failure by
+    /// whether it says the hypervisor process is gone (`OrphanDeleteAdoption`).
+    /// The distinction is the whole point: `try?` here discarded it, and the
+    /// resulting delete could never tell a VM whose process is gone (reclaim
+    /// its directory) from a live one this agent cannot reach (leave it alone).
+    private func adoptOrphanForDelete(
+        vmId: String, entry: VMManifestEntry, service: (any HypervisorService)?
+    ) async -> OrphanDeleteAdoption {
+        guard let service else { return .indeterminate }
+        do {
+            _ = try await service.adoptVM(vmId: vmId, spec: entry.spec)
+            return .adopted
+        } catch {
+            let adoption = OrphanDeleteAdoption.classify(adoptionFailure: error)
+            logger.log(
+                level: adoption == .processGone ? .info : .warning,
+                "Could not re-adopt an orphaned VM to delete it",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "adoption": .string(String(describing: adoption)),
+                    "error": .string(error.localizedDescription),
+                ])
+            return adoption
+        }
+    }
+
     private func reconcileDelete(_ item: ReconcileWorkItem) async throws {
         // Orphan with no live session: try to re-adopt first so the surviving
         // hypervisor process is actually torn down instead of leaking. If the
-        // session cannot be reattached (pre-deterministic-socket VM, dead
-        // process), fall back to releasing the manifest entry — the same
-        // manual-cleanup contract as the imperative path.
+        // session cannot be reattached, fall back to releasing the manifest
+        // entry, reclaiming as much as the failure proves is safe to reclaim.
         if managedVMs[item.vmId] == nil, let entry = orphanedVMs[item.vmId] {
-            if let service = getHypervisorService(for: entry.hypervisorType),
-                (try? await service.adoptVM(vmId: item.vmId, spec: entry.spec)) != nil
-            {
+            let service = getHypervisorService(for: entry.hypervisorType)
+            let adoption = await adoptOrphanForDelete(vmId: item.vmId, entry: entry, service: service)
+            switch adoption {
+            case .adopted:
                 managedVMs[item.vmId] = entry
-            } else {
+
+            case .processGone, .indeterminate:
+                // Reclaim before releasing the manifest entry, not after: that
+                // entry is the only record on this host that the VM was ever
+                // here, so a crash between the two must leave the record
+                // standing rather than the files (STR-179). A replayed delete
+                // re-reclaims harmlessly. `reclaimVMDirectory` reports its own
+                // outcome — success and failure both — so nothing is claimed
+                // about the removal here.
+                if adoption == .processGone, let service {
+                    // Nothing is running from this VM's disks, so its whole
+                    // directory — boot disk included — goes with it.
+                    await service.reclaimVMDirectory(vmId: item.vmId)
+                } else {
+                    logger.warning(
+                        "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",
+                        metadata: ["vmId": .string(item.vmId)])
+                }
+
                 orphanedVMs.removeValue(forKey: item.vmId)
                 persistManifest()
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
                     vmId: item.vmId, count: entry.spec.networks.count)
-                logger.warning(
-                    "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
-                    metadata: ["vmId": .string(item.vmId)])
                 return
             }
         }

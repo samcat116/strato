@@ -1,3 +1,6 @@
+import Fluent
+import SQLKit
+import StratoShared
 import Vapor
 
 /// How far a resource is from the state the API was last asked to put it in
@@ -114,6 +117,197 @@ extension ConvergenceObservable {
 
 extension VM: ConvergenceObservable {}
 extension Sandbox: ConvergenceObservable {}
+
+/// A workload whose API mutations are accepted asynchronously and judged by
+/// the reconciliation loop rather than by an operation row (ADR 0001 stage 4,
+/// STR-147).
+///
+/// This is the seam `ResourceMutation`, the stuck-convergence sweep, and the
+/// operations façade share, so each of them is written once for both workload
+/// kinds instead of switching on `OperationResourceKind` at every step.
+/// Everything on it already existed on `VM` and `Sandbox`; only
+/// `convergenceDeadline` is new.
+protocol ConvergingResource: Model, ConvergenceObservable, Sendable where IDValue == UUID {
+    static var operationResourceKind: OperationResourceKind { get }
+
+    var name: String { get }
+    var projectID: UUID { get }
+
+    /// The agent this workload is placed on, or nil if it never reached one.
+    var hypervisorId: String? { get }
+
+    var generation: Int64 { get }
+    var observedGeneration: Int64 { get }
+    var convergenceDeadline: Date? { get set }
+
+    /// The owning agent has confirmed the current generation and what it
+    /// observes satisfies the desired state — `conditions.converged`, in the
+    /// shape the reconciliation paths want it.
+    var isConverged: Bool { get }
+
+    /// Derived on read from the columns above — the client-facing answer to
+    /// "is this mutation done?".
+    var conditions: ResourceConditions { get }
+
+    /// Resolves the in-flight state a failed mutation left behind. Returns
+    /// whether anything changed; does not persist.
+    @discardableResult
+    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool
+
+    /// Rows whose convergence deadline has passed — the stuck-convergence
+    /// sweep's whole query. A protocol requirement rather than a generic
+    /// extension because Fluent filters on the model's own field *projection*
+    /// (`\.$convergenceDeadline`), which a protocol cannot name. Rows with no
+    /// deadline are excluded by SQL's `NULL` comparison, which is the wanted
+    /// behaviour: nothing is outstanding on them.
+    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Self]
+
+    /// Copies the columns the *reconciliation* loop owns — everything the
+    /// observed-state applier, the scheduler's placement, the finalizer
+    /// participants and other mutations write — from a freshly read row onto
+    /// this instance.
+    ///
+    /// A mutation loads its resource in the route handler and later `save`s the
+    /// whole row, so without this its pre-request snapshot of these columns
+    /// would be written back over whatever committed in between:
+    /// `observedGeneration` would go *backwards*, un-converging a client that
+    /// was already satisfied, and a `hypervisorId` the scheduler had just
+    /// assigned would be nulled. `ResourceMutation.accept` calls this under the
+    /// row lock, before the mutation closure runs, so the closure builds on
+    /// committed state.
+    ///
+    /// Deliberately not "copy everything": the guest telemetry (qga view,
+    /// balloon stats, exit code) is re-reported on every agent poll and heals
+    /// itself within seconds, so it is left out rather than growing this list
+    /// with fields whose staleness has no lasting consequence.
+    func adoptReconciliationState(from committed: Self)
+}
+
+extension ConvergingResource {
+    /// Claims the right to declare this resource's outstanding convergence
+    /// timed out, by clearing the deadline in a conditional `UPDATE`.
+    ///
+    /// This is what makes the stuck-convergence sweep safe to run on every
+    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
+    /// idempotent and convergent on its own — the state two replicas write is
+    /// the same — but the completion webhook is not, so the claim decides which
+    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
+    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
+    /// exactly one updates a row: the same compare-and-swap technique as
+    /// `ResourceOperation.completeIfPending`, without the cluster lock.
+    /// Locks this resource's row for the rest of the caller's transaction and
+    /// refreshes the reconciliation-owned columns from what is committed.
+    ///
+    /// The lock is what serializes concurrent API mutations on one resource,
+    /// now that the "operation already pending" `409` is gone (STR-147): each
+    /// one's generation bump lands on top of the last, so the loser's desired
+    /// state is genuinely applied rather than silently overwritten by a stale
+    /// snapshot — which would otherwise have the façade report a dropped
+    /// mutation as succeeded. Returns false when the row is gone.
+    func lockAndRefresh(on db: any Database) async throws -> Bool {
+        guard let sql = db as? any SQLDatabase else {
+            throw OperationCompletionError.unsupportedDatabase
+        }
+        let id = try requireID()
+        let locked = try await sql.raw(
+            "SELECT id FROM \(ident: Self.schema) WHERE id = \(bind: id) FOR UPDATE"
+        ).all(decoding: ClaimedConvergenceRow.self)
+        guard !locked.isEmpty else { return false }
+
+        // Read *after* the lock so this sees whatever the writer we waited on
+        // committed, not the snapshot our caller opened with.
+        guard let committed = try await Self.find(id, on: db) else { return false }
+        adoptReconciliationState(from: committed)
+        return true
+    }
+
+    func claimConvergenceTimeout(on db: any Database) async throws -> Bool {
+        guard let sql = db as? any SQLDatabase else {
+            throw OperationCompletionError.unsupportedDatabase
+        }
+        let claimed = try await sql.raw(
+            """
+            UPDATE \(ident: Self.schema)
+            SET convergence_deadline = NULL
+            WHERE id = \(bind: try requireID()) AND convergence_deadline IS NOT NULL
+            RETURNING id
+            """
+        ).all(decoding: ClaimedConvergenceRow.self)
+        guard !claimed.isEmpty else { return false }
+        convergenceDeadline = nil
+        return true
+    }
+}
+
+/// `RETURNING id` from the claim above. A file-scope type because a generic
+/// function cannot nest one.
+private struct ClaimedConvergenceRow: Decodable {
+    let id: UUID
+}
+
+extension ConvergingResource {
+    /// Pushes the convergence deadline out to cover a mutation with `budget`
+    /// seconds to converge, never pulling it in.
+    ///
+    /// The `max` is the whole point (STR-147). With the "operation already
+    /// pending" mutex dropped, mutations of different kinds overlap: a reboot
+    /// issued against a VM whose 600s create is still downloading its image
+    /// would, under a plain assignment, hand the create a 120s runway and flip
+    /// a perfectly healthy resource to degraded. Extending only forward means
+    /// the outstanding work is always judged against the most generous budget
+    /// anything asked for.
+    func extendConvergenceDeadline(by budget: TimeInterval, from now: Date = Date()) {
+        let candidate = now.addingTimeInterval(budget)
+        if let existing = convergenceDeadline, existing > candidate { return }
+        convergenceDeadline = candidate
+    }
+}
+
+extension VM: ConvergingResource {
+    static var operationResourceKind: OperationResourceKind { .virtualMachine }
+    var projectID: UUID { $project.id }
+
+    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
+        try await VM.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    }
+
+    func adoptReconciliationState(from committed: VM) {
+        status = committed.status
+        statusChangedAt = committed.statusChangedAt
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        lastError = committed.lastError
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        hypervisorId = committed.hypervisorId
+        finalizers = committed.finalizers
+    }
+}
+
+extension Sandbox: ConvergingResource {
+    static var operationResourceKind: OperationResourceKind { .sandbox }
+    var projectID: UUID { $project.id }
+
+    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
+        try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    }
+
+    func adoptReconciliationState(from committed: Sandbox) {
+        status = committed.status
+        statusChangedAt = committed.statusChangedAt
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        lastError = committed.lastError
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        hypervisorId = committed.hypervisorId
+        finalizers = committed.finalizers
+    }
+}
 
 extension VM {
     var conditions: ResourceConditions {

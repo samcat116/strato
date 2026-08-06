@@ -15,7 +15,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
-import { useOperationsStore } from "@/lib/stores/operations-store";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
 
@@ -64,7 +67,7 @@ export function CreateSandboxDialog({
   onOpenChange,
   onCreated,
 }: CreateSandboxDialogProps) {
-  const watch = useOperationsStore((state) => state.watch);
+  const watch = useMutationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState(EMPTY_FORM);
@@ -91,9 +94,10 @@ export function CreateSandboxDialog({
       const GB = 1024 * 1024 * 1024; // 1 GB in bytes
       const env = parseEnv(formData.env);
       const ttl = parseInt(formData.ttlSeconds, 10);
-      // Creation is asynchronous: the server accepts the request and returns an
-      // operation, which the OperationWatcher polls and reports on completion.
-      const operation = await sandboxesApi.create({
+      // Creation is asynchronous: the server accepts the request and returns
+      // the sandbox with the generation it is converging on, which the
+      // MutationWatcher follows and reports on completion.
+      const accepted = await sandboxesApi.create({
         name: formData.name.trim(),
         image: formData.image.trim(),
         projectId,
@@ -105,7 +109,13 @@ export function CreateSandboxDialog({
         workingDir: formData.workingDir.trim() || undefined,
         ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
       });
-      watch(operation, formData.name.trim());
+      watch(
+        acceptedMutation(accepted, {
+          kind: "create",
+          resourceKind: "sandbox",
+          resourceName: formData.name.trim(),
+        })
+      );
       toast.success(`Creating sandbox "${formData.name.trim()}"`);
       onOpenChange(false);
       onCreated?.();

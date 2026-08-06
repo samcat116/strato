@@ -204,7 +204,7 @@ struct MessageOrderingTests {
             type: .volumeClone,
             payload: payload([
                 "sourceVolumeId": sourceId, "sourceVolumePath": "/a",
-                "targetVolumeId": targetId, "targetVolumePath": "/b",
+                "targetVolumeId": targetId,
             ])
         )
 

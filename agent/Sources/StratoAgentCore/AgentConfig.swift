@@ -339,6 +339,33 @@ public struct AgentConfig: Codable {
     /// control-plane database must not be able to empty a host, while a real
     /// drain can afford the flag.
     public let allowBulkTeardown: Bool?
+    /// Whether to fetch desired state from the control plane's long-poll
+    /// endpoint instead of waiting for pushed syncs (STR-146). Default true;
+    /// falls back to push mode automatically against a control plane too old
+    /// to serve the endpoint, so this only exists to pin an agent to the old
+    /// transport during a rollout. Nothing else about the agent changes — the
+    /// WebSocket still carries streams, heartbeats, and observed state.
+    public let desiredStatePull: Bool?
+    /// How often the poller must fetch *without* `If-None-Match`, in seconds.
+    /// Default 300. This is the correctness invariant of the pull transport,
+    /// not a tuning knob: conditional requests are a bandwidth optimization,
+    /// and this bounds how long a wrong "not modified" could strand the agent.
+    /// Raising it trades convergence-of-last-resort latency for very little
+    /// bandwidth; setting it very low mostly just wastes assemblies.
+    public let desiredStateFullRefetchSeconds: Int?
+
+    /// Whether this agent should drive itself by long-poll.
+    public var wantsDesiredStatePull: Bool { desiredStatePull ?? true }
+
+    /// The forced-unconditional-fetch interval, floored at one second so a
+    /// zero or negative value in a config file cannot turn the loop into a
+    /// spin.
+    public var desiredStateFullRefetchInterval: Duration {
+        guard let seconds = desiredStateFullRefetchSeconds else {
+            return DesiredStatePoller.defaultFullRefetchInterval
+        }
+        return .seconds(max(1, seconds))
+    }
 
     /// The teardown blast-radius guard this configuration asks for.
     public var teardownGuard: TeardownGuard {
@@ -392,6 +419,8 @@ public struct AgentConfig: Codable {
         case reconcileTeardownMinimum = "reconcile_teardown_minimum"
         case reconcileTeardownPercent = "reconcile_teardown_percent"
         case allowBulkTeardown = "allow_bulk_teardown"
+        case desiredStatePull = "desired_state_pull"
+        case desiredStateFullRefetchSeconds = "desired_state_full_refetch_seconds"
     }
 
     public init(
@@ -437,7 +466,9 @@ public struct AgentConfig: Codable {
         simulation: SimulationConfig? = nil,
         reconcileTeardownMinimum: Int? = nil,
         reconcileTeardownPercent: Int? = nil,
-        allowBulkTeardown: Bool? = nil
+        allowBulkTeardown: Bool? = nil,
+        desiredStatePull: Bool? = nil,
+        desiredStateFullRefetchSeconds: Int? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -482,6 +513,8 @@ public struct AgentConfig: Codable {
         self.reconcileTeardownMinimum = reconcileTeardownMinimum
         self.reconcileTeardownPercent = reconcileTeardownPercent
         self.allowBulkTeardown = allowBulkTeardown
+        self.desiredStatePull = desiredStatePull
+        self.desiredStateFullRefetchSeconds = desiredStateFullRefetchSeconds
     }
 
     /// The VM image cache budget in bytes (config stores whole GB).
@@ -647,6 +680,10 @@ public struct AgentConfig: Codable {
         let reconcileTeardownMinimum = tomlData.int("reconcile_teardown_minimum")
         let reconcileTeardownPercent = tomlData.int("reconcile_teardown_percent")
         let allowBulkTeardown = tomlData.bool("allow_bulk_teardown")
+
+        // Desired-state transport (STR-146).
+        let desiredStatePull = tomlData.bool("desired_state_pull")
+        let desiredStateFullRefetchSeconds = tomlData.int("desired_state_full_refetch_seconds")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -866,7 +903,9 @@ public struct AgentConfig: Codable {
             simulation: simulationConfig,
             reconcileTeardownMinimum: reconcileTeardownMinimum,
             reconcileTeardownPercent: reconcileTeardownPercent,
-            allowBulkTeardown: allowBulkTeardown
+            allowBulkTeardown: allowBulkTeardown,
+            desiredStatePull: desiredStatePull,
+            desiredStateFullRefetchSeconds: desiredStateFullRefetchSeconds
         )
     }
 

@@ -333,7 +333,7 @@ struct SiteController: RouteCollection {
         // reconciling (and gets networksAuthoritative=false on its next sync)
         // before/as the new one starts. Level-triggered syncs make the
         // handover safe in either order.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
     }
@@ -443,7 +443,7 @@ struct SiteController: RouteCollection {
         // operator to discover the requirement from agent logs (issue #743).
         await SiteNetworkAuthority.designateIfUnset(
             agent: agent, siteID: targetSiteId, on: req.db, logger: req.logger)
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return try AgentResponse(from: agent)
     }
 
@@ -494,7 +494,7 @@ struct SiteController: RouteCollection {
 
         agent.$site.id = nil
         try await agent.save(on: req.db)
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return try AgentResponse(from: agent)
     }
 }

@@ -16,12 +16,12 @@ extension NetworkSpec {
     /// only; sandbox NICs pass nil = unmanaged), already gated on the
     /// receiving agent's protocol version by the assembly.
     ///
-    /// `sendsMetadata` is the same kind of gate, for `metadataEnabled` (STR-49):
+    /// `sendsMetadataPort` is the same kind of gate, for `metadataEnabled` (STR-49):
     /// false omits the field entirely for an agent that predates it, so nil on
     /// the wire always means "the sender has no opinion" rather than "off".
     static func build(
         interface: some NetworkAddressable, network: LogicalNetwork, securityGroupIds: [UUID]? = nil,
-        sendsMetadata: Bool = true
+        sendsMetadataPort: Bool = true
     ) -> NetworkSpec {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
@@ -49,7 +49,7 @@ extension NetworkSpec {
             domainName: network.domainName,
             leaseTime: network.leaseTime,
             securityGroupIds: securityGroupIds,
-            metadataEnabled: sendsMetadata ? network.metadataEnabled : nil
+            metadataEnabled: sendsMetadataPort ? network.metadataEnabled : nil
         )
     }
 }

@@ -32,6 +32,9 @@ protocol FinalizableResource: Model where IDValue == UUID {
     /// it did not perform. Everything before the claim must tolerate running
     /// twice; the row is what records that the teardown finished.
     static func reap(_ resource: Self, on db: any Database, app: Application) async throws -> Bool
+
+    /// Which table the resource's `resource_events` rows point into.
+    static var operationResourceKind: OperationResourceKind { get }
 }
 
 /// The finalizer bookkeeping shared by every terminating resource: stamping
@@ -141,6 +144,48 @@ enum ResourceFinalizerService {
         return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
+    /// Appends the terminal `resource_events` row for a completed deletion, and
+    /// enqueues the `operation.completed` webhook that used to ride the
+    /// operation's verdict (STR-147).
+    ///
+    /// Call inside the reap's transaction, *after* `reapClaim` — the claim is
+    /// what makes "this call removed the row" true for exactly one writer, and
+    /// so makes this append exactly-once under a reap race.
+    ///
+    /// This is the whole answer to "how does a client know a delete finished?".
+    /// Every other mutation's outcome is readable off the resource's own
+    /// `conditions`; a delete's is the resource being gone, and a `404` means
+    /// deleted, never-existed and not-authorized alike. The row's scope is
+    /// copied from the delete *request* event rather than resolved, because
+    /// there is nothing left to resolve against by the time this runs.
+    ///
+    /// Best-effort on the request lookup: a row deleted by some path that never
+    /// recorded a request (a pre-STR-147 delete mid-flight across a deploy)
+    /// still gets a terminal event, just without the scope, which is strictly
+    /// better than none.
+    static func recordDeletionCompleted<R: FinalizableResource>(
+        _ resource: R, in tx: any Database
+    ) async throws {
+        let id = try resource.requireID()
+        let request = try await ResourceEvent.latest(
+            .requested, resourceKind: R.operationResourceKind, resourceID: id, on: tx)
+
+        let terminal = try await ResourceEvent.record(
+            .delete,
+            resourceKind: R.operationResourceKind,
+            resourceID: id,
+            actor: request.map { MutationActor(type: $0.actorType, id: $0.actorID) } ?? .system,
+            phase: .completed,
+            scope: ResourceEvent.Scope(
+                organizationID: request?.organizationID,
+                projectID: request?.projectID,
+                resourceName: request?.resourceName,
+                generation: request?.targetGeneration),
+            on: tx)
+
+        try await WebhookEvents.enqueueDeletionCompleted(terminal, requestID: request?.id, on: tx)
+    }
+
     /// Claims the right to reap `id` inside `tx`, returning false when another
     /// writer already removed the row. `SELECT … FOR UPDATE` holds the row lock
     /// for the rest of the transaction, so a concurrent reap blocks here and
@@ -190,6 +235,9 @@ extension VM: FinalizableResource {
             // controllers use: the revoke reads the VM's checkpoints, whose
             // rows the delete below cascades away (STR-112).
             try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: tx)
+            // Before the row goes: the terminal event reads the delete request's
+            // scope, and after the delete there is nothing left to read.
+            try await ResourceFinalizerService.recordDeletionCompleted(vm, in: tx)
             try await vm.delete(on: tx)
             try await QuotaEnforcementService.release(for: vm, on: tx)
             return true
@@ -227,6 +275,7 @@ extension Sandbox: FinalizableResource {
             // first: the revoke reads the snapshot rows the delete cascades
             // away (STR-112).
             try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: tx)
+            try await ResourceFinalizerService.recordDeletionCompleted(sandbox, in: tx)
             try await sandbox.delete(on: tx)
             try await QuotaEnforcementService.release(for: sandbox, on: tx)
             return true

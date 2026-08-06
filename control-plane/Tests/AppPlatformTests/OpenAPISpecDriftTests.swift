@@ -20,11 +20,15 @@ import AppTestSupport
 /// Adding a route without documenting it fails this suite, in either direction.
 struct OpenAPISpecDriftTests {
     /// Routes deliberately **not** modeled as OpenAPI operations: WebSocket
-    /// upgrades, which OpenAPI 3.0 cannot express. They are documented as prose
-    /// in the spec's "Out of scope" section. Normalized as `METHOD /path` with
-    /// `{}` for every path parameter.
+    /// upgrades, which OpenAPI 3.0 cannot express, plus the agent control
+    /// channel under `/agent/`, which is authenticated by SPIFFE SVID over the
+    /// mTLS listener and consumed by agents built from `shared/` rather than by
+    /// clients generated from this spec. Both are documented as prose in the
+    /// spec's "Out of scope" section. Normalized as `METHOD /path` with `{}`
+    /// for every path parameter.
     private static let webSocketExceptions: Set<String> = [
         "GET /agent/ws",
+        "GET /agent/desired-state",
         "GET /api/vms/{}/console",
         "POST /api/vms/{}/console/vnc",
         "GET /api/vms/{}/console/vnc/{}/attach",

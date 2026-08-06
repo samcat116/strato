@@ -60,7 +60,8 @@ actor MockHypervisorService: HypervisorService {
     }
 
     func createVM(
-        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment]
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment],
+        metadata: InstanceMetadata?
     ) async throws {
         logger.info("Creating mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
         vms[vmId] = MockVM(spec: spec, status: .created)
@@ -98,6 +99,11 @@ actor MockHypervisorService: HypervisorService {
         logger.info("Deleting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
         vms.removeValue(forKey: vmId)
     }
+
+    /// A mock VM has no disk image, no seed ISO and no directory — the tracked
+    /// entry `deleteVM` drops is the whole of its footprint — so there is
+    /// nothing to reclaim.
+    func reclaimVMDirectory(vmId: String) async {}
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
         guard let vm = vms[vmId] else {

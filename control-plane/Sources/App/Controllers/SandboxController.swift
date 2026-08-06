@@ -43,10 +43,27 @@ struct SandboxController: RouteCollection {
 
     // MARK: - Async operation plumbing
 
+    /// The `202` body every accepted sandbox lifecycle mutation answers with
+    /// (STR-147) — the sandbox as the mutation left it, plus the generation its
+    /// `conditions.observedGeneration` has to reach. Sandbox counterpart of
+    /// `VMController.acceptedResponse`.
+    private static func acceptedResponse(
+        for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request
+    ) async throws -> Response {
+        try await loadNICSecurityGroups(sandbox, on: req.db)
+        return try AcceptedMutation(SandboxDetailResponse(from: sandbox), accepted).acceptedResponse()
+    }
+
     /// Sandbox-flavored front of `ResourceOperation.begin`: creates the pending
     /// operation record and applies the sandbox's desired-state change in one
     /// transaction, rejecting with `409 Conflict` when any operation is already
-    /// pending for the sandbox. Internal (not private) because the snapshot
+    /// pending for the sandbox.
+    ///
+    /// Only the snapshot verbs use this now (STR-147): they are still
+    /// imperative agent RPCs with no generation to converge on, so they still
+    /// need a row to carry their in-flight state until ADR 0001 stage 8 makes
+    /// snapshots desired artifacts. Lifecycle mutations go through
+    /// `ResourceMutation.accept`. Internal (not private) because the snapshot
     /// handlers in SandboxSnapshotController.swift share it.
     func beginOperation(
         _ kind: VMOperationKind,
@@ -180,10 +197,8 @@ struct SandboxController: RouteCollection {
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
-        let operations = try await ResourceOperation.recent(
+        return try await OperationFacade.history(
             resourceKind: .sandbox, resourceID: sandboxID, limit: limit, on: req.db)
-
-        return operations.map { OperationResponse(from: $0) }
     }
 
     // MARK: - Create
@@ -421,7 +436,7 @@ struct SandboxController: RouteCollection {
             restoreSnapshot == nil ? .stopped : .running
 
         // Quota admission check, the sandbox insert, its NIC + address rows, the
-        // initial desired-state bump, and the pending create operation commit
+        // initial desired-state bump, and the create's attribution event commit
         // (or roll back) as one transaction, mirroring VM creation. Sandboxes
         // draw from the same vCPU/memory pools as VMs, count against the sandbox
         // count limit, and reserve no storage (issue #415).
@@ -433,17 +448,17 @@ struct SandboxController: RouteCollection {
         // poisons the whole Postgres transaction, so the retry wraps the
         // transaction: the loser re-reads the used set and allocates the
         // next free address.
-        let operation: ResourceOperation
+        let accepted: ResourceMutation.Accepted
         do {
             let initialGeneration = sandbox.generation
-            operation = try await VMController.retryingOnConstraintFailure {
+            accepted = try await VMController.retryingOnConstraintFailure {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: reset the id/exists/generation so every attempt
                 // starts as a fresh insert (see the VM create path).
                 sandbox.id = nil
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
-                return try await req.db.transaction { db -> ResourceOperation in
+                return try await req.db.transaction { db -> ResourceMutation.Accepted in
                     if let restoreSnapshotID {
                         try await Self.requireSnapshotAvailableForFork(
                             restoreSnapshotID, on: db)
@@ -465,6 +480,12 @@ struct SandboxController: RouteCollection {
                     // The bump to generation 1 distinguishes "never confirmed by
                     // any agent" (observed_generation 0) from "confirmed".
                     sandbox.setDesiredStatus(initialDesiredStatus)
+                    // How long the create has to converge before the
+                    // stuck-convergence sweep marks the sandbox degraded
+                    // (STR-147), stamped with the insert for the reason the VM
+                    // create path stamps its own.
+                    sandbox.extendConvergenceDeadline(
+                        by: OperationResourceKind.sandbox.completionBudgetSeconds(for: .create))
                     try await sandbox.update(on: db)
 
                     // One NIC on the requested logical network, IPAM-allocated by
@@ -479,16 +500,13 @@ struct SandboxController: RouteCollection {
                         on: db
                     )
 
-                    let operation = ResourceOperation(
-                        sandboxID: sandboxID, userID: userID, kind: .create)
-                    try await operation.save(on: db)
-
-                    // The create's attribution record (ADR 0001, stage 2), for
-                    // the reason the VM create path appends its own: the
-                    // retrying transaction owns this insert, not
-                    // `ResourceOperation.begin`. Scope passed, not resolved,
+                    // The create's attribution record and the client's handle on
+                    // the agent work that follows (ADR 0001 stage 4), for the
+                    // reason the VM create path appends its own: the retrying
+                    // transaction owns this insert, not
+                    // `ResourceMutation.accept`. Scope passed, not resolved,
                     // for the same reason it is there.
-                    try await ResourceEvent.record(
+                    let event = try await ResourceEvent.record(
                         .create, resourceKind: .sandbox, resourceID: sandboxID,
                         actor: .user(userID),
                         scope: ResourceEvent.Scope(
@@ -510,7 +528,8 @@ struct SandboxController: RouteCollection {
                         on: db
                     )
 
-                    return operation
+                    return ResourceMutation.Accepted(
+                        mutationID: try event.requireID(), targetGeneration: sandbox.generation)
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -524,10 +543,10 @@ struct SandboxController: RouteCollection {
         // Place the sandbox in the background: the scheduler selects a
         // Firecracker-capable agent and persists hypervisorId, and the
         // desired-state sync carries the sandbox to its agent. Observed-state
-        // reports — not this request — decide the operation's verdict.
-        req.resourceOperationCoordinator.dispatch(
-            operation, resourceKind: .sandbox, resourceID: sandboxID, hypervisorId: nil,
-            dispatch: .placement { @Sendable [app = req.application] db in
+        // reports — not this request — decide whether it converged.
+        req.resourceMutation.dispatch(
+            .create, resourceType: Sandbox.self, resourceID: sandboxID, hypervisorId: nil,
+            strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
 
@@ -535,11 +554,11 @@ struct SandboxController: RouteCollection {
             "Sandbox creation accepted",
             metadata: [
                 "sandbox_id": .string(sandboxID.uuidString),
-                "operation_id": .string(operation.id?.uuidString ?? ""),
+                "mutation_id": .string(accepted.mutationID.uuidString),
                 "image": .string(imageRef),
             ])
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     /// Allocates and persists the sandbox's single NIC (issue #416), reusing the
@@ -660,17 +679,15 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be started in current state: \(sandbox.status.rawValue)")
         }
 
-        let sandboxID = try sandbox.requireID()
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .boot, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
-            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .boot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             sandbox.setDesiredStatus(.running)
-            try await sandbox.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     func stop(req: Request) async throws -> Response {
@@ -682,17 +699,15 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.rawValue)")
         }
 
-        let sandboxID = try sandbox.requireID()
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .shutdown, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
-            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .shutdown, on: sandbox, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             sandbox.setDesiredStatus(.stopped)
-            try await sandbox.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     func restart(req: Request) async throws -> Response {
@@ -708,20 +723,21 @@ struct SandboxController: RouteCollection {
         // Restart is expressed as a fresh desired-running generation: the
         // generation bump is what obliges the agent to act (there is no
         // imperative sandbox reboot message on the wire). The agent-side
-        // interpretation lands with the sandbox runtime (issue #421); until
-        // an agent acknowledges the new generation the operation stays
-        // pending and the sweep budget backstops it.
-        let sandboxID = try sandbox.requireID()
+        // interpretation lands with the sandbox runtime (issue #421); until an
+        // agent acknowledges the new generation the sandbox reads as
+        // unconverged and the convergence deadline backstops it. Unlike the
+        // VM's reboot — an imperative RPC with no generation to converge on,
+        // and so still an operation until STR-151 — this one already rides the
+        // desired-state sync, which is why it converts with the rest.
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .reboot, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
-            hypervisorId: sandbox.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .reboot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             sandbox.setDesiredStatus(.running)
-            try await sandbox.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     // MARK: - Exec (issue #423)
@@ -839,24 +855,23 @@ struct SandboxController: RouteCollection {
             agentOnline = false
         }
 
-        let strategy: ResourceOperationCoordinator.Strategy =
+        let strategy: ResourceMutation.Dispatch =
             agentOnline
             ? .stateSync
             : .directResolution { @Sendable db in
                 try await Self.performDirectDeletion(sandbox: sandbox, on: db, app: app)
             }
 
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .delete, resourceKind: .sandbox, resourceID: sandboxID, userID: userID,
-            hypervisorId: sandbox.hypervisorId, dispatch: strategy, on: req.db, app: app
+        let accepted = try await req.resourceMutation.accept(
+            .delete, on: sandbox, actor: .user(userID), dispatch: strategy,
+            on: req.db, app: app
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
             ResourceFinalizerService.stampForDeletion(sandbox)
             sandbox.setDesiredStatus(.absent)
-            try await sandbox.save(on: db)
         }
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     /// The direct-removal work for a sandbox whose agent is gone (never placed,
@@ -864,12 +879,12 @@ struct SandboxController: RouteCollection {
     /// confirm teardown, so the agent's finalizer is force-cleared, which reaps
     /// the row (exported snapshot objects, bindings, record, quota) since it is
     /// the only participant today. Returns whether the row is gone — false when
-    /// another participant still holds a finalizer, which keeps the operation
-    /// pending instead of reporting a removal that has not happened. Wrapped by
-    /// the coordinator's `.directResolution` dispatch, which supplies the
-    /// still-pending guard and records the verdict. If the agent ever comes
-    /// back still carrying the sandbox, its observed-state report surfaces it
-    /// for operator attention.
+    /// another participant still holds a finalizer, in which case the delete is
+    /// under way rather than done and the reap that eventually removes the row
+    /// is what appends the terminal event. Wrapped by `ResourceMutation`'s
+    /// `.directResolution` dispatch. If the agent ever comes back still
+    /// carrying the sandbox, its observed-state report surfaces it for operator
+    /// attention.
     ///
     /// Internal rather than private because the expiry sweep (issue #424)
     /// deletes down this same path, so a TTL-driven deletion releases quota
@@ -890,12 +905,11 @@ struct SandboxController: RouteCollection {
             outcome = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: sandbox, on: db, app: app)
         } catch {
-            throw ResourceOperationCoordinator.WorkError(
+            throw ResourceMutation.WorkError(
                 "Failed to delete sandbox record: \(error.localizedDescription)")
         }
         // Another participant still owes cleanup: the delete is under way, not
-        // done, so the caller leaves the operation pending rather than
-        // reporting a removal that has not happened.
+        // done, so nothing terminal is recorded here.
         if case .held(let remaining) = outcome {
             app.logger.info(
                 "Sandbox delete is waiting on finalizers other than the agent's",

@@ -258,7 +258,7 @@ struct SecurityGroupController: RouteCollection {
 
         // The group's port group drops out of the next sync's desired state
         // and the topology authority tears it down.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
 
@@ -300,7 +300,7 @@ struct SecurityGroupController: RouteCollection {
             try await Self.bumpGeneration(of: groupId, on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return try SecurityGroupRuleResponse(from: rule)
     }
 
@@ -326,7 +326,7 @@ struct SecurityGroupController: RouteCollection {
             try await Self.bumpGeneration(of: groupId, on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
 
@@ -398,7 +398,7 @@ struct SecurityGroupController: RouteCollection {
         // reaches an agent, so syncing the fleet for one would be a guaranteed
         // no-op (see `SandboxInterfaceSecurityGroup`).
         if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToAllAgents()
+            await req.application.agentService.syncDesiredStateToFleet()
         }
 
         req.logger.info(
@@ -445,7 +445,7 @@ struct SecurityGroupController: RouteCollection {
         guard changed else { return .noContent }
 
         if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToAllAgents()
+            await req.application.agentService.syncDesiredStateToFleet()
         }
 
         req.logger.info(
@@ -538,13 +538,10 @@ struct SecurityGroupController: RouteCollection {
     private func resolveVMNIC(
         req: Request, vmId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroup
     ) async throws -> NICTarget {
-        guard let vm = try await VM.find(vmId, on: req.db) else {
-            throw Abort(.badRequest, reason: "VM \(vmId) does not exist")
-        }
-        let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
-        guard hasVMPermission else {
-            throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
-        }
+        // Owning the group is not enough, and an unreachable VM is answered as
+        // absent whether it is missing or merely forbidden — see
+        // `reachableVM` (issue #881).
+        let vm = try await req.reachableVM(vmId, permission: "update")
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).

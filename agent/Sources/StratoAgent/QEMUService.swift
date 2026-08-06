@@ -97,7 +97,8 @@ actor QEMUService: HypervisorService {
     /// against the same disk paths (issue #260).
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = []
+        networkAttachments: [ResolvedNetworkAttachment] = [],
+        metadata: InstanceMetadata? = nil
     ) async throws {
         if activeVMs[vmId] != nil {
             logger.info(
@@ -235,7 +236,8 @@ actor QEMUService: HypervisorService {
         // Translate the neutral spec into QEMU's native configuration. Network
         // attachments were already realized by the agent's NetworkOrchestrator.
         let qemuConfig = try await convertToQEMUConfiguration(
-            spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId)
+            spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId,
+            hostname: metadata?.hostname)
 
         // Spawn the process under its own stage budget — QMP connection can
         // hang indefinitely, but this stage no longer shares its envelope with
@@ -375,7 +377,7 @@ actor QEMUService: HypervisorService {
         // here is safe and idempotent: the TPM's state directory persists, so
         // the respawned guest sees the same TPM it had (issue #565).
         if vmSpecs[vmId]?.effectiveMachine.tpm == true, let swtpm {
-            let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+            let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
             try await swtpm.ensureRunning(vmDirectory: vmDir, vmId: vmId)
         }
         let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
@@ -466,23 +468,17 @@ actor QEMUService: HypervisorService {
     }
 
     func deleteVM(vmId: String) async throws {
-        guard let qemuManager = activeVMs[vmId] else {
-            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
-        }
-
         logger.info("Deleting QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Destroy VM (network attachments are torn down by the agent's
-        // NetworkOrchestrator after this returns)
-        try await controlled("qmp-destroy", vmId: vmId) {
-            try await qemuManager.destroy()
+        if let qemuManager = activeVMs[vmId] {
+            // Destroy VM (network attachments are torn down by the agent's
+            // NetworkOrchestrator after this returns)
+            try await controlled("qmp-destroy", vmId: vmId) {
+                try await qemuManager.destroy()
+            }
+        } else {
+            try await destroyWithoutSession(vmId: vmId)
         }
-
-        // Stop the VM's swtpm, if it has one. Unconditional rather than gated
-        // on the spec's machine profile: a re-adopted VM has no spec here, and
-        // stopping is a no-op when no swtpm is running.
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
-        await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
@@ -490,48 +486,113 @@ actor QEMUService: HypervisorService {
         vmSpawnSizing.removeValue(forKey: vmId)
         vmConfigs.removeValue(forKey: vmId)
         awaitingFirstStart.remove(vmId)
+        vmConsoleSocketPaths.removeValue(forKey: vmId)
+        vmSerialSocketPaths.removeValue(forKey: vmId)
 
-        // Clean up console socket
-        if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
-            try? FileManager.default.removeItem(atPath: socketPath)
-            logger.debug("Removed console socket: \(socketPath)")
-        }
-
-        // Clean up serial socket
-        if let socketPath = vmSerialSocketPaths.removeValue(forKey: vmId) {
-            try? FileManager.default.removeItem(atPath: socketPath)
-            logger.debug("Removed serial socket: \(socketPath)")
-        }
-
-        // Clean up the deterministic VNC socket (issue #566). Unconditional,
-        // like the QMP sockets below: a VM re-adopted from a previous agent
-        // incarnation has one on disk that this process never recorded.
-        try? FileManager.default.removeItem(
-            atPath: QEMUGraphicsDevice.socketPath(
-                vmDirectory: (vmStoragePath as NSString).appendingPathComponent(vmId)))
-
-        // Clean up the deterministic re-adoption QMP socket
-        try? FileManager.default.removeItem(
-            atPath: Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the deterministic guest-agent socket (issue #563)
-        try? FileManager.default.removeItem(
-            atPath: Self.qgaSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the deterministic balloon-stats QMP socket (issue #567)
-        try? FileManager.default.removeItem(
-            atPath: Self.statsSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
-
-        // Clean up the UEFI variable store and the TPM's state directory
-        // (issue #565). Both are per-VM and meaningless once the VM is gone;
-        // keeping the NVRAM would also make a later VM reusing this id inherit
-        // a stranger's boot entries.
-        try? FileManager.default.removeItem(
-            atPath: Self.nvramPath(vmStoragePath: vmStoragePath, vmId: vmId))
-        try? FileManager.default.removeItem(
-            atPath: SwtpmSupervisor.stateDirectory(vmDirectory: vmDir))
+        // Safe at this point: both branches above either left the host with no
+        // QEMU process for this VM or threw, so nothing can still be running
+        // from the disk this unlinks.
+        await reclaimVMDirectory(vmId: vmId)
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
+    }
+
+    /// Leaves the host with no QEMU process for `vmId` when this service holds
+    /// no control session for it, so `deleteVM` can go on to reclaim its
+    /// directory.
+    ///
+    /// The agent deletes from its own manifest, which can name a VM this
+    /// service has no handle for: the manifest is durable and this service's
+    /// session table is not, so any divergence between the two arrives here.
+    /// Answering it with `vmNotFound` was wrong twice over — the delete never
+    /// converged, and it left the VM's directory on the host on every retry
+    /// (STR-179).
+    ///
+    /// The deterministic QMP socket outlives the session and is the closest
+    /// thing to an answer for the only question a delete actually needs: is a
+    /// process still running from that directory? A socket that connects
+    /// belongs to a live QEMU, and `quit` over it is a real teardown (confirmed
+    /// by `AdoptedQEMUVM.destroy`, which returns only once the process is
+    /// gone), so the delete converges instead of giving up. A socket that
+    /// refuses a connection outlived its process — nothing to tear down. Only a
+    /// connect that neither succeeds nor fails is ambiguous enough to throw:
+    /// unlinking a live guest's disk reclaims no space (the process holds the
+    /// inode open) and leaves it running from a file no operator can find.
+    ///
+    /// The weak case is a socket that is *absent*, which strictly says nothing
+    /// about the process — it is the normal trace of a QEMU that exited and
+    /// unlinked it, but it also describes a live VM created before
+    /// deterministic sockets (issue #260), and a socket inside the very
+    /// directory about to be removed can go missing for other reasons too. It
+    /// is treated as "gone" for the same reason `OrphanDeleteAdoption` does,
+    /// and logged loudly because it is the one removal here with no positive
+    /// evidence behind it.
+    private func destroyWithoutSession(vmId: String) async throws {
+        let socketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            logger.warning(
+                "Deleting a VM with no control session and no QMP socket; assuming nothing is left to tear down",
+                metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+            return
+        }
+
+        let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
+        do {
+            // Same bound as re-adoption, for the same reason: a stale socket
+            // can accept a connection and then never speak (issue #516).
+            _ = try await StageBudget.run(
+                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt-for-delete", onTimeout: .abandon
+            ) {
+                try await adopted.connect()
+            }
+        } catch is StageBudgetError {
+            throw HypervisorServiceError.timeout(
+                "connecting to VM \(vmId) over \(socketPath) to delete it exceeded \(StageBudget.adoptionSeconds)s")
+        } catch {
+            logger.info(
+                "VM has no live QEMU behind its QMP socket; deleting what it left on this host",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "socket": .string(socketPath),
+                    "error": .string(error.localizedDescription),
+                ])
+            return
+        }
+
+        logger.warning(
+            "Deleting a VM whose QEMU is alive but had no session on this agent",
+            metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+        try await controlled("qmp-destroy", vmId: vmId) {
+            try await adopted.destroy()
+        }
+    }
+
+    /// See `HypervisorService.reclaimVMDirectory`. `deleteVM` finishes through
+    /// here too, so what a QEMU VM leaves on the host has one description.
+    func reclaimVMDirectory(vmId: String) async {
+        guard activeVMs[vmId] == nil else {
+            // The caller's evidence contradicts what this service knows. Refuse
+            // rather than unlink the disk of a guest it is still driving.
+            logger.error(
+                "Refusing to reclaim the directory of a VM with a live control session",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+
+        // Stop the VM's swtpm, if it has one. Unconditional rather than gated
+        // on the spec's machine profile: a re-adopted VM has no spec here, and
+        // stopping is a no-op when no swtpm is running. It is also a separate
+        // process from QEMU, so a dead VM's swtpm can still be running — and
+        // its state lives in the directory removed below.
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
+        await swtpm?.stop(vmDirectory: vmDir, vmId: vmId)
+
+        // Everything else the VM owns on this host lives in its own directory —
+        // the boot disk, the cloud-init ISO, the UEFI varstore, the TPM state,
+        // and every socket — so remove the directory whole. Naming files one at
+        // a time is what leaked the boot disk on every delete (#969), and it
+        // covers a re-adopted VM's files too, which this process never recorded.
+        VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
     }
 
     /// Returns the console socket path for a VM
@@ -547,7 +608,7 @@ actor QEMUService: HypervisorService {
         }
 
         // Compute the expected path deterministically
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let consoleSocketPath = (vmDir as NSString).appendingPathComponent("console.sock")
 
         // Check if the socket file exists (VM is running with console enabled)
@@ -573,7 +634,7 @@ actor QEMUService: HypervisorService {
         }
 
         // Compute the expected path deterministically
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let serialSocketPath = (vmDir as NSString).appendingPathComponent("serial.sock")
 
         // Check if the socket file exists (VM is running with serial enabled)
@@ -601,7 +662,7 @@ actor QEMUService: HypervisorService {
     /// it. The connect attempt is what settles that, and its failure is
     /// reported to the browser as a console that could not be opened.
     func getVNCSocketPath(vmId: String) -> String? {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let vncSocketPath = QEMUGraphicsDevice.socketPath(vmDirectory: vmDir)
 
         guard FileManager.default.fileExists(atPath: vncSocketPath) else {
@@ -730,7 +791,7 @@ actor QEMUService: HypervisorService {
 
     /// The deterministic QMP socket every VM exposes for re-adoption.
     static func adoptionSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qmp.sock")
     }
 
@@ -739,7 +800,7 @@ actor QEMUService: HypervisorService {
     /// The deterministic QEMU-guest-agent socket every VM exposes. Derived only
     /// from vmStoragePath+vmId, so it works for re-adopted VMs too.
     static func qgaSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qga.sock")
     }
 
@@ -988,7 +1049,7 @@ actor QEMUService: HypervisorService {
     /// `qmp.sock`), so stats polling gets its own. Derived only from
     /// vmStoragePath+vmId, so it works for re-adopted VMs too.
     static func statsSocketPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("qmp-stats.sock")
     }
 
@@ -1441,7 +1502,7 @@ actor QEMUService: HypervisorService {
     /// VARS template on first boot and kept thereafter, so boot entries the
     /// guest writes — and Secure Boot keys it enrolls — survive a respawn.
     static func nvramPath(vmStoragePath: String, vmId: String) -> String {
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         return (vmDir as NSString).appendingPathComponent("nvram.fd")
     }
 
@@ -1476,8 +1537,12 @@ actor QEMUService: HypervisorService {
         let readonly: Bool
     }
 
+    // `hostname` is deliberately required despite being `Optional`: a default
+    // would let a future caller drop it and silently land the guest back on the
+    // derived name this exists to replace (STR-177).
     private func convertToQEMUConfiguration(
-        _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String
+        _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String,
+        hostname: String?
     ) async throws
         -> QEMUConfiguration
     {
@@ -1487,7 +1552,7 @@ actor QEMUService: HypervisorService {
         // The VM directory holds the NVRAM store, the TPM state, and every
         // socket below, so it must exist before any of them are resolved. It
         // usually already does (disk materialization created it).
-        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let vmDir = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: vmDir) {
             do {
@@ -1812,7 +1877,7 @@ actor QEMUService: HypervisorService {
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
         if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-            at: cloudInitISOPath, vmId: vmId, sshAuthorizedKeys: spec.sshAuthorizedKeys,
+            at: cloudInitISOPath, vmId: vmId, hostname: hostname, sshAuthorizedKeys: spec.sshAuthorizedKeys,
             userData: spec.userData,
             networkAttachments: networkAttachments)
         {

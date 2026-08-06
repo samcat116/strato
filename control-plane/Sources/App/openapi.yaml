@@ -46,12 +46,31 @@ info:
     ## Asynchronous mutations
 
     VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
-    pause/resume, sandbox snapshot/restore) are **asynchronous**. They persist a
-    desired-state change plus a `ResourceOperation` row in one transaction and
-    return `202 Accepted` with that operation. Clients poll
-    `GET /api/operations/{operationID}` (or the per-resource operations list)
-    until `status` is terminal (`succeeded` or `failed`). A second mutation on a
-    resource that already has a pending operation is rejected with `409`.
+    pause/resume, sandbox snapshot/restore) are **asynchronous**: they persist a
+    desired-state change and return `202 Accepted`.
+
+    Most of them — everything with a generation to converge on — answer with
+    `{resource, targetGeneration, mutationId}`. Refetch the resource and read
+    its `conditions`: done is `converged` with
+    `observedGeneration >= targetGeneration`; failed is
+    `degraded.sinceGeneration == targetGeneration`, carrying the agent's
+    reason. Overlapping mutations are accepted rather than refused — desired
+    state is level-triggered, so the last write wins and the agent converges on
+    it. They are serialized on the resource, so each one's change is applied on
+    top of the last rather than overwriting it with a stale snapshot: if you
+    issue `stop` while a `pause` is in flight, both are recorded and the stop's
+    `targetGeneration` is the higher one.
+
+    The exceptions are the verbs still dispatched as imperative agent commands
+    — VM restart, and every snapshot verb — which answer with a
+    `ResourceOperation` to poll to a terminal `status`, and which do reject a
+    second mutation on the same resource with `409`.
+
+    **Deletion** is the one case where the resource cannot answer for itself:
+    once the row is removed, polling it returns a `404` indistinguishable from
+    never-existed and not-authorized. Poll
+    `GET /api/operations/{operationID}` with the delete's `mutationId`
+    instead; it reports `succeeded` from the record the deletion left behind.
 
     Image and volume mutations are synchronous at the API layer: they return the
     resource immediately (often in a transitional `status` such as `pending` or
@@ -64,10 +83,18 @@ info:
 
     ## Out of scope
 
-    WebSocket endpoints are intentionally **not** modeled as OpenAPI
-    operations. They are documented here as prose:
+    The agent control channel under `/agent/` is intentionally **not** modeled
+    as OpenAPI operations: it is authenticated by SPIFFE SVID over the Envoy
+    mTLS listener rather than by session or API key, and its consumers are
+    agents built from `shared/`, not clients generated from this spec.
+    WebSocket endpoints are likewise out of scope — OpenAPI 3.0 cannot express
+    an upgrade. Both are documented here as prose:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
+    - `GET /agent/desired-state` — the desired-state long-poll (SPIFFE mTLS).
+      Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
+      and an `ETag`, or `304` when the agent's `If-None-Match` still matches
+      after the server's hold window. See `docs/architecture/wire-protocol.md`.
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
     - `POST /api/vms/{vmID}/console/vnc` + `GET
       /api/vms/{vmID}/console/vnc/{sessionID}/attach` — VM graphics console
@@ -292,8 +319,9 @@ paths:
       operationId: createVM
       summary: Create a virtual machine
       description: >-
-        Records the VM and a pending `create` operation, returning the
-        operation to poll. `networkId`/`networkName` and `securityGroupIds` are
+        Records the VM and returns it with the generation it is converging on;
+        refetch it until its `conditions` report `converged`.
+        `networkId`/`networkName` and `securityGroupIds` are
         resolved within the VM's own project: one naming something outside it
         is reported as `404`, not as a distinct cross-project refusal, since
         ids are opaque and names are per-project — confirming that one exists
@@ -306,7 +334,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateVMRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -353,7 +381,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VMDetail"
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -366,10 +394,14 @@ paths:
     delete:
       operationId: deleteVM
       summary: Delete a virtual machine
-      description: Sets desired state to absent and returns a pending `delete` operation.
+      description: >-
+        Sets desired state to absent. The row survives until every finalizer
+        clears, so poll `GET /api/operations/{operationID}` with the returned
+        `mutationId` rather than the VM: once the VM is gone, a `404` on it is
+        indistinguishable from never-existed and not-authorized.
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -383,7 +415,7 @@ paths:
       summary: Start a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -397,7 +429,7 @@ paths:
       summary: Stop a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -425,7 +457,7 @@ paths:
       summary: Pause a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -439,7 +471,7 @@ paths:
       summary: Resume a paused virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -611,7 +643,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSandboxRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -659,9 +691,13 @@ paths:
     delete:
       operationId: deleteSandbox
       summary: Delete a sandbox
+      description: >-
+        Sets desired state to absent. Poll
+        `GET /api/operations/{operationID}` with the returned `mutationId`
+        rather than the sandbox — see `deleteVM` for why.
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -675,7 +711,7 @@ paths:
       summary: Start a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -689,7 +725,7 @@ paths:
       summary: Stop a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -703,7 +739,7 @@ paths:
       summary: Restart a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1224,6 +1260,13 @@ paths:
         Requires `attach` on the volume and `update` on the VM. Refused with
         `400` when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        volume, never to the VM.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1629,6 +1672,13 @@ paths:
         Requires `update` on the floating IP and on the VM. Refused with `400`
         when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        floating IP, never to the VM.
       tags: [Floating IPs]
       requestBody:
         required: true
@@ -1816,6 +1866,14 @@ paths:
         Requires `attach` on the group and `update` on the VM. Refused with
         `400` when the two belong to different projects — the status every
         cross-project refusal answers with.
+
+
+        A `vmId` this caller cannot reach is answered `404`, whether no such VM
+        exists or the caller merely lacks `update` on it: the two are
+        deliberately indistinguishable, so the endpoint cannot be used to probe
+        which VM ids exist. `403` on this endpoint therefore refers to the
+        security group, never to the VM. A `sandboxId` still separates the two —
+        `404` absent, `403` forbidden.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -1839,6 +1897,14 @@ paths:
       description: >-
         Refused when it would leave the NIC with no security group — every
         NIC keeps at least one.
+
+
+        Resolves the target the same way attach does: a `vmId` this caller
+        cannot reach is answered `404` whether no such VM exists or the caller
+        merely lacks `update` on it, so the two are indistinguishable and the
+        endpoint cannot be used to probe which VM ids exist. `403` therefore
+        refers to the security group, never to the VM; a `sandboxId` still
+        separates the two.
       tags: [Security Groups]
       requestBody:
         required: true
@@ -4766,8 +4832,11 @@ paths:
       summary: Update agent properties
       description: >-
         Currently only `autoUpdate` (declarative auto-update enrollment).
-        Withdrawing clears any assigned desired version and pushes a fresh
-        desired-state sync. Requires `manage` on the agent.
+        Withdrawing clears an assignment the fleet rollout made and pushes a
+        fresh desired-state sync; an update an operator assigned directly
+        survives, since that path needs no enrollment (cancel it with `DELETE
+        /api/agents/{agentId}/actions/update`). Re-enrolling clears a recorded
+        failure and restarts the health budget. Requires `manage` on the agent.
       tags: [Agents]
       requestBody:
         required: true
@@ -4846,11 +4915,19 @@ paths:
       operationId: updateAgentBinary
       summary: Update an agent's binary
       description: >-
-        Resolves the release artifact for the agent's OS/architecture,
-        dispatches an update command over the agent socket, and reports the
-        agent's own outcome synchronously (the call blocks while the agent
-        downloads and verifies the artifact, up to 300s). On success the agent
-        restarts and re-registers with its new version.
+        Assigns the target version to the agent as desired state and nudges a
+        sync, which carries it as `desiredAgentUpdate`. The agent downloads and
+        verifies the artifact, restarts, and proves the update by re-registering
+        with its new version. Returns 202 immediately: the assignment is durable
+        on the agent row, so it survives disconnects and control-plane restarts.
+
+
+        Poll the agent (`GET /api/agents/{agentId}`) for progress —
+        `updateDesiredVersion` clears on convergence, `updateBlockedReason`
+        carries the agent's reason for waiting, and `updateFailureReason` a
+        terminal failure. This is the same machinery as the fleet auto-update
+        rollout, and an in-flight update from either source holds the other:
+        only one agent restarts at a time.
 
 
         The request body is optional. Supplying `artifactUrl`/`sha256`
@@ -4865,8 +4942,8 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentUpdateRequest"
       responses:
-        "200":
-          description: The agent accepted the update and is restarting.
+        "202":
+          description: The update was assigned; the agent converges on it.
           content:
             application/json:
               schema:
@@ -4877,28 +4954,40 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: >-
-            The agent is offline, already at the target version, hosts
+            The agent is offline, already runs the target version, hosts
             sandboxes that would not survive a restart, speaks a wire protocol
-            older than remote updates, or has not reported its OS/architecture.
-            Several of these are waivable with `force`.
+            older than declarative updates (v7), or has not reported its
+            OS/architecture. Only the sandbox caveat is waivable with `force`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "502":
-          description: The agent could not be reached, or it reported a failure.
+    delete:
+      operationId: cancelAgentUpdate
+      summary: Cancel an agent's update assignment
+      description: >-
+        Withdraws the assigned version, any pinned artifact, the health-budget
+        clock, and any recorded blocker or failure, whoever assigned it; the
+        next sync stops carrying the update.
+
+
+        Deliberately has no online requirement, unlike assigning: an update
+        that can never converge is usually one whose agent is gone, and that is
+        exactly when it needs withdrawing. Idempotent — cancelling an agent
+        with no assignment succeeds and changes nothing. Requires `manage` on
+        the agent.
+      tags: [Agents]
+      responses:
+        "200":
+          description: The agent, with no update assignment.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-        "504":
-          description: >-
-            The agent did not reply within the update window. The update may
-            still complete; the agent re-registers with its new version if so.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/AgentDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/agents/{agentId}/actions/adopt-workloads:
     parameters:
       - $ref: "#/components/parameters/AgentID"
@@ -8408,6 +8497,22 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ResourceOperation"
+    AcceptedVMMutation:
+      description: >-
+        The mutation was accepted. Refetch the VM until its `conditions` report
+        `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedVMMutation"
+    AcceptedSandboxMutation:
+      description: >-
+        The mutation was accepted. Refetch the sandbox until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedSandboxMutation"
     LogBackendUnavailable:
       description: The log backend (Loki) could not be queried.
       content:
@@ -8437,11 +8542,67 @@ components:
           type: string
       additionalProperties: true
 
+    AcceptedVMMutation:
+      type: object
+      description: >-
+        The body of a `202` from a VM lifecycle mutation. The VM as the
+        mutation left it, plus the generation it now has to converge on.
+
+
+        Done means the VM's `conditions` report `converged` with
+        `observedGeneration >= targetGeneration`; failed means
+        `conditions.degraded.sinceGeneration == targetGeneration`, with the
+        agent's reason. Both are readable from `GET /api/vms/{vmID}` — no
+        operation object is involved.
+
+
+        `mutationId` names the audit record of the request, and is what
+        `GET /api/operations/{operationID}` answers for. Its one *necessary*
+        use is `deleteVM`: a delete succeeds by the VM ceasing to exist, and a
+        client polling the VM would see a `404` that means deleted,
+        never-existed and not-authorized alike.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/VMDetail"
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the VM's `observedGeneration` must reach.
+        mutationId:
+          type: string
+          format: uuid
+
+    AcceptedSandboxMutation:
+      type: object
+      description: >-
+        The body of a `202` from a sandbox lifecycle mutation — the sandbox
+        counterpart of `AcceptedVMMutation`, with the same contract.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/SandboxDetail"
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the sandbox's `observedGeneration` must reach.
+        mutationId:
+          type: string
+          format: uuid
+
     ResourceOperation:
       type: object
       description: >-
         A durable record of one asynchronous resource lifecycle mutation. Poll
         it until `status` is terminal.
+
+
+        Served from two sources. The verbs still dispatched as imperative agent
+        commands — VM restart, and every snapshot verb — have real operation
+        records. Everything else is synthesized on read from the mutation's
+        audit record and the resource's `conditions`, so a client written
+        against the older contract keeps working; those responses report no
+        `completedAt` except for a completed delete.
       required: [vmId, resourceKind, resourceId, kind, status]
       properties:
         id:
@@ -12372,8 +12533,16 @@ components:
           type: string
           nullable: true
           description: >-
-            The version the fleet rollout has assigned this agent while it
-            converges; null once converged or never assigned.
+            The version this agent has been assigned while it converges; null
+            once converged or never assigned. Set by the fleet rollout and by
+            an operator's update action alike.
+        updateAssignmentSource:
+          type: string
+          nullable: true
+          enum: [rollout, manual]
+          description: >-
+            Who assigned `updateDesiredVersion` — the fleet auto-update rollout
+            or an operator's update action. Null when there is no assignment.
         updateAttemptedAt:
           type: string
           format: date-time
@@ -12658,8 +12827,11 @@ components:
         force:
           type: boolean
           description: >-
-            Proceed despite caveats that would otherwise be refused: hosted
-            sandboxes, or an agent already at the target version.
+            Proceed despite the one caveat that is otherwise refused: hosted
+            sandboxes, which the sandbox runtime does not yet re-adopt after an
+            agent restart. An agent already at the target version is refused
+            regardless — an update converges on a version, so reinstalling the
+            same build is not expressible.
         artifactUrl:
           type: string
           description: >-
@@ -12678,8 +12850,11 @@ components:
         targetVersion:
           type: string
           description: >-
-            Informational version label for an explicit artifact; defaults to
-            the configured target.
+            Version label for an explicit artifact; defaults to the configured
+            target, and is required when the deployment has none. Load-bearing:
+            convergence is "the agent re-registered at this version", so a label
+            the artifact's binary does not report leaves the update stuck until
+            it is recorded as failed.
 
     AgentUpdateArtifactKind:
       type: string
@@ -12691,12 +12866,12 @@ components:
 
     AgentUpdateResult:
       type: object
-      description: Outcome the agent reported for a dispatched update.
+      description: The update assignment the agent will converge on.
       required: [status, targetVersion, artifactUrl]
       properties:
         status:
           type: string
-          description: Always `updating` on success.
+          description: Always `assigned`.
         targetVersion:
           type: string
         artifactUrl:

@@ -450,16 +450,12 @@ struct FloatingIPController: RouteCollection {
         let floatingIP = try await fetchFloatingIPWithPermission(req: req, permission: "update")
         let request = try req.content.decode(AttachFloatingIPRequest.self)
 
-        guard let vm = try await VM.find(request.vmId, on: req.db) else {
-            throw Abort(.badRequest, reason: "VM \(request.vmId) does not exist")
-        }
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
-        // the VM too (the volume-attach rule).
-        let hasVMPermission = try await req.can("update", on: "virtual_machine", id: vm.id!.uuidString)
-        guard hasVMPermission else {
-            throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
-        }
+        // the VM too (the volume-attach rule). An unreachable VM is answered as
+        // absent whether it is missing or merely forbidden — see `reachableVM`
+        // (issue #881).
+        let vm = try await req.reachableVM(request.vmId, permission: "update")
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -561,7 +557,7 @@ struct FloatingIPController: RouteCollection {
 
         // Push the new NAT desired state to the fleet (the site's controller
         // realizes it); a lost nudge is caught by the periodic sync.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Floating IP attached",
@@ -599,7 +595,7 @@ struct FloatingIPController: RouteCollection {
             try await network?.save(on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Floating IP detached",

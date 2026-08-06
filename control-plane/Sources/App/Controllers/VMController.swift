@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 import StratoShared
 
@@ -100,10 +101,8 @@ struct VMController: RouteCollection {
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
-        let operations = try await ResourceOperation.recent(
+        return try await OperationFacade.history(
             resourceKind: .virtualMachine, resourceID: vmID, limit: limit, on: req.db)
-
-        return operations.map { OperationResponse(from: $0) }
     }
 
     /// GET /api/vms
@@ -449,11 +448,11 @@ struct VMController: RouteCollection {
 
         let userID = try user.requireID()
 
-        // Reserve quota and persist the VM and its pending create operation in one
+        // Reserve quota and persist the VM and its create record in one
         // transaction: enforcement checks, the reservation bump, the initial insert,
-        // the path update, and the operation record all commit together or roll back
+        // the path update, and the attribution event all commit together or roll back
         // together, so a quota rejection leaves nothing behind.
-        let operation: ResourceOperation
+        let accepted: ResourceMutation.Accepted
         do {
             // IPAM's unique (network, address) index is the backstop against
             // concurrent creates racing to the same address. A violation
@@ -461,7 +460,7 @@ struct VMController: RouteCollection {
             // transaction (not the insert): the loser re-reads the used set
             // and allocates the next free address.
             let initialGeneration = vm.generation
-            operation = try await Self.retryingOnConstraintFailure {
+            accepted = try await Self.retryingOnConstraintFailure {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: Fluent recorded the generated id and marked the
                 // model as existing, so saving again would UPDATE a row that no
@@ -482,6 +481,14 @@ struct VMController: RouteCollection {
                         storage: vm.disk,
                         on: db
                     )
+
+                    // How long the create has to converge before the
+                    // stuck-convergence sweep marks the VM degraded (STR-147).
+                    // Stamped with the insert, so a control-plane crash between
+                    // here and placement still leaves a resource the sweep can
+                    // judge.
+                    vm.extendConvergenceDeadline(
+                        by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
 
                     // Save VM to database first to generate ID
                     try await vm.save(on: db)
@@ -588,18 +595,15 @@ struct VMController: RouteCollection {
                         try await address6.save(on: db)
                     }
 
-                    // The pending create operation is the client's handle on the
-                    // asynchronous agent work that follows (issue #259).
-                    let operation = ResourceOperation(vmID: vmID, userID: userID, kind: .create)
-                    try await operation.save(on: db)
-
-                    // The create's attribution record (ADR 0001, stage 2).
-                    // Appended here rather than by `ResourceOperation.begin`,
-                    // because the retrying IPAM transaction owns this insert.
-                    // The scope is passed rather than resolved: this
-                    // transaction is the longest-held one in the system, and
-                    // every field of it is already in memory.
-                    try await ResourceEvent.record(
+                    // The create's attribution record, and the client's handle
+                    // on the asynchronous agent work that follows (ADR 0001
+                    // stage 4). Appended here rather than by
+                    // `ResourceMutation.accept`, because the retrying IPAM
+                    // transaction owns this insert. The scope is passed rather
+                    // than resolved: this transaction is the longest-held one
+                    // in the system, and every field of it is already in
+                    // memory.
+                    let event = try await ResourceEvent.record(
                         .create, resourceKind: .virtualMachine, resourceID: vmID,
                         actor: .user(userID),
                         scope: ResourceEvent.Scope(
@@ -622,7 +626,8 @@ struct VMController: RouteCollection {
                         on: db
                     )
 
-                    return operation
+                    return ResourceMutation.Accepted(
+                        mutationID: try event.requireID(), targetGeneration: vm.generation)
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -636,10 +641,10 @@ struct VMController: RouteCollection {
         // Place the VM in the background: the scheduler selects a hypervisor
         // and persists hypervisorId, and the desired-state sync carries the
         // VM (spec assembled from the database) to its agent. Observed-state
-        // reports — not this request — decide the operation's verdict.
-        req.resourceOperationCoordinator.dispatch(
-            operation, resourceKind: .virtualMachine, resourceID: vmID, hypervisorId: nil,
-            dispatch: .placement { @Sendable [app = req.application] db in
+        // reports — not this request — decide whether it converged.
+        req.resourceMutation.dispatch(
+            .create, resourceType: VM.self, resourceID: vmID, hypervisorId: nil,
+            strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
 
@@ -647,11 +652,11 @@ struct VMController: RouteCollection {
             "VM creation accepted",
             metadata: [
                 "vm_id": .string(vmID.uuidString),
-                "operation_id": .string(operation.id?.uuidString ?? ""),
+                "mutation_id": .string(accepted.mutationID.uuidString),
                 "created_from": .string("image"),
             ])
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     /// Updates a VM's metadata and, since issue #568, its vCPU/memory sizing.
@@ -837,13 +842,23 @@ struct VMController: RouteCollection {
 
         let existingVMID = try existingVM.requireID()
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .resize, resourceKind: .virtualMachine, resourceID: existingVMID, userID: userID,
-            hypervisorId: existingVM.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
+        let accepted = try await req.resourceMutation.accept(
+            .resize, on: existingVM, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
         ) { @Sendable db in
+            // Lock the row and recompute the deltas against what it says right
+            // now. This is the one guard the dropped "operation already
+            // pending" mutex was actually load-bearing for (STR-147): the
+            // sizing above was read before the transaction, so two concurrent
+            // resizes would each charge quota for the same delta and the
+            // project would be under-counted by one of them. `accept` already
+            // holds this row's lock, so the read below sees the winner's
+            // committed sizing — which is what makes the delta right rather
+            // than merely refused.
+            let committed = try await Self.committedVMSizing(existingVMID, on: db)
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
-                vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
+                vcpuDelta: newCPU - committed.cpu, memoryDelta: newMemory - committed.memory, on: db)
             existingVM.cpu = newCPU
             existingVM.memory = newMemory
             // Deliberately not a quota movement: ballooning reclaims memory
@@ -852,11 +867,39 @@ struct VMController: RouteCollection {
             // target is cleared.
             existingVM.balloonTarget = newBalloonTarget
             // Desired status is unchanged — this is a spec change — but the
-            // generation must still advance for the agent to apply it.
+            // generation must still advance for the agent to apply it. The
+            // generation it builds on came from `accept`'s refresh, so the
+            // loser of a race lands strictly above the winner rather than
+            // reusing its number.
             existingVM.bumpGeneration()
-            try await existingVM.save(on: db)
         }
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    /// The VM's committed sizing, read inside the mutation transaction — where
+    /// `ResourceMutation.accept` already holds the row lock, so this sees what
+    /// a racing resize committed rather than the request's own stale snapshot.
+    ///
+    /// Read here rather than adopted by `accept`'s refresh because `cpu` and
+    /// `memory` are *mutation*-owned columns: the refresh deliberately leaves
+    /// them alone so this request's new sizing is not overwritten by the old.
+    private static func committedVMSizing(_ id: UUID, on db: any Database) async throws -> CommittedVMSizing {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Resizing a VM requires an SQL database")
+        }
+        guard
+            let row = try await sql.raw(
+                "SELECT cpu, memory FROM vms WHERE id = \(bind: id)"
+            ).first(decoding: CommittedVMSizing.self)
+        else {
+            throw Abort(.notFound, reason: "VM no longer exists")
+        }
+        return row
+    }
+
+    private struct CommittedVMSizing: Decodable {
+        let cpu: Int
+        let memory: Int64
     }
 
     /// Upper bound on a VM's vCPU count, and so on the hotplug slots QEMU is
@@ -895,6 +938,16 @@ struct VMController: RouteCollection {
     /// the raw `VM` encoding would expose fields that must stay server-side
     /// (cloud-init user_data can carry secrets).
     private static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
+        try await detail(for: vm, on: req).encodeResponse(for: req)
+    }
+
+    /// - Parameter resolvingEnforcement: whether to ask whether the VM's
+    ///   security groups are actually enforced. That answer costs its own
+    ///   queries and means nothing for a VM being torn down, so the delete path
+    ///   skips it and reports `nil` — "unknown", which is the truth there.
+    private static func detail(
+        for vm: VM, on req: Request, resolvingEnforcement: Bool = true
+    ) async throws -> VMDetailResponse {
         try await vm.$networkInterfaces.load(on: req.db)
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
@@ -903,8 +956,24 @@ struct VMController: RouteCollection {
         }
         return try await VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db)
-        ).encodeResponse(for: req)
+            securityGroupsEnforced: resolvingEnforcement
+                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil)
+    }
+
+    /// The `202` body every accepted VM lifecycle mutation answers with
+    /// (STR-147): the VM as the mutation left it, plus the generation its
+    /// `conditions.observedGeneration` has to reach.
+    ///
+    /// The full detail DTO rather than a bare id — a client that just resized
+    /// or started a VM re-renders from this and only then starts polling, which
+    /// is one fewer round trip than the operation object ever gave it.
+    private static func acceptedResponse(
+        for vm: VM, _ accepted: ResourceMutation.Accepted, on req: Request,
+        resolvingEnforcement: Bool = true
+    ) async throws -> Response {
+        try await AcceptedMutation(
+            detail(for: vm, on: req, resolvingEnforcement: resolvingEnforcement), accepted
+        ).acceptedResponse()
     }
 
     func delete(req: Request) async throws -> Response {
@@ -934,7 +1003,7 @@ struct VMController: RouteCollection {
         // agent's finalizer here — which reaps the row, since it is the only
         // participant. If the agent ever comes back still carrying the VM, its
         // observed-state report surfaces it as an orphan for operator attention.
-        let strategy: ResourceOperationCoordinator.Strategy =
+        let strategy: ResourceMutation.Dispatch =
             agentOnline
             ? .stateSync
             : .directResolution { @Sendable db in
@@ -948,12 +1017,12 @@ struct VMController: RouteCollection {
                     outcome = try await ResourceFinalizerService.clear(
                         .agentAbsent, from: vm, on: db, app: app)
                 } catch {
-                    throw ResourceOperationCoordinator.WorkError(
+                    throw ResourceMutation.WorkError(
                         "Failed to delete VM record: \(error.localizedDescription)")
                 }
                 // Another participant still owes cleanup: the delete is under
-                // way, not done, so the operation stays pending rather than
-                // reporting a removal that has not happened.
+                // way, not done, and the reap that finally removes the row is
+                // what appends the terminal event a client is waiting for.
                 if case .held(let remaining) = outcome {
                     app.logger.info(
                         "VM delete is waiting on finalizers other than the agent's",
@@ -965,18 +1034,21 @@ struct VMController: RouteCollection {
                 return outcome.isRemoved
             }
 
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: strategy, on: req.db, app: app
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .delete, on: vm, actor: .user(userID), dispatch: strategy,
+            on: req.db, app: app
+        ) { @Sendable _ in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would
             // resurrect tokens their participants have already cleared.
             ResourceFinalizerService.stampForDeletion(vm)
             vm.setDesiredStatus(.absent)
-            try await vm.save(on: db)
         }
-        return try operation.acceptedResponse()
+        // The delete path skips the enforcement lookup: a client follows a
+        // delete through the operations façade with `mutationId`, so nothing
+        // reads this body beyond the id, and the VM may already be reaped.
+        return try await Self.acceptedResponse(
+            for: vm, accepted, on: req, resolvingEnforcement: false)
     }
 
     func pause(req: Request) async throws -> Response {
@@ -987,19 +1059,18 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
         }
 
-        // No transitional status exists for pause; the VM stays `.running` until
-        // the agent confirms, and the operation record carries the in-flight state.
-        let vmID = try vm.requireID()
+        // No transitional status exists for pause; the VM stays `.running`
+        // until the agent confirms, and the in-flight state is the gap between
+        // `generation` and `observedGeneration` the conditions report.
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .pause, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .pause, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             vm.setDesiredStatus(.paused)
-            try await vm.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     func resume(req: Request) async throws -> Response {
@@ -1011,17 +1082,15 @@ struct VMController: RouteCollection {
         }
 
         // Counterpart of pause: the VM stays `.paused` until the agent confirms.
-        let vmID = try vm.requireID()
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .resume, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .resume, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             vm.setDesiredStatus(.running)
-            try await vm.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     func status(req: Request) async throws -> VMDetailResponse {
@@ -1077,20 +1146,18 @@ struct VMController: RouteCollection {
         }
 
         // The desired status and generation bump are the mutation;
-        // observed-state reports complete the operation (issue #260). No
-        // transitional `.starting` is stored — in-flight state is derived
-        // from desired != observed plus the pending operation.
-        let vmID = try vm.requireID()
+        // observed-state reports decide whether it converged (issue #260). No
+        // transitional `.starting` is stored — in-flight state is the gap
+        // between desired and observed.
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .boot, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             vm.setDesiredStatus(.running)
-            try await vm.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     func stop(req: Request) async throws -> Response {
@@ -1101,17 +1168,15 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
         }
 
-        let vmID = try vm.requireID()
         let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .shutdown, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: .stateSync, on: req.db, app: req.application
-        ) { @Sendable db in
+        let accepted = try await req.resourceMutation.accept(
+            .shutdown, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
             vm.setDesiredStatus(.shutdown)
-            try await vm.save(on: db)
         }
 
-        return try operation.acceptedResponse()
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     func restart(req: Request) async throws -> Response {
@@ -1130,8 +1195,7 @@ struct VMController: RouteCollection {
         let userID = try user.requireID()
         let operation = try await req.resourceOperationCoordinator.perform(
             .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            hypervisorId: vm.hypervisorId, dispatch: .awaitingResponse(.vmReboot),
-            on: req.db, app: req.application)
+            dispatch: .awaitingResponse(.vmReboot), on: req.db, app: req.application)
 
         return try operation.acceptedResponse()
     }

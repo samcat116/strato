@@ -7,15 +7,18 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-/// Tests for `POST /api/agents/:agentId/actions/update` — the refusal paths
-/// that must trip *before* anything is dispatched to the agent: offline
-/// agents, pre-v6 wire protocols (which cannot decode the command and would
-/// only ever time out), unresolvable artifacts, and the sandbox re-adoption
-/// caveat. The dispatch itself is exercised up to the socket lookup (no agent
-/// is connected, so an update that clears every gate reports the agent as
-/// unreachable).
+/// Tests for `POST /api/agents/:agentId/actions/update` — the operator's
+/// "update now", which since STR-145 assigns the same declarative field the
+/// fleet rollout uses instead of dispatching an imperative command (ADR 0001
+/// stage 6). Two halves: the refusals that must trip before anything is
+/// assigned (offline agents, pre-v7 wire protocols that ignore the field,
+/// missing artifacts, the sandbox re-adoption caveat), and the assignment
+/// itself landing on the agent row for sync assembly to pick up.
 @Suite("Agent Update Endpoint Tests", .serialized)
 final class AgentUpdateEndpointTests {
+
+    private static let target = "1.4.0"
+    private static let validDigest = String(repeating: "ab", count: 32)
 
     private func withUpdateTestApp(
         _ test: (Application, TestDataBuilder, Organization, String) async throws -> Void
@@ -53,13 +56,14 @@ final class AgentUpdateEndpointTests {
         app: Application,
         org: Organization,
         online: Bool = true,
-        wireProtocolVersion: Int = WireProtocol.agentUpdateMinimumVersion,
+        version: String = "1.0.0",
+        wireProtocolVersion: Int = WireProtocol.desiredAgentUpdateMinimumVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
         let agent = Agent(
             name: "hv-update-\(UUID().uuidString.prefix(8))",
             hostname: "hv.example",
-            version: "1.0.0",
+            version: version,
             capabilities: ["qemu"],
             status: online ? .online : .offline,
             resources: AgentResources(
@@ -77,7 +81,10 @@ final class AgentUpdateEndpointTests {
         return agent
     }
 
-    private static let validDigest = String(repeating: "ab", count: 32)
+    private func reload(_ agent: Agent, on app: Application) async throws -> Agent {
+        let row = try await Agent.find(agent.requireID(), on: app.db)
+        return try #require(row)
+    }
 
     @Test("offline agents are refused")
     func offlineAgentRefused() async throws {
@@ -93,10 +100,14 @@ final class AgentUpdateEndpointTests {
         }
     }
 
-    @Test("agents on a pre-v6 wire protocol are refused with the real reason")
+    @Test("agents on a pre-v7 wire protocol are refused with the real reason")
     func oldWireProtocolRefused() async throws {
         try await withUpdateTestApp { app, _, org, token in
-            let agent = try await self.makeAgent(app: app, org: org, wireProtocolVersion: 5)
+            // A pre-v7 agent decodes the sync but ignores `desiredAgentUpdate`:
+            // assigning it would report an update that converges on nothing.
+            let agent = try await self.makeAgent(
+                app: app, org: org,
+                wireProtocolVersion: WireProtocol.desiredAgentUpdateMinimumVersion - 1)
 
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -104,6 +115,7 @@ final class AgentUpdateEndpointTests {
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("wire protocol"))
             }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
 
@@ -140,6 +152,29 @@ final class AgentUpdateEndpointTests {
         }
     }
 
+    @Test("an explicit artifact with no target version to converge on is refused")
+    func explicitArtifactRequiresTargetVersion() async throws {
+        try await withUpdateTestApp { app, _, org, token in
+            // No STRATO_VERSION/AGENT_TARGET_VERSION in tests, and no
+            // targetVersion in the body: there is nothing to measure
+            // convergence against, so the assignment could only ever be
+            // recorded as failed after its health budget.
+            let agent = try await self.makeAgent(app: app, org: org)
+
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "artifactUrl": "https://mirror.internal/strato-linux-x86_64.tar.gz",
+                    "sha256": Self.validDigest,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("targetVersion"))
+            }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
+        }
+    }
+
     @Test("hosted Firecracker VMs do not require force (re-adopted since #433)")
     func firecrackerVMsDoNotRequireForce() async throws {
         try await withUpdateTestApp { app, builder, org, token in
@@ -152,45 +187,97 @@ final class AgentUpdateEndpointTests {
             vm.hypervisorType = .firecracker
             try await vm.save(on: app.db)
 
-            // No force: the request must clear every pre-dispatch gate and
-            // fail only at the send itself (no agent socket in this harness),
-            // proving hosted Firecracker VMs no longer trip the guard.
+            // No force: the request must clear every gate and land the
+            // assignment, proving hosted Firecracker VMs no longer trip one.
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
                     "artifactUrl": "https://mirror.internal/strato-linux-x86_64.tar.gz",
                     "sha256": Self.validDigest,
+                    "targetVersion": Self.target,
                 ])
             } afterResponse: { res in
-                #expect(res.status == .badGateway)
+                #expect(res.status == .accepted)
             }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == Self.target)
         }
     }
 
-    @Test("a dispatchable update against a disconnected agent reports it unreachable")
-    func disconnectedAgentReportedUnreachable() async throws {
+    @Test("the assignment lands on the row and rides the agent's next sync")
+    func assignmentLandsOnTheRow() async throws {
         try await withUpdateTestApp { app, _, org, token in
-            // Online per heartbeat, but no WebSocket is actually connected in
-            // this harness: every pre-dispatch gate passes and the send itself
-            // fails, mapping to a 502 rather than a success.
+            // Online per heartbeat, but no WebSocket is connected in this
+            // harness — which no longer matters: the assignment is durable on
+            // the row and the agent picks it up on its next sync, so an agent
+            // that is mid-reconnect no longer loses the update.
             let agent = try await self.makeAgent(app: app, org: org)
 
-            struct ForceBody: Content {
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "artifactUrl": "https://mirror.internal/strato-linux-x86_64.tar.gz?token=secret",
+                    "sha256": Self.validDigest,
+                    "targetVersion": Self.target,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                let body = try res.content.decode(AgentController.AgentUpdateResponse.self)
+                #expect(body.status == "assigned")
+                #expect(body.targetVersion == Self.target)
+                // The response goes to any agent#manage holder, so a presigned
+                // artifact URL must come back redacted.
+                #expect(!body.artifactUrl.contains("secret"))
+            }
+
+            let row = try await self.reload(agent, on: app)
+            #expect(row.updateDesiredVersion == Self.target)
+            #expect(row.updateAssignmentSource == .manual)
+            #expect(row.updateAttemptedAt != nil)
+            // Manual updates need no auto-update enrollment.
+            #expect(!row.autoUpdate)
+
+            // The override is pinned to the row (there is no release to
+            // re-resolve it from) and assembly hands it to the agent verbatim.
+            let sync = try await app.desiredStateAssembler.assemble(
+                agentId: agent.requireID().uuidString)
+            let update = try #require(sync.desiredAgentUpdate)
+            #expect(update.targetVersion == Self.target)
+            #expect(update.artifactURL == "https://mirror.internal/strato-linux-x86_64.tar.gz?token=secret")
+            #expect(update.sha256 == Self.validDigest)
+            #expect(update.artifactKind == .tarball)
+            #expect(update.tarballMember == AgentUpdateArtifacts.defaultTarballMember)
+        }
+    }
+
+    @Test("an agent already at the target is refused, force or not")
+    func alreadyAtTargetRefused() async throws {
+        try await withUpdateTestApp { app, _, org, token in
+            // Convergence is "the agent re-registered at this version", so an
+            // agent already there has nothing to converge on: the assignment
+            // would hang until the health budget called it failed. `force` no
+            // longer reinstalls.
+            let agent = try await self.makeAgent(app: app, org: org, version: "v\(Self.target)")
+
+            struct Body: Content {
                 let artifactUrl: String
                 let sha256: String
+                let targetVersion: String
                 let force: Bool
             }
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    ForceBody(
+                    Body(
                         artifactUrl: "https://mirror.internal/strato-linux-x86_64.tar.gz",
                         sha256: Self.validDigest,
+                        targetVersion: Self.target,
                         force: true
                     ))
             } afterResponse: { res in
-                #expect(res.status == .badGateway)
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("already runs"))
             }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
 
@@ -222,6 +309,7 @@ final class AgentUpdateEndpointTests {
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("sandbox"))
             }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
 
@@ -253,23 +341,24 @@ final class AgentUpdateEndpointTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.contains("system admin"))
             }
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
 
-    @Test("an explicit bare-binary artifact passes every gate and reaches dispatch")
+    @Test("an explicit bare-binary artifact is pinned to the row as such")
     func explicitBinaryArtifactAccepted() async throws {
         try await withUpdateTestApp { app, _, org, token in
             // The operator hands a bare executable (artifactKind "binary"):
-            // the request must decode and clear all pre-dispatch gates — the
-            // 502 proves it reached the send (no agent socket is connected
-            // here), not a 400 from the body or a kind-related refusal.
+            // the shape must survive onto the row and out to the sync, since
+            // it decides whether the agent extracts a tarball member or
+            // installs the download itself.
             let agent = try await self.makeAgent(app: app, org: org)
 
             struct BinaryBody: Content {
                 let artifactUrl: String
                 let sha256: String
                 let artifactKind: String
-                let force: Bool
+                let targetVersion: String
             }
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -278,11 +367,17 @@ final class AgentUpdateEndpointTests {
                         artifactUrl: "https://mirror.internal/strato-agent",
                         sha256: Self.validDigest,
                         artifactKind: "binary",
-                        force: true
+                        targetVersion: Self.target
                     ))
             } afterResponse: { res in
-                #expect(res.status == .badGateway)
+                #expect(res.status == .accepted)
             }
+
+            let sync = try await app.desiredStateAssembler.assemble(
+                agentId: agent.requireID().uuidString)
+            let update = try #require(sync.desiredAgentUpdate)
+            #expect(update.artifactKind == .binary)
+            #expect(update.tarballMember == nil)
         }
     }
 }
