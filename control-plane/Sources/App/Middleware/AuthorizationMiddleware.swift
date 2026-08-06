@@ -130,8 +130,14 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     static func classify(path: String) -> RouteClass? {
         // Public allowlist. Split into small sub-expressions: a single long
         // `||` chain trips the Swift type-checker.
+        // `/agent/desired-state` is the desired-state long-poll (STR-146):
+        // agents fetch their sync with their SPIFFE SVID over mTLS, and the
+        // handler authenticates the forwarded client certificate itself.
+        // Matched *exactly*, not as a prefix — `publicPrefixes` below is
+        // `hasPrefix`, so listing it there would silently make a future
+        // `/agent/desired-state-history` public too.
         let exactPublic: Set<String> = [
-            "/api/docs", "/api/openapi.yaml",
+            "/api/docs", "/api/openapi.yaml", "/agent/desired-state",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.
@@ -140,14 +146,9 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // `/oauth/` is the RFC 8628 device-grant surface: the polling CLI has
         // no credentials yet. The approval/management endpoints live under
         // `/api/oauth/` and stay session-gated.
-        // `/agent/desired-state` is the desired-state long-poll (STR-146):
-        // agents fetch their sync with their SPIFFE SVID over mTLS, and the
-        // handler authenticates the forwarded client certificate itself. Listed
-        // as its own exact prefix rather than widening this to `/agent/` so a
-        // future route under that prefix still has to opt in here.
         let publicPrefixes = [
-            "/health", "/auth", "/api/users/register", "/agent/ws", "/agent/desired-state",
-            "/ssf/events/", "/api/public/", "/oauth/",
+            "/health", "/auth", "/api/users/register", "/agent/ws", "/ssf/events/", "/api/public/",
+            "/oauth/",
         ]
         // Image-download URLs: agents fetch base images with their SPIFFE SVID
         // over mTLS, not a session; the handler authenticates the forwarded

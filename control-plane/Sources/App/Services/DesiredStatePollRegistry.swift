@@ -25,11 +25,59 @@ actor DesiredStatePollRegistry {
     /// moment, so this is a collection rather than a single slot.
     private var waiters: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
 
+    /// Rings waiting to be delivered, and the task that will deliver them.
+    /// See `coalesceWindow`.
+    private var pendingKeys: Set<String> = []
+    private var pendingAll = false
+    private var flushTask: Task<Void, Never>?
+
+    /// How long a ring is held so that rings arriving behind it collapse into
+    /// the same wake-up.
+    ///
+    /// Without this, a burst of mutations costs one full assembly per ring per
+    /// parked poll: the woken poll re-assembles, finds the same digest, parks
+    /// again, and is woken by the next ring. Fleet-wide rings make that worse
+    /// than it sounds, because they wake *every* parked poll on *every*
+    /// replica — a script adding twenty security-group rules would otherwise
+    /// burn twenty assemblies per agent in the fleet, for a change most of them
+    /// are not affected by.
+    ///
+    /// The cost is up to this much added doorbell latency, which is nothing
+    /// against the reconcile that follows (a VM create is seconds of work
+    /// agent-side). Correctness does not depend on it either way: a woken poll
+    /// re-reads current state from Postgres, so collapsing two rings into one
+    /// wake-up loses nothing — the single assembly sees both mutations.
+    static let coalesceWindow: Duration = .milliseconds(50)
+
+    /// Ceiling on polls parked simultaneously for one agent.
+    ///
+    /// A healthy agent has exactly one. Two is legitimate and transient — a
+    /// re-poll racing its predecessor's teardown, or a load balancer re-routing
+    /// on reconnect — which is why the cap is not one and why `waiters` holds a
+    /// collection per key. Past it, a misbehaving or looping agent would
+    /// otherwise be able to park unbounded polls, each doing a full assembly on
+    /// every doorbell; the endpoint is deliberately exempt from rate limiting
+    /// (`RateLimitMiddleware`, where one shared sidecar IP would bucket the
+    /// whole fleet together), so this is what bounds that amplification.
+    static let maxParkedPollsPerAgent = 3
+
+    /// Whether a `wait` actually parked. `refused` means the per-agent cap was
+    /// already reached — the caller must idle rather than answer immediately,
+    /// or the excess polls turn into a hot loop.
+    enum ParkOutcome: Sendable, Equatable {
+        case parked
+        case refused
+    }
+
     /// Park until the doorbell rings for `agentKey`, `deadline` passes, or the
     /// calling request is cancelled (client hung up). Never throws: every
     /// outcome is "go re-assemble and decide", and the caller distinguishes
     /// them by re-checking the clock.
-    func wait(agentKey: String, until deadline: ContinuousClock.Instant) async {
+    @discardableResult
+    func wait(agentKey: String, until deadline: ContinuousClock.Instant) async -> ParkOutcome {
+        guard (waiters[agentKey]?.count ?? 0) < Self.maxParkedPollsPerAgent else {
+            return .refused
+        }
         let id = UUID()
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -57,16 +105,15 @@ actor DesiredStatePollRegistry {
         } onCancel: {
             Task { await self.resume(agentKey: agentKey, id: id) }
         }
+        return .parked
     }
 
     /// Wake every poll parked for `agentKey`. Contentless: a woken poll
     /// re-assembles and decides for itself whether anything actually changed,
     /// so a spurious ring costs one assembly and never a wrong answer.
     func ring(agentKey: String) {
-        guard let parked = waiters.removeValue(forKey: agentKey) else { return }
-        for continuation in parked.values {
-            continuation.resume()
-        }
+        pendingKeys.insert(agentKey)
+        scheduleFlush()
     }
 
     /// Wake every poll parked here, whoever it belongs to. The fleet-wide
@@ -75,10 +122,38 @@ actor DesiredStatePollRegistry {
     /// re-assembles and decides for itself, so the ones that were not actually
     /// affected simply park again.
     func ringAll() {
-        let parked = waiters
-        waiters.removeAll()
-        for continuations in parked.values {
-            for continuation in continuations.values {
+        pendingAll = true
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task {
+            try? await Task.sleep(for: Self.coalesceWindow, clock: ContinuousClock())
+            await self.flush()
+        }
+    }
+
+    private func flush() {
+        flushTask = nil
+        let all = pendingAll
+        let keys = pendingKeys
+        pendingAll = false
+        pendingKeys.removeAll()
+
+        if all {
+            let parked = waiters
+            waiters.removeAll()
+            for continuations in parked.values {
+                for continuation in continuations.values {
+                    continuation.resume()
+                }
+            }
+            return
+        }
+        for key in keys {
+            guard let parked = waiters.removeValue(forKey: key) else { continue }
+            for continuation in parked.values {
                 continuation.resume()
             }
         }

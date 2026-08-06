@@ -598,9 +598,10 @@ final class IAMAuthorizerBackstopTests {
         #expect(M.classify(path: "/api/projects/\(id)/images/\(id)/download") == .isPublic)
         #expect(M.classify(path: "/api/sandboxes/\(id)/snapshots/\(id)/artifacts/rootfs") == .isPublic)
         #expect(M.classify(path: "/agent/desired-state") == .isPublic)
-        // Listed as its own exact prefix, not by widening the allowlist to
-        // `/agent/`: a future route under that prefix must still opt in.
+        // Matched exactly, not by prefix: neither a sibling under `/agent/` nor
+        // a longer path that merely starts with it may inherit public access.
         #expect(M.classify(path: "/agent/something-else") == nil)
+        #expect(M.classify(path: "/agent/desired-state-history") == nil)
         // Identity-plane.
         #expect(M.classify(path: "/api/api-keys") == .loginOnly)
         #expect(M.classify(path: "/api/authorization/check") == .loginOnly)

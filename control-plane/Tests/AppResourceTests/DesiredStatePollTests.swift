@@ -287,6 +287,85 @@ struct DesiredStatePollTests {
     func pollPathIsPublic() {
         #expect(AuthorizationMiddleware.classify(path: Self.path) == .isPublic)
     }
+
+    // MARK: Assembly-cost guards (PR #985 review)
+
+    /// A refused park must idle, not answer. The agent treats `304` as
+    /// "re-poll now", so answering immediately would turn the excess polls of a
+    /// looping agent into a hot loop against an endpoint that is deliberately
+    /// exempt from rate limiting.
+    @Test("Polls past the per-agent park cap idle out the window rather than answering early")
+    func parkCapIdlesRatherThanAnswering() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            _ = try await self.registerAgentRow(app: app, name: "poll-agent")
+            app.desiredStatePollHoldWindow = .milliseconds(600)
+
+            let first = try await self.poll(app: app, port: port)
+            let etag = try #require(first.headers.first(name: .eTag))
+
+            // One more than the cap, all conditional so they all try to park.
+            let count = DesiredStatePollRegistry.maxParkedPollsPerAgent + 1
+            let started = ContinuousClock().now
+            let responses = try await withThrowingTaskGroup(of: ClientResponse.self) { group in
+                for _ in 0..<count {
+                    group.addTask { try await self.poll(app: app, port: port, ifNoneMatch: etag) }
+                }
+                var all: [ClientResponse] = []
+                for try await response in group { all.append(response) }
+                return all
+            }
+            let elapsed = ContinuousClock().now - started
+
+            #expect(responses.count == count)
+            #expect(responses.allSatisfy { $0.status == .notModified })
+            // Including the refused one: nothing came back early.
+            #expect(elapsed >= .milliseconds(500))
+        }
+    }
+
+    /// Rings arriving inside the coalescing window collapse into one wake-up,
+    /// and the single assembly that follows sees all of them — so a burst
+    /// costs one assembly, not one per ring.
+    @Test("A burst of doorbells wakes a parked poll once, with the latest state")
+    func burstOfDoorbellsCoalesces() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let agent = try await self.registerAgentRow(app: app, name: "poll-agent")
+            app.desiredStatePollHoldWindow = .seconds(30)
+
+            let first = try await self.poll(app: app, port: port)
+            let etag = try #require(first.headers.first(name: .eTag))
+
+            let parked = Task { try await self.poll(app: app, port: port, ifNoneMatch: etag) }
+            var isParked = false
+            for _ in 0..<200 {
+                isParked = await app.desiredStatePollRegistry.parkedAgentKeys
+                    .contains("spiffe://strato.local/agent/poll-agent")
+                if isParked { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            #expect(isParked)
+
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Burst Org")
+            let project = try await builder.createProject(
+                name: "Burst Project", description: "burst tests", organization: org)
+            let vm = try await builder.createVM(name: "burst-vm", project: project)
+            vm.hypervisorId = agent.id!.uuidString
+            try await vm.save(on: app.db)
+
+            // Twenty rings back to back, well inside the coalescing window.
+            for _ in 0..<20 {
+                await app.desiredStatePollRegistry.ring(
+                    agentKey: "spiffe://strato.local/agent/poll-agent")
+            }
+
+            let woken = try await parked.value
+            #expect(woken.status == .ok)
+            #expect(try self.decodeSync(woken).vms.map(\.vmId) == [vm.id!])
+        }
+    }
 }
 
 // MARK: - Running-server harness
