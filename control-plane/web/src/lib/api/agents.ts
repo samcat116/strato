@@ -42,6 +42,12 @@ export const agentsApi = {
     return api.post<AgentUpdateResult>(`/api/agents/${id}/actions/update`, options ?? {});
   },
 
+  // Withdraws an update assignment (rollout's or an operator's). Works while
+  // the agent is offline, which is when a stuck update usually needs clearing.
+  cancelUpdate(id: string): Promise<Agent> {
+    return api.delete<Agent>(`/api/agents/${id}/actions/update`);
+  },
+
   patch(id: string, data: { autoUpdate?: boolean }): Promise<Agent> {
     return api.patch<Agent>(`/api/agents/${id}`, data);
   },

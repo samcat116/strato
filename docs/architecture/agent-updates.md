@@ -91,6 +91,13 @@ on convergence, `updateBlockedReason` carries the agent's reason for waiting,
 - Needs no auto-update enrollment, and does not create one. Withdrawing an
   agent from auto-update clears the *rollout's* assignment, never an
   operator's.
+- Is cancellable: `DELETE /api/agents/:id/actions/update` (or **Cancel** on the
+  agent's auto-update card) drops the assignment, the pinned artifact, the
+  budget clock, and any recorded failure. Deliberately not gated on the agent
+  being online, unlike assigning — an update that can never converge is usually
+  one whose agent is gone, and re-issuing it would be refused for exactly that
+  reason. Without this an assignment had no withdrawal path at all: it never
+  converges, and it is exempt from the rollout's stale reset by design.
 - System admins may override the artifact (`artifactUrl` + `sha256`) for
   air-gapped or one-off builds; delegated admins may not — an explicit
   artifact is arbitrary code on the host. An override is pinned to the agent
@@ -137,13 +144,24 @@ where another stopped:
     *parked*: its assignment stays, so it converges whenever the blocker
     clears, but the rollout stops waiting on it.
   - **Failed** — the agent reported a terminal failure (download, checksum,
-    probe, or swap), or went silent past the health budget. The rollout
-    **halts** — no further agents are assigned — until an operator
-    intervenes (re-enable auto-update on the failed agent to retry, or
-    re-issue the update, which overwrites the assignment and clears the
-    failure) or the target version moves on, which resets stale rollout
-    assignments and failures. A version an operator assigned by hand is never
-    reset as stale: the deployment target has no opinion about it.
+    probe, or swap), or went silent past the health budget. A *rollout*
+    failure **halts** the fleet — no further agents are assigned — until an
+    operator intervenes (re-enable auto-update on the failed agent to retry,
+    which also restarts its budget clock; re-issue the update, which
+    overwrites the assignment with a fresh artifact; or cancel it) or the
+    target version moves on, which resets stale rollout assignments and
+    failures.
+
+    A *manual* failure does not halt the fleet. One operator action on one
+    agent — possibly not even an enrolled one — must not stop every other
+    agent's auto-update, and a manual assignment's own escapes are precisely
+    what a terminal failure closes: it never converges, and it is never reset
+    as stale (the deployment target has no opinion about a version an operator
+    chose). Cancelling is what clears it.
+
+    Either way the failure drops the pinned artifact, so a presigned
+    credential does not outlive the update that needed it; re-issuing supplies
+    a fresh one.
 
 ### Convergence preconditions (agent)
 

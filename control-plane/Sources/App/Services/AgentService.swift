@@ -1566,8 +1566,13 @@ actor AgentService {
     ///   a new target. Manual assignments are exempt — the operator named that
     ///   version (possibly a one-off build) deliberately.
     /// - **failed** — a recorded failure (agent-reported, or silence past the
-    ///   health budget, recorded here): the rollout halts until an operator
-    ///   intervenes or the target changes.
+    ///   health budget, recorded here). A *rollout* failure halts the fleet
+    ///   until an operator intervenes or the target changes: the next agent
+    ///   would most likely hit the same bad artifact. A *manual* one does not —
+    ///   one operator action on one agent must not stop every other agent's
+    ///   auto-update, especially since the manual assignment's own escapes
+    ///   (converge, stale reset) are exactly what a terminal failure closes off.
+    ///   Cancelling the assignment is what clears it.
     /// - **parked** — blocked past the health budget (e.g. running
     ///   Firecracker VMs): the assignment stays, level-triggered, so the
     ///   agent converges whenever its blocker clears — but advancement stops
@@ -1645,7 +1650,20 @@ actor AgentService {
                 }
 
                 if agent.updateFailureReason != nil {
-                    rolloutHalted = true
+                    // A *rollout* failure halts the fleet until an operator
+                    // intervenes: the next agent would most likely hit the same
+                    // bad artifact. A manual one does not. It is one operator's
+                    // action on one agent — possibly not even an enrolled one —
+                    // and letting it stop every other agent's auto-update means
+                    // a single failed "update now" wedges the fleet with no
+                    // automatic way out (the assignment is exempt from the
+                    // stale reset by design, and the agent that would clear it
+                    // by converging is the one that just died). Cancelling the
+                    // assignment is the operator's escape; until then this
+                    // agent simply holds its own failure.
+                    if agent.updateAssignmentSource != .manual {
+                        rolloutHalted = true
+                    }
                     continue
                 }
 
@@ -1675,18 +1693,22 @@ actor AgentService {
                 if age > Self.autoUpdateHealthBudgetSeconds {
                     // Silence past the budget: the agent neither converged
                     // nor explained itself — most likely it attempted the
-                    // update and never came back. Halt the rollout.
-                    agent.updateFailureReason =
+                    // update and never came back.
+                    let manual = agent.updateAssignmentSource == .manual
+                    agent.recordUpdateFailure(
                         "did not re-register at \(assigned) within \(Int(Self.autoUpdateHealthBudgetSeconds))s of assignment"
+                    )
                     try await agent.save(on: db)
                     Telemetry.agentAutoUpdateFailed(reason: "health_budget")
                     app.logger.error(
-                        "Agent auto-update failed: agent went silent past the health budget; rollout halted",
+                        manual
+                            ? "Agent update failed: agent went silent past the health budget"
+                            : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
                             "agentName": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
-                    rolloutHalted = true
+                    rolloutHalted = rolloutHalted || !manual
                 } else {
                     waitingOnAgent = true
                 }
@@ -1731,12 +1753,7 @@ actor AgentService {
                 return
             }
 
-            next.updateDesiredVersion = target
-            next.updateAssignmentSource = .rollout
-            next.updateArtifactOverride = nil
-            next.updateAttemptedAt = now
-            next.updateBlockedReason = nil
-            next.updateFailureReason = nil
+            next.assignUpdate(version: target, source: .rollout, at: now)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(
@@ -2177,11 +2194,12 @@ actor AgentService {
 
         switch status.disposition {
         case ObservedAgentUpdateStatus.dispositionFailed:
-            // Terminal for this artifact and process lifetime: halt the
-            // rollout on the real error instead of waiting out the budget.
+            // Terminal for this artifact and process lifetime: record the real
+            // error instead of waiting out the budget (and, for a rollout
+            // assignment, halt on it).
             agent.updateBlockedReason = nil
             if agent.updateFailureReason != status.reason {
-                agent.updateFailureReason = status.reason
+                agent.recordUpdateFailure(status.reason)
                 app.logger.error(
                     "Agent reported its assigned update failed",
                     metadata: [

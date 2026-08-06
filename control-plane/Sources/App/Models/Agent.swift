@@ -160,6 +160,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// `sha256`, system-admin only). Nil for the release path, which is
     /// re-resolved at every sync assembly instead of stored — an override has no
     /// release to re-resolve from, so it rides the row.
+    ///
+    /// **The URL may be a credential.** Everything else that touches an artifact
+    /// URL redacts it (`DesiredAgentUpdate.redactURL`) precisely because a
+    /// presigned query token or userinfo is often the only way to authenticate a
+    /// private mirror — and none of that redaction reaches a database column, a
+    /// backup, or a read replica. So the assignment is the credential's lifetime:
+    /// `clearUpdateAssignment()` drops it on convergence and withdrawal, and a
+    /// terminal failure drops it too, rather than leaving a live token on a row
+    /// whose update is never going to finish.
     @OptionalField(key: "update_artifact_override")
     var updateArtifactOverride: ResolvedAgentArtifact?
 
@@ -290,10 +299,31 @@ enum AgentUpdateAssignmentSource: String, Codable, Sendable {
 }
 
 extension Agent {
+    /// Assigns an update, writing every field the assignment consists of at
+    /// once. Both assigners go through here rather than setting the fields
+    /// themselves, because `updateAssignmentSource` reads as nil without a
+    /// version: written in the other order, a manual assignment would read back
+    /// as `.rollout` and be swept away as stale — silently, at the next tick.
+    /// Callers save.
+    func assignUpdate(
+        version: String,
+        source: AgentUpdateAssignmentSource,
+        artifact: ResolvedAgentArtifact? = nil,
+        at now: Date = Date()
+    ) {
+        updateDesiredVersion = version
+        updateAssignmentSource = source
+        updateArtifactOverride = artifact
+        updateAttemptedAt = now
+        updateBlockedReason = nil
+        updateFailureReason = nil
+    }
+
     /// Clears every update-assignment field: the version, who assigned it, any
     /// pinned artifact, the health-budget clock, and the reported
     /// blocker/failure. Used when the assignment converges, when its target
-    /// goes stale, and when an operator withdraws auto-update. Callers save.
+    /// goes stale, when an operator cancels it, and when an operator withdraws
+    /// auto-update. Callers save.
     func clearUpdateAssignment() {
         updateDesiredVersion = nil
         updateAssignmentSource = nil
@@ -301,6 +331,18 @@ extension Agent {
         updateAttemptedAt = nil
         updateBlockedReason = nil
         updateFailureReason = nil
+    }
+
+    /// Records a terminal failure for the current assignment. The assignment
+    /// itself stays — it is what an operator sees, and what a returning agent
+    /// could still converge on if the blocker was environmental — but the
+    /// pinned artifact goes, because it may carry a presigned credential and
+    /// this update is not finishing on its own. Re-issuing the update supplies
+    /// a fresh one. Callers save.
+    func recordUpdateFailure(_ reason: String) {
+        updateFailureReason = reason
+        updateBlockedReason = nil
+        updateArtifactOverride = nil
     }
 }
 

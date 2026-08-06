@@ -393,6 +393,17 @@ An agent updates one at a time across the fleet: a manual update and the
 [auto-update rollout](/architecture/agent-updates) share one assignment field,
 so neither starts while the other is in flight.
 
+If an update can never land — a bad artifact, or a host that died mid-swap —
+withdraw the assignment rather than waiting it out:
+
+```bash
+curl -X DELETE https://strato.example.com/api/agents/<agent-id>/actions/update \
+  -H 'Authorization: Bearer <api-key>'
+```
+
+(or **Cancel** on the agent's auto-update card). This works while the agent is
+offline, which re-issuing the update does not.
+
 Caveats the UI confirms before assigning:
 
 - The agent disconnects briefly and re-registers on restart.

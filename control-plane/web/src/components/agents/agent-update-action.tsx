@@ -30,14 +30,20 @@ interface AgentUpdateActionProps {
  *
  * A 409 is a refusal. One of them — hosted sandboxes, whose runtime does not
  * re-adopt after a restart — the operator may override, so the dialog surfaces
- * the reason and offers a force retry instead of failing outright. The others
- * (offline, already at the target, too old a wire protocol) are not waivable;
- * force simply gets the same refusal back.
+ * the reason and offers a force retry. The others (offline, already at the
+ * target, too old a wire protocol) are not waivable, and force would return the
+ * identical refusal, so they get the reason without the retry. "Already at the
+ * target" is reachable by a race — the agent re-registers between the list
+ * render and the click — which is exactly when a dead retry button is most
+ * tempting. Matching on prose is the weak part; a machine-readable refusal code
+ * on the endpoint would be the real fix.
  */
 export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateActionProps) {
   const [open, setOpen] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const updateAgent = useUpdateAgent();
+  // Only the sandbox caveat is waivable; see the note above.
+  const forceWaivable = conflict?.includes("sandbox") ?? false;
 
   if (!agent.updateAvailable || !agent.isOnline) {
     return null;
@@ -128,17 +134,19 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
             >
               Cancel
             </Button>
-            <Button
-              onClick={() => handleUpdate(conflict !== null)}
-              disabled={updateAgent.isPending}
-            >
-              {updateAgent.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ArrowUpCircle className="h-4 w-4" />
-              )}
-              {conflict ? "Force update" : "Update"}
-            </Button>
+            {(conflict === null || forceWaivable) && (
+              <Button
+                onClick={() => handleUpdate(forceWaivable)}
+                disabled={updateAgent.isPending}
+              >
+                {updateAgent.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowUpCircle className="h-4 w-4" />
+                )}
+                {forceWaivable ? "Force update" : "Update"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

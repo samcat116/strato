@@ -14,6 +14,16 @@ import Fluent
 ///   are deliberately *not* stored: sync assembly re-resolves them every time so
 ///   a long-assigned update never carries a stale (possibly presigned) link.
 ///   An override has no release to re-resolve from, so it is pinned here.
+///
+///   Read that last point the right way round: this column can hold a
+///   **credential at rest**. An artifact URL's query string or userinfo is often
+///   the only way to authenticate a private mirror, which is why every other
+///   path redacts it (`DesiredAgentUpdate.redactURL`) — and none of that
+///   redaction reaches a database column, a backup, or a read replica. The
+///   mitigation is lifetime, not secrecy: the value exists only while an
+///   assignment does, and convergence, cancellation, withdrawal, and terminal
+///   failure all drop it. Storing a stripped URL plus a separate credential
+///   reference would bound it further; that is a follow-up, not this column.
 struct AddManualAgentUpdateAssignment: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("agents")

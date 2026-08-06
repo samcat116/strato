@@ -22,6 +22,10 @@ struct AgentController: RouteCollection {
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
         agents.post(":agentId", "actions", "update", use: updateAgent)
+        // Withdraws an update assignment. The only way back from an update that
+        // can never converge, since the agent it was assigned to is usually the
+        // reason it can't.
+        agents.delete(":agentId", "actions", "update", use: cancelAgentUpdate)
         // Finishes a node's re-identification (STR-98): moves the workloads it
         // is demonstrably running off the agent record it was enrolled under
         // before.
@@ -1159,15 +1163,11 @@ struct AgentController: RouteCollection {
 
         // The assignment *is* the update: durable on the row, re-read by every
         // sync assembly, and cleared by the auto-update sweep once the agent
-        // re-registers at the target (or when the budget calls it failed).
-        // Overwriting an in-flight assignment is deliberate — re-issuing the
-        // update is the documented way to retry past a recorded failure.
-        agent.updateDesiredVersion = targetVersion
-        agent.updateAssignmentSource = .manual
-        agent.updateArtifactOverride = artifactOverride
-        agent.updateAttemptedAt = Date()
-        agent.updateBlockedReason = nil
-        agent.updateFailureReason = nil
+        // re-registers at the target. Overwriting an in-flight assignment is
+        // deliberate — re-issuing the update is how an operator retries past a
+        // recorded failure, and it restarts the health budget with a freshly
+        // supplied artifact.
+        agent.assignUpdate(version: targetVersion, source: .manual, artifact: artifactOverride)
         try await agent.save(on: req.db)
 
         req.logger.notice(
@@ -1197,6 +1197,50 @@ struct AgentController: RouteCollection {
         return response
     }
 
+    /// Withdraws an agent's update assignment, whoever made it: the version,
+    /// the pinned artifact, the health-budget clock, and any recorded
+    /// blocker/failure. The next sync stops carrying the desired update.
+    ///
+    /// This is the counterpart the declarative rewrite needs. An imperative
+    /// dispatch had nothing to cancel — it either returned or timed out — but an
+    /// assignment is durable, so an update that can never converge (a bad
+    /// artifact, a host that died mid-swap) would otherwise sit on the row with
+    /// no API able to remove it: it never converges, it is exempt from the
+    /// rollout's stale reset, and re-issuing the update is refused while the
+    /// agent is offline, which is exactly when it failed. Hence no `isOnline`
+    /// guard here — cancelling has to work precisely when assigning does not.
+    ///
+    /// Idempotent: cancelling an agent with no assignment is a no-op success.
+    func cancelAgentUpdate(req: Request) async throws -> AgentResponse {
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
+        }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+
+        guard let assigned = agent.updateDesiredVersion else {
+            return try AgentResponse(from: agent)
+        }
+
+        agent.clearUpdateAssignment()
+        try await agent.save(on: req.db)
+        req.logger.notice(
+            "Agent update assignment cancelled",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+                "targetVersion": .string(assigned),
+            ])
+
+        // Push the sync now so a connected agent stops seeing the desired
+        // update rather than waiting for the periodic backstop.
+        await req.agentService.syncDesiredState(agentId: agentId.uuidString)
+
+        return try AgentResponse(from: agent)
+    }
+
     // MARK: - Agent Properties
 
     struct AgentPatchRequest: Content {
@@ -1223,8 +1267,15 @@ struct AgentController: RouteCollection {
             if autoUpdate {
                 // Fresh enrollment gets a fresh chance: a failure recorded
                 // under a previous enrollment must not keep the fleet rollout
-                // halted at an agent the operator just re-opted in.
+                // halted at an agent the operator just re-opted in. The budget
+                // clock has to restart with it — leaving the original
+                // `updateAttemptedAt` in place means the next sweep tick
+                // recomputes `age > budget` and re-records the same failure,
+                // which is a retry that never had a chance.
                 agent.updateFailureReason = nil
+                if agent.updateDesiredVersion != nil {
+                    agent.updateAttemptedAt = Date()
+                }
             } else if agent.updateAssignmentSource != .manual {
                 // Withdrawing clears the rollout's assignment: the next sync
                 // stops carrying the desired update and the agent clears its

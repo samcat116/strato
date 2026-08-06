@@ -28,12 +28,38 @@ struct AgentReleaseManifest: Decodable {
 /// operator-supplied override can be pinned to the agent row (`Agent
 /// .updateArtifactOverride`) and replayed on every sync assembly; release-path
 /// artifacts are re-resolved instead of stored.
+///
+/// **This shape is persisted**, which makes it a forward-compatibility contract
+/// rather than a value passed between two functions in one binary: a row written
+/// by this build has to decode in the next one. It is an `@OptionalField` on the
+/// model, not a lazily-decoded blob, so a decode failure fails the *whole* agent
+/// row load — taking sync assembly and agent registration down with it, which is
+/// wildly out of proportion to an update artifact. Any field added here must
+/// therefore decode with a default; `init(from:)` below is where that is
+/// enforced, and `url`/`sha256` are the only two an override cannot be without.
 struct ResolvedAgentArtifact: Codable, Equatable, Sendable {
     let url: String
     let sha256: String
     let kind: AgentUpdateArtifactKind
     /// Member to extract when `kind == .tarball`; ignored for bare binaries.
     let tarballMember: String
+
+    init(url: String, sha256: String, kind: AgentUpdateArtifactKind, tarballMember: String) {
+        self.url = url
+        self.sha256 = sha256
+        self.kind = kind
+        self.tarballMember = tarballMember
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(String.self, forKey: .url)
+        sha256 = try container.decode(String.self, forKey: .sha256)
+        kind = try container.decodeIfPresent(AgentUpdateArtifactKind.self, forKey: .kind) ?? .tarball
+        tarballMember =
+            try container.decodeIfPresent(String.self, forKey: .tarballMember)
+            ?? AgentUpdateArtifacts.defaultTarballMember
+    }
 }
 
 /// The seam through which release artifacts are resolved for an agent update:

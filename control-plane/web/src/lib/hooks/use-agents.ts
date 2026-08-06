@@ -75,6 +75,18 @@ export function useUpdateAgent() {
   });
 }
 
+// Withdraws an agent's update assignment (STR-145).
+export function useCancelAgentUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => agentsApi.cancelUpdate(id),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents", id] });
+    },
+  });
+}
+
 // Toggles declarative auto-update enrollment (issue #434).
 export function usePatchAgent() {
   const queryClient = useQueryClient();

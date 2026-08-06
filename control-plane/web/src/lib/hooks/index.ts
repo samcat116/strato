@@ -24,6 +24,7 @@ export {
   useAgentEnrollments,
   useRevokeAgentEnrollment,
   useUpdateAgent,
+  useCancelAgentUpdate,
   usePatchAgent,
   useAdoptAgentWorkloads,
   useInvalidateAgents,

@@ -1,11 +1,11 @@
 "use client";
 
-import { Loader2, RefreshCw, AlertTriangle, PauseCircle } from "lucide-react";
+import { Loader2, RefreshCw, AlertTriangle, PauseCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { usePatchAgent } from "@/lib/hooks";
+import { useCancelAgentUpdate, usePatchAgent } from "@/lib/hooks";
 import type { Agent } from "@/types/api";
 
 interface AgentAutoUpdateCardProps {
@@ -24,6 +24,7 @@ interface AgentAutoUpdateCardProps {
  */
 export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
   const patchAgent = usePatchAgent();
+  const cancelUpdate = useCancelAgentUpdate();
 
   const toggle = async (autoUpdate: boolean) => {
     try {
@@ -35,6 +36,15 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update agent");
+    }
+  };
+
+  const cancel = async () => {
+    try {
+      await cancelUpdate.mutateAsync({ id: agent.id });
+      toast.success(`Update assignment for ${agent.name} cancelled`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to cancel the update");
     }
   };
 
@@ -74,15 +84,38 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
         </p>
 
         {agent.updateDesiredVersion && (
-          <div className="flex items-start gap-2 text-foreground">
-            <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground" />
-            <p>
-              Updating to <span className="font-medium">{agent.updateDesiredVersion}</span>
-              {agent.updateAssignmentSource === "manual" ? " (requested manually)" : ""}
-              {agent.updateAttemptedAt
-                ? ` (assigned ${new Date(agent.updateAttemptedAt).toLocaleString()})`
-                : " (waiting on the agent)"}
-            </p>
+          <div className="flex items-start justify-between gap-2 text-foreground">
+            <div className="flex items-start gap-2">
+              {agent.updateFailureReason ? (
+                <AlertTriangle className="h-4 w-4 mt-0.5 text-red-600 dark:text-red-400" />
+              ) : (
+                <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground" />
+              )}
+              <p>
+                Updating to <span className="font-medium">{agent.updateDesiredVersion}</span>
+                {agent.updateAssignmentSource === "manual" ? " (requested manually)" : ""}
+                {agent.updateAttemptedAt
+                  ? ` (assigned ${new Date(agent.updateAttemptedAt).toLocaleString()})`
+                  : " (waiting on the agent)"}
+              </p>
+            </div>
+            {/* The way out of an update that can never land — the agent it was
+                assigned to is usually the reason, so re-issuing it is refused
+                (offline) and it will never converge on its own. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-muted-foreground"
+              onClick={cancel}
+              disabled={cancelUpdate.isPending}
+            >
+              {cancelUpdate.isPending ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4 mr-1.5" />
+              )}
+              Cancel
+            </Button>
           </div>
         )}
 
@@ -97,8 +130,9 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
           <div className="flex items-start gap-2 text-red-600 dark:text-red-400">
             <AlertTriangle className="h-4 w-4 mt-0.5" />
             <p>
-              Update failed (rollout halted here): {agent.updateFailureReason}. Retry with
-              the Update button, or re-enable auto-update.
+              Update failed{agent.updateAssignmentSource === "manual" ? "" : " (rollout halted here)"}:{" "}
+              {agent.updateFailureReason}. Retry with the Update button (which needs the
+              agent back online), cancel the assignment, or re-enable auto-update.
             </p>
           </div>
         )}

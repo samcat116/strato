@@ -3396,7 +3396,7 @@ export interface paths {
         head?: never;
         /**
          * Update agent properties
-         * @description Currently only `autoUpdate` (declarative auto-update enrollment). Withdrawing clears any assigned desired version and pushes a fresh desired-state sync. Requires `manage` on the agent.
+         * @description Currently only `autoUpdate` (declarative auto-update enrollment). Withdrawing clears an assignment the fleet rollout made and pushes a fresh desired-state sync; an update an operator assigned directly survives, since that path needs no enrollment (cancel it with `DELETE /api/agents/{agentId}/actions/update`). Re-enrolling clears a recorded failure and restarts the health budget. Requires `manage` on the agent.
          */
         patch: operations["updateAgentProperties"];
         trace?: never;
@@ -3445,7 +3445,13 @@ export interface paths {
          *     The request body is optional. Supplying `artifactUrl`/`sha256` overrides the release path and is system-admin only, since it installs an arbitrary binary on the host. Requires `manage` on the agent, and system admin while the agent hosts foreign-organization workloads.
          */
         post: operations["updateAgentBinary"];
-        delete?: never;
+        /**
+         * Cancel an agent's update assignment
+         * @description Withdraws the assigned version, any pinned artifact, the health-budget clock, and any recorded blocker or failure, whoever assigned it; the next sync stops carrying the update.
+         *
+         *     Deliberately has no online requirement, unlike assigning: an update that can never converge is usually one whose agent is gone, and that is exactly when it needs withdrawing. Idempotent — cancelling an agent with no assignment succeeds and changes nothing. Requires `manage` on the agent.
+         */
+        delete: operations["cancelAgentUpdate"];
         options?: never;
         head?: never;
         patch?: never;
@@ -14967,6 +14973,33 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    cancelAgentUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent, with no update assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     adoptAgentWorkloads: {
