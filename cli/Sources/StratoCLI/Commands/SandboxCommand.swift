@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct SandboxCommand: AsyncParsableCommand {
@@ -18,14 +19,13 @@ struct SandboxCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let page: Page<Sandbox> = try await environment.makeClient()
-                    .get("/api/sandboxes", query: [("limit", String(listPageLimit))])
-                let sandboxes = page.items
+                let sandboxes = try await environment.makeClient()
+                    .listSandboxes(query: .init(limit: listPageLimit)).ok.body.json.items
                 try printResult(sandboxes, format: global.output) {
                     var table = TextTable(headers: ["id", "name", "image", "status", "expires", "created"])
                     for sandbox in sandboxes {
                         table.addRow([
-                            formatUUID(sandbox.id), sandbox.name, sandbox.image, sandbox.status,
+                            sandbox.id ?? "", sandbox.name, sandbox.image, sandbox.status.rawValue,
                             formatDate(sandbox.expiresAt), formatDate(sandbox.createdAt),
                         ])
                     }
@@ -46,15 +46,16 @@ struct SandboxCommand: AsyncParsableCommand {
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
-                let sandbox: Sandbox = try await environment.makeClient().get("/api/sandboxes/\(id)")
+                let sandbox = try await environment.makeClient()
+                    .getSandbox(path: .init(sandboxID: id)).ok.body.json
                 try printResult(sandbox, format: global.output) {
                     var table = TextTable(headers: ["field", "value"])
-                    table.addRow(["id", formatUUID(sandbox.id)])
+                    table.addRow(["id", sandbox.id ?? ""])
                     table.addRow(["name", sandbox.name])
                     table.addRow(["image", sandbox.image])
-                    table.addRow(["status", sandbox.status])
-                    table.addRow(["environment", sandbox.environment ?? ""])
-                    table.addRow(["cpus", sandbox.cpus.map(String.init) ?? ""])
+                    table.addRow(["status", sandbox.status.rawValue])
+                    table.addRow(["environment", sandbox.environment])
+                    table.addRow(["cpus", String(sandbox.cpus)])
                     table.addRow(["exit code", sandbox.exitCode.map(String.init) ?? ""])
                     table.addRow(["expires", formatDate(sandbox.expiresAt)])
                     table.addRow(["created", formatDate(sandbox.createdAt)])
@@ -97,11 +98,12 @@ struct SandboxCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let request = CreateSandboxRequest(
-                    name: name, image: image, projectId: project ?? env.context.project,
-                    environment: environment, cpus: cpus, memory: memory, ttlSeconds: ttl
-                )
-                let operation: ResourceOperation = try await client.post("/api/sandboxes", body: request)
+                let operation = try await client.createSandbox(
+                    body: .json(
+                        .init(
+                            name: name, image: image, projectId: project ?? env.context.project,
+                            environment: environment, cpus: cpus, memory: memory, ttlSeconds: ttl))
+                ).accepted.body.json
                 try await handleOperation(
                     operation, client: client, noWait: noWait, format: global.output,
                     successMessage: "Sandbox '\(name)' created.")
@@ -124,7 +126,7 @@ struct SandboxCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
-                let operation: ResourceOperation = try await client.delete("/api/sandboxes/\(id)")
+                let operation = try await client.deleteSandbox(path: .init(sandboxID: id)).accepted.body.json
                 try await handleOperation(
                     operation, client: client, noWait: noWait, format: global.output,
                     successMessage: "Sandbox \(id) deleted.")
@@ -132,51 +134,39 @@ struct SandboxCommand: AsyncParsableCommand {
         }
     }
 
-    struct Start: SandboxActionCommand {
+    struct Start: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Start a sandbox.")
-        static let verb = "start"
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
+            try await $0.startSandbox(path: .init(sandboxID: $1)).accepted.body.json
+        }
         static let pastTense = "started"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "Sandbox id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Stop: SandboxActionCommand {
+    struct Stop: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Stop a sandbox.")
-        static let verb = "stop"
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
+            try await $0.stopSandbox(path: .init(sandboxID: $1)).accepted.body.json
+        }
         static let pastTense = "stopped"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "Sandbox id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
     }
 
-    struct Restart: SandboxActionCommand {
+    struct Restart: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Restart a sandbox.")
-        static let verb = "restart"
+        static let resourceLabel = "Sandbox"
+        static let action: ResourceAction = {
+            try await $0.restartSandbox(path: .init(sandboxID: $1)).accepted.body.json
+        }
         static let pastTense = "restarted"
         @OptionGroup var global: GlobalOptions
         @Argument(help: "Sandbox id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
-    }
-}
-
-protocol SandboxActionCommand: AsyncParsableCommand {
-    static var verb: String { get }
-    static var pastTense: String { get }
-    var global: GlobalOptions { get }
-    var id: String { get }
-    var noWait: Bool { get }
-}
-
-extension SandboxActionCommand {
-    func run() async throws {
-        try await runHandlingCLIErrors {
-            let env = try CLIEnvironment.resolve(global)
-            let client = env.makeClient()
-            let operation: ResourceOperation = try await client.post("/api/sandboxes/\(id)/\(Self.verb)")
-            try await handleOperation(
-                operation, client: client, noWait: noWait, format: global.output,
-                successMessage: "Sandbox \(id) \(Self.pastTense).")
-        }
     }
 }

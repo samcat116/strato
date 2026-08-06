@@ -1,0 +1,353 @@
+# ADR 0001: A fully declarative agent protocol
+
+- **Status**: Proposed
+- **Date**: 2026-08-02
+- **Deciders**: Sam Schmitt
+- **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,
+  multi-replica coordination
+
+## Summary
+
+Converge every control-plane → agent interaction that acts on a durable
+resource onto the existing level-triggered reconciliation loop, deliver
+desired state by agent pull instead of control-plane push, project operation
+progress as conditions on the resource itself, and generalize deletion into
+finalizers. Imperative RPC survives only for live byte streams (console,
+exec, logs). The `ResourceOperation` side-table, the generic request/response
+apparatus in `AgentService`, and the cross-replica RPC forwarding in
+`ReplicaMessageBridge` are all retired.
+
+## Context
+
+### What exists
+
+Strato's core control loop is already declarative (issues #260, #261): the
+database stores desired state, `DesiredStateAssembler` produces a full
+authoritative `DesiredStateMessage` per agent, per-resource monotonic
+`generation` counters guard against reordering, and the agent-side reconciler
+diffs observed vs. desired and converges via per-VM serial lanes. Syncs are
+level-triggered and safe to drop or replay; a periodic timer is the
+correctness backstop.
+
+But of the ~40 message types in `shared/Sources/StratoShared/`
+(`WebSocketProtocol.swift` and friends), only two carry the reconciliation
+loop. Roughly 19 are one-shot imperative RPCs — nine `volume_*`, the
+VM checkpoint/restore/snapshot-delete trio, the sandbox snapshot quartet,
+`vm_reboot`, `agent_update` — correlated by `requestId` and answered with
+`success`/`error`. These drag in, on the control plane:
+
+- **The pending-request apparatus** (`AgentService.swift` ~2452–2670):
+  checked continuations, per-request timeout tasks, cancellation
+  bookkeeping, `failPendingRequests(for:)` on disconnect, response
+  correlation and ownership checks.
+- **`ResourceOperation`** (issue #412): a side-table of async operations with
+  per-kind completion budgets, a cluster-singleton stuck-operation sweep,
+  per-resource-kind stuck-resolution paths, and deliberate FK-lessness so
+  delete operations survive row removal. Operation rows are also the current
+  home of user attribution (`user_id`), on which JWT-SVID mutation
+  attribution (STR-15) depends, and the transaction in which webhooks (#559)
+  are enqueued.
+- **Cross-replica RPC forwarding** (`ReplicaMessageBridge`): an imperative
+  action on replica A for an agent socketed to replica B travels over the
+  `replica:{id}:rpc` / `rpc-replies` pub/sub channels — a correlated
+  request/response spanning two processes and Valkey, with timeout state
+  held on both ends.
+- **Socket routing** (`agent:{name}:replica` keys) so any replica can find
+  the one replica capable of reaching a given agent, plus targeted
+  **sync nudges** (`replica:{id}:nudges`) so mutations reach the
+  socket-holding replica for payload assembly and push.
+
+Each of these is load-bearing for correctness today, and each has real
+failure modes we have already paid for: stale routing keys after failover
+(the `.ownReplica`-with-no-local-socket branch in `routeDesiredStateSync`),
+sweep-vs-verdict races mediated by `completeIfPending`, orphaned in-flight
+exchanges when a replica dies uncleanly, and the recurring CI teardown
+crashes whose frames sit in exactly these seams.
+
+### The false dichotomy
+
+The comment atop `VMSnapshotMessages.swift` states the current design
+assumption: a checkpoint "is an *action* rather than a state, so it cannot
+ride the level-triggered desired-state sync." This is true of the verb and
+false of the result. "Checkpoint this VM" is an action; "checkpoint C exists
+for VM V" is a state — a durable artifact with an identity that an agent can
+diff and converge on. The same holds for volumes, volume snapshots, clones,
+and sandbox snapshots.
+
+Kubernetes faced every one of these cases and settled a consistent taxonomy:
+
+| Need | Kubernetes answer | Mechanism |
+| --- | --- | --- |
+| Live byte streams | Openly imperative subresources (`pods/exec`, `attach`, `log`) | Connection upgrade, nothing in etcd; **uniform authz/audit**, non-uniform transport |
+| Restart-shaped edges | Encode the edge as a nonce in the spec | `kubectl rollout restart` = patch `restartedAt` annotation |
+| One-shot work with durable results | Make the request a durable object | `Job`, `CertificateSigningRequest` (+ TTL controllers for retention) |
+| Deletion with cleanup | Finalizers | `deletionTimestamp` + `metadata.finalizers`; row outlives the DELETE |
+| Operation progress | `status.conditions` on the resource | No operations side-table exists |
+
+The decision rule that falls out: **does the interaction have a durable noun
+on the other side?** If yes, it is state and belongs in the reconcile loop.
+If it is a live stream tied to a human session, it stays RPC. If it is a
+read, it is observed state.
+
+## Decision
+
+### 1. The durable-noun rule governs the protocol
+
+Every message that creates, mutates, or destroys a durable resource moves
+into the desired-state sync. Streams stay imperative. Reads fold into
+observed state. Concretely:
+
+| Messages | Disposition |
+| --- | --- |
+| `volume_create/delete/attach/detach/resize` | Desired volume entries (exists, size, attachment) in the sync |
+| `volume_clone` | A create *strategy* on the desired entry — the `DesiredSandboxState.restoreFrom` pattern (issue #427), not an operation |
+| `volume_snapshot`, `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create/_delete` | Desired artifact entries; captured sizes/metadata return via observed state |
+| `sandbox_snapshot_export` | A placement fact ("snapshot S exists on agent B"); the byte transfer beneath remains a transport concern |
+| `agent_update` (imperative form) | Deleted; `DesiredAgentUpdate` (issue #434) already exists and is the proof this migration works |
+| `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied |
+| `volume_info` | Deleted; the fields join the observed report |
+| `console_*`, `sandbox_exec_*`, `vm_log`, `sandbox_log` | **Stay imperative, permanently.** Live byte pipes with a human on the end; the uniformity that matters is Cedar authorization and addressing, not transport |
+
+The nonce counters must be durable on the agent (`VMManifestStore`);
+a manifest-less re-registration must not replay reboots.
+
+### 2. Desired state is pulled, not pushed
+
+The agent fetches its desired state via long-poll HTTP GET against **any**
+control-plane replica, over the same Envoy SVID-mTLS listener that already
+carries artifact downloads (`MTLSArtifactDownloader`, issue #493). The
+endpoint scopes by SVID identity exactly as the image-download route does.
+
+- **Doorbells are contentless and broadcast.** A mutation publishes "agent X
+  changed" on a single channel; every replica checks whether it holds X's
+  parked poll, at most one does, the rest no-op. No routing directory, no
+  targeted delivery. A lost doorbell costs one poll interval.
+- **The agent re-fetches unconditionally on a slow timer**, doorbell or not.
+  Over-ringing is free; under-ringing costs latency, never correctness.
+- **Version numbers are an optimization only.** The per-agent revision
+  counter (already present in-process as `desiredStateRevisions`) becomes an
+  ETag for `304 Not Modified`. It must never gate *whether* the agent
+  fetches — a missed bump anywhere in the wide assembly scope (own VMs,
+  volumes, site-peer networks, security-group closures, floating IPs,
+  rollout targets) would otherwise silently strand an agent. The periodic
+  unconditional fetch is the invariant; the version is a bandwidth saving.
+- **Side effects move to the pull.** Assembly currently records
+  image-download grants (issue #562) and mints registry credentials fresh
+  per sync. These stay at response-assembly time on the serving replica —
+  never cached — so a grant is never recorded for a sync that was not
+  delivered, and credentials are always fresh.
+
+The WebSocket remains for streams (console, exec, log forwarding) and as the
+observed-state/heartbeat channel initially; migrating observed state to POST
+is a possible follow-up, not part of this decision.
+
+### 3. Operation progress lives on the resource
+
+Resources already carry `generation`, `observedGeneration`,
+`convergencePhase`, `lastError`, and `failedGeneration`. Operation
+completion is already derived from them
+(`ObservedStateApplier`: succeeded ⇔ `observedGeneration >= generation` ∧
+desired satisfied; failed ⇔ `failedGeneration == generation`). We stop
+maintaining that derivation by hand in a side-table:
+
+- API resources expose a **conditions block** (converged / targetGeneration
+  / observedGeneration / phase / degraded), computed in the DTO from
+  existing columns.
+- Mutation endpoints keep returning **202**, with body
+  `{resource, targetGeneration}`. Clients poll the resource, not an
+  operation.
+- The stuck-operation sweep becomes a **stuck-convergence sweep** that flips
+  `degraded` when `generation − observedGeneration` is outstanding past
+  budget. Marking degraded is idempotent and commutative, so the sweep can
+  run lock-free on every replica; only the webhook enqueue needs
+  transition-detection inside its transaction.
+- Per-operation-kind budgets (create 600s vs. reboot 120s) lose their
+  natural home; the resource records `lastMutationKind`/`lastMutationAt` to
+  preserve differentiated budgets.
+
+### 4. Deletion generalizes to finalizers
+
+The agent-confirmed tombstone dance already exists (`DesiredVMStatus.absent`;
+row removal only after the agent's full report omits the resource). It is
+hardcoded to one participant. We generalize:
+
+- Resources gain a `finalizers` list (e.g. `agent.absent`, `ipam.release`,
+  `dns.deregister`, `fip.release`).
+- `DELETE` marks desired `absent` and stamps the list; each cleanup step —
+  today inline and ordered by hope in the delete path — removes its own
+  token idempotently from wherever it actually runs; the row is removed when
+  the list empties.
+- Because the row now provably outlives the delete, the original reason
+  `ResourceOperation` has no FK to its resource disappears — which is what
+  makes the side-table finally removable.
+
+### 5. Attribution and events get a durable home
+
+`resource_operations.user_id` is currently the only mutation-attribution
+record and blocks JWT-SVID mutations (STR-15). Operation completion is
+currently the webhook (#559) enqueue point. Both must survive the table:
+
+- An **append-only `resource_events` table**: written at mutation time
+  (who, what, kind, target generation), never updated, never swept. This is
+  the audit trail and the STR-15 attribution point.
+- **Webhook enqueue moves to the conditions transition** detected in
+  `ObservedStateApplier`, in the same transaction that applies the observed
+  report — the same guarantee as `completeIfPending`, one fewer table.
+
+### 6. `ResourceOperation` is retired via a façade
+
+The operations API remains as a compatibility façade synthesizing responses
+from conditions + `resource_events` until clients migrate; the table, the
+coordinator, the sweep, and the per-kind verdict paths are deleted when only
+façade reads remain.
+
+## Consequences
+
+### Removed or demoted
+
+- **The generic RPC apparatus** in `AgentService` (~300 lines of
+  continuation lifecycle, timeout races, disconnect cleanup) — the highest
+  defect-density seam in the control plane. Console/exec keep their own
+  session managers; nothing else calls it.
+- **`ResourceOperationCoordinator` (304), `ResourceOperation` (372),
+  `OperationController` (57), `sweepStuckOperations` +
+  stuck-resource resolution (~220)**, plus the `completeIfPending` call
+  sites threaded through `ObservedStateApplier`. Net of the replacements
+  (conditions projection, `resource_events`, stuck-convergence sweep),
+  roughly −600 lines and — more importantly — the sweep-vs-verdict race
+  class and the cluster-singleton sweep lock.
+- **`replica:{id}:rpc` / `rpc-replies`** — deleted entirely; there is no
+  cross-replica request state because there are no cross-replica requests.
+- **`agent:{name}:replica` routing keys and targeted nudges** — deleted
+  with the pull transport; `ReplicaMessageBridge` shrinks to (or past) a
+  broadcast doorbell.
+- **~19 wire message types**, each with struct, `MessageType` case, envelope
+  arm, agent-side dispatch, and version gate. `success`/`error` correlation
+  goes with them.
+- **Thin RPC-wrapper services** (`VMSnapshotService`,
+  `SandboxSnapshotService`, the dispatch half of `VolumeService`): logic
+  moves into assembler entries and agent reconciler lanes, which already
+  have retry, per-resource serialization, and crash recovery via the
+  manifest — properties the imperative handlers uniquely lack today.
+- **Frontend**: one resource lifecycle instead of two; "refetch until
+  converged" replaces operation polling.
+
+Rough total: 2,500–3,000 net lines across control plane, agent, and shared,
+concentrated in the seams that have produced our worst races and flakes.
+
+### Multi-replica becomes boring
+
+This is the strategic payoff. Today multi-replica correctness depends on a
+directory (routing keys) staying fresh and on request/response state
+surviving process boundaries; coordination is load-bearing. After:
+
+- **Every replica is equivalent for every request.** Mutations are Postgres
+  writes anywhere; no broker/socket-holder distinction, no affinity
+  pressure on load balancing.
+- **Replica death is a non-event.** No process holds durable-intent state in
+  memory; kill −9 costs reconnection latency. Rolling restarts and
+  autoscaling stop being carefully drained events.
+- **Valkey-down degrades uniformly.** Today imperative ops genuinely fail
+  when Valkey is down and the socket is elsewhere; after, every path is a
+  Postgres write and Valkey loss means convergence latency rises to the
+  poll interval, full stop.
+- **What legitimately remains coordinated**: scheduler placement
+  reservations (`resv:*` — real distributed mutual exclusion), presence
+  keys (refreshable by the long-poll itself), a few expiry/rollout sweep
+  locks. Coordination is demoted from correctness dependency to latency
+  optimization.
+
+### Costs and risks
+
+- **Absent-then-confirm for every new declarative resource.** Volumes,
+  snapshots, and checkpoints each need tombstone semantics; historically
+  this is where reconciliation bugs live. Finalizers make it uniform but
+  the per-resource work is real.
+- **Retention.** Durable snapshot/checkpoint objects need TTL/GC answers
+  (the `Job.ttlSecondsAfterFinished` lesson) that fire-and-forget RPCs never
+  raised.
+- **Payload growth.** The sync gains volumes/snapshots/checkpoints; the
+  observed report gains their full-list counterparts. The `304`/ETag fast
+  path and (later) observed-state deltas are the mitigations; on dense
+  hosts this is the metric to watch.
+- **Wire-protocol migration.** Each conversion needs a version bump and a
+  dual-mode window (control plane sends both / accepts both) per the
+  established `WireProtocol.supports*` pattern. The imperative paths cannot
+  be deleted until the fleet floor passes each gate.
+- **Nonce durability.** Reboot/restore counters must survive agent restarts
+  in the manifest store, or re-registration replays edges.
+- **Budget fidelity.** Kind-differentiated stuck budgets now depend on
+  `lastMutationKind` being maintained; a conservative single budget is the
+  fallback if that proves fiddly.
+- **Coupling.** The side-table shrinks exactly as fast as RPCs convert, and
+  not faster; snapshot/restore verdicts complete off responses until their
+  conversions land. Sequencing below is chosen so every stage is
+  independently shippable and valuable.
+
+## Migration plan
+
+Each stage ships alone, behind the standard wire-version gates where the
+agent is involved.
+
+1. **Conditions block** in VM/sandbox DTOs — pure projection of existing
+   columns; frontend starts preferring it.
+2. **`resource_events`** append-only audit; mutations dual-write. Unblocks
+   STR-15 attribution independently.
+3. **Finalizers column** + agent-absence as first participant; then move
+   IPAM / DNS / floating-IP cleanup in one at a time.
+4. **202 → `{resource, targetGeneration}`**; operations API becomes a
+   façade.
+5. **Volumes declarative** (6 messages) — the clearest durable noun, the
+   biggest single win; retires its operation kinds and `VolumeService`'s
+   await-response path.
+6. **Drop imperative `agent_update`** (one caller; declarative path exists).
+7. **`volume_info` → observed report.**
+8. **Snapshots and checkpoints as desired artifacts** (retention design
+   included).
+9. **Reboot/restore nonces** (3 messages).
+10. **Pull transport + broadcast doorbell**; delete targeted nudges, routing
+    keys, and — once nothing else uses it — the RPC bridge.
+11. **Delete** `ResourceOperation`, its coordinator, sweep, and the pending-
+    request apparatus when only façade reads and stream RPCs remain.
+
+Stages 1–4 are safe even if the program stops there. Stage 10 can move
+earlier if multi-replica pain justifies it; it only requires stage 5–9
+*conversions* for the full bridge deletion, not for its own value.
+
+## Alternatives considered
+
+- **Keep push, add a version doorbell on the WebSocket.** Keeps the entire
+  routing directory and targeted-nudge machinery; only shrinks payloads.
+  Rejected as the weak form of the change.
+- **Make the version counter load-bearing** (agent fetches only when told
+  the version changed). Rejected: a missed bump anywhere in the wide
+  assembly scope silently strands an agent — strictly worse than today's
+  backstop. Versions are `304` fast paths only.
+- **Cache assembled payloads in Valkey.** Rejected: assembly has write
+  side effects (grants) and mints fresh credentials; caching serves stale
+  credentials and records grants for undelivered syncs.
+- **Convert streams too** ("a console session should exist"). Rejected as a
+  category error: session lifetime is a browser tab, not cluster intent,
+  and per-keystroke state has no business in Postgres. Kubernetes ships
+  five streaming subresources unapologetically; the uniformity worth having
+  is authorization, which Cedar already provides.
+- **Keep `ResourceOperation` alongside conditions.** Rejected: it is a
+  hand-maintained materialized view of `observedGeneration >= generation`,
+  and its remaining jobs (attribution, webhook tx, budgets, mutex) all have
+  cheaper homes — see Decision 5. The "operation already pending" mutex is
+  deliberately dropped where level-triggering makes overlapping writes
+  safe, retained only where genuinely needed (e.g. resize-during-create).
+
+## References
+
+- Issues #260/#261 (reconciliation loop), #412 (`ResourceOperation`
+  generalization), #427 (`restoreFrom` create-strategy pattern), #434
+  (`DesiredAgentUpdate`), #493/#562 (SVID-mTLS artifact downloads and
+  grants), #559 (webhooks), #564 (checkpoints), #855 (session store split);
+  STR-15 (JWT-SVID attribution).
+- `docs/architecture/wire-protocol.md`, `docs/architecture/multi-replica.md`
+  — both require updates as stages land.
+- Kubernetes precedents: streaming subresources, `rollout restart`
+  annotation nonce, `Job`/CSR durable-request objects, finalizers,
+  `status.conditions`, non-persisted subresources (`TokenRequest`,
+  `eviction`).

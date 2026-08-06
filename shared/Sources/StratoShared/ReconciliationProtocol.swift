@@ -54,6 +54,21 @@ public struct DesiredVMState: Codable, Sendable {
     /// have the VM can materialize it. Download URLs are control-plane-relative
     /// paths fetched over SVID mTLS — no signature, so nothing here expires.
     public let imageInfo: ImageInfo?
+    /// What the VM's link-local metadata service should tell the guest about
+    /// itself (STR-48). Riding the sync is what makes the metadata store
+    /// level-triggered, generation-guarded, and replay-safe without a second
+    /// control loop or transport: an operator's edit lands on the next sync
+    /// instead of requiring the guest to be rebuilt around a new seed ISO.
+    ///
+    /// Optional so payloads from older control planes still decode and older
+    /// agents ignore it, matching `subnet6`/`dhcpEnabled`. Absence is
+    /// asymmetric, the `networks`/`sandboxes` hazard in miniature: from a
+    /// control plane that speaks the field (`supportsInstanceMetadata` on the
+    /// envelope's sender version) nil is authoritative — there is nothing to
+    /// serve, and an agent holding stale metadata must drop it — while from an
+    /// older one it means only "no opinion", and the agent leaves whatever it
+    /// serves alone rather than reading silence as an instruction.
+    public let metadata: InstanceMetadata?
 
     public init(
         vmId: UUID,
@@ -61,7 +76,8 @@ public struct DesiredVMState: Codable, Sendable {
         spec: VMSpec,
         desiredStatus: DesiredVMStatus,
         generation: Int64,
-        imageInfo: ImageInfo? = nil
+        imageInfo: ImageInfo? = nil,
+        metadata: InstanceMetadata? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -69,6 +85,7 @@ public struct DesiredVMState: Codable, Sendable {
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.imageInfo = imageInfo
+        self.metadata = metadata
     }
 }
 
@@ -109,6 +126,33 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.generation = generation
         self.registryCredential = registryCredential
         self.restoreFrom = restoreFrom
+    }
+}
+
+// MARK: - Workload tombstones
+
+/// The control plane's explicit instruction to remove a workload an agent
+/// holds but no database row describes (STR-98).
+///
+/// Absence from a sync is deliberately *not* this. The agent holds anything it
+/// has that a sync omits and reports it back as an `UnrecognizedWorkload`; only
+/// after the control plane confirms no row exists does a tombstone authorize
+/// the teardown. That collapses the destructive path into the one that already
+/// exists — a `.absent` desired entry — and makes every teardown traceable to a
+/// control-plane decision rather than to a silence.
+///
+/// `generation` outranks whatever the agent last applied for the workload, so
+/// the reconciler's staleness guard admits it exactly like any other desired
+/// entry.
+public struct DesiredWorkloadTombstone: Codable, Sendable, Equatable {
+    public let kind: WorkloadKind
+    public let workloadId: UUID
+    public let generation: Int64
+
+    public init(kind: WorkloadKind, workloadId: UUID, generation: Int64) {
+        self.kind = kind
+        self.workloadId = workloadId
+        self.generation = generation
     }
 }
 
@@ -165,12 +209,18 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 /// Control plane → agent: the full authoritative set of VMs that should exist
 /// on the receiving agent.
 ///
-/// Full-list semantics make the message level-triggered and idempotent: a VM
-/// omitted from the list should not exist on the agent, identical syncs diff
-/// to nothing, and the message is safe to drop, replay, or reorder (per-VM
-/// `generation` guards handle reordering). Sent on agent registration, nudged
-/// on any desired-state change, and repeated on a timer as the correctness
-/// backstop.
+/// Full-list semantics make the message level-triggered and idempotent:
+/// identical syncs diff to nothing, and the message is safe to drop, replay, or
+/// reorder (per-VM `generation` guards handle reordering). Sent on agent
+/// registration, nudged on any desired-state change, and repeated on a timer as
+/// the correctness backstop.
+///
+/// Omission is **not** teardown (STR-98). A workload the agent holds that this
+/// message does not list is held, untouched, and reported back as an
+/// `UnrecognizedWorkload`; it is removed only once the control plane answers
+/// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
+/// that, the whole safety of a host's workloads rested on the assembler's
+/// `WHERE` clause returning a complete list.
 public struct DesiredStateMessage: WebSocketMessage {
     public var type: MessageType { .desiredState }
     public let requestId: String
@@ -180,11 +230,12 @@ public struct DesiredStateMessage: WebSocketMessage {
     public let vms: [DesiredVMState]
     /// The full authoritative set of sandboxes that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
-    /// here should not exist). Decodes to `[]` from control planes older than
-    /// the sandbox protocol — which the agent must NOT read as "tear down all
-    /// sandboxes": sandbox reconciliation is gated on
-    /// `WireProtocol.supportsSandboxSync(envelope.senderVersion)`, exactly like
-    /// the `networks` list before it.
+    /// here should not exist — and, like a VM, is held and reported rather
+    /// than destroyed until a tombstone says otherwise). Decodes to `[]` from
+    /// control planes older than the sandbox protocol; sandbox reconciliation
+    /// is gated on `WireProtocol.supportsSandboxSync(envelope.senderVersion)`
+    /// so such a sync isn't mistaken for "this host should have no
+    /// sandboxes", exactly like the `networks` list before it.
     public let sandboxes: [DesiredSandboxState]
     /// The full authoritative set of logical networks that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a network omitted
@@ -217,6 +268,15 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// groups": the authority skips security-group reconciliation entirely
     /// when the field is absent, exactly like the `networks` list before it.
     public let securityGroups: [DesiredSecurityGroup]?
+    /// Workloads the receiving agent holds that the control plane has
+    /// confirmed have no row, and which it therefore authorizes the agent to
+    /// tear down (STR-98). Each entry is the answer to an
+    /// `UnrecognizedWorkload` the agent reported, so a tombstone is always the
+    /// second half of a round trip — never something the control plane
+    /// volunteers. Nil from control planes that predate the field, which is
+    /// then simply "nothing authorized": such a control plane never confirms a
+    /// teardown, so a stray workload leaks rather than a live one dying.
+    public let tombstones: [DesiredWorkloadTombstone]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -227,7 +287,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         networks: [DesiredNetworkState] = [],
         networksAuthoritative: Bool = true,
         desiredAgentUpdate: DesiredAgentUpdate? = nil,
-        securityGroups: [DesiredSecurityGroup]? = nil
+        securityGroups: [DesiredSecurityGroup]? = nil,
+        tombstones: [DesiredWorkloadTombstone]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -238,6 +299,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.networksAuthoritative = networksAuthoritative
         self.desiredAgentUpdate = desiredAgentUpdate
         self.securityGroups = securityGroups
+        self.tombstones = tombstones
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -258,6 +320,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
         desiredAgentUpdate = try c.decodeIfPresent(DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
         securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
+        tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
     }
 }
 
@@ -616,6 +679,63 @@ public struct ObservedAgentUpdateStatus: Codable, Sendable {
     }
 }
 
+// MARK: - Unrecognized workloads
+
+/// A workload an agent holds that the last desired-state sync did not list
+/// (STR-98).
+///
+/// The agent **holds** it — running, untouched, adopted into no desired
+/// generation — and reports it here so the control plane can decide. A row
+/// that still exists means an assembler or scoping bug and must never
+/// authorize teardown; no row at all earns a `DesiredWorkloadTombstone` on a
+/// later sync.
+public struct UnrecognizedWorkload: Codable, Sendable, Equatable {
+    public let kind: WorkloadKind
+    public let workloadId: UUID
+    /// The last desired-state generation the agent applied for this workload
+    /// (0 if it never applied one), so the control plane can mint a tombstone
+    /// generation that outranks it rather than one the agent would drop as
+    /// stale.
+    public let observedGeneration: Int64
+    /// The workload's observed status, for the operator-facing log on the
+    /// control plane ("holding a *running* VM nothing describes" reads very
+    /// differently from holding a stopped one). Purely diagnostic.
+    public let status: String?
+
+    public init(kind: WorkloadKind, workloadId: UUID, observedGeneration: Int64, status: String? = nil) {
+        self.kind = kind
+        self.workloadId = workloadId
+        self.observedGeneration = observedGeneration
+        self.status = status
+    }
+}
+
+/// Why an agent refused to converge the teardowns a sync authorized (STR-98
+/// phase 2): the blast-radius guard tripped.
+///
+/// Reported so the refusal reaches operators through the plumbing that already
+/// exists, rather than living only in an agent log nobody is watching. The
+/// agent keeps converging everything else in the sync.
+public struct ObservedTeardownRefusal: Codable, Sendable, Equatable {
+    /// The sync whose teardowns were refused, so the refusal can be correlated
+    /// with the control-plane side of the same exchange.
+    public let syncId: String
+    /// How many tombstoned workloads that sync would have destroyed.
+    public let requestedTeardowns: Int
+    /// How many workloads the host holds in total, the denominator of the
+    /// percentage half of the guard.
+    public let presentWorkloads: Int
+    /// Human-readable explanation, surfaced on the agent's API resource.
+    public let reason: String
+
+    public init(syncId: String, requestedTeardowns: Int, presentWorkloads: Int, reason: String) {
+        self.syncId = syncId
+        self.requestedTeardowns = requestedTeardowns
+        self.presentWorkloads = presentWorkloads
+        self.reason = reason
+    }
+}
+
 /// Agent → control plane: everything the agent actually has, with resources.
 ///
 /// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
@@ -642,6 +762,15 @@ public struct ObservedStateReport: WebSocketMessage {
     /// into the new build rather than reporting progress), and from agents
     /// older than the field.
     public let agentUpdateStatus: ObservedAgentUpdateStatus?
+    /// Workloads this agent holds that its last sync did not list (STR-98).
+    /// They also appear in `vms`/`sandboxes` above — the agent really is
+    /// running them — so this list is the agent asking "should these exist?",
+    /// not a second inventory. Empty from agents older than the field, which
+    /// still read omission as teardown.
+    public let unrecognized: [UnrecognizedWorkload]
+    /// Set when the blast-radius guard refused a sync's teardowns. Nil in the
+    /// steady state and from agents older than the field.
+    public let teardownRefusal: ObservedTeardownRefusal?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -650,7 +779,9 @@ public struct ObservedStateReport: WebSocketMessage {
         vms: [ObservedVMState],
         sandboxes: [ObservedSandboxState] = [],
         resources: AgentResources,
-        agentUpdateStatus: ObservedAgentUpdateStatus? = nil
+        agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
+        unrecognized: [UnrecognizedWorkload] = [],
+        teardownRefusal: ObservedTeardownRefusal? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -659,11 +790,14 @@ public struct ObservedStateReport: WebSocketMessage {
         self.sandboxes = sandboxes
         self.resources = resources
         self.agentUpdateStatus = agentUpdateStatus
+        self.unrecognized = unrecognized
+        self.teardownRefusal = teardownRefusal
     }
 
-    // Custom decode so `sandboxes` tolerates absence: a report produced by a
-    // pre-sandbox agent decodes to [] rather than throwing. `encode(to:)`
-    // stays synthesized; all other keys remain required.
+    // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
+    // report produced by a pre-sandbox (or pre-STR-98) agent decodes to []
+    // rather than throwing. `encode(to:)` stays synthesized; all other keys
+    // remain required.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         requestId = try c.decode(String.self, forKey: .requestId)
@@ -673,5 +807,7 @@ public struct ObservedStateReport: WebSocketMessage {
         sandboxes = try c.decodeIfPresent([ObservedSandboxState].self, forKey: .sandboxes) ?? []
         resources = try c.decode(AgentResources.self, forKey: .resources)
         agentUpdateStatus = try c.decodeIfPresent(ObservedAgentUpdateStatus.self, forKey: .agentUpdateStatus)
+        unrecognized = try c.decodeIfPresent([UnrecognizedWorkload].self, forKey: .unrecognized) ?? []
+        teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
     }
 }

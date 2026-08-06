@@ -107,8 +107,8 @@ language, one evaluator.
 |---|---|---|---|
 | **0 — Structure** | Legal parentage, resource types | Us (schema) | Write time → `400` |
 | **1 — Platform policy** | Non-negotiable `forbid`s | Us | Eval; immutable to customers |
-| **2 — Guardrails** | Ceilings on what tier 3 can grant | Org/folder admins | Eval **and** write-time check |
-| **3 — Grants** | Role bindings + conditions | Customers | Eval |
+| **2 — Guardrails** | Ceilings on what tier 3 can grant | Org/folder admins | Eval; explained at write time |
+| **3 — Grants** | Role bindings (+ conditions, not yet implemented) | Customers | Eval |
 
 ## Guardrails (tier 2)
 
@@ -194,41 +194,61 @@ request the next one still blocks. What shipped in phase 2 was the store and
 these semantics; since cutover, guardrails compile into the evaluator's
 policy set (#480) and sit on the enforcement path of every request.
 
-### The write-time ceiling check (shipped, #484)
+### The write-time ceiling report (shipped, #484)
 
-Before accepting a tier-3 binding, run the symcc analysis: does the grant it
-creates reach anything a guardrail forbids? If so, reject the write naming the
-specific guardrail:
+On a tier-3 binding write, run the symcc analysis: which guardrails narrow the
+grant it creates? Every one of them comes back with the response, naming the
+guardrail, who set it, and what it takes back:
 
 ```
-403 GuardrailViolation
-  guardrail: organization/Acme/no-prod-for-contractors
-  set_by:    alice@acme (organization admin)
-  reason:    grants editor on project resources tagged "prod"
-             to principals in group "contractors"
+201 Created
+{ "ceilings": [{
+    "guardrail":        "organization/Acme/no-prod-for-contractors",
+    "setBy":            "alice@acme (organization admin)",
+    "explanation":      "grants editor on project resources tagged \"prod\"
+                         to principals in group \"contractors\"",
+    "ceilingedActions": ["vm:create", "vm:delete", "vm:update"]
+}] }
 ```
 
-Denying at eval time is correct but produces a mystery; denying at write time
-produces an explanation. This is the reason an analyzable policy language was
-chosen. Eval-time enforcement remains as well (attributes can change after the
-binding exists). The analysis runs only on binding/guardrail writes — rare and
-latency-tolerant — never on the request path.
+`ceilingedActions` is the point of the shape: the ceiling covers three of
+`editor`'s actions and the grant still confers the other thirty. An action is
+listed only if the ceiling's action scope covers it **and** it can reach a
+resource type the ceiling matches — which is why the symbolic half below asks
+about every reachable type rather than stopping at the first that overlaps.
+
+Denying at eval time is correct but produces a mystery; explaining at write
+time is what an analyzable policy language buys. Eval-time enforcement is what
+*enforces* — the write-time pass only reports. The analysis runs only on
+binding/guardrail writes — rare and latency-tolerant — never on the request
+path.
+
+**It reports; it does not refuse (STR-110, #864).** It refused until STR-110,
+and the two rules disagreed: the evaluator subtracts the ceilinged actions and
+leaves the rest of the grant working, while the write-time check rejected the
+whole binding over a single overlap. Since roles are broad action groups, one
+`forbid vm:stop` on an organization made `operator`, `editor` and `admin`
+ungrantable everywhere beneath it — an identical binding was legal to *hold*
+and illegal to *create*, and an admin adding a narrow ceiling silently lost the
+ability to onboard anyone above `viewer`. Ceilings only subtract, at both ends;
+the information the analysis produces is worth surfacing, not worth blocking on.
 
 **What is asked, and of whom.** Bindings are not policies here — they arrive as
-`context.grants` (see the Cedar encoding below) — so `GuardrailWriteCheck`
+`context.grants` (see the Cedar encoding below) — so `GuardrailWriteReport`
 first writes the proposed binding as the `permit` it amounts to, then asks
 symcc whether that permit and the guardrail (re-emitted as a `permit` — the
 solver-facing projection of `GuardrailRendering`, which carries the same
 action and resource clauses as the compiled forbid by construction) can both
-allow one request. Non-disjoint means a breach, and the counterexample is a
-concrete request that would be granted and forbidden at once.
+allow one request. Non-disjoint means the ceiling narrows the grant, and the
+counterexample is a concrete request that would be granted and forbidden at
+once.
 
 The question is split deliberately:
 
 - **The principal side is resolved from the database**, not symbolically.
   Group and org membership are facts; a solver told nothing about them assumes
-  every principal *might* be in every group and refuses grants no ceiling
-  touches. A group binding is checked against the group *and* its members,
+  every principal *might* be in every group and reports ceilings that touch
+  nothing. A group binding is checked against the group *and* its members,
   because that is how the ceiling reaches them at evaluation time.
 - **The action side is resolved from the registry**, which is finite —
   paying a solver for an answer already in `IAMRoleRegistry` would be waste.
@@ -237,39 +257,54 @@ The question is split deliberately:
   carrying the attributes the ceiling matches on? That question does not depend
   on which overlapping action is asked about, only on the resource type, so the
   enumeration is one query per reachable resource type per candidate guardrail
-  — complete, not sampled.
+  — complete, not sampled, and not short-circuited: the per-type answers are
+  what decide which actions are reported.
 
-**Matcher ceilings only (#610).** The write-time check runs against matcher-built
-guardrails. An authored guardrail's principal side is free-form Cedar this check
-cannot resolve against the database, and resolving it symbolically would make
-the solver invent memberships it was never told about (the very thing the
-principal-side split above exists to avoid) — so rather than refuse bindings on
-a guess, authored ceilings rely on eval-time enforcement, which is exact and
-always in force. The trade-off is that an authored ceiling gives no *write-time*
-explanation; the eval-time denial still names it. `who-can`, whose queries are
-concrete, reflects authored ceilings exactly without a solver — see below.
+**Matcher ceilings only (#610).** The write-time report runs against
+matcher-built guardrails. An authored guardrail's principal side is free-form
+Cedar this analysis cannot resolve against the database, and resolving it
+symbolically would make the solver invent memberships it was never told about
+(the very thing the principal-side split above exists to avoid) — so rather
+than name a ceiling on a guess, authored ceilings rely on eval-time
+enforcement, which is exact and always in force. The trade-off is that an
+authored ceiling gives no *write-time* explanation; the eval-time denial still
+names it. `who-can`, whose queries are concrete, reflects authored ceilings
+exactly without a solver — see below.
 
-**Fail closed.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on `PATH`) names the SMT
-solver; the control-plane image ships one. With no solver, gated binding writes
-return `503` rather than being accepted unchecked. Readiness deliberately does
-*not* depend on it: a solver outage should fail the writes it guards, not cycle
-every replica, and eval-time enforcement is untouched throughout.
+**Best effort, but never silently.** `IAM_SYMCC_SOLVER_PATH` (or `cvc5` on
+`PATH`) names the SMT solver; the control-plane image ships one. With no
+solver — or a failing one, or one too slow — the write is accepted and the
+response says so in `analysisUnavailable`, because an empty `ceilings` list
+otherwise means both "nothing narrows this grant" and "nobody looked", and only
+the first is an all-clear. (The path failed *closed* while it still refused
+writes; with nothing being refused there is nothing to fail closed about.)
+Readiness deliberately does not depend on the solver either: an outage should
+cost explanations, not cycle every replica.
 
-**Two carve-outs**, both at the call sites:
+**The report is bounded.** It is one solver invocation per reachable resource
+type per candidate ceiling, and ceilings inherit, so a deep node can stack
+invocations onto a response whose write has already committed and no longer
+depends on them. `GuardrailWriteReport.analysisBudget` caps the whole report;
+the budget is checked between invocations, so the worst case is the budget plus
+one analyzer timeout. Exceeding it is reported like any other failure to
+answer, not as an empty list.
 
-- **Creator bindings** on resource create are not gated. The create was already
-  authorized through the evaluator, guardrails included, and a solver round
-  trip on every resource create is exactly the request-path cost this design
-  rules out.
-- **Provisioning** (OIDC claim sync, SCIM, invite redemption, bootstrap) is not
-  gated. It runs at sign-in, and failing closed there would make an SMT solver
-  a hard dependency of authentication.
+**Two carve-outs**, both at the call sites — neither runs the analysis at all:
 
-**Guardrail writes are accepted, not refused.** Subtracting from existing
-grants is precisely a ceiling's job, and one that could not be imposed until
-every grant beneath it had been cleaned up first would be useless during the
-incident it was written for. The write returns the bindings it now shadows, and
-logs each one.
+- **Creator bindings** on resource create. The create was already authorized
+  through the evaluator, guardrails included, and a solver round trip on every
+  resource create is exactly the request-path cost this design rules out.
+- **Provisioning** (OIDC claim sync, SCIM, invite redemption, bootstrap). It
+  runs at sign-in, where there is no one to read the explanation and no
+  response body to carry it.
+
+**Both directions are accepted, and each reports the other.** Subtracting from
+existing grants is precisely a ceiling's job, and a ceiling that could not be
+imposed until every grant beneath it had been cleaned up first would be useless
+during the incident it was written for — so a guardrail write returns the
+bindings it now shadows (`shadowedBindings`). A binding write returns the
+ceilings that narrow it (`ceilings`). Same relation, both directions, and each
+write is logged with what it changed.
 
 The same machinery proves the role-nesting invariant in CI
 (`RoleNestingSubsumptionTests`): `check_implies` over the compiled role
@@ -282,7 +317,8 @@ verified rather than assumed.
 
 Customers write role bindings through a template plus a fixed condition
 vocabulary (`mfa`, `ip_range`, `expires_at`, `tags`/`environment`) — never
-free-form Cedar text.
+free-form Cedar text. Of that vocabulary **only `expires_at` is implemented**;
+see "Conditions are not implemented yet" below.
 
 ```
 (principal_type, principal_id, role, node_type, node_id,
@@ -305,9 +341,44 @@ free-form Cedar text.
   written only by the creator-binding path; there is no customer-facing
   endpoint to author or revoke one individually.
 - **Every binding has a nullable `expires_at`.** TTL is a property of the
-  grant primitive.
+  grant primitive, and it is enforced — expiry is applied at *read* time by
+  `QueryBuilder<RoleBinding>.active()`, on every path that *decides* from
+  bindings, rather than by a sweep. The write and sweep paths deliberately do
+  not filter: `grant` must find an expired row to refresh rather than duplicate
+  it, and revoking one must still delete it.
 - Bindings are written in the same database transaction as the resources they
-  protect.
+  protect — **and removed in it**. The table carries no foreign key to the node
+  it names (an id there may be a resource the database never joins against), so
+  nothing reclaims a binding whose node is gone: each delete path revokes its
+  own node's bindings, including the child nodes that cascade with the row —
+  `RoleBindingService.revokeAll(nodeType:nodeID:)`, or `ResourceBindingCleanup`
+  for VMs and sandboxes, whose snapshots go with them. A path that forgets
+  leaks rows permanently (STR-112). It is also why **node ids are never
+  reused**: with UUIDv4 they cannot be, and an orphaned binding on a recycled
+  id would silently start granting again.
+
+### Conditions are not implemented yet (STR-108)
+
+The `condition` column exists so the vocabulary above needs no schema change,
+but **nothing compiles a condition into the Cedar `when` clause**. The entity
+slice therefore *skips* any binding carrying one — flattening it as if it were
+unconditional would turn a restricted grant into an open one — so a conditioned
+binding grants nothing at all.
+
+That is fail-closed, and it stays as defence in depth. What was missing was any
+signal at the write boundary: a conditioned row referenced a live role, was
+unexpired, sat on the right node, and was indistinguishable from a working
+grant in every members/bindings listing while conferring no access. So the
+schema now refuses it — `CHECK (condition IS NULL)`, installed by
+`RejectConditionedRoleBindings`, which also deletes any pre-existing
+conditioned row (they granted nothing, so no access changes) and logs the
+count. No API ever exposed the field; direct SQL was the only way in.
+
+Environment- and MFA-shaped restrictions are expressible today, just one tier
+up: a custom role's advanced `cedarText` may carry arbitrary `when` clauses
+(see "Roles are rows"), and guardrails can fence an environment from above.
+Binding-level conditions become real work the day someone compiles them —
+until then the constraint is what keeps the gap from looking like a feature.
 
 ### Roles are global action groups
 
@@ -340,10 +411,13 @@ asymmetry is intentional.) The implication-nesting direction is verified with
 symcc subsumption checks in CI (`RoleNestingSubsumptionTests`, #484); it is
 easy to get backwards.
 
-Today's environment roles (`environment_manager`, deployer, approver) become
-**conditioned bindings** (e.g. `editor` on a project where
-`resource.environment == "staging"`), consistent with
-environment-as-attribute.
+Today's environment roles (`environment_manager`, deployer, approver) are
+expressed as an environment-scoped restriction rather than a role per
+environment, consistent with environment-as-attribute. The intended end state
+is a **conditioned binding** (e.g. `editor` on a project where
+`resource.environment == "staging"`); until conditions are implemented
+(STR-108, above) the same restriction is written as a custom role whose
+advanced `cedarText` carries the `when` clause, bound normally.
 
 ### In-guest execution is never in a default role (#804)
 
@@ -493,8 +567,8 @@ the best-effort caveat above — only permits, which widen access, remain
 un-invertible. Marking rather than filtering is deliberate: an admin auditing
 "who can reach this?" needs to see both a ceilinged grant and a live one. This
 is what #484 unblocked for guardrails — the symbolic machinery is for the
-subtree-quantified write-time check; the concrete reverse lookup only needed the
-compiled set. Guardrail DTOs also carry their `cedar_text` so the UI can show
+subtree-quantified write-time report; the concrete reverse lookup only needed
+the compiled set. Guardrail DTOs also carry their `cedar_text` so the UI can show
 the Cedar a ceiling compiles to.
 
 ### Membership and visibility
@@ -676,10 +750,15 @@ works for a machine principal. The async-mutation endpoints do not:
 initiator, and operation visibility falls back to "the initiator may read it"
 once the resource row is gone. A machine principal has no user id to put
 there, so those handlers refuse with a 403 naming the reason rather than
-recording a misleading initiator. Widening them needs a principal-typed
-initiator column (`principal_type` alongside `user_id`) plus the matching
-change to the initiator-fallback check — a schema change deliberately kept
-out of this one.
+recording a misleading initiator.
+
+Half of what widening them needs now exists: `resource_events` (ADR 0001
+stage 2) records every mutation against a principal-typed **actor** — type
+plus id, with no id at all for the system actor — and is the attribution
+record intended to outlive the operations table. What remains is threading
+the request principal into `ResourceOperation.begin` instead of deriving the
+actor from `user_id`, and the matching change to operation visibility's
+initiator fallback.
 
 Off by default (`SPIFFE_JWT_SVID_AUTH_ENABLED`): it widens the credential
 surface from mTLS-only to bearer tokens accepted, which is an operator's
@@ -763,7 +842,10 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   `Folder` rename already in the Cedar vocabulary), the per-operation action
   inventory, and the condition vocabulary as the request `Context` (`mfa`,
   `sourceIP`; `expires_at` is enforced when bindings are read, and
-  `environment` matches the resource).
+  `environment` matches the resource). The `Context` shape is declared;
+  nothing populates the ambient half yet, which is why binding conditions are
+  unimplemented (STR-108) — a role's or guardrail's own `when` clause is what
+  carries a condition today.
 - **Roles are nested action groups, lower-inside-higher**: `vm:read` is a
   member of `role:viewer`, and `role:viewer` of `role:operator`, up the chain
   — so `action in Action::"role:admin"` transitively reaches everything while
@@ -779,7 +861,9 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   bindings along the ancestor chain into `context.grants` (per-role user and
   group sets); the static role policies test membership in those sets. This is
   what keeps grant/revoke free of cache invalidation. Conditioned bindings are
-  skipped and counted, never flattened — flattening one would widen it.
+  skipped and counted, never flattened — flattening one would widen it. Since
+  STR-108 the schema refuses to store one, so the count stays zero and the skip
+  is defence in depth against a row written against an older schema.
 - **Guardrails compile to `forbid` policies** (`GuardrailRendering`), one
   per row, id `guardrail-<row id>` so a denial names its ceiling. The attach
   node becomes `resource in <node>` over the chain's parent edges;
@@ -1323,9 +1407,9 @@ Phases; each landed independently:
    before upgrading past #483. Releases after #483 no longer carry the
    SpiceDB export, so skipping the cutover release would silently drop
    resource-level grants that existed only in SpiceDB.
-7. **Payoff features.** The symcc write-time guardrail check (`403
-   GuardrailViolation` naming the guardrail) **shipped** — see "The write-time
-   ceiling check" above. Still ahead: policy simulator, workload
+7. **Payoff features.** The symcc write-time guardrail analysis **shipped** —
+   every grant comes back naming the ceilings that narrow it; see "The
+   write-time ceiling report" above. Still ahead: policy simulator, workload
    registry/principals, service accounts.
 
 The **folder rename** (OU → folder) happens in two steps: UI/docs copy

@@ -343,4 +343,181 @@ struct HostPreflightTests {
         #expect(gated[1].available == false)
         #expect(gated[1].unavailabilityReason?.contains("cannot create") == true)
     }
+
+    // MARK: - libvirt
+
+    @Test("No libvirt probe result skips both libvirt checks")
+    func libvirtChecksSkippedWhenNotProbed() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let report = HostPreflight.run(passingInputs(root: root))
+
+        #expect(report.check(.libvirtConnection) == nil)
+        #expect(report.check(.libvirtVersion) == nil)
+        // A host that was never asked about libvirt must not read as broken.
+        #expect(report.libvirtReady)
+        #expect(report.libvirtFailureDetail == nil)
+    }
+
+    @Test("A libvirt new enough to drive passes both checks")
+    func reachableLibvirtPasses() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .reachable(LibvirtProbe.Version(major: 12, minor: 0, patch: 0))
+        let report = HostPreflight.run(inputs)
+
+        #expect(report.failures.isEmpty)
+        #expect(report.libvirtReady)
+    }
+
+    @Test("An uninstalled libvirt reports how to install it")
+    func missingLibvirtIsReported() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .clientMissing
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.libvirtConnection))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("libvirt-daemon-system") == true)
+        #expect(!report.libvirtReady)
+        // The version check is not reported at all: there is no version to
+        // compare, and two failures for one cause is noise.
+        #expect(report.check(.libvirtVersion) == nil)
+    }
+
+    @Test("An unreachable libvirtd names the daemon error and the socket-permission fix")
+    func unreachableLibvirtIsReported() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .unreachable("Failed to connect socket to '/var/run/libvirt/virtqemud-sock'")
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.libvirtConnection))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("virtqemud-sock") == true)
+        #expect(check.detail?.contains("libvirt` group") == true)
+        #expect(report.libvirtFailureDetail == check.detail)
+    }
+
+    @Test("A libvirt below the version floor fails with the OS requirement, having connected fine")
+    func oldLibvirtFailsVersionFloor() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        // Ubuntu 24.04's libvirt: reachable, and too old to snapshot UEFI guests.
+        inputs.libvirt = .reachable(LibvirtProbe.Version(major: 10, minor: 0, patch: 0))
+        let report = HostPreflight.run(inputs)
+
+        #expect(report.check(.libvirtConnection)?.passed == true)
+        let version = try #require(report.check(.libvirtVersion))
+        #expect(!version.passed)
+        #expect(version.detail?.contains("10.0.0") == true)
+        #expect(version.detail?.contains("11.5.0") == true)
+        #expect(version.detail?.contains("Ubuntu 24.04") == true)
+        #expect(!report.libvirtReady)
+    }
+
+    @Test("The version floor is exclusive of older patch releases only")
+    func versionFloorBoundary() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        // 11.5.0 exactly is enough; 11.4.99 is not.
+        for (version, ready) in [
+            (LibvirtProbe.Version(major: 11, minor: 5, patch: 0), true),
+            (LibvirtProbe.Version(major: 11, minor: 4, patch: 99), false),
+            (LibvirtProbe.Version(major: 11, minor: 5, patch: 1), true),
+        ] {
+            var inputs = passingInputs(root: root)
+            inputs.libvirt = .reachable(version)
+            #expect(HostPreflight.run(inputs).libvirtReady == ready, "libvirt \(version)")
+        }
+    }
+
+    @Test("libvirt failures are informational until the agent actually drives libvirt")
+    func libvirtSeverityFollowsDriver() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .clientMissing
+        inputs.libvirtRequired = false
+        let notYet = HostPreflight.run(inputs)
+        // Informational, not advisory: every node in every fleet lacks libvirt
+        // today, and warning about a dependency this build does not use would
+        // have each one reporting a non-problem on every reconnect.
+        #expect(notYet.check(.libvirtConnection)?.severity == .informational)
+        #expect(notYet.check(.libvirtConnection)?.detail?.contains("will be required") == true)
+        // Nothing about libvirt may gate placement while the QEMU driver still
+        // manages VMs directly.
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        #expect(notYet.gate([qemu]) == [qemu])
+
+        inputs.libvirtRequired = true
+        let required = HostPreflight.run(inputs)
+        #expect(required.check(.libvirtConnection)?.severity == .gating)
+        // Once it is a real requirement the message drops the hedge.
+        #expect(required.check(.libvirtConnection)?.detail?.contains("will be required") == false)
+    }
+
+    @Test("A daemon that answered unparseably is not told to start itself")
+    func unrecognizedLibvirtOutputGetsHonestRemediation() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .unrecognizedOutput("Using library: libvirt 12.0.0")
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.libvirtConnection))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("Using library: libvirt 12.0.0") == true)
+        // The connection succeeded, so none of the unreachable remediation applies.
+        #expect(check.detail?.contains("libvirt` group") == false)
+        #expect(check.detail?.contains("Start the daemon") == false)
+        #expect(!report.libvirtReady)
+    }
+
+    // MARK: - QEMU firmware descriptors
+
+    @Test("Firmware descriptors present pass; an empty directory is advisory")
+    func firmwareDescriptorChecks() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let descriptors = "\(root)/firmware"
+        try FileManager.default.createDirectory(atPath: descriptors, withIntermediateDirectories: true)
+
+        var inputs = passingInputs(root: root)
+        inputs.qemuFirmwareDescriptorPath = descriptors
+        let empty = HostPreflight.run(inputs)
+        let check = try #require(empty.check(.qemuFirmwareDescriptors))
+        #expect(!check.passed)
+        #expect(check.severity == .advisory)
+        #expect(empty.storageReady)
+
+        FileManager.default.createFile(atPath: "\(descriptors)/60-edk2-x86_64.json", contents: Data())
+        #expect(HostPreflight.run(inputs).check(.qemuFirmwareDescriptors)?.passed == true)
+    }
+
+    @Test("A missing firmware descriptor directory is advisory, not a crash")
+    func firmwareDescriptorDirectoryMissing() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.qemuFirmwareDescriptorPath = "\(root)/nonexistent"
+        let check = try #require(HostPreflight.run(inputs).check(.qemuFirmwareDescriptors))
+        #expect(!check.passed)
+        #expect(check.severity == .advisory)
+    }
 }

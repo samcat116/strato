@@ -22,12 +22,38 @@ struct ObservedStateApplier {
         let id: UUID
     }
 
-    func apply(_ report: ObservedStateReport) async throws {
+    /// What one report's teardown bookkeeping produced (STR-98), for the
+    /// caller — which holds the agent row this needs to be reported against.
+    struct UnrecognizedOutcome: Sendable {
+        /// A teardown was newly authorized (or its generation advanced), so
+        /// the agent should get a sync now rather than at the next period.
+        var authorizedTeardown = false
+        /// Held claims bucketed by reason, for a gauge recorded on every
+        /// report. Both buckets are always present, including at zero, so the
+        /// series falls back to 0 when the condition clears instead of going
+        /// stale at its last non-zero value.
+        var heldByReason: [String: Int] = [
+            AgentWorkloadClaim.heldRowPresentReason: 0,
+            AgentWorkloadClaim.heldOtherAgentBucket: 0,
+        ]
+    }
+
+    /// Apply one report, returning what the caller should do about the
+    /// workloads the agent holds that no sync accounted for.
+    @discardableResult
+    func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
         let db = app.db
         let reported = Dictionary(
             report.vms.map { ($0.vmId, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+
+        // Decide what the agent is holding that no sync accounted for
+        // (STR-98) before touching the workloads themselves: a claim recorded
+        // here is what authorizes — or permanently withholds — a teardown, and
+        // the loud path below reads whether the same report also observed the
+        // workload.
+        let unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
 
         let dbVMs = try await VM.query(on: db)
             .filter(\.$hypervisorId == report.agentId)
@@ -158,6 +184,278 @@ struct ObservedStateApplier {
                 )
             }
         }
+
+        return unrecognizedOutcome
+    }
+
+    // MARK: - Unrecognized workloads (STR-98)
+
+    /// Decide what to do about the workloads an agent holds that its last sync
+    /// did not list, and record each verdict as an `AgentWorkloadClaim`.
+    ///
+    /// This is the control-plane half of taking omission out of the
+    /// destructive path. The agent no longer destroys what a sync forgot; it
+    /// holds it and asks. Only one answer authorizes teardown:
+    ///
+    /// * **No row at all** — the workload really is a stray (its project was
+    ///   deleted, its row was removed out of band). Tombstoned, at a
+    ///   generation that outranks whatever the agent last applied.
+    /// * **A row that maps to this very agent** — the sync that omitted it is
+    ///   the bug. Never tombstoned, however many times it is reported.
+    /// * **A row placed on another agent** — the node is very likely the same
+    ///   host under a new `Agent` row (a re-enrollment, or a trust-domain
+    ///   migration). Never tombstoned either: the fix is to re-point the
+    ///   placement, which `AgentController.adoptWorkloads` does once an
+    ///   operator confirms.
+    ///
+    /// Returns whether a tombstone was newly authorized or advanced, so the
+    /// caller can nudge a sync rather than waiting a full period for it.
+    private func applyUnrecognizedWorkloads(
+        _ report: ObservedStateReport,
+        on db: Database
+    ) async throws -> UnrecognizedOutcome {
+        let existingClaims = try await AgentWorkloadClaim.query(on: db)
+            .filter(\.$agentId == report.agentId)
+            .all()
+
+        // Everything this report mentions at all: an id that has dropped out
+        // of both lists is gone from the host, which retires its claim.
+        var mentioned: Set<ResourceKey> = []
+        for vm in report.vms { mentioned.insert(ResourceKey(kind: .virtualMachine, id: vm.vmId)) }
+        for sandbox in report.sandboxes {
+            mentioned.insert(ResourceKey(kind: .sandbox, id: sandbox.sandboxId))
+        }
+        for entry in report.unrecognized {
+            mentioned.insert(ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId))
+        }
+
+        var claimsByKey = Dictionary(
+            existingClaims.map { (ResourceKey(kind: $0.resourceKind, id: $0.resourceID), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        // Retire claims for workloads the host no longer has: the tombstoned
+        // ones because the teardown converged, the held ones because whatever
+        // was holding them is over.
+        var staleClaims = claimsByKey.filter { !mentioned.contains($0.key) }
+
+        // Also retire a tombstone whose record has come back — a restored
+        // database, an operator re-creating the row. The workload is described
+        // again, so this sync lists it and the agent's own diff would ignore
+        // the tombstone anyway; leaving the claim would ship a contradictory
+        // "keep this / destroy this" pair on every sync forever.
+        let reportedUnrecognized = Set(
+            report.unrecognized.map { ResourceKey(kind: $0.kind.resourceKind, id: $0.workloadId) })
+        let revivable = claimsByKey.filter {
+            $0.value.disposition == .tombstoned && !reportedUnrecognized.contains($0.key)
+                && !staleClaims.keys.contains($0.key)
+        }
+        if !revivable.isEmpty {
+            var revived: Set<ResourceKey> = []
+            let vmCandidates = revivable.keys.filter { $0.kind == .virtualMachine }.map(\.id)
+            if !vmCandidates.isEmpty {
+                for id in try await VM.query(on: db).filter(\.$id ~~ vmCandidates).all().compactMap(\.id) {
+                    revived.insert(ResourceKey(kind: .virtualMachine, id: id))
+                }
+            }
+            let sandboxCandidates = revivable.keys.filter { $0.kind == .sandbox }.map(\.id)
+            if !sandboxCandidates.isEmpty {
+                for id in try await Sandbox.query(on: db).filter(\.$id ~~ sandboxCandidates).all()
+                    .compactMap(\.id)
+                {
+                    revived.insert(ResourceKey(kind: .sandbox, id: id))
+                }
+            }
+            for (key, claim) in revivable where revived.contains(key) {
+                staleClaims[key] = claim
+            }
+        }
+
+        // One delete for the whole set: a database restored from backup makes
+        // a 500-VM host report 500 strays at once, and this runs on every
+        // report, ahead of the reconciliation it precedes.
+        if !staleClaims.isEmpty {
+            try await AgentWorkloadClaim.query(on: db)
+                .filter(\.$id ~~ staleClaims.values.compactMap(\.id))
+                .delete()
+            for (key, claim) in staleClaims {
+                claimsByKey.removeValue(forKey: key)
+                app.logger.info(
+                    "Agent no longer holds a workload it claimed; claim retired",
+                    metadata: [
+                        "agentId": .string(report.agentId),
+                        "resourceKind": .string(key.kind.rawValue),
+                        "resourceId": .string(key.id.uuidString),
+                        "disposition": .string(claim.disposition.rawValue),
+                    ])
+            }
+        }
+
+        // Held claims this report doesn't re-decide keep the disposition they
+        // already have; the loop below adds the ones it decides. Counted so
+        // the gauge answers "is this still happening", which the transition
+        // counter cannot.
+        var outcome = UnrecognizedOutcome()
+        for (key, claim) in claimsByKey
+        where claim.disposition == .held && !reportedUnrecognized.contains(key) {
+            outcome.heldByReason[claim.reasonBucket, default: 0] += 1
+        }
+        guard !report.unrecognized.isEmpty else { return outcome }
+
+        // One query per kind for the rows behind the reported ids — including
+        // rows placed on *other* agents, which is the whole re-point signal.
+        let vmIDs = report.unrecognized.filter { $0.kind == .vm }.map(\.workloadId)
+        let sandboxIDs = report.unrecognized.filter { $0.kind == .sandbox }.map(\.workloadId)
+        var vmPlacements: [UUID: WorkloadPlacement] = [:]
+        if !vmIDs.isEmpty {
+            for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs).all() {
+                guard let id = vm.id else { continue }
+                vmPlacements[id] = WorkloadPlacement(agentId: vm.hypervisorId)
+            }
+        }
+        var sandboxPlacements: [UUID: WorkloadPlacement] = [:]
+        if !sandboxIDs.isEmpty {
+            for sandbox in try await Sandbox.query(on: db).filter(\.$id ~~ sandboxIDs).all() {
+                guard let id = sandbox.id else { continue }
+                sandboxPlacements[id] = WorkloadPlacement(agentId: sandbox.hypervisorId)
+            }
+        }
+
+        // New claims accumulate for one batched create at the end — see the
+        // stale-delete note above for why this path can't afford a round trip
+        // per workload.
+        var newClaims: [AgentWorkloadClaim] = []
+        for entry in report.unrecognized {
+            let key = ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId)
+            let placement: WorkloadPlacement? =
+                entry.kind == .vm ? vmPlacements[entry.workloadId] : sandboxPlacements[entry.workloadId]
+            let existing = claimsByKey[key]
+
+            guard let placement else {
+                // No row: teardown is authorized. The generation must outrank
+                // what the agent last applied, or its staleness guard drops
+                // the tombstone and the stray would be held forever.
+                let generation = max(entry.observedGeneration + 1, existing?.tombstoneGeneration ?? 0)
+                let changed =
+                    existing?.disposition != .tombstoned || existing?.tombstoneGeneration != generation
+                try await upsertClaim(
+                    existing,
+                    agentId: report.agentId,
+                    key: key,
+                    disposition: .tombstoned,
+                    tombstoneGeneration: generation,
+                    reason: nil,
+                    entry: entry,
+                    pendingCreates: &newClaims,
+                    on: db)
+                if changed {
+                    outcome.authorizedTeardown = true
+                    app.logger.notice(
+                        "Agent holds a workload with no control-plane record; authorizing teardown",
+                        metadata: [
+                            "agentId": .string(report.agentId),
+                            "resourceKind": .string(key.kind.rawValue),
+                            "resourceId": .string(key.id.uuidString),
+                            "observedStatus": .string(entry.status ?? "unknown"),
+                            "tombstoneGeneration": .stringConvertible(generation),
+                        ])
+                    Telemetry.workloadTombstoned(kind: key.kind.rawValue)
+                }
+                continue
+            }
+
+            // A row exists. Nothing here can authorize a teardown — this is
+            // the control plane failing to describe a workload it owns, and
+            // destroying it would be acting on our own bug.
+            let onThisAgent = placement.agentId == report.agentId
+            let reason =
+                onThisAgent
+                ? AgentWorkloadClaim.heldRowPresentReason
+                : AgentWorkloadClaim.heldOnOtherAgentReason(placement.agentId ?? "none")
+            try await upsertClaim(
+                existing,
+                agentId: report.agentId,
+                key: key,
+                disposition: .held,
+                tombstoneGeneration: nil,
+                reason: reason,
+                entry: entry,
+                pendingCreates: &newClaims,
+                on: db)
+            outcome.heldByReason[
+                onThisAgent
+                    ? AgentWorkloadClaim.heldRowPresentReason
+                    : AgentWorkloadClaim.heldOtherAgentBucket, default: 0] += 1
+            if existing?.disposition != .held || existing?.reason != reason {
+                app.logger.error(
+                    onThisAgent
+                        ? "Agent holds a workload its own desired-state sync omitted; withholding teardown (sync assembly bug)"
+                        : "Agent holds a workload placed on a different agent record; withholding teardown (re-point required)",
+                    metadata: [
+                        "agentId": .string(report.agentId),
+                        "resourceKind": .string(key.kind.rawValue),
+                        "resourceId": .string(key.id.uuidString),
+                        "placedOnAgentId": .string(placement.agentId ?? "none"),
+                        "observedStatus": .string(entry.status ?? "unknown"),
+                    ])
+                Telemetry.workloadTeardownWithheld(
+                    reason: onThisAgent
+                        ? AgentWorkloadClaim.heldRowPresentReason
+                        : AgentWorkloadClaim.heldOtherAgentBucket)
+            }
+        }
+        if !newClaims.isEmpty {
+            try await newClaims.create(on: db)
+        }
+        return outcome
+    }
+
+    /// Where a workload row currently says it lives, or nil when the row is
+    /// gone. `agentId` nil means the row exists but was never placed.
+    private struct WorkloadPlacement {
+        let agentId: String?
+    }
+
+    /// Record one verdict, updating the existing claim in place so its
+    /// `first_seen_at` keeps saying how long the situation has persisted.
+    private func upsertClaim(
+        _ existing: AgentWorkloadClaim?,
+        agentId: String,
+        key: ResourceKey,
+        disposition: WorkloadClaimDisposition,
+        tombstoneGeneration: Int64?,
+        reason: String?,
+        entry: UnrecognizedWorkload,
+        pendingCreates: inout [AgentWorkloadClaim],
+        on db: Database
+    ) async throws {
+        guard let claim = existing else {
+            pendingCreates.append(
+                AgentWorkloadClaim(
+                    agentId: agentId,
+                    resourceKind: key.kind,
+                    resourceID: key.id,
+                    disposition: disposition,
+                    tombstoneGeneration: tombstoneGeneration,
+                    reason: reason,
+                    observedGeneration: entry.observedGeneration,
+                    observedStatus: entry.status
+                ))
+            return
+        }
+        guard
+            claim.disposition != disposition
+                || claim.tombstoneGeneration != tombstoneGeneration
+                || claim.reason != reason
+                || claim.observedGeneration != entry.observedGeneration
+                || claim.observedStatus != entry.status
+        else { return }  // unchanged: don't churn the row on every report
+        claim.disposition = disposition
+        claim.tombstoneGeneration = tombstoneGeneration
+        claim.reason = reason
+        claim.observedGeneration = entry.observedGeneration
+        claim.observedStatus = entry.status
+        try await claim.save(on: db)
     }
 
     /// Apply one settled (or failing) observation to its VM row and resolve
@@ -194,9 +492,22 @@ struct ObservedStateApplier {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
+        // Mirror the report's convergence progress onto the row (STR-142) so
+        // the API can project it as the VM's `conditions` block. Recorded on
+        // both the converging and settled paths — the phase only exists on the
+        // former, and the error pair has to be *cleared* on the latter.
+        var changed = vm.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
+            if changed {
+                try await vm.save(on: db)
+            }
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
@@ -207,7 +518,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > vm.observedGeneration {
             vm.observedGeneration = observed.observedGeneration
             changed = true
@@ -433,32 +743,56 @@ struct ObservedStateApplier {
         let vmID = try vm.requireID()
 
         if vm.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row: if we crash in between, the next report retries the
-            // (idempotent) removal, whereas removing first would leave a
-            // pending operation with nothing to resolve it but the sweep.
+            // Teardown confirmed: this is the `agent.absent` finalizer's
+            // participant (ADR 0001). Complete the operation first, then clear
+            // the token: if we crash in between, the next report retries the
+            // (idempotent) clear, whereas clearing first would leave a pending
+            // operation with nothing to resolve it but the sweep.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            try await db.transaction { db in
-                try await vm.delete(on: db)
-                try await QuotaEnforcementService.release(for: vm, on: db)
+            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
+            case .reaped:
+                app.logger.info(
+                    "VM deletion confirmed by agent report; record removed",
+                    metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                // Other participants still owe cleanup. Logged on every report
+                // until they finish, so this stays at debug.
+                app.logger.debug(
+                    "VM teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "vmId": .string(vmID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                // Raced another reaper, or the row went between the query and
+                // here. Nothing to say: whoever removed it logged the removal.
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
-
-            app.logger.info(
-                "VM deletion confirmed by agent report; record removed",
-                metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
             return
         }
+
+        // A report lists everything the agent is converging or has failed to
+        // converge, so an omitted VM has no progress to report at all — most
+        // often because the agent restarted and lost its in-memory view. Drop
+        // whatever it last said, rather than leave `conditions` claiming a
+        // download that nothing is doing (STR-142).
+        let convergenceCleared = vm.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
 
         // Same established-state rule as the heartbeat reconciliation: only
         // states that assert live agent presence are safe to escalate on
         // absence. (`.created` may be mid-create on an agent that hasn't
         // received the sync yet.) The reconcile loop will re-create the VM on
         // its next sync; if it succeeds, a later report restores the status.
-        guard vm.status.assertsAgentPresence else { return }
+        guard vm.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await vm.save(on: db)
+            }
+            return
+        }
 
         let previous = vm.status
         vm.setStatus(.error)
@@ -485,8 +819,19 @@ struct ObservedStateApplier {
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
+        // Convergence progress for the `conditions` block (STR-142) — same
+        // contract as VMs, recorded on both paths for the same reasons.
+        var changed = sandbox.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
+            if changed {
+                try await sandbox.save(on: db)
+            }
             app.logger.debug(
                 "Sandbox converging on agent",
                 metadata: [
@@ -497,7 +842,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > sandbox.observedGeneration {
             sandbox.observedGeneration = observed.observedGeneration
             changed = true
@@ -571,33 +915,47 @@ struct ObservedStateApplier {
         let sandboxID = try sandbox.requireID()
 
         if sandbox.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row (same crash-ordering rationale as VMs).
+            // Teardown confirmed: the `agent.absent` participant, same
+            // crash-ordering rationale as VMs.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            // Exported snapshot objects first: the snapshot rows cascade with
-            // the sandbox row below (issue #428).
-            await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
-
-            try await db.transaction { db in
-                try await sandbox.delete(on: db)
-                try await QuotaEnforcementService.release(for: sandbox, on: db)
+            switch try await ResourceFinalizerService.clear(
+                .agentAbsent, from: sandbox, on: db, app: app)
+            {
+            case .reaped:
+                app.logger.info(
+                    "Sandbox deletion confirmed by agent report; record removed",
+                    metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                app.logger.debug(
+                    "Sandbox teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
-
-            app.logger.info(
-                "Sandbox deletion confirmed by agent report; record removed",
-                metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
             return
         }
+
+        // Nothing to report means no progress to report — same rationale as
+        // the VM path (STR-142).
+        let convergenceCleared = sandbox.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
 
         // Only escalate established sandboxes: a never-confirmed row
         // (observedGeneration 0) may be mid-create on an agent that hasn't
         // received the sync yet, and non-presence-asserting states are owned
         // by the sweep.
-        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else { return }
+        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await sandbox.save(on: db)
+            }
+            return
+        }
 
         let previous = sandbox.status
         sandbox.setStatus(.error)

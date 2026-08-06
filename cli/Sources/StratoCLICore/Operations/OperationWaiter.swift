@@ -1,22 +1,16 @@
 import Foundation
+import StratoAPIClient
 
-/// A `ResourceOperation` as returned by the control plane. `pending` is the
-/// only non-terminal status.
-public struct ResourceOperation: Codable, Sendable {
-    public let id: UUID?
-    public let resourceKind: String?
-    public let resourceId: UUID?
-    public let kind: String
-    public let status: String
-    public let error: String?
-    public let createdAt: Date?
-    public let completedAt: Date?
+/// The generated `ResourceOperation`, under the name the commands use.
+public typealias ResourceOperation = Components.Schemas.ResourceOperation
 
-    public var isTerminal: Bool { status != "pending" }
-    public var succeeded: Bool { status == "succeeded" }
+extension ResourceOperation {
+    /// `pending` is the only non-terminal status.
+    public var isTerminal: Bool { status != .pending }
+    public var succeeded: Bool { status == .succeeded }
 }
 
-/// Polls `GET /api/operations/:id` until the operation leaves `pending`.
+/// Polls `getOperation` until the operation leaves `pending`.
 public struct OperationWaiter: Sendable {
     public let pollInterval: Double
     public let timeout: Double
@@ -37,7 +31,9 @@ public struct OperationWaiter: Sendable {
     /// Returns the terminal operation, throwing `CLIError.operationFailed`
     /// when it lands on `failed`.
     @discardableResult
-    public func wait(for operation: ResourceOperation, client: APIClient) async throws -> ResourceOperation {
+    public func wait(
+        for operation: ResourceOperation, client: any APIProtocol
+    ) async throws -> ResourceOperation {
         guard let operationID = operation.id else {
             throw CLIError.api(status: 0, message: "Server returned an operation without an id")
         }
@@ -51,11 +47,12 @@ public struct OperationWaiter: Sendable {
                         + "check it later with 'strato operation get \(operationID)'.")
             }
             try await sleeper(pollInterval)
-            current = try await client.get("/api/operations/\(operationID.uuidString)")
+            current = try await client.getOperation(path: .init(operationID: operationID)).ok.body.json
         }
 
         if !current.succeeded {
-            throw CLIError.operationFailed(kind: current.kind, message: current.error ?? "unknown error")
+            throw CLIError.operationFailed(
+                kind: current.kind.rawValue, message: current.error ?? "unknown error")
         }
         return current
     }

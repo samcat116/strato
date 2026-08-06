@@ -148,7 +148,7 @@ struct GuardrailController: RouteCollection {
     /// finds out now rather than from whoever loses access (#484).
     struct GuardrailWriteResponse: Content {
         let guardrail: GuardrailDTO
-        let shadowedBindings: [GuardrailWriteCheck.ShadowedBinding]
+        let shadowedBindings: [GuardrailWriteReport.ShadowedBinding]
     }
 
     struct GuardrailListResponse: Content {
@@ -374,13 +374,13 @@ struct GuardrailController: RouteCollection {
     /// Runs after the write has committed, so an unavailable solver cannot
     /// turn a guardrail write into a failure: the ceiling is already in force
     /// either way, and the report is a courtesy the write does not depend on.
-    /// This is the opposite posture from binding writes, and deliberately so —
-    /// there, the analysis is the thing being decided.
+    /// Binding writes take the same posture since STR-110 — both directions
+    /// report, neither is decided by the analysis.
     private func shadowed(by guardrail: Guardrail, req: Request) async throws
-        -> [GuardrailWriteCheck.ShadowedBinding]
+        -> [GuardrailWriteReport.ShadowedBinding]
     {
         do {
-            let shadowed = try await GuardrailWriteCheck.shadowedBindings(
+            let shadowed = try await GuardrailWriteReport.shadowedBindings(
                 by: guardrail,
                 analyzer: req.application.guardrailAnalyzer,
                 on: req.db,

@@ -2961,6 +2961,13 @@ paths:
         Organization admins only. Cascades to the organization's folders and
         projects and revokes their role bindings. The seeded "Default
         Organization" cannot be deleted (400).
+
+
+        Refuses with 409 when any of those projects still contains a VM or
+        sandbox. This changed with STR-98: the cascade previously hard-deleted
+        those VM rows, leaving guests running on agents with no record of them
+        — and, before the same change, an agent tore such a workload down on
+        the next sync for being unlisted. Delete or move the workloads first.
       tags: [Organizations]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -2968,6 +2975,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/switch:
     parameters:
       - $ref: "#/components/parameters/OrganizationID"
@@ -3008,9 +3016,11 @@ paths:
       description: >-
         Organization admins only. The target user is looked up by email and must
         already exist; adding an existing member returns 409.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Organizations]
       requestBody:
         required: true
@@ -3020,11 +3030,14 @@ paths:
               $ref: "#/components/schemas/AddOrganizationMemberRequest"
       responses:
         "201":
-          description: The member was added. No response body.
+          description: The member was added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/members/{userID}:
@@ -3048,9 +3061,11 @@ paths:
       description: >-
         Organization admins only. Demoting the last remaining admin is rejected
         with 400.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Organizations]
       requestBody:
         required: true
@@ -3060,11 +3075,14 @@ paths:
               $ref: "#/components/schemas/UpdateOrganizationMemberRoleRequest"
       responses:
         "200":
-          description: The role was updated. No response body.
+          description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/organizations/{organizationID}/ous:
     parameters:
@@ -3294,7 +3312,7 @@ paths:
       summary: Grant a user a role on a folder
       description: >-
         Requires `iam:setPolicy` on the folder. Identify the user by `userID`
-        or `userEmail`. Returns an empty body.
+        or `userEmail`.
         The grant inherits down every folder, project, and resource beneath
         the folder, and keeps applying to projects added later.
         A principal may hold at most one role per folder; use `PATCH` to
@@ -3303,9 +3321,11 @@ paths:
         only by a caller who also holds `iam:grantExternal` on the folder;
         such cross-org grants are recorded with a distinct
         `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3316,10 +3336,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/ous/{ouID}/members/{userID}:
@@ -3342,9 +3365,11 @@ paths:
         Changing an organization-external user's role is a new cross-org
         grant: it requires `iam:grantExternal` on the folder and is recorded
         with a distinct `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3355,10 +3380,13 @@ paths:
       responses:
         "200":
           description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeFolderMember
@@ -3382,14 +3410,16 @@ paths:
       operationId: grantFolderGroup
       summary: Grant a group a role on a folder
       description: >-
-        Requires `iam:setPolicy` on the folder. Returns an empty body.
+        Requires `iam:setPolicy` on the folder.
         A group from another organization can be granted a role, but only by
         a caller who also holds `iam:grantExternal` on the folder; such
         cross-org grants are recorded with a distinct `iam.cross_org_grant`
         audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Folders]
       requestBody:
         required: true
@@ -3400,10 +3430,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/organizations/{organizationID}/ous/{ouID}/groups/{groupID}:
@@ -3735,8 +3768,11 @@ paths:
       operationId: validateHierarchy
       summary: Report hierarchy integrity issues
       description: >-
-        System-admin only. Scans every organization for circular references,
-        broken materialized paths, orphaned resources, and quota violations.
+        System-admin only. Scans every organization for materialized `path` /
+        `depth` values that disagree with the relational parent chain, for
+        parent cycles, and for folders and projects whose parent row is
+        missing. The relational links are the source of truth; the paths are
+        the derived copy that can drift.
       tags: [Organizations]
       responses:
         "200":
@@ -3751,7 +3787,11 @@ paths:
     post:
       operationId: repairHierarchy
       summary: Repair hierarchy integrity issues
-      description: System-admin only. Applies the requested repairs and reports what was fixed and what remains.
+      description: >-
+        System-admin only. Applies the requested repairs and reports what was
+        fixed and what remains. Only `repairOptions.rebuildPaths` does anything
+        today: it rewrites the drifted `path` / `depth` of the folders and
+        projects `validate` reports as `broken_path`.
       tags: [Organizations]
       requestBody:
         required: true
@@ -4092,14 +4132,15 @@ paths:
       summary: Grant a user a role on a project
       description: >-
         Requires project admin. Identify the user by `userID` or `userEmail`.
-        Returns an empty body.
         A user outside the project's organization can be granted a role, but
         only by a caller who also holds `iam:grantExternal` on the project;
         such cross-org grants are recorded with a distinct
         `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4110,10 +4151,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/members/{userID}:
@@ -4130,13 +4174,15 @@ paths:
       operationId: updateProjectMemberRole
       summary: Change a user's role on a project
       description: >-
-        Requires project admin. Returns an empty body.
+        Requires project admin.
         Changing an organization-external user's role is a new cross-org
         grant: it requires `iam:grantExternal` on the project and is recorded
         with a distinct `iam.cross_org_grant` audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4147,10 +4193,13 @@ paths:
       responses:
         "200":
           description: The role was updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeProjectMember
@@ -4172,14 +4221,16 @@ paths:
       operationId: grantProjectGroup
       summary: Grant a group a role on a project
       description: >-
-        Requires project admin. Returns an empty body.
+        Requires project admin.
         A group from another organization can be granted a role, but only by
         a caller who also holds `iam:grantExternal` on the project; such
         cross-org grants are recorded with a distinct `iam.cross_org_grant`
         audit event.
-        Checked against the tier-2 guardrails in force on the node before it
-        is accepted: a grant that would reach past a ceiling is refused with
-        `403`, naming the guardrail, who set it, and why.
+        Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one — ceilings subtract at evaluation —
+        but every ceiling that narrows it comes back in `ceilings`, naming
+        the guardrail, who set it, and which of the role's actions it takes
+        back.
       tags: [Projects]
       requestBody:
         required: true
@@ -4190,10 +4241,13 @@ paths:
       responses:
         "201":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /api/projects/{projectID}/groups/{groupID}:
@@ -4845,6 +4899,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/agents/{agentId}/actions/adopt-workloads:
+    parameters:
+      - $ref: "#/components/parameters/AgentID"
+    post:
+      operationId: adoptAgentWorkloads
+      summary: Adopt workloads from a superseded agent record
+      description: >-
+        Re-points VMs, sandboxes, and their volumes from `fromAgentId` onto
+        this agent. Only workloads this agent reports holding (see
+        `heldWorkloads`) *and* currently placed on the source record are
+        moved, so the call cannot point a workload at a host that is not
+        running it.
+
+
+        This finishes a node's re-identification: agent records are keyed by
+        trust domain and name, so re-enrolling a node under a corrected name —
+        or moving it to its organization's trust domain — mints a new record
+        while its workloads stay placed on the old one. Requires `manage` on
+        **both** agents, which must belong to the same organization.
+      tags: [Agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdoptWorkloadsRequest"
+      responses:
+        "200":
+          description: The workloads were re-pointed and both agents were re-synced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdoptWorkloadsResult"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            This agent does not report holding any workloads placed on the
+            given source record, so there is nothing it can prove it runs — or
+            the two agents belong to different organizations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/agents/{agentId}/organization:
     parameters:
       - $ref: "#/components/parameters/AgentID"
@@ -5137,9 +5237,9 @@ paths:
       summary: Grant the service account a role on its project
       description: >-
         Requires `iam:setPolicy` on the project. Replaces any existing project
-        role. Checked against the tier-2 guardrails in force on the node
-        before it is accepted: a grant that would reach past a ceiling is
-        refused with `403`, naming the guardrail, who set it, and why.
+        role. Analyzed against the tier-2 guardrails in force on the node: the
+        grant is never refused over one, but every ceiling that narrows it
+        comes back in `ceilings`.
       tags: [Service Accounts]
       requestBody:
         required: true
@@ -5150,10 +5250,13 @@ paths:
       responses:
         "200":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: clearServiceAccountProjectRole
@@ -5303,8 +5406,9 @@ paths:
       description: >-
         Requires `iam:setPolicy` on the project. The registration must be a
         directly registered workload in the project's organization. Replaces
-        any existing role. Checked against the tier-2 guardrails in force on
-        the node before it is accepted.
+        any existing role. Analyzed against the tier-2 guardrails in force on
+        the node: the grant is never refused over one, but every ceiling that
+        narrows it comes back in `ceilings`.
       tags: [Service Accounts]
       requestBody:
         required: true
@@ -5315,10 +5419,13 @@ paths:
       responses:
         "200":
           description: The role was granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IAMGrantWriteResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "503": { $ref: "#/components/responses/GuardrailCheckUnavailable" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: revokeProjectWorkloadGrant
@@ -8277,16 +8384,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    GuardrailCheckUnavailable:
-      description: >-
-        The write-time guardrail check could not run, so the policy write was
-        not accepted. Deliberately fail-closed: a grant is never accepted
-        unchecked because the analyzer was unavailable. Existing access is
-        unaffected and guardrails remain enforced on every request.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
     NotFound:
       description: The resource does not exist or is not visible.
       content:
@@ -8546,6 +8643,7 @@ components:
         - disk
         - diskFormatted
         - networkInterfaces
+        - conditions
       properties:
         id:
           type: string
@@ -8615,12 +8713,70 @@ components:
             author the ACLs at all; either way the attached groups filter
             nothing until an operator fixes it. Absent means the VM is
             unplaced, so there is no realizer to judge yet.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+    ResourceConditions:
+      type: object
+      description: >-
+        How far a resource is from the state the API was last asked to put it
+        in. Derived on read from the resource's own generation counters and the
+        convergence progress its agent reports — polling this block is the
+        supported alternative to polling the operation a mutation returned.
+      required: [converged, targetGeneration, observedGeneration]
+      properties:
+        converged:
+          type: boolean
+          description: >-
+            Whether the owning agent has confirmed converging to
+            `targetGeneration` *and* what it observes satisfies the desired
+            state. Always false once a delete is in flight: a terminating
+            resource is on its way out, not converging on anything, and it
+            disappears when the last finalizer clears rather than settling.
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the resource is trying to reach — what the last mutation bumped it to.
+        observedGeneration:
+          type: integer
+          format: int64
+          description: >-
+            The newest generation the owning agent has confirmed converging to.
+            0 means no agent has ever confirmed this resource.
+        phase:
+          type: string
+          description: >-
+            The agent's human-readable current step (e.g. "downloading image"),
+            present only while it is actively working toward
+            `targetGeneration`. Absent does not mean idle — an unplaced
+            resource, or one whose agent is offline, reports no phase either.
+        degraded:
+          allOf:
+            - $ref: "#/components/schemas/DegradedCondition"
+          description: >-
+            The last convergence attempt that failed, or absent if the most
+            recent attempt succeeded. Can be present alongside a newer
+            `targetGeneration` while a retry is in flight.
+    DegradedCondition:
+      type: object
+      description: Why a resource is not converging, and since when.
+      required: [reason, sinceGeneration]
+      properties:
+        reason:
+          type: string
+          description: The agent's error from the failed attempt, verbatim.
+        sinceGeneration:
+          type: integer
+          format: int64
+          description: >-
+            The generation whose convergence produced `reason`. Compare with
+            `targetGeneration` to tell a failure of the state currently being
+            pursued from one a newer mutation has already superseded.
     VMStatus:
       type: string
       description: The observed VM state (tolerant decoding; unknown values map to Unknown).
@@ -8786,6 +8942,7 @@ components:
         - memory
         - env
         - status
+        - conditions
       properties:
         id:
           type: string
@@ -8844,6 +9001,8 @@ components:
           items:
             type: string
             format: uuid
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time
@@ -11371,6 +11530,10 @@ components:
         id:
           type: string
           format: uuid
+          description: >-
+            The id of the entity the issue is about. An entity carries at most
+            one issue, so this is stable across calls and can be replayed into
+            `HierarchyRepairRequest.specificIssues`.
         type:
           type: string
           enum: [circular_reference, broken_path, orphaned_resource, quota_violation]
@@ -11395,10 +11558,11 @@ components:
 
     HierarchyRepairRequest:
       type: object
-      required: [repairAll, repairOptions]
+      description: Every field is optional and defaults to off, so one repair can be requested on its own.
       properties:
         repairAll:
           type: boolean
+          description: Repair every issue the scan finds. Defaults to false; omit it and name `specificIssues` instead.
         specificIssues:
           type: array
           nullable: true
@@ -11408,18 +11572,25 @@ components:
             format: uuid
         repairOptions:
           type: object
-          required: [fixCircularReferences, rebuildPaths, removeOrphanedResources, adjustQuotas, createMissingDefaults]
+          description: Which repairs to apply. Every option defaults to false, so an omitted one is not attempted.
           properties:
             fixCircularReferences:
               type: boolean
+              description: Not implemented; a cycle is reported but never repaired. Defaults to false.
             rebuildPaths:
               type: boolean
+              description: >-
+                Rewrite the drifted `path` / `depth` of folders and projects
+                reported as `broken_path`. Defaults to false.
             removeOrphanedResources:
               type: boolean
+              description: Not implemented. Defaults to false.
             adjustQuotas:
               type: boolean
+              description: Not implemented. Defaults to false.
             createMissingDefaults:
               type: boolean
+              description: Not implemented. Defaults to false.
 
     HierarchyRepairReport:
       type: object
@@ -11427,6 +11598,11 @@ components:
       properties:
         success:
           type: boolean
+          description: >-
+            True when the tree carries no issues at all afterwards — not merely
+            that the requested repairs applied. A request that asked for nothing,
+            or one that leaves an unrepairable issue such as a parent cycle
+            standing, reports false with the detail in `remainingIssues`.
         repairedIssues:
           type: array
           items:
@@ -12194,6 +12370,94 @@ components:
           type: string
           nullable: true
           description: Terminal failure that halted the rollout at this agent.
+        teardownRefusalReason:
+          type: string
+          nullable: true
+          description: >-
+            Why the agent last refused to converge a sync's workload
+            teardowns, because removing that many of the host's workloads at
+            once looked more like a control-plane failure than an intention.
+            Null in the steady state.
+        teardownRefusedAt:
+          type: string
+          format: date-time
+          nullable: true
+        heldWorkloads:
+          type: array
+          nullable: true
+          description: >-
+            Workloads this agent is running that no desired-state sync
+            accounts for, and whose teardown the control plane refused to
+            authorize because a record still exists for them. A non-empty list
+            means the control plane is describing this host incorrectly —
+            most often that the node re-enrolled under a new agent record
+            while its workloads stayed placed on the old one, in which case
+            `placedOnAgentId` names it and they can be adopted. Returned only
+            by the single-agent endpoint; null in list responses.
+          items:
+            $ref: "#/components/schemas/HeldWorkload"
+
+    HeldWorkload:
+      type: object
+      description: One workload an agent holds that the control plane will not authorize tearing down.
+      required: [kind, id]
+      properties:
+        kind:
+          type: string
+          enum: [virtual_machine, sandbox]
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          nullable: true
+          description: The workload's observed status on the agent.
+        reason:
+          type: string
+          nullable: true
+          description: >-
+            `row_present_here` when the record maps to this very agent (a sync
+            assembly bug), or `row_on_agent:<uuid>` when it is placed on a
+            different agent record.
+        placedOnAgentId:
+          type: string
+          nullable: true
+          description: The agent record the workload is currently placed on, when that differs.
+        firstSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    AdoptWorkloadsRequest:
+      type: object
+      required: [fromAgentId]
+      properties:
+        fromAgentId:
+          type: string
+          format: uuid
+          description: The agent record whose placements should move to this agent.
+
+    AdoptWorkloadsResult:
+      type: object
+      required: [adoptedVMs, adoptedSandboxes, adoptedVolumes, skippedUnclaimed]
+      properties:
+        adoptedVMs:
+          type: integer
+        adoptedSandboxes:
+          type: integer
+        adoptedVolumes:
+          type: integer
+          description: >-
+            Volumes re-pointed onto this agent, including detached ones —
+            their data is on this host too. A volume attached to a VM that
+            stayed behind is not moved.
+        skippedUnclaimed:
+          type: integer
+          description: >-
+            Workloads still placed on the source record that this agent does
+            not report holding, so they were left alone. These are not
+            necessarily stranded: a workload running on a genuinely different
+            host counts here too.
 
     AgentStatus:
       type: string
@@ -13666,6 +13930,64 @@ components:
           enum: [viewer, operator, editor, admin]
         node:
           $ref: "#/components/schemas/IAMNode"
+
+    IAMGrantWriteResponse:
+      type: object
+      description: >-
+        What a role grant returns: the tier-2 ceilings in force that narrow it.
+        The mirror of `shadowedBindings` on a guardrail write — there the
+        ceiling's author sees the grants it narrows, here the grant's author
+        sees the ceilings that narrow it.
+      required: [ceilings]
+      properties:
+        ceilings:
+          type: array
+          description: >-
+            Empty in the ordinary case. A non-empty list is not a failure —
+            the binding confers everything the listed ceilings do not take
+            back. Also empty when `analysisUnavailable` is set, which is the
+            only thing distinguishing "nothing narrows this grant" from
+            "nobody could say".
+          items:
+            $ref: "#/components/schemas/IAMGrantCeiling"
+        analysisUnavailable:
+          type: string
+          description: >-
+            Present only when the symbolic analysis could not run — no solver,
+            a solver failure, or the analysis exceeding its wall-clock budget —
+            naming which. The grant is written and the ceilings are enforced at
+            evaluation either way; what is missing is the explanation.
+
+    IAMGrantCeiling:
+      type: object
+      required: [guardrail, explanation, ceilingedActions]
+      properties:
+        guardrail:
+          type: string
+          description: >-
+            `organization/Acme/no-prod-for-contractors` — the attach node and
+            the guardrail's name, so the reader knows where to go to change it.
+        setBy:
+          type: string
+          description: "`alice@acme (organization admin)`, when the author is still resolvable."
+        explanation:
+          type: string
+          description: >-
+            What the grant does that the ceiling forbids, in the vocabulary the
+            ceiling was written in.
+        ceilingedActions:
+          type: array
+          description: >-
+            The role's actions this ceiling takes back: covered by its action
+            scope *and* able to reach a resource type it can match. Everything
+            else in the role is unaffected.
+          items:
+            type: string
+        counterexample:
+          type: string
+          description: >-
+            A concrete request the grant allows and the ceiling forbids, as the
+            solver found it.
 
     IAMGuardrailCreateRequest:
       type: object

@@ -210,29 +210,19 @@ enum WebhookEvents {
     }
 
     /// Resolves the owning organization/project and display name for an
-    /// operation's resource. Nil when the resource row no longer exists.
-    /// Internal so `ResourceOperation.begin` can stamp the same context onto
-    /// the operation row while the resource still exists.
+    /// operation's resource. Nil when the resource row no longer exists, or
+    /// sits under no organization — there is nowhere to deliver to either way.
+    ///
+    /// The lookup itself is `ResourceEvent.scope`, which the mutation path
+    /// already runs to stamp the same context onto the operation row; this is
+    /// the delivery-shaped view of it, for operations that carry none (rows
+    /// predating the columns, or begun outside `ResourceOperation.begin`).
     static func resourceContext(
         kind: OperationResourceKind, id: UUID, on db: Database
     ) async throws -> (organizationID: UUID, projectID: UUID?, resourceName: String?)? {
-        let projectID: UUID?
-        let name: String?
-        switch kind {
-        case .virtualMachine:
-            guard let vm = try await VM.find(id, on: db) else { return nil }
-            projectID = vm.$project.id
-            name = vm.name
-        case .sandbox:
-            guard let sandbox = try await Sandbox.find(id, on: db) else { return nil }
-            projectID = sandbox.$project.id
-            name = sandbox.name
-        }
-        guard let projectID,
-            let project = try await Project.find(projectID, on: db),
-            let organizationID = try await project.getRootOrganizationId(on: db)
-        else { return nil }
-        return (organizationID, projectID, name)
+        let scope = try await ResourceEvent.scope(of: kind, id: id, on: db)
+        guard let organizationID = scope.organizationID else { return nil }
+        return (organizationID, scope.projectID, scope.resourceName)
     }
 
     // MARK: - VM state changes

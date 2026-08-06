@@ -308,7 +308,10 @@ final class ResourceOperationCoordinatorTests {
             let operation = try await coordinator.perform(
                 .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
                 hypervisorId: nil,
-                dispatch: .directResolution { db in try await vm.delete(on: db) },
+                dispatch: .directResolution { db in
+                    try await vm.delete(on: db)
+                    return true
+                },
                 on: app.db, app: app
             ) { db in
                 vm.setDesiredStatus(.absent)
@@ -341,7 +344,10 @@ final class ResourceOperationCoordinatorTests {
 
             coordinator.dispatch(
                 operation, resourceKind: .virtualMachine, resourceID: vmID, hypervisorId: nil,
-                dispatch: .directResolution { db in try await vm.delete(on: db) }, app: app)
+                dispatch: .directResolution { db in
+                    try await vm.delete(on: db)
+                    return true
+                }, app: app)
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
             // The removal work must not have run under a failed operation.

@@ -305,16 +305,22 @@ extension ResourceOperation {
 
             let operation = ResourceOperation(
                 resourceKind: resourceKind, resourceID: resourceID, userID: userID, kind: kind)
-            // Capture the webhook delivery context while the resource row
-            // still exists — a delete's completion event has nothing left to
-            // resolve against once the row is removed (PR #668 review).
-            if let context = try await WebhookEvents.resourceContext(
-                kind: resourceKind, id: resourceID, on: db)
-            {
-                operation.organizationID = context.organizationID
-                operation.projectID = context.projectID
-                operation.resourceName = context.resourceName
-            }
+            // Capture the resource's scope while its row still exists — a
+            // delete's completion event has nothing left to resolve against
+            // once the row is removed (PR #668 review). It is the operation's
+            // webhook delivery context and, below, the event's.
+            //
+            // These three stamp independently: a resource whose project has no
+            // organization records its project and name with a nil
+            // `organization_id`, where the earlier all-or-nothing capture left
+            // all three nil. Delivery is unchanged — the only reader,
+            // `WebhookEvents.enqueueOperationCompletion`, guards on
+            // `organizationID` — but a future reader of `projectID` should
+            // know it can be set on a row that has no deliverable context.
+            var scope = try await ResourceEvent.scope(of: resourceKind, id: resourceID, on: db)
+            operation.organizationID = scope.organizationID
+            operation.projectID = scope.projectID
+            operation.resourceName = scope.resourceName
             do {
                 try await operation.save(on: db)
             } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -325,8 +331,44 @@ extension ResourceOperation {
 
             try await mutation(db)
 
+            // The append-only attribution record (ADR 0001, stage 2),
+            // dual-written with the operation row until the operations table
+            // retires. In the mutation's transaction, so the trail cannot
+            // disagree with what actually applied.
+            //
+            // Only the generation is re-read: the event's target generation is
+            // the one the mutation just set, and a mutation closure moves
+            // nothing else the scope carries.
+            scope.generation = try await ResourceEvent.generation(
+                of: resourceKind, id: resourceID, on: db)
+            try await ResourceEvent.record(
+                kind,
+                resourceKind: resourceKind,
+                resourceID: resourceID,
+                actor: MutationActor(operationUserID: userID),
+                scope: scope,
+                on: db)
+
             return operation
         }
+    }
+
+    /// The resource's operation history, newest first — what the `GET
+    /// /<resource>/:id/operations` handlers return once their own permission
+    /// check has produced the id. The query is identical for every resource
+    /// kind, so it lives here rather than once per controller.
+    static func recent(
+        resourceKind: OperationResourceKind,
+        resourceID: UUID,
+        limit: Int,
+        on db: Database
+    ) async throws -> [ResourceOperation] {
+        try await ResourceOperation.query(on: db)
+            .filter(\.$resourceKind == resourceKind)
+            .filter(\.$resourceID == resourceID)
+            .sort(\.$createdAt, .descending)
+            .limit(limit)
+            .all()
     }
 }
 

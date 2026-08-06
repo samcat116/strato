@@ -199,6 +199,29 @@ log_level = "info"
 # Optional - defaults to 100000
 # sandbox_jailer_uid_base = 100000
 
+# Teardown blast-radius guard
+#
+# A workload this host holds that a desired-state sync doesn't list is never
+# destroyed on that silence alone: the agent holds it and reports it, and the
+# control plane confirms with an explicit tombstone before anything is torn
+# down. This guard bounds those confirmed teardowns as well, refusing a sync
+# that would remove more than reconcile_teardown_minimum workloads AND more
+# than reconcile_teardown_percent of what this host is running. The refusal is
+# logged at error and reported to the control plane; everything else in the
+# sync still converges.
+#
+# Ordinary deletes (the ones you asked for through the API) are not affected.
+# Optional - defaults to 3
+# reconcile_teardown_minimum = 3
+# Optional - defaults to 25
+# reconcile_teardown_percent = 25
+
+# Converge a sync's teardowns however large the batch. Set this only for a
+# deliberate host drain, and unset it afterwards — with it on, a control plane
+# that has lost this host's records can empty the host in one sync.
+# Optional - defaults to false
+# allow_bulk_teardown = false
+
 # OVN chassis bootstrap (Linux, network_mode = "ovn" only)
 #
 # ovn-controller only works once the local Open vSwitch carries the chassis

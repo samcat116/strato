@@ -394,12 +394,13 @@ final class EntitySliceLoaderTests {
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil,
                 expiresAt: Date(timeIntervalSinceNow: -60), on: app.db)
             // Flattening a conditioned binding as unconditional would turn a
-            // restricted grant into an open one — it must be skipped.
-            try await RoleBinding(
+            // restricted grant into an open one — it must be skipped. The
+            // schema now refuses such a row (STR-108); this reproduces one
+            // written outside that boundary, which the skip still has to cover.
+            try await insertConditionedRoleBinding(
                 principalType: .user, principalID: user.id!, role: .editor,
                 nodeType: .project, nodeID: tree.project.id!,
-                condition: #"{"mfa": true}"#
-            ).save(on: app.db)
+                condition: #"{"mfa": true}"#, on: app.db)
 
             let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
 

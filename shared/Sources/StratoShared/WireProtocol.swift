@@ -337,7 +337,70 @@ public enum WireProtocol {
     /// mutation would cost more than the missing logs. In the other direction
     /// a nil from an older control plane reads as "off", which is what every
     /// rule written before this version meant.
-    public static let currentVersion = 24
+    /// Version 25: tombstone-confirmed teardown (STR-98). Until now, omission
+    /// from a `DesiredStateMessage` *was* the destroy instruction: anything on
+    /// a host the control plane did not list was force-stopped and
+    /// de-registered, so every workload's safety rested on one assembler
+    /// `WHERE` clause returning a complete list. A database restored from
+    /// backup, an agent re-enrolled under a new row, or a project-delete
+    /// cascade racing a create all produce a *short* list — not an error — and
+    /// took the host down with it.
+    ///
+    /// The destructive path now needs an explicit instruction. Adds
+    /// `DesiredStateMessage.tombstones` outbound and
+    /// `ObservedStateReport.unrecognized` / `.teardownRefusal` inbound: the
+    /// agent holds what a sync omits and reports it, the control plane
+    /// confirms no row exists, and only then does a tombstone authorize the
+    /// teardown — which the agent honors exactly as it honors any `.absent`
+    /// entry.
+    ///
+    /// Deliberately **no gate**, in either direction, and for once that is the
+    /// safe choice rather than the risky one. Every other version's tolerance
+    /// hazard was "the peer ignores the field and something silently doesn't
+    /// happen"; here the thing that doesn't happen is a teardown. A pre-v25
+    /// control plane sends no tombstones, so a v25 agent holds strays forever
+    /// instead of destroying live workloads — the failure mode is a leaked
+    /// process an operator can see and remove. In the other direction a
+    /// pre-v25 *agent* keeps the old destroy-on-omission behavior no matter
+    /// what the control plane does, which is exactly what
+    /// `supportsWorkloadTombstones(_:)` exists to make visible: registration
+    /// logs such agents at `notice` so the fleet's remaining exposure is
+    /// legible during a rollout, rather than the version silently meaning
+    /// nothing.
+    ///
+    /// Version 26: instance metadata (STR-48). `DesiredVMState` gains an
+    /// optional `metadata: InstanceMetadata` — hostname, placement, NICs, SSH
+    /// keys, user/vendor data, tags, and a phase-3 identity policy — which the
+    /// agent serves to the guest from the link-local metadata address instead
+    /// of baking it into a boot-time seed ISO. Riding the sync is the whole
+    /// point: the store inherits level-triggering, generation guards, and
+    /// replay safety, so an operator's edit propagates on the next sync with
+    /// no new control loop and nothing in the payload that can expire.
+    ///
+    /// Additive and tolerant on the wire — the key simply isn't there from an
+    /// older control plane, and an older agent ignores one it can't decode a
+    /// struct into — but absence is *asymmetric* in the `networks` (v3) /
+    /// `sandboxes` (v5) sense rather than the harmless `desiredAgentUpdate`
+    /// (v7) sense, so it needs a gate on each side for a different reason:
+    ///
+    /// - **Agent side**, `supportsInstanceMetadata(_:)` is what keeps nil from
+    ///   being read as an instruction. From a v26+ control plane nil is
+    ///   authoritative ("nothing to serve", drop what you hold); from an older
+    ///   one it means the sender has never heard of metadata, and treating
+    ///   that as authoritative would empty every VM's metadata store the
+    ///   moment a control plane is rolled back.
+    /// - **Control-plane side**, the same gate lets sync assembly omit the
+    ///   field for pre-v26 agents (the v20 `securityGroups` pattern) rather
+    ///   than serializing a payload the receiver provably discards.
+    ///
+    /// What the gate deliberately does NOT do is refuse placement, unlike
+    /// v18/v23. A pre-v26 agent still provisions the guest from the seed ISO
+    /// exactly as it does today — the metadata service is additive to that
+    /// path, not yet a replacement for it — so a VM landing on an old agent
+    /// loses mutability, not its ability to boot. That changes when the seed
+    /// ISO is retired, and retiring it is what will make a placement gate
+    /// load-bearing.
+    public static let currentVersion = 26
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -591,6 +654,39 @@ public enum WireProtocol {
     /// version string.
     public static func supportsGraphicsConsole(_ version: Int) -> Bool {
         version >= graphicsConsoleMinimumVersion
+    }
+
+    /// The lowest protocol version that holds unlisted workloads instead of
+    /// destroying them (see `currentVersion` version 25 notes).
+    public static let workloadTombstoneMinimumVersion = 25
+
+    /// Whether an agent registered with `version` treats omission from a sync
+    /// as "hold and report" rather than "destroy".
+    ///
+    /// Not a send-side gate — tombstones are additive and a pre-v25 agent
+    /// ignoring them changes nothing it would otherwise do. It exists to make
+    /// the *remaining* exposure legible: below this version, any sync that
+    /// under-lists a host still force-stops every workload it omitted, and no
+    /// control-plane behavior can prevent that. Registration says so out loud
+    /// so an operator upgrading a fleet knows which hosts are still armed.
+    public static func supportsWorkloadTombstones(_ version: Int) -> Bool {
+        version >= workloadTombstoneMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks `DesiredVMState.metadata`
+    /// (see `currentVersion` version 26 notes).
+    public static let instanceMetadataMinimumVersion = 26
+
+    /// Whether a peer at `version` understands instance metadata on the sync.
+    ///
+    /// Agent-side this decides whether an absent `metadata` field *means*
+    /// anything: from a v26+ control plane nil is authoritative (serve
+    /// nothing), from an older one it is silence and the agent must leave the
+    /// VM's metadata alone — the `supportsNetworkSync` reading of an absent
+    /// list, for the same reason. Control-plane-side it lets sync assembly
+    /// omit the field for agents that would discard it.
+    public static func supportsInstanceMetadata(_ version: Int) -> Bool {
+        version >= instanceMetadataMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

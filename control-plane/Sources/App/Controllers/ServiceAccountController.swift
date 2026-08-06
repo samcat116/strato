@@ -8,7 +8,7 @@ import Vapor
 /// A service account is a resource in the IAM tree (`serviceaccount:*`
 /// actions under its project, including `impersonate`) *and* a principal —
 /// its project role is an ordinary `role_bindings` row written through the
-/// same guardrail-checked path user and group grants use.
+/// same ceiling-reported path user and group grants use.
 struct ServiceAccountController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let projectScoped = routes.grouped("api", "projects", ":projectID", "service-accounts")
@@ -204,9 +204,9 @@ struct ServiceAccountController: RouteCollection {
 
     /// PUT /api/service-accounts/:serviceAccountID/project-role — grant the
     /// account a seeded role on its project, replacing any existing one. This
-    /// is an IAM policy write on the project, gated and guardrail-checked
+    /// is an IAM policy write on the project, gated and ceiling-reported
     /// exactly like user and group grants.
-    func setProjectRole(req: Request) async throws -> HTTPStatus {
+    func setProjectRole(req: Request) async throws -> Response {
         let account = try await loadAccount(req)
         let accountID = try account.requireID()
         let projectID = account.$project.id
@@ -217,15 +217,14 @@ struct ServiceAccountController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid role; must be one of: viewer, operator, editor, admin")
         }
 
-        // A ceiling in force on this project (or above it) may forbid what
-        // this grant would reach — refuse now, with the reason (#484).
-        try await GuardrailWriteCheck.requireNoViolation(
-            ProposedBinding(
-                principalType: .serviceAccount,
-                principalID: accountID,
-                role: role,
-                node: IAMNode(type: .project, id: projectID)
-            ), req: req)
+        // A ceiling in force on this project (or above it) may narrow what
+        // this grant reaches — reported with the response (#484, STR-110).
+        let proposed = ProposedBinding(
+            principalType: .serviceAccount,
+            principalID: accountID,
+            role: role,
+            node: IAMNode(type: .project, id: projectID)
+        )
 
         let actorID = req.auth.get(User.self)?.id
         try await req.db.transaction { db in
@@ -248,7 +247,8 @@ struct ServiceAccountController: RouteCollection {
                 on: db
             )
         }
-        return .ok
+        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/service-accounts/:serviceAccountID/project-role

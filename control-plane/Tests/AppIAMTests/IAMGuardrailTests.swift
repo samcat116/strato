@@ -645,7 +645,7 @@ final class IAMGuardrailTests {
         }
     }
 
-    @Test("An authored guardrail is skipped by the write-time check; the solver is never consulted")
+    @Test("An authored guardrail is skipped by the write-time report; the solver is never consulted")
     func authoredSkippedInWriteCheck() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
@@ -657,12 +657,13 @@ final class IAMGuardrailTests {
                 engine: app.cedarEngine, on: app.db)
             let binding = ProposedBinding(
                 principalType: .user, principalID: user.id!, role: .editor, node: tree.projectNode)
-            // An unavailable analyzer would `503` if consulted; a matcher ceiling
-            // here would. That it stays empty proves authored rows are skipped.
-            let violations = try await GuardrailWriteCheck.violations(
-                for: binding, analyzer: UnavailableGuardrailAnalyzer(reason: "test"),
+            // An unavailable analyzer throws if consulted; a matcher ceiling
+            // here would consult it. That this returns empty rather than
+            // throwing proves authored rows are skipped.
+            let ceilings = try await GuardrailWriteReport.ceilings(
+                narrowing: binding, analyzer: UnavailableGuardrailAnalyzer(reason: "test"),
                 on: app.db, logger: app.logger)
-            #expect(violations.isEmpty)
+            #expect(ceilings.isEmpty)
         }
     }
 

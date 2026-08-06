@@ -13,6 +13,15 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
+        // The generated API client (issue #583). Its `openapi.yaml` is a
+        // symlink to the control plane's, so the CLI is compiled against the
+        // server's own contract: a breaking spec change breaks this build
+        // rather than surfacing as a runtime decode failure later.
+        .package(name: "strato-api-client", path: "../clients/swift"),
+        // Used directly by the CLI's transport and middlewares, not just
+        // transitively through the generated client.
+        .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-http-types.git", from: "1.0.0"),
     ],
     targets: [
         // Core library with all testable logic: config/credentials, HTTP
@@ -23,6 +32,9 @@ let package = Package(
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
+                .product(name: "StratoAPIClient", package: "strato-api-client"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
             ],
             swiftSettings: swiftSettings
         ),
@@ -31,12 +43,18 @@ let package = Package(
             dependencies: [
                 "StratoCLICore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "StratoAPIClient", package: "strato-api-client"),
             ],
             swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "StratoCLITests",
-            dependencies: ["StratoCLICore"],
+            dependencies: [
+                "StratoCLICore",
+                .product(name: "StratoAPIClient", package: "strato-api-client"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+            ],
             swiftSettings: swiftSettings
         ),
     ],

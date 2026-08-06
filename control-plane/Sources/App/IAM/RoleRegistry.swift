@@ -95,6 +95,38 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     /// checks go through the one evaluator path rather than a controller-local
     /// `isSystemAdmin` read.
     case user
+
+    /// The table whose rows this node type names — the model's own `schema`,
+    /// never a guess from the case name (`virtual_machine` → `vms`).
+    ///
+    /// Every node type is backed by exactly one UUID-keyed table, so this is
+    /// total rather than optional, and the exhaustive switch makes a new node
+    /// type a compile error here: anything that reasons about whether a node
+    /// still exists (the orphaned-binding sweep, the cascade-coverage guard in
+    /// `ResourceBindingCleanup`'s tests) has to be told where to look.
+    var table: String {
+        switch self {
+        case .organization: return Organization.schema
+        case .organizationalUnit: return OrganizationalUnit.schema
+        case .project: return Project.schema
+        case .virtualMachine: return VM.schema
+        case .sandbox: return Sandbox.schema
+        case .image: return Image.schema
+        case .network: return LogicalNetwork.schema
+        case .floatingIP: return FloatingIP.schema
+        case .securityGroup: return SecurityGroup.schema
+        case .dnsZone: return DNSZone.schema
+        case .dnsRecord: return DNSRecord.schema
+        case .volume: return Volume.schema
+        case .volumeSnapshot: return VolumeSnapshot.schema
+        case .sandboxSnapshot: return SandboxSnapshot.schema
+        case .vmSnapshot: return VMSnapshot.schema
+        case .site: return Site.schema
+        case .agent: return Agent.schema
+        case .serviceAccount: return ServiceAccount.schema
+        case .user: return User.schema
+        }
+    }
 }
 
 /// The global roles. Each role is a curated action group that implies the one

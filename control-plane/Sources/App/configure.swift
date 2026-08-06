@@ -718,6 +718,44 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLogToSecurityGroupRules())
     app.migrations.add(CreateSandboxInterfaceSecurityGroups())
 
+    // Tombstone-confirmed teardown (STR-98): what an agent holds that no sync
+    // accounted for, and what the control plane decided about it. Omission
+    // from a sync stops being an instruction to destroy.
+    app.migrations.add(CreateAgentWorkloadClaim())
+    app.migrations.add(AddTeardownRefusalToAgent())
+    app.migrations.add(RestrictVMProjectDeletion())
+
+    // STR-108: the database refuses a conditioned role binding, because the
+    // condition vocabulary is not compiled and the evaluator skips such a row —
+    // a grant that looks live in every listing and confers nothing.
+    app.migrations.add(RejectConditionedRoleBindings())
+
+    // ADR 0001 stage 2 (STR-143): the append-only mutation audit trail.
+    // Mutations dual-write it alongside their operation row, so attribution
+    // and the operation lifecycle can be separated before the operations
+    // table itself is retired.
+    app.migrations.add(CreateResourceEvent())
+
+    // STR-144: the agent-confirmed tombstone dance generalizes into finalizers
+    // — a list of outstanding cleanup participants that keeps a deleted row
+    // alive until the last one clears its token.
+    app.migrations.add(AddFinalizersToWorkloads())
+
+    // STR-142: mirror the agent's reported convergence progress onto the VM
+    // and sandbox rows so the API can project a `conditions` block instead of
+    // making clients poll an operation to learn the same thing (ADR 0001).
+    app.migrations.add(AddConvergenceStateToWorkloads())
+
+    // One-time sweep of the bindings the VM, sandbox and image delete paths
+    // leaked before they learned to revoke (STR-112). Runs last: it reads every
+    // resource table it checks against, so it wants them in their final shape.
+    app.migrations.add(DeleteOrphanedResourceRoleBindings())
+
+    // One-time sweep of the project paths folder moves left stale (STR-114).
+    // Also runs late: it recomputes derived data over the folder and project
+    // tables, so it wants them in their final shape.
+    app.migrations.add(RebuildDriftedHierarchyPaths())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

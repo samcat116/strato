@@ -1,0 +1,74 @@
+<domain type='kvm'>
+  <name>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</name>
+  <uuid>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</uuid>
+  <memory unit='KiB'>4194304</memory>
+  <currentMemory unit='KiB'>4194304</currentMemory>
+  <vcpu placement='static'>4</vcpu>
+  <os firmware='efi'>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <firmware>
+      <feature enabled='yes' name='enrolled-keys'/>
+      <feature enabled='yes' name='secure-boot'/>
+    </firmware>
+    <nvram format='qcow2'>/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/nvram.fd</nvram>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+    <smm state='on'/>
+  </features>
+  <cpu mode='host-passthrough' check='none'/>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/disk.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/cloud-init.iso'/>
+      <target dev='vdb' bus='virtio'/>
+      <readonly/>
+    </disk>
+    <controller type='virtio-serial' index='0'/>
+    <controller type='usb' index='0' model='qemu-xhci'/>
+    <interface type='ethernet'>
+      <mac address='52:54:00:ab:cd:ef'/>
+      <target dev='tap0f9ea1b23c4e' managed='no'/>
+      <model type='virtio'/>
+      <mtu size='9000'/>
+    </interface>
+    <interface type='ethernet'>
+      <target dev='tap0f9ea1b23c4f' managed='no'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/serial.sock'/>
+      <target port='0'/>
+    </serial>
+    <console type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/console.sock'/>
+      <target type='virtio' port='0'/>
+    </console>
+    <channel type='unix'>
+      <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/qga.sock'/>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <graphics type='vnc'>
+      <listen type='socket' socket='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/vnc.sock'/>
+    </graphics>
+    <video>
+      <model type='vga' heads='1'/>
+    </video>
+    <input type='tablet' bus='usb'/>
+    <input type='keyboard' bus='usb'/>
+    <tpm model='tpm-tis'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>
+    <memballoon model='virtio' freePageReporting='on'/>
+  </devices>
+</domain>

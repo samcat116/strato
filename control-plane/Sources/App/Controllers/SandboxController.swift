@@ -180,12 +180,8 @@ struct SandboxController: RouteCollection {
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
-        let operations = try await ResourceOperation.query(on: req.db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sandboxID)
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-            .all()
+        let operations = try await ResourceOperation.recent(
+            resourceKind: .sandbox, resourceID: sandboxID, limit: limit, on: req.db)
 
         return operations.map { OperationResponse(from: $0) }
     }
@@ -486,6 +482,21 @@ struct SandboxController: RouteCollection {
                     let operation = ResourceOperation(
                         sandboxID: sandboxID, userID: userID, kind: .create)
                     try await operation.save(on: db)
+
+                    // The create's attribution record (ADR 0001, stage 2), for
+                    // the reason the VM create path appends its own: the
+                    // retrying transaction owns this insert, not
+                    // `ResourceOperation.begin`. Scope passed, not resolved,
+                    // for the same reason it is there.
+                    try await ResourceEvent.record(
+                        .create, resourceKind: .sandbox, resourceID: sandboxID,
+                        actor: .user(userID),
+                        scope: ResourceEvent.Scope(
+                            organizationID: try await project.getRootOrganizationId(on: db),
+                            projectID: projectId,
+                            resourceName: sandbox.name,
+                            generation: sandbox.generation),
+                        on: db)
 
                     // IAM dual-write (issue #477): the creator's binding on the
                     // sandbox, in the create transaction (see the VM path).
@@ -814,9 +825,10 @@ struct SandboxController: RouteCollection {
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "delete")
 
         // Deletion via state sync, exactly like VMs: desired becomes
-        // `.absent`, the agent tears the sandbox down on its next sync, and
-        // the row is removed only once a report confirms absence. Unplaced
-        // sandboxes and offline agents keep a direct database path.
+        // `.absent`, the sandbox is stamped with the finalizers its teardown
+        // owes, the agent tears the sandbox down on its next sync, and the row
+        // is removed only once the last finalizer clears. Unplaced sandboxes
+        // and offline agents keep a direct path.
         let sandboxID = try sandbox.requireID()
         let userID = try user.requireID()
         let app = req.application
@@ -839,6 +851,8 @@ struct SandboxController: RouteCollection {
             hypervisorId: sandbox.hypervisorId, dispatch: strategy, on: req.db, app: app
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
+            // Stamp before the mark — see the VM delete path for why.
+            ResourceFinalizerService.stampForDeletion(sandbox)
             sandbox.setDesiredStatus(.absent)
             try await sandbox.save(on: db)
         }
@@ -846,17 +860,24 @@ struct SandboxController: RouteCollection {
     }
 
     /// The direct-removal work for a sandbox whose agent is gone (never placed,
-    /// or offline cluster-wide) or that is being expired: clean up exported
-    /// snapshot objects, then remove the record and release its quota in one
-    /// transaction. Wrapped by the coordinator's `.directResolution` dispatch,
-    /// which supplies the still-pending guard and records the verdict. If the
-    /// agent ever comes back still carrying the sandbox, its observed-state
-    /// report surfaces it for operator attention.
+    /// or offline cluster-wide) or that is being expired: nothing will ever
+    /// confirm teardown, so the agent's finalizer is force-cleared, which reaps
+    /// the row (exported snapshot objects, bindings, record, quota) since it is
+    /// the only participant today. Returns whether the row is gone — false when
+    /// another participant still holds a finalizer, which keeps the operation
+    /// pending instead of reporting a removal that has not happened. Wrapped by
+    /// the coordinator's `.directResolution` dispatch, which supplies the
+    /// still-pending guard and records the verdict. If the agent ever comes
+    /// back still carrying the sandbox, its observed-state report surfaces it
+    /// for operator attention.
     ///
     /// Internal rather than private because the expiry sweep (issue #424)
     /// deletes down this same path, so a TTL-driven deletion releases quota
     /// exactly like a user-initiated one.
-    static func performDirectDeletion(sandbox: Sandbox, on db: any Database, app: Application) async throws {
+    @discardableResult
+    static func performDirectDeletion(
+        sandbox: Sandbox, on db: any Database, app: Application
+    ) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
         if sandbox.hypervisorId != nil {
             app.logger.warning(
@@ -864,19 +885,25 @@ struct SandboxController: RouteCollection {
                 metadata: ["sandbox_id": .string(sandboxID.uuidString)])
         }
 
-        // Exported snapshot objects first: the snapshot rows cascade with the
-        // sandbox row below (issue #428).
-        await Self.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
-
-        guard !Task.isCancelled else { return }
+        let outcome: ResourceFinalizerService.ClearOutcome
         do {
-            try await db.transaction { db in
-                try await sandbox.delete(on: db)
-                try await QuotaEnforcementService.release(for: sandbox, on: db)
-            }
+            outcome = try await ResourceFinalizerService.clear(
+                .agentAbsent, from: sandbox, on: db, app: app)
         } catch {
             throw ResourceOperationCoordinator.WorkError(
                 "Failed to delete sandbox record: \(error.localizedDescription)")
         }
+        // Another participant still owes cleanup: the delete is under way, not
+        // done, so the caller leaves the operation pending rather than
+        // reporting a removal that has not happened.
+        if case .held(let remaining) = outcome {
+            app.logger.info(
+                "Sandbox delete is waiting on finalizers other than the agent's",
+                metadata: [
+                    "sandbox_id": .string(sandboxID.uuidString),
+                    "finalizers": .string(remaining.joined(separator: ",")),
+                ])
+        }
+        return outcome.isRemoved
     }
 }

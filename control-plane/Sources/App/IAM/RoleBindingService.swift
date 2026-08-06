@@ -195,6 +195,17 @@ enum RoleBindingService {
             .delete()
     }
 
+    /// Remove every binding attached to any of `nodeIDs`, all of one type —
+    /// the form a cascade delete needs, where removing one row takes a set of
+    /// child nodes with it (a VM's checkpoints, a sandbox's snapshots).
+    static func revokeAll(nodeType: IAMNodeType, nodeIDs: [UUID], on db: Database) async throws {
+        guard !nodeIDs.isEmpty else { return }
+        try await RoleBinding.query(on: db)
+            .filter(\.$nodeType == nodeType.rawValue)
+            .filter(\.$nodeID ~~ nodeIDs)
+            .delete()
+    }
+
     /// The unexpired bindings on a node.
     static func activeBindings(nodeType: IAMNodeType, nodeID: UUID, on db: Database) async throws -> [RoleBinding] {
         try await RoleBinding.query(on: db)

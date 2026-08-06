@@ -59,6 +59,13 @@ export default defineConfig({
         ]
       },
       {
+        text: 'Architecture Decisions',
+        items: [
+          { text: 'ADR 0001: Declarative Agent Protocol', link: '/adr/0001-declarative-agent-protocol' },
+          { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' }
+        ]
+      },
+      {
         text: 'API',
         items: [
           { text: 'API Reference', link: '/api-reference' }

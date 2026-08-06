@@ -146,6 +146,13 @@ actor AgentService {
     private var cleanDesiredStateRevisions: [String: UInt64] = [:]
     private var periodicDesiredStateSyncTask: Task<Void, Never>?
 
+    /// The last refused sync this replica has logged per agent (STR-98).
+    /// A refusal rides on every observed report until the agent's guard
+    /// clears, so without this one stuck refusal would log and count on every
+    /// heartbeat instead of once per refused sync. Replica-local: after a
+    /// restart the first report re-logs, which is the right side to err on.
+    private var reportedTeardownRefusalSyncIds: [String: String] = [:]
+
     /// Keep periodic fan-out bounded so a large replica does not stampede the
     /// database while still allowing unrelated agents to make progress.
     private static let desiredStateSyncConcurrency = 4
@@ -308,6 +315,20 @@ actor AgentService {
         guard WireProtocol.supportsStateSync(protocolVersion) else {
             Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
+        }
+
+        // An agent below the tombstone protocol still reads omission from a
+        // sync as "destroy" (STR-98), and no control-plane behavior can change
+        // that. Say so at registration so a half-upgraded fleet's remaining
+        // exposure is visible rather than implicit in a version number.
+        if !WireProtocol.supportsWorkloadTombstones(protocolVersion) {
+            app.logger.notice(
+                "Agent predates tombstone-confirmed teardown; a sync that under-lists this host would still destroy its workloads",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "protocolVersion": .stringConvertible(protocolVersion),
+                    "requiredVersion": .stringConvertible(WireProtocol.workloadTombstoneMinimumVersion),
+                ])
         }
 
         let db = app.db
@@ -900,6 +921,12 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Reap workloads whose finalizers all cleared but whose row
+                    // outlived the process that owed the removal (STR-144).
+                    await sweepOrphanedTerminatingResources()
+
+                    try self.checkTickPreconditions()
+
                     // Delete sandboxes past their TTL, and reap terminal
                     // sandbox records past the retention window (issue #424).
                     await sweepExpiredSandboxes()
@@ -1186,6 +1213,81 @@ actor AgentService {
         }
     }
 
+    /// How long a terminating workload may sit with every finalizer cleared
+    /// before this sweep reaps it. Generous on purpose: the delete path's own
+    /// reap follows its finalizer clear by milliseconds, so anything this old
+    /// lost the process that owed it (crash, drain, OOM kill) rather than
+    /// being slow.
+    static let orphanedTerminatingBudgetSeconds: TimeInterval = 60
+
+    /// Reaps workloads whose finalizers all cleared but whose row survived
+    /// (STR-144). Clearing a token and removing the row are two commits; a
+    /// crash between them leaves a terminating row with an empty list, which
+    /// still holds quota and still appears in listings.
+    ///
+    /// Participants with a repeating trigger heal themselves — every
+    /// observed-state report re-drives `agent.absent`. This is the backstop for
+    /// the ones that do not: the offline/unplaced direct path is a one-shot
+    /// background task, and the sandbox expiry sweep's deletions are unattended,
+    /// so without this a drained replica could strand a row with nobody left to
+    /// notice. It is also what lets a future participant be added without each
+    /// one inventing its own retry.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepOrphanedTerminatingResources() async {
+        guard !isShutDown, !app.didShutdown else { return }
+        // Cluster-singleton like the other sweeps: the reap claim would make
+        // concurrent passes safe anyway, but there is no reason to pay for
+        // every replica scanning.
+        guard await app.coordination.acquireSweepLock("orphaned_terminating") else { return }
+
+        let db = app.db
+        let cutoff = Date().addingTimeInterval(-Self.orphanedTerminatingBudgetSeconds)
+
+        do {
+            // `finalizers` is filtered in Swift, not SQL: Fluent cannot express
+            // array cardinality, and the scanned set is only workloads that
+            // have been terminating for at least a minute — normally empty.
+            let vms = try await VM.query(on: db)
+                .filter(\.$desiredStatus == .absent)
+                .filterAged(before: cutoff, by: \.$updatedAt, fallingBackTo: \.$createdAt)
+                .all()
+            await reapOrphanedTerminating(vms.filter { $0.finalizers.isEmpty }, kind: "VM", on: db)
+
+            let sandboxes = try await Sandbox.query(on: db)
+                .filter(\.$desiredStatus == .absent)
+                .filterAged(before: cutoff, by: \.$updatedAt, fallingBackTo: \.$createdAt)
+                .all()
+            await reapOrphanedTerminating(
+                sandboxes.filter { $0.finalizers.isEmpty }, kind: "sandbox", on: db)
+        } catch {
+            app.logger.error("Orphaned-terminating sweep failed: \(error)")
+        }
+    }
+
+    /// Drives one kind's orphans through the ordinary clear path — clearing an
+    /// already-cleared token on an empty list reaps — so the sweep shares the
+    /// reap claim and per-kind teardown instead of re-spelling either.
+    private func reapOrphanedTerminating<R: FinalizableResource>(
+        _ resources: [R], kind: String, on db: any Database
+    ) async {
+        for resource in resources {
+            guard let id = resource.id else { continue }
+            do {
+                let outcome = try await ResourceFinalizerService.clear(
+                    .agentAbsent, from: resource, on: db, app: app)
+                guard case .reaped = outcome else { continue }
+                app.logger.warning(
+                    "Reaped a terminating \(kind) whose row outlived its last finalizer",
+                    metadata: ["resourceId": .string(id.uuidString)])
+            } catch {
+                app.logger.error(
+                    "Failed to reap orphaned terminating \(kind): \(error)",
+                    metadata: ["resourceId": .string(id.uuidString)])
+            }
+        }
+    }
+
     /// One resource the stuck sweep found in a transitional status: enough to
     /// decide on it (`id`), to log it (`stuckStatus`, captured before the
     /// transition to `.error`), and to resolve it (`markError`).
@@ -1404,6 +1506,10 @@ actor AgentService {
             ) { db in
                 try await SandboxController.requireSnapshotLineageDeletable(
                     for: sandboxID, on: db)
+                // Same stamp-then-mark order as the user-initiated delete: an
+                // expiry that races a user's DELETE must not re-stamp a token
+                // its participant already cleared.
+                ResourceFinalizerService.stampForDeletion(sandbox)
                 sandbox.setDesiredStatus(.absent)
                 try await sandbox.save(on: db)
             }
@@ -1942,6 +2048,9 @@ actor AgentService {
             agentChanged = true
             agent.lastHeartbeat = Date()
         }
+        if applyReportedTeardownRefusal(report.teardownRefusal, to: agent) {
+            agentChanged = true
+        }
         if agentChanged {
             do {
                 try await agent.save(on: app.db)
@@ -1957,12 +2066,76 @@ actor AgentService {
         await refreshAgentLivenessIfNeeded(agentKey: agentKey)
 
         do {
-            try await app.observedStateApplier.apply(report)
+            let outcome = try await app.observedStateApplier.apply(report)
+            // Level-triggered, and recorded here because this is where the
+            // agent's name is: the withheld-teardown counter only fires at the
+            // transition, so on its own it can't answer whether a host is
+            // still holding workloads the control plane failed to describe.
+            for (reason, count) in outcome.heldByReason {
+                Telemetry.workloadClaimsHeld(agentName: agent.name, reason: reason, count: count)
+            }
+            // A newly authorized teardown (STR-98) is worth a sync right away:
+            // until the tombstone reaches the agent it keeps holding — and
+            // re-reporting — a workload nothing describes.
+            if outcome.authorizedTeardown {
+                await syncDesiredState(agentId: report.agentId)
+            }
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
                 metadata: ["agentId": .string(report.agentId)])
         }
+    }
+
+    /// Folds an agent's teardown refusal (STR-98 phase 2) into its row,
+    /// mutating the in-memory model for the caller's save.
+    ///
+    /// A refusal means the agent declined to converge teardowns a sync
+    /// authorized because they would have taken out too much of the host at
+    /// once. That is a standing condition, not an event: it repeats on every
+    /// sync until either the batch shrinks or an operator intervenes, so it
+    /// lives on the row where the UI can show it rather than only in a log.
+    ///
+    /// The log line and the counter are deduped on `syncId`, because the
+    /// refusal rides along on *every* observed report — heartbeats included —
+    /// while the agent's guard stands. Logging per report would turn one stuck
+    /// refusal into thousands of `error` lines a day, which is exactly how an
+    /// error level stops meaning anything. Per refused sync is the honest
+    /// count; the row keeps `teardownRefusedAt` fresh either way, so the UI
+    /// still shows the condition as current.
+    /// Returns whether the row actually changed, so a heartbeat carrying a
+    /// refusal it has already recorded costs no write.
+    private func applyReportedTeardownRefusal(
+        _ refusal: ObservedTeardownRefusal?, to agent: Agent
+    ) -> Bool {
+        guard let refusal else {
+            reportedTeardownRefusalSyncIds.removeValue(forKey: agent.name)
+            guard agent.teardownRefusalReason != nil || agent.teardownRefusedAt != nil else {
+                return false
+            }
+            agent.teardownRefusalReason = nil
+            agent.teardownRefusedAt = nil
+            return true
+        }
+        guard reportedTeardownRefusalSyncIds[agent.name] != refusal.syncId else {
+            // Same refused sync, re-reported on a heartbeat. Already logged,
+            // already counted, already on the row.
+            return agent.teardownRefusalReason != refusal.reason
+        }
+        reportedTeardownRefusalSyncIds[agent.name] = refusal.syncId
+        app.logger.error(
+            "Agent refused a sync's workload teardowns",
+            metadata: [
+                "agentName": .string(agent.name),
+                "syncId": .string(refusal.syncId),
+                "requestedTeardowns": .stringConvertible(refusal.requestedTeardowns),
+                "presentWorkloads": .stringConvertible(refusal.presentWorkloads),
+                "reason": .string(refusal.reason),
+            ])
+        Telemetry.agentTeardownRefused()
+        agent.teardownRefusalReason = refusal.reason
+        agent.teardownRefusedAt = Date()
+        return true
     }
 
     /// Folds an agent's self-reported update status (issue #434) into its

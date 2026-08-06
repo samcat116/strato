@@ -269,6 +269,9 @@ actor Agent {
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
 
+    // How much of this host one sync's confirmed teardowns may remove (STR-98).
+    private let teardownGuard: TeardownGuard
+
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
@@ -321,7 +324,8 @@ actor Agent {
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
-        spiffeConfig: SPIFFEConfig? = nil
+        spiffeConfig: SPIFFEConfig? = nil,
+        teardownGuard: TeardownGuard = TeardownGuard()
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -355,6 +359,7 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
+        self.teardownGuard = teardownGuard
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
@@ -673,7 +678,8 @@ actor Agent {
         // The reconciler drives desired-state syncs onto the shared per-VM
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
-        reconciler = Reconciler(actuator: self, queue: messageQueue, logger: logger)
+        reconciler = Reconciler(
+            actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard)
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
@@ -1049,7 +1055,7 @@ actor Agent {
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
         } else {
-            let preflight = runHostPreflight()
+            let preflight = runHostPreflight(libvirt: await probeLibvirt())
             swtpmAvailable = preflight.swtpmAvailable
             logHostPreflight(preflight)
             let probed = preflight.gate(
@@ -1408,14 +1414,30 @@ actor Agent {
 
     // MARK: - Host preflight
 
+    /// Probes libvirtd, whose reachability and version the preflight checks.
+    /// Linux-only: libvirt's QEMU driver is, and the whole point of the probe is
+    /// the daemon a hypervisor node manages VMs through.
+    ///
+    /// Spawns a subprocess, hence async and separate from `runHostPreflight` —
+    /// the same split `HypervisorProbe.firecrackerVersion` uses.
+    private func probeLibvirt() async -> LibvirtProbe.Status? {
+        #if os(Linux)
+        return await LibvirtProbe.probe()
+        #else
+        return nil
+        #endif
+    }
+
     /// Runs the host-readiness checks against this agent's resolved
     /// configuration. Called at every registration (initial and reconnect) so
     /// the reported capabilities always reflect the host as it is now.
-    private func runHostPreflight() -> HostPreflight.Report {
+    private func runHostPreflight(libvirt: LibvirtProbe.Status? = nil) -> HostPreflight.Report {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
         #else
         let firecrackerSocketDirectory: String? = nil
+        let qemuFirmwareDescriptorPath: String? = nil
         #endif
 
         // Mirror QEMUService's firmware resolution so the preflight reports
@@ -1440,6 +1462,8 @@ actor Agent {
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
                 swtpmBinaryPath: swtpmBinaryPath,
+                qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
+                libvirt: libvirt,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
@@ -1452,13 +1476,19 @@ actor Agent {
     /// minutes later.
     private func logHostPreflight(_ report: HostPreflight.Report) {
         for failure in report.failures {
-            let message: Logger.Message = "Host preflight failed: \(failure.detail ?? failure.kind.rawValue)"
+            let detail = failure.detail ?? failure.kind.rawValue
             let metadata: Logger.Metadata = ["check": .string(failure.kind.rawValue)]
             switch failure.severity {
             case .gating:
-                logger.error(message, metadata: metadata)
+                logger.error("Host preflight failed: \(detail)", metadata: metadata)
             case .advisory:
-                logger.warning(message, metadata: metadata)
+                logger.warning("Host preflight failed: \(detail)", metadata: metadata)
+            case .informational:
+                // Not a fault with this host: a dependency this build does not
+                // use yet. Both the level and the wording stay calm — warning
+                // "failed" here would have every node in every fleet reporting a
+                // non-problem on every reconnect.
+                logger.info("Host preflight note: \(detail)", metadata: metadata)
             }
         }
     }
@@ -2015,8 +2045,8 @@ extension Agent {
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a
                 // control plane older than the sandbox protocol (v5) omits
-                // `sandboxes` (decoded as []), which must NOT be read as
-                // "tear down all sandboxes" under full-list semantics.
+                // `sandboxes` (decoded as []), which must not be mistaken for
+                // an authoritative "this host should have no sandboxes".
                 await reconciler?.apply(
                     message, includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
@@ -4041,7 +4071,12 @@ extension Agent: ReconcileActuator {
             vms: observed,
             sandboxes: await observedSandboxStates(reconciler: reconciler),
             resources: await getAgentResources(),
-            agentUpdateStatus: autoUpdateStatus
+            agentUpdateStatus: autoUpdateStatus,
+            // Workloads this host holds that no sync accounted for (STR-98).
+            // They also appear above — the agent is genuinely running them —
+            // and stay there until the control plane decides what they are.
+            unrecognized: await reconciler.unrecognizedWorkloads(),
+            teardownRefusal: await reconciler.lastTeardownRefusal()
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was

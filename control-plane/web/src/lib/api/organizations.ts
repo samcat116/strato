@@ -2,6 +2,7 @@
 
 import { api } from "./client";
 import type {
+  GrantWriteResponse,
   Organization,
   OrganizationMember,
   CreateOrganizationRequest,
@@ -43,7 +44,11 @@ export const organizationsApi = {
     return api.get<OrganizationMember[]>(`/api/organizations/${orgId}/members`);
   },
 
-  addMember(orgId: string, userEmail: string, role: string): Promise<void> {
+  addMember(
+    orgId: string,
+    userEmail: string,
+    role: string
+  ): Promise<GrantWriteResponse> {
     return api.post(`/api/organizations/${orgId}/members`, { userEmail, role });
   },
 
@@ -51,7 +56,11 @@ export const organizationsApi = {
     return api.delete(`/api/organizations/${orgId}/members/${userId}`);
   },
 
-  updateMemberRole(orgId: string, userId: string, role: string): Promise<void> {
+  updateMemberRole(
+    orgId: string,
+    userId: string,
+    role: string
+  ): Promise<GrantWriteResponse> {
     return api.patch(`/api/organizations/${orgId}/members/${userId}`, { role });
   },
 };

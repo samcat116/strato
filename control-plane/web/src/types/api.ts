@@ -230,6 +230,33 @@ export interface OrganizationMember {
   joinedAt: string;
 }
 
+/**
+ * A tier-2 ceiling that narrows a grant just written (STR-110). Never a
+ * failure: the grant landed, and confers everything the ceiling does not take
+ * back.
+ */
+export interface GrantCeiling {
+  /** `organization/Acme/no-vm-stop` — attach node and guardrail name. */
+  guardrail: string;
+  /** `alice@acme (organization admin)`, when the author is resolvable. */
+  setBy?: string;
+  explanation: string;
+  /** The role's actions this ceiling takes back; the rest still apply. */
+  ceilingedActions: string[];
+  counterexample?: string;
+}
+
+/** What every role-grant write returns. Usually `ceilings: []`. */
+export interface GrantWriteResponse {
+  ceilings: GrantCeiling[];
+  /**
+   * Why the ceiling analysis could not run, when it could not. `ceilings` is
+   * empty in that case too, so this is the only thing separating "nothing
+   * narrows this grant" from "nobody could say". The grant landed either way.
+   */
+  analysisUnavailable?: string;
+}
+
 // Legacy project-role names still accepted on writes; the unified vocabulary
 // also accepts IAM role names and role ids (issue #608).
 export type ProjectRole = "admin" | "member" | "viewer";
@@ -569,6 +596,39 @@ export interface Agent {
   updateBlockedReason?: string;
   // Terminal failure that halted the rollout at this agent, if any.
   updateFailureReason?: string;
+  // Why the agent last refused to converge a sync's workload teardowns
+  // (STR-98): removing that many of the host's workloads at once looked more
+  // like a control-plane failure than an intention. Absent in the steady state.
+  teardownRefusalReason?: string;
+  teardownRefusedAt?: string;
+  // Workloads the agent is running that no desired-state sync accounts for and
+  // whose teardown the control plane refused to authorize, because a record
+  // still exists for them. Returned by the single-agent endpoint only.
+  heldWorkloads?: HeldWorkload[];
+}
+
+// One workload an agent holds that the control plane will not authorize
+// tearing down. Most often the node re-enrolled under a new agent record and
+// its workloads are still placed on the old one (`placedOnAgentId`).
+export interface HeldWorkload {
+  kind: "virtual_machine" | "sandbox";
+  id: string;
+  status?: string;
+  reason?: string;
+  placedOnAgentId?: string;
+  firstSeenAt?: string;
+}
+
+// Result of POST /api/agents/:id/actions/adopt-workloads.
+export interface AdoptWorkloadsResult {
+  adoptedVMs: number;
+  adoptedSandboxes: number;
+  // Includes detached volumes on the source record — their data is on the
+  // adopting host too.
+  adoptedVolumes: number;
+  // Workloads on the source record this agent doesn't report holding. Not
+  // necessarily stranded: one running on a genuinely different host counts here.
+  skippedUnclaimed: number;
 }
 
 // Result of POST /api/agents/:id/actions/update — the agent has verified and

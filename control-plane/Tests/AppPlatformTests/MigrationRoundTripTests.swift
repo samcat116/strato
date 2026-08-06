@@ -86,4 +86,50 @@ struct MigrationRoundTripTests {
             }
         }
     }
+
+    @Test("The orphan sweep drops bindings whose node is gone and keeps the rest")
+    func orphanedRoleBindingSweep() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "sweeper", email: "sweeper@example.com")
+            let org = try await builder.createOrganization(name: "Sweep Org")
+            let project = try await builder.createProject(
+                name: "Sweep Project", description: "orphan sweep", organization: org)
+            let vm = try await builder.createVM(name: "live-vm", project: project)
+
+            func grant(_ nodeType: IAMNodeType, _ nodeID: UUID) async throws {
+                try await RoleBindingService.grant(
+                    principalType: .user, principalID: user.id!, role: .admin,
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+            }
+            func count(_ nodeType: IAMNodeType, _ nodeID: UUID) async throws -> Int {
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$nodeType == nodeType.rawValue)
+                    .filter(\.$nodeID == nodeID)
+                    .count()
+            }
+
+            let liveVMID = try vm.requireID()
+            let deletedVMID = UUID()
+            let deletedSnapshotID = UUID()
+            let deletedVolumeID = UUID()
+            try await grant(.virtualMachine, liveVMID)
+            try await grant(.virtualMachine, deletedVMID)
+            try await grant(.vmSnapshot, deletedSnapshotID)
+            // A type the sweep deliberately leaves alone, orphan or not: only
+            // the types whose delete paths were leaking are in scope.
+            try await grant(.volume, deletedVolumeID)
+
+            try await DeleteOrphanedResourceRoleBindings().prepare(on: app.db)
+
+            let liveVMBindings = try await count(.virtualMachine, liveVMID)
+            let orphanedVMBindings = try await count(.virtualMachine, deletedVMID)
+            let orphanedSnapshotBindings = try await count(.vmSnapshot, deletedSnapshotID)
+            let untouchedVolumeBindings = try await count(.volume, deletedVolumeID)
+            #expect(liveVMBindings == 1)
+            #expect(orphanedVMBindings == 0)
+            #expect(orphanedSnapshotBindings == 0)
+            #expect(untouchedVolumeBindings == 1)
+        }
+    }
 }

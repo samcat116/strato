@@ -3,7 +3,8 @@ import Foundation
 import Vapor
 
 /// A role grant: `principal` holds `role` on `node` (an org-tree node or an
-/// individual resource), optionally conditioned and optionally expiring.
+/// individual resource), optionally expiring. Conditions are reserved, not
+/// implemented — see `condition`.
 ///
 /// This table is the policy store for the Cedar-based evaluator (see
 /// docs/architecture/iam.md) — what grants evaluate from since the cutover
@@ -38,9 +39,16 @@ final class RoleBinding: Model, @unchecked Sendable {
     @Field(key: "node_id")
     var nodeID: UUID
 
-    /// Optional condition from the fixed vocabulary (`mfa`, `ip_range`,
-    /// `tags`/`environment`), stored as a JSON document. Unused in phase 1;
-    /// the column exists so conditioned bindings need no schema change.
+    /// Reserved for the fixed condition vocabulary (`mfa`, `ip_range`,
+    /// `tags`/`environment`), to be stored as a JSON document.
+    ///
+    /// **Always nil.** Conditions are not implemented: nothing compiles one
+    /// into the Cedar `when` clause, so `EntitySliceLoader` skips a conditioned
+    /// binding entirely (fail-closed — it grants nothing, and looks live while
+    /// doing so). A `CHECK (condition IS NULL)` constraint enforces that at the
+    /// write boundary (`RejectConditionedRoleBindings`, STR-108) and no
+    /// initializer here can set one; the column stays so implementing them
+    /// needs no schema change.
     @OptionalField(key: "condition")
     var condition: String?
 
@@ -65,7 +73,6 @@ final class RoleBinding: Model, @unchecked Sendable {
         roleID: UUID,
         nodeType: IAMNodeType,
         nodeID: UUID,
-        condition: String? = nil,
         expiresAt: Date? = nil,
         createdBy: UUID? = nil
     ) {
@@ -75,7 +82,6 @@ final class RoleBinding: Model, @unchecked Sendable {
         self.role = roleID.uuidString
         self.nodeType = nodeType.rawValue
         self.nodeID = nodeID
-        self.condition = condition
         self.expiresAt = expiresAt
         self.createdBy = createdBy
     }
@@ -88,7 +94,6 @@ final class RoleBinding: Model, @unchecked Sendable {
         role: IAMRole,
         nodeType: IAMNodeType,
         nodeID: UUID,
-        condition: String? = nil,
         expiresAt: Date? = nil,
         createdBy: UUID? = nil
     ) {
@@ -99,7 +104,6 @@ final class RoleBinding: Model, @unchecked Sendable {
             roleID: role.seededID,
             nodeType: nodeType,
             nodeID: nodeID,
-            condition: condition,
             expiresAt: expiresAt,
             createdBy: createdBy
         )
