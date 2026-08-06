@@ -146,6 +146,19 @@ actor AgentService {
     private var cleanDesiredStateRevisions: [String: UInt64] = [:]
     private var periodicDesiredStateSyncTask: Task<Void, Never>?
 
+    /// Agent row ids (as strings) whose desired state travels by long-poll
+    /// rather than by push (STR-146). Pushes are skipped for these — both the
+    /// periodic fan-out and the doorbell's local half — because the agent is
+    /// not listening for them and a redundant push would assemble the whole
+    /// sync a second time for nothing.
+    ///
+    /// Replica-local and socket-scoped, like `livenessRefreshedAt`: it records
+    /// what an agent said when it registered *here*, so it is populated on
+    /// registration and dropped on unregister. A replica that never saw the
+    /// registration defaults to push mode, which is the safe direction — an
+    /// unnecessary push is wasted work, a suppressed one is a stranded agent.
+    private var pullModeAgents: Set<String> = []
+
     /// The last refused sync this replica has logged per agent (STR-98).
     /// A refusal rides on every observed report until the agent's guard
     /// clears, so without this one stuck refusal would log and count on every
@@ -575,6 +588,12 @@ actor AgentService {
         // without a database read. No-op when no socket exists (tests).
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
+        recordDesiredStateTransport(
+            agentId: agentUUID.uuidString,
+            agentName: agentName,
+            protocolVersion: protocolVersion,
+            claimsPull: message.pullsDesiredState ?? false)
+
         // Publish liveness and socket location to the coordination store so
         // every control-plane process — not just the one holding this socket —
         // can see the agent and route mutations to it.
@@ -687,6 +706,7 @@ actor AgentService {
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
+        pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
@@ -722,6 +742,7 @@ actor AgentService {
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
+        pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
@@ -745,6 +766,9 @@ actor AgentService {
         // where the agent lives now.
         if let agentId = await agentId(forKey: agentKey) {
             failPendingRequests(for: agentId)
+            // The claim came with the socket and goes with it. If the agent
+            // reconnects here it re-declares its transport at registration.
+            pullModeAgents.remove(agentId)
         }
 
         if case .forward = await app.replicaBridge.remoteRoute(agentKey: agentKey) {
@@ -909,7 +933,9 @@ actor AgentService {
                         // Dirty agents are the minute-level fast path. Every
                         // tenth such pass (10 minutes at the production
                         // interval) is the level-triggered backstop for a lost
-                        // cross-replica nudge.
+                        // doorbell. Pull-mode agents are skipped by the pass
+                        // itself — their backstop is their own unconditional
+                        // re-fetch, which runs on a much tighter interval.
                         scheduleDesiredStateSyncToAllAgents(force: tick.isMultiple(of: 20))
                     }
 
@@ -1886,6 +1912,11 @@ actor AgentService {
         let targets = app.websocketManager.registeredAgents().compactMap {
             registered
                 -> DesiredStateSyncTarget? in
+            // A pull-mode agent's backstop is its own unconditional re-fetch,
+            // not ours. Pushing to it anyway would assemble the full sync a
+            // second time and write it to a socket nothing is reading for
+            // desired state.
+            guard !pullModeAgents.contains(registered.agentId) else { return nil }
             let revision = desiredStateRevisions[registered.agentId, default: 0]
             guard force || cleanDesiredStateRevisions[registered.agentId] != revision else {
                 return nil
@@ -1934,12 +1965,17 @@ actor AgentService {
         periodicDesiredStateSyncTask = nil
     }
 
-    /// Trigger a desired-state sync for an agent from any replica. When this
-    /// process holds the agent's socket the sync is assembled and pushed
-    /// directly (the local short-circuit); otherwise the replica named by the
-    /// routing key is nudged over pub/sub and assembles it from Postgres
-    /// there. Both halves are latency optimizations — a lost nudge is
-    /// repaired by the holder's periodic sync timer.
+    /// Trigger a desired-state sync for an agent from any replica.
+    ///
+    /// This rings the contentless broadcast doorbell (STR-146): the local half
+    /// runs inline, and the same signal goes out on `agent:doorbell` so
+    /// whichever *other* replica happens to hold the agent's parked poll or
+    /// socket can act on it. Nothing here consults a routing directory — that
+    /// question is what the doorbell exists to not have to answer.
+    ///
+    /// Purely a latency optimization, in both modes: a pull-mode agent
+    /// converges on its own unconditional re-fetch and a push-mode agent on the
+    /// holder's periodic sync timer, doorbell or no doorbell.
     ///
     /// A mutation on one agent can change what its site's network controller
     /// must realize (a VM landing on any site node may reference a network
@@ -1949,12 +1985,10 @@ actor AgentService {
     /// common case (first VM on a fresh network) converge on the peer's first
     /// attempt instead of waiting out a dependency-pending retry.
     func syncDesiredState(agentId: String) async {
-        markDesiredStateDirty(agentId)
         if let controllerId = await siteNetworkControllerID(forAgentId: agentId), controllerId != agentId {
-            markDesiredStateDirty(controllerId)
-            await routeDesiredStateSync(agentId: controllerId)
+            await ringDesiredStateDoorbell(agentId: controllerId)
         }
-        await routeDesiredStateSync(agentId: agentId)
+        await ringDesiredStateDoorbell(agentId: agentId)
     }
 
     /// The agent id of the site network controller responsible for the given
@@ -1975,34 +2009,74 @@ actor AgentService {
         }
     }
 
-    private func routeDesiredStateSync(agentId: String) async {
-        if let localName = app.websocketManager.agentKey(agentId: agentId) {
-            await syncDesiredStateLocally(agentId: agentId, agentKey: localName)
-            return
-        }
-
-        guard let name = await agentKey(forId: agentId) else {
+    /// Ring the doorbell for one agent: act on it locally, then broadcast so
+    /// every other replica gets the same chance.
+    ///
+    /// Both halves always run. The local half is not an optimization that
+    /// makes the broadcast redundant — this replica may hold the socket while
+    /// another holds the poll, or vice versa — and the broadcast is not a
+    /// substitute for the local half, because Valkey may be down. Ringing
+    /// twice is free; the doorbell is contentless and every recipient
+    /// re-derives the truth from Postgres.
+    private func ringDesiredStateDoorbell(agentId: String) async {
+        guard let agentKey = await agentKey(forId: agentId) else {
             app.logger.warning(
-                "Cannot route sync for unknown agent", metadata: ["agentId": .string(agentId)])
+                "Cannot ring the desired-state doorbell for an unknown agent",
+                metadata: ["agentId": .string(agentId)])
+            return
+        }
+        await applyDoorbell(agentKey: agentKey)
+        await app.replicaBridge.ringDoorbell(agentKey: agentKey)
+    }
+
+    /// The local half of a doorbell, shared by the in-process ring and the
+    /// broadcast subscriber. Does whatever this replica can do about the agent
+    /// and nothing else — which for most replicas, most of the time, is
+    /// nothing at all. That is the design, not a degraded path: "at most one
+    /// replica can act" is what removes the need for a routing directory.
+    private func applyDoorbell(agentKey: String) async {
+        guard agentKey != CoordinationService.doorbellAllAgents else {
+            await applyFleetDoorbell()
             return
         }
 
-        switch await app.replicaBridge.remoteRoute(agentKey: name) {
-        case .forward(let replicaId):
-            await app.replicaBridge.nudge(agentKey: name, toReplica: replicaId)
-        case .noRoute:
-            // No route: the agent is offline everywhere. The sync it missed
-            // is delivered by the registration-triggered sync on reconnect.
-            app.logger.debug(
-                "No socket route for agent; sync deferred to reconnect",
-                metadata: ["agentKey": .string(name)])
-        case .ownReplica:
-            // The route says us, but no local socket exists — a connection
-            // torn down before its route expired. The reconnect sync (or the
-            // holder's periodic timer, wherever the agent lands) is the
-            // backstop; nudging ourselves would find the same missing socket.
-            break
-        }
+        // Wake a parked long-poll, if this is where it happens to be parked.
+        await app.desiredStatePollRegistry.ring(agentKey: agentKey)
+
+        // Push over a locally held socket, if the agent is still push-mode.
+        // An agent with neither a poll nor a socket here needs nothing from
+        // us: it will fetch (or be pushed to) wherever it actually lives.
+        guard let agentId = app.websocketManager.agentId(agentKey: agentKey),
+            !pullModeAgents.contains(agentId)
+        else { return }
+        markDesiredStateDirty(agentId)
+        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
+    }
+
+    /// The local half of a fleet-wide doorbell: wake every poll parked here
+    /// and force a push pass over every push-mode socket here.
+    ///
+    /// Forced rather than dirty-filtered because a fleet-wide change (a
+    /// security-group rule, a network edit, a site's controller moving) is
+    /// exactly the kind that never went through `markDesiredStateDirty` per
+    /// affected agent — its blast radius is computed inside sync assembly, not
+    /// known at the mutation site.
+    private func applyFleetDoorbell() async {
+        await app.desiredStatePollRegistry.ringAll()
+        await syncDesiredStateToAllAgents(force: true)
+    }
+
+    /// Ring the fleet-wide doorbell: every agent's desired state may have
+    /// changed. The entry point for mutations whose effect is not scoped to a
+    /// placement — security groups, networks, site topology, floating IPs.
+    ///
+    /// Before STR-146 these callers reached only the agents socketed to the
+    /// calling replica, so in a multi-replica deployment the rest waited out
+    /// the forced periodic pass. Broadcasting fixes that as a side effect of
+    /// being the only way to reach a parked poll on another replica.
+    func syncDesiredStateToFleet() async {
+        await applyFleetDoorbell()
+        await app.replicaBridge.ringDoorbell(agentKey: CoordinationService.doorbellAllAgents)
     }
 
     /// Assemble and send the full desired-state sync over a locally held
@@ -2093,19 +2167,53 @@ actor AgentService {
         }
     }
 
-    /// Deliver a cross-replica sync nudge (the `ReplicaBridgeDelegate` hook).
-    /// If we (still) hold the agent's socket, push a fresh sync; if not, the
-    /// nudge raced a disconnect and the periodic timer wherever the agent lands
-    /// is the backstop.
-    func deliverNudge(agentKey: String) async {
-        guard let agentId = app.websocketManager.agentId(agentKey: agentKey) else {
-            app.logger.debug(
-                "Nudge for agent without a local socket; ignoring",
-                metadata: ["agentKey": .string(agentKey)])
-            return
+    /// Deliver a broadcast doorbell from another replica (the
+    /// `ReplicaBridgeDelegate` hook). Identical to the local ring — the whole
+    /// point of a contentless broadcast is that the recipient does not need to
+    /// know where it came from.
+    func deliverDoorbell(agentKey: String) async {
+        await applyDoorbell(agentKey: agentKey)
+    }
+
+    /// Whether this control plane will let agents drive themselves by
+    /// long-poll. The kill switch for the transport rollout: with it off,
+    /// every agent is pushed to regardless of what it claims at registration,
+    /// which is the pre-STR-146 behavior exactly.
+    static let desiredStatePullEnabled: Bool = {
+        guard let raw = Environment.get("AGENT_DESIRED_STATE_PULL_ENABLED") else { return true }
+        return !["0", "false", "no", "off"].contains(raw.lowercased())
+    }()
+
+    /// Record which transport an agent's desired state travels over, from what
+    /// it declared at registration.
+    ///
+    /// Three things must all agree before pushes stop, and each rules out a
+    /// different way of stranding an agent: the wire version (it knows the
+    /// endpoint exists), the agent's own `pullsDesiredState` flag (it is
+    /// actually polling, rather than merely capable and pinned to push mode by
+    /// config), and this control plane's kill switch. Any disagreement leaves
+    /// the agent in push mode, which is the only safe direction — a redundant
+    /// push wastes an assembly, a wrongly suppressed one strands a host.
+    private func recordDesiredStateTransport(
+        agentId: String,
+        agentName: String,
+        protocolVersion: Int,
+        claimsPull: Bool
+    ) {
+        let pulls =
+            claimsPull && Self.desiredStatePullEnabled
+            && WireProtocol.supportsDesiredStatePull(protocolVersion)
+        if pulls {
+            guard pullModeAgents.insert(agentId).inserted else { return }
+            app.logger.info(
+                "Agent drives itself by desired-state long-poll; suppressing pushes",
+                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
+        } else {
+            guard pullModeAgents.remove(agentId) != nil else { return }
+            app.logger.info(
+                "Agent reverted to pushed desired state",
+                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
         }
-        markDesiredStateDirty(agentId)
-        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
     }
 
     // MARK: - Observed-state reports (issue #260)
@@ -3009,8 +3117,8 @@ actor AgentService {
 extension AgentService: ReplicaBridgeDelegate {
     /// Holder half of a cross-replica RPC (`ReplicaMessageBridge` hook): run the
     /// forwarded exchange over the locally held socket and await the agent's
-    /// correlated response. `deliverNudge` — the delegate's other half — lives
-    /// with the desired-state sync code above.
+    /// correlated response. `deliverDoorbell` — the delegate's other half —
+    /// lives with the desired-state sync code above.
     func runLocalExchange(
         _ envelope: MessageEnvelope,
         requestId: String,
@@ -3066,7 +3174,7 @@ extension Application {
 /// core teardown is the "Core not configured" CI crash).
 struct AgentServiceLifecycleHandler: LifecycleHandler {
     /// Force creation at boot: the service's heartbeat/sweep loop and — since
-    /// issue #261 — this replica's nudge/RPC channel subscriptions must be
+    /// issue #261 — the doorbell and RPC channel subscriptions must be
     /// live even before the first request or agent connection would have
     /// created it lazily. Runs in `didBootAsync` so the Redis pools the
     /// subscriptions need already exist.

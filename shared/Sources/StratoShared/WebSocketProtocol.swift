@@ -154,6 +154,19 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// registrations from agents that predate host-info reporting decode fine,
     /// and any individual field the agent couldn't probe is absent.
     public let hostInfo: HostInfo?
+    /// Whether this agent fetches its desired state from
+    /// `GET /agent/desired-state` rather than waiting for pushed
+    /// `desired_state` frames (ADR 0001 stage 10). True means "stop pushing to
+    /// me" — the control plane skips this agent in its periodic push pass and
+    /// rings the broadcast doorbell instead of writing to its socket.
+    ///
+    /// Like `sandboxCapable`, speaking the wire version is deliberately not
+    /// sufficient: a v29 agent understands the endpoint but may be pinned to
+    /// push mode by config, and the control plane must not stop pushing to an
+    /// agent that isn't actually polling. Optional so registrations from older
+    /// agents decode fine; absent means push mode, which is the safe default
+    /// in both directions of skew.
+    public let pullsDesiredState: Bool?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -171,7 +184,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         sandboxCapable: Bool? = nil,
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
-        hostInfo: HostInfo? = nil
+        hostInfo: HostInfo? = nil,
+        pullsDesiredState: Bool? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -189,6 +203,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.tpmCapable = tpmCapable
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
+        self.pullsDesiredState = pullsDesiredState
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent

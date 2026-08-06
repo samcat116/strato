@@ -557,7 +557,7 @@ struct FloatingIPController: RouteCollection {
 
         // Push the new NAT desired state to the fleet (the site's controller
         // realizes it); a lost nudge is caught by the periodic sync.
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Floating IP attached",
@@ -595,7 +595,7 @@ struct FloatingIPController: RouteCollection {
             try await network?.save(on: db)
         }
 
-        await req.application.agentService.syncDesiredStateToAllAgents()
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Floating IP detached",

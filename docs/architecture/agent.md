@@ -70,13 +70,35 @@ default) funnels into `launchAgent`.
   shared `SPIFFEVerification` target holds the verifier, which the control
   plane also uses to pin the SPIRE server's identity. See issue #552.
 - **`WebSocketClient`** (actor, executable target): WebSocketKit with a
-  16 MiB max frame (the desired-state sync is one frame; must match the
+  16 MiB max frame (a pushed desired-state sync is one frame; must match the
   control plane), inbound frames decoded and yielded into an `AsyncStream`
   to preserve arrival order, and a connection-scoped 20s heartbeat.
   Connection loss triggers `Agent.runReconnectLoop`: exponential backoff
   (1s → 30s cap, with jitter), re-registering on success; a
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
+- **Desired state arrives by long-poll** (`DesiredStatePoller` in
+  `StratoAgentCore`, STR-146). Against a control plane at wire v29+, and unless
+  `desired_state_pull = false` pins it back, the agent starts a loop over
+  `GET /agent/desired-state` after registration — over
+  `MTLSArtifactDownloader` with the `.longPoll` timeout profile, so the same
+  SVID mTLS transport as image downloads, resolved fresh per request so a
+  rotated SVID needs no re-wiring. A received payload goes straight into
+  `routeInboundMessage`, the same path a pushed frame takes, so it lands on the
+  `.desiredState` serialization lane with the ordering guarantees the
+  reconciler already relies on.
+
+  Most fetches carry `If-None-Match` so the control plane can park them and
+  answer `304`; that is a bandwidth optimization. Every
+  `desired_state_full_refetch_seconds` (default 300) the loop omits the
+  validator entirely and the control plane must answer with a full payload —
+  the correctness invariant, and deliberately a rule rather than a tuning knob.
+  Making *every* request conditional is the natural way to write an HTTP client
+  and is exactly the bug: a wrong server-side "unchanged" would then strand the
+  agent on stale desired state forever, with no error anywhere.
+
+  The WebSocket is still dialed and still carries consoles, exec, log
+  forwarding, heartbeats, and observed state. Only desired state moves.
 
 ## Shutdown
 

@@ -9,7 +9,7 @@ import AppTestSupport
 /// Records what the bridge asks its owner to do, standing in for `AgentService`
 /// so the bridge can be exercised without any real agent sockets.
 private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
-    private(set) var deliveredNudges: [String] = []
+    private(set) var deliveredDoorbells: [String] = []
     private(set) var localExchanges: [String] = []
     private var localExchangeResult: Result<AgentServiceResponse, Error> = .success(.success(nil))
 
@@ -28,8 +28,8 @@ private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
         return try localExchangeResult.get()
     }
 
-    func deliverNudge(agentKey: String) async {
-        deliveredNudges.append(agentKey)
+    func deliverDoorbell(agentKey: String) async {
+        deliveredDoorbells.append(agentKey)
     }
 }
 
@@ -104,21 +104,59 @@ final class ReplicaMessageBridgeTests {
         }
     }
 
-    // MARK: Nudge dispatch
+    // MARK: Doorbell dispatch
 
-    @Test("A real nudge is handed to the delegate")
-    func nudgeDispatchedToDelegate() async throws {
+    @Test("A doorbell from another replica is handed to the delegate")
+    func doorbellDispatchedToDelegate() async throws {
         try await withBridge { bridge, delegate, _, _ in
-            await bridge.handleNudge(agentKey: "agent-x")
-            #expect(await delegate.deliveredNudges == ["agent-x"])
+            await bridge.handleDoorbell(
+                CoordinationService.doorbellPayload(agentKey: "agent-x", fromReplica: "replica-b"))
+            #expect(await delegate.deliveredDoorbells == ["agent-x"])
         }
     }
 
-    @Test("The subscription probe sentinel is consumed, not delegated")
+    /// The publisher runs the local half inline before broadcasting, so acting
+    /// on its own echo would assemble and push the same sync twice.
+    @Test("A doorbell this replica published is ignored")
+    func ownDoorbellEchoIgnored() async throws {
+        try await withBridge { bridge, delegate, _, replicaId in
+            await bridge.handleDoorbell(
+                CoordinationService.doorbellPayload(agentKey: "agent-x", fromReplica: replicaId))
+            #expect(await delegate.deliveredDoorbells.isEmpty)
+        }
+    }
+
+    @Test("Our own subscription probe is consumed, not delegated")
     func probeSentinelNotDelegated() async throws {
+        try await withBridge { bridge, delegate, _, replicaId in
+            await bridge.handleDoorbell(
+                CoordinationService.doorbellPayload(
+                    agentKey: ReplicaMessageBridge.subscriptionProbeMessage, fromReplica: replicaId))
+            #expect(await delegate.deliveredDoorbells.isEmpty)
+            #expect(await bridge.lastSubscriptionProbeRoundTripped == false)
+        }
+    }
+
+    /// The doorbell channel is fleet-wide, so every replica sees every other
+    /// replica's probes. Counting one would make a dead subscription look alive
+    /// on the strength of a neighbor's traffic.
+    @Test("Another replica's probe neither counts nor delegates")
+    func foreignProbeIgnored() async throws {
         try await withBridge { bridge, delegate, _, _ in
-            await bridge.handleNudge(agentKey: ReplicaMessageBridge.subscriptionProbeMessage)
-            #expect(await delegate.deliveredNudges.isEmpty)
+            await bridge.verifySubscriptions()
+            await bridge.handleDoorbell(
+                CoordinationService.doorbellPayload(
+                    agentKey: ReplicaMessageBridge.subscriptionProbeMessage, fromReplica: "replica-b"))
+            #expect(await delegate.deliveredDoorbells.isEmpty)
+            #expect(await bridge.lastSubscriptionProbeRoundTripped == false)
+        }
+    }
+
+    @Test("A malformed doorbell payload is dropped rather than delegated")
+    func malformedDoorbellIgnored() async throws {
+        try await withBridge { bridge, delegate, _, _ in
+            await bridge.handleDoorbell("no-separator-here")
+            #expect(await delegate.deliveredDoorbells.isEmpty)
         }
     }
 

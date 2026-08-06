@@ -46,7 +46,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 28), stamped on
+`WireProtocol.swift` holds the protocol version (currently 29), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -77,6 +77,7 @@ ad-hoc checks scattered through the code:
 | `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
+| `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -299,6 +300,36 @@ progress string, and on failure a `lastError` paired with `failedGeneration` —
 the control plane only fails a pending operation when `failedGeneration`
 matches the current generation, which prevents attributing a stale error to a
 newer change.
+
+### Two transports, one payload (wire v29)
+
+Since v29 the agent normally **fetches** its desired state rather than waiting
+for a pushed frame: a long-poll `GET /agent/desired-state` on the same Envoy
+SVID-mTLS listener that carries image downloads, scoped by the forwarded SVID
+identity exactly as the image-download route is (ADR 0001 stage 10, STR-146).
+
+Nothing about the payload changes. The response body is the same
+`MessageEnvelope` wrapping the same `DesiredStateMessage`, so the agent's decode
+and dispatch path — including reading `senderVersion` off the envelope to tell
+authoritative silence from an old control plane — is identical either way. This
+version gates the *transport*, not the schema.
+
+Which transport an agent gets is per agent, not per fleet:
+`AgentRegisterMessage.pullsDesiredState` says whether it is polling, and the
+control plane stops pushing only when that, the version gate, and its own
+`AGENT_DESIRED_STATE_PULL_ENABLED` kill switch all agree. Speaking v29 is
+deliberately not sufficient on its own, for the same reason `sandboxCapable`
+exists: a v29 build understands the endpoint but may be pinned to push mode.
+
+**Conditional requests are an optimization and never a gate.** The response
+carries an `ETag` (a SHA-256 digest of the assembled payload, with per-assembly
+noise — correlation ids, timestamps, freshly minted registry tokens, re-resolved
+artifact URLs — normalized out). A poll that presents a matching
+`If-None-Match` parks server-side until a doorbell fires or the hold window
+expires, then answers `304`. But the agent re-fetches **unconditionally** on a
+slow timer regardless, sending no validator at all, and the control plane must
+answer that with a full payload. That is the correctness invariant: a wrong
+ETag anywhere can then cost only latency, never convergence.
 
 ### Level-triggered, full-list sync
 

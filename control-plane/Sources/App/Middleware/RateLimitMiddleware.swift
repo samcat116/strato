@@ -228,6 +228,16 @@ struct RateLimitMiddleware: AsyncMiddleware {
         // them out avoids counting a single stream against the per-request budget.
         if request.headers.first(name: .upgrade)?.lowercased() == "websocket" { return nil }
 
+        // The desired-state long-poll (STR-146) is the pull half of the same
+        // agent channel, and is excluded for both of the reasons above at once.
+        // It is long-lived — a parked poll holds a request open for its whole
+        // hold window — and it authenticates by SVID client certificate, so it
+        // never resolves a `User` and would bucket by IP. Every agent's request
+        // arrives from the pod-local Envoy sidecar, so that one bucket is
+        // `ip:127.0.0.1` for the entire fleet: the larger the fleet, the sooner
+        // its own agents throttle each other out of their desired state.
+        if path == "/agent/desired-state" { return nil }
+
         if path.hasPrefix("/auth/") || path == "/api/users/register" {
             return .auth
         }

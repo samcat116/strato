@@ -201,6 +201,20 @@ static_resources:
                                                 # Single-quoted: YAML does no escape processing
                                                 # there, so the backslashes reach RE2 intact.
                                                 regex: 'spiffe://(strato\.local|org-[0-9a-f]{16}\.strato\.local)/agent/.+'
+                        # The agent control channel: the WebSocket at
+                        # /agent/ws and the desired-state long-poll at
+                        # /agent/desired-state (STR-146). Timeout 0: both are
+                        # long-lived by design — the socket for the agent's
+                        # lifetime, and a poll for as long as the control plane
+                        # parks it with nothing to say.
+                        #
+                        # Note that `timeout: 0s` is the *route* timeout only.
+                        # The connection manager's stream_idle_timeout (5 min by
+                        # default, unset here) still applies to a stream with no
+                        # bytes flowing, which is exactly what a parked poll is.
+                        # The 45s hold window in AgentDesiredStateController is
+                        # deliberately well under it; raise that and this needs
+                        # an explicit per-route idle_timeout.
                         - match:
                             prefix: "/agent/"
                           route:
