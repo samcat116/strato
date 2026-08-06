@@ -128,6 +128,96 @@ struct BootstrapCommandTests {
         }
     }
 
+    /// The prose path is what an interactive operator actually reads, and it is
+    /// the only place the claim link appears outside `--quiet`.
+    @Test("The human output carries the claim link, its expiry, and the origin warning")
+    func humanOutputCarriesTheClaimLink() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(app, arguments: ["--admin-email", "ada@example.com"])
+            let output = console.lines.joined(separator: "\n")
+
+            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
+            #expect(output.contains("/claim?token="))
+            #expect(output.contains(Self.expiryText(claim.expiresAt)))
+            #expect(output.contains("WEBAUTHN_RELYING_PARTY_ORIGIN"))
+            #expect(output.contains("register your passkey"))
+            // The headless warning belongs to the other shape only.
+            #expect(!output.contains("cannot log in to the UI"))
+        }
+    }
+
+    @Test("The headless human output still warns that nobody can sign in")
+    func headlessHumanOutputWarns() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(app)
+            let output = console.lines.joined(separator: "\n")
+            #expect(output.contains("cannot log in to the UI"))
+            #expect(output.contains("--admin-email"))
+            #expect(!output.contains("/claim?token="))
+        }
+    }
+
+    /// Deriving `adaci` from `ada+ci@example.com` would seed an account under a
+    /// name the operator never typed and, under `--quiet`, never sees.
+    @Test("A local part needing sanitisation is refused rather than mangled")
+    func mangledLocalPartRefuses() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada+ci@example.com"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
+    @Test("--no-api-key seeds a passkey-only administrator")
+    func noAPIKeySkipsTheKey() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(
+                app, arguments: ["--quiet", "--no-api-key", "--admin-email", "ada@example.com"])
+
+            let keyCount = try await APIKey.query(on: app.db).count()
+            #expect(keyCount == 0)
+            // Quiet output is one secret per line, so only the claim URL remains.
+            #expect(console.lines.count == 1)
+            #expect(try #require(console.lines.first).contains("/claim?token="))
+        }
+    }
+
+    /// Neither passkey nor key would leave the seeded admin unreachable — the
+    /// STR-178 failure, made worse.
+    @Test("--no-api-key without --admin-email is refused")
+    func noAPIKeyWithoutHumanRefuses() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.UnreachableSeedError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--no-api-key"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
+    @Test("--admin-email refuses on a populated deployment too")
+    func adminEmailRefusesWhenUsersExist() async throws {
+        try await withTestApp { app in
+            let existing = User(username: "someone", email: "someone@example.com", displayName: "Someone")
+            try await existing.save(on: app.db)
+
+            await #expect(throws: BootstrapCommand.RefusedError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada@example.com"])
+            }
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    private static func expiryText(_ date: Date?) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm 'UTC'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: date ?? Date())
+    }
+
     @Test("--admin-email and --email are mutually exclusive")
     func conflictingEmailFlagsRefuse() async throws {
         try await withTestApp { app in

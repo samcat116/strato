@@ -20,6 +20,13 @@ import Vapor
 /// `--claim` covers the other half of the lockout: an account with no passkey
 /// (a `bootstrap`-seeded automation identity, or an invite whose link was lost)
 /// cannot sign in at all, so the command can mint a fresh claim link for it.
+/// It is refused for an account that already has a passkey, one that is
+/// disabled, and one provisioned by OIDC or SCIM — in each case the invite
+/// would be useless at best and a lockout at worst.
+///
+/// Every run writes an `iam.platform_admin_granted` audit event. Observability
+/// is most of what a named command buys over the raw SQL, so it is not
+/// optional: the record is flushed before the command returns.
 struct GrantPlatformAdminCommand: AsyncCommand {
     struct Signature: CommandSignature {
         @Option(name: "email", help: "Email of the existing account to promote")
@@ -33,7 +40,9 @@ struct GrantPlatformAdminCommand: AsyncCommand {
             help: "Also mint a one-time claim link, for an account that has no passkey yet")
         var claim: Bool
 
-        @Flag(name: "quiet", short: "q", help: "Print only the claim URL on stdout (implies --claim)")
+        @Flag(
+            name: "quiet", short: "q",
+            help: "Suppress prose; with --claim, print only the claim URL on stdout")
         var quiet: Bool
     }
 
@@ -69,10 +78,32 @@ struct GrantPlatformAdminCommand: AsyncCommand {
         }
     }
 
+    struct DisabledAccountError: Error, CustomStringConvertible {
+        let username: String
+        var description: String {
+            """
+            grant-platform-admin refused: '\(username)' is disabled, and every claim endpoint \
+            rejects a disabled account — the link would be dead on arrival. Re-enable the account \
+            first.
+            """
+        }
+    }
+
+    struct NonLocalAccountError: Error, CustomStringConvertible {
+        let username: String
+        let source: String
+        var description: String {
+            """
+            grant-platform-admin refused: '\(username)' is provisioned by \(source), so a local \
+            passkey invite is not how it signs in. Promote it without --claim and have them \
+            authenticate through their identity provider.
+            """
+        }
+    }
+
     func run(using context: CommandContext, signature: Signature) async throws {
         let app = context.application
         let console = context.console
-        let wantsClaim = signature.claim || signature.quiet
 
         guard (signature.email == nil) != (signature.username == nil) else { throw SelectorError() }
 
@@ -89,22 +120,35 @@ struct GrantPlatformAdminCommand: AsyncCommand {
         guard let user = try await query.first() else { throw NotFoundError(selector: selector) }
         let userID = try user.requireID()
 
-        // Minting an invite for an account that can already sign in is not a
-        // no-op: `/auth/register/begin` refuses any account holding an
-        // unclaimed token, so this would take away the passkey path it was
-        // meant to restore.
-        if wantsClaim {
-            let credentialCount = try await UserCredential.query(on: app.db)
-                .filter(\.$user.$id == userID)
-                .count()
-            guard credentialCount == 0 else { throw AlreadyEnrolledError(username: user.username) }
+        if signature.claim {
+            // Both mirror gates the claim endpoints apply, refused here so the
+            // operator finds out now rather than from a link that 4xx's mid-outage:
+            // `claimBegin`/`claimFinish` call `rejectDisabledAccount`, and a
+            // local passkey invite is not how an OIDC/SCIM identity signs in.
+            guard user.disabledAt == nil else { throw DisabledAccountError(username: user.username) }
+            guard user.source == .local else {
+                throw NonLocalAccountError(username: user.username, source: user.source.rawValue)
+            }
         }
 
-        let claimToken = wantsClaim ? AccountClaimToken.generateToken() : nil
+        let claimToken = signature.claim ? AccountClaimToken.generateToken() : nil
         let claimExpiresAt = Date().addingTimeInterval(UserController.claimTokenTTL)
         let wasAlreadyAdmin = user.isSystemAdmin
 
         try await app.db.transaction { db in
+            // The enrollment check belongs *inside* the transaction that mints.
+            // Read outside it, a concurrent claim or self-registration could
+            // enroll the account's first credential in the gap, and this would
+            // then write an unclaimed invite onto an account that now has a
+            // passkey — `beginRegistration` refuses those, so the recovery
+            // command would itself cause the lockout it exists to undo.
+            if signature.claim {
+                let credentialCount = try await UserCredential.query(on: db)
+                    .filter(\.$user.$id == userID)
+                    .count()
+                guard credentialCount == 0 else { throw AlreadyEnrolledError(username: user.username) }
+            }
+
             user.isSystemAdmin = true
             try await user.save(on: db)
 
@@ -128,8 +172,34 @@ struct GrantPlatformAdminCommand: AsyncCommand {
             }
         }
 
-        if signature.quiet, let claimToken {
-            console.print(UserController.claimURL(for: claimToken))
+        // The highest-privilege mutation in the system, made outside the
+        // evaluator — so the trail is the only thing that can answer "who
+        // granted this, and when" afterwards. Flushed explicitly rather than
+        // left to shutdown ordering: a one-shot command must not depend on the
+        // retention handler running to persist its own record.
+        await app.audit.record(
+            AuditRecord(
+                eventType: "iam.platform_admin_granted",
+                userID: userID,
+                username: user.username,
+                resourceType: "user",
+                resourceID: userID.uuidString,
+                action: "grant",
+                adminBypass: true,
+                metadata: [
+                    "via": "cli",
+                    "already_admin": String(wasAlreadyAdmin),
+                    "claim_minted": String(claimToken != nil),
+                ]))
+        await app.audit.flush(waitingUpTo: .seconds(5))
+
+        if signature.quiet {
+            // A pure output modifier, as in `bootstrap`: it never changes what
+            // the command does, so a scripted promotion without --claim simply
+            // prints nothing.
+            if let claimToken {
+                console.print(UserController.claimURL(for: claimToken))
+            }
             return
         }
 

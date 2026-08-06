@@ -1067,7 +1067,11 @@ extension UserController {
     /// Characters allowed in a username. Kept conservative (and free of `@`,
     /// spaces, and path/URL punctuation) because the username is a login
     /// identifier that travels through URLs and the WebAuthn user entity.
-    private static let usernameAllowedCharacters = CharacterSet(
+    ///
+    /// Not `private`: `BootstrapCommand` derives a username from an email
+    /// address and must decide against the same set. A second copy there could
+    /// silently strip characters this one had started accepting.
+    static let usernameAllowedCharacters = CharacterSet(
         charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
     /// Trims and validates a username, returning the value to store.

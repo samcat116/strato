@@ -55,8 +55,13 @@ docker compose run --rm bootstrap        # human-readable
 docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
 ```
 
-With `--admin-email`, `--quiet` prints the API key on the first line and the
-claim URL on the second.
+`--quiet` prints one secret per line: the API key, then the claim URL if one
+was minted.
+
+On the `--admin-email` path the passkey is your credential, so the API key is
+an extra long-lived admin secret you may not want in scrollback — add
+`--no-api-key` to skip it. (It is refused without `--admin-email`, which would
+leave the seeded admin with no way in at all.)
 
 The command hard-refuses when any user already exists, and the key is printed
 exactly once. The claim link is single-use and valid for seven days; its origin
@@ -70,18 +75,33 @@ expired, promote an existing account from the control-plane container:
 
 ```bash
 # promote someone who can already sign in
-docker compose exec control-plane App grant-platform-admin --email you@example.com
+docker compose run --rm bootstrap grant-platform-admin \
+  --email you@example.com --env production
 
 # ...or promote and mint a fresh passkey link for an account that has none
-docker compose exec control-plane App grant-platform-admin \
-  --email bootstrap@localhost --claim
+docker compose run --rm bootstrap grant-platform-admin \
+  --email bootstrap@localhost --claim --env production
 ```
 
-`--claim` is refused for an account that already has a passkey: an unclaimed
+The `bootstrap` service is just a one-shot control-plane container with the
+same environment, so it is the right place to run any `App` subcommand. Prefer
+it over `docker compose exec control-plane`, which would boot a second full
+Vapor app — migrations, lifecycle handlers and all — inside the container that
+is serving traffic. (If you do use `exec`, the binary is `./App`: the image's
+`ENTRYPOINT` is what normally supplies it, and `exec` bypasses that.)
+
+`--claim` is refused for an account that already has a passkey — an unclaimed
 invite blocks passkey enrollment, so minting one would take away the sign-in it
-was meant to restore. The command runs on a populated deployment (unlike
-`bootstrap`) and its only guard is shell access to the control plane, which is
-the same trust level a direct database write already needed.
+was meant to restore — and likewise for a disabled account or one provisioned
+by OIDC/SCIM, where the link would be dead on arrival. The command runs on a
+populated deployment (unlike `bootstrap`), writes an
+`iam.platform_admin_granted` audit event, and its only guard is shell access to
+the control plane, which is the same trust level a direct database write
+already needed.
+
+This recovery path is currently documented for Docker Compose only; on
+Kubernetes, run the same subcommand in a control-plane pod
+(`kubectl exec deploy/strato-control-plane -- ./App grant-platform-admin …`).
 
 ### With a real hostname
 

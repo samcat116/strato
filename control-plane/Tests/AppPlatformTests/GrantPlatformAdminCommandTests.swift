@@ -62,7 +62,8 @@ struct GrantPlatformAdminCommandTests {
         try await withTestApp { app in
             let user = try await makeUser(app)
 
-            let console = try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
+            let console = try await run(
+                app, arguments: ["--claim", "--quiet", "--email", "morpheus@example.com"])
 
             #expect(console.lines.count == 1)
             let claimURL = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,7 +73,8 @@ struct GrantPlatformAdminCommandTests {
             #expect(claim.tokenHash == AccountClaimToken.hashToken(rawToken))
             #expect(claim.$user.id == user.id)
             #expect(claim.isValid)
-            #expect(try #require(try await User.find(user.id, on: app.db)).isSystemAdmin)
+            let promoted = try #require(try await User.find(user.id, on: app.db))
+            #expect(promoted.isSystemAdmin)
         }
     }
 
@@ -91,7 +93,7 @@ struct GrantPlatformAdminCommandTests {
             )
             try await stale.save(on: app.db)
 
-            try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
+            try await run(app, arguments: ["--claim", "--quiet", "--email", "morpheus@example.com"])
 
             let live = try await AccountClaimToken.query(on: app.db).all()
             #expect(live.count == 1)
@@ -117,8 +119,99 @@ struct GrantPlatformAdminCommandTests {
             }
             // Refusal is total: no promotion either, so the operator retries
             // deliberately rather than discovering a half-applied change.
-            #expect(!(try #require(try await User.find(user.id, on: app.db))).isSystemAdmin)
-            #expect(try await AccountClaimToken.query(on: app.db).count() == 0)
+            let untouched = try #require(try await User.find(user.id, on: app.db))
+            #expect(!untouched.isSystemAdmin)
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    /// `--quiet` is an output modifier, not a mode switch: a scripted plain
+    /// promotion must work and must not mint anything.
+    @Test("--quiet without --claim promotes silently and mints nothing")
+    func quietWithoutClaimIsPurelyOutput() async throws {
+        try await withTestApp { app in
+            let user = try await makeUser(app)
+
+            let console = try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
+
+            #expect(console.lines.isEmpty)
+            let promoted = try #require(try await User.find(user.id, on: app.db))
+            #expect(promoted.isSystemAdmin)
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    /// The sharp edge of the old coupling: quiet promotion of an already-enrolled
+    /// account used to hard-fail with no promotion at all.
+    @Test("--quiet promotes an enrolled account instead of refusing")
+    func quietPromotesEnrolledAccount() async throws {
+        try await withTestApp { app in
+            let user = try await makeUser(app)
+            let credential = UserCredential(
+                userID: try user.requireID(),
+                credentialID: Data("credential".utf8),
+                publicKey: Data("key".utf8)
+            )
+            try await credential.save(on: app.db)
+
+            try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
+
+            let promoted = try #require(try await User.find(user.id, on: app.db))
+            #expect(promoted.isSystemAdmin)
+        }
+    }
+
+    /// Every claim endpoint calls `rejectDisabledAccount`, so the link would be
+    /// dead on arrival — better to say so now than mid-outage.
+    @Test("--claim refuses a disabled account")
+    func claimRefusesDisabledAccount() async throws {
+        try await withTestApp { app in
+            let user = try await makeUser(app)
+            user.disabledAt = Date()
+            try await user.save(on: app.db)
+
+            await #expect(throws: GrantPlatformAdminCommand.DisabledAccountError.self) {
+                try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
+            }
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    /// A local passkey invite is not how an OIDC or SCIM identity signs in.
+    @Test("--claim refuses a non-local account")
+    func claimRefusesNonLocalAccount() async throws {
+        try await withTestApp { app in
+            let user = try await makeUser(app)
+            user.source = .oidc
+            try await user.save(on: app.db)
+
+            await #expect(throws: GrantPlatformAdminCommand.NonLocalAccountError.self) {
+                try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
+            }
+            // Promotion itself stays available for federated identities.
+            try await run(app, arguments: ["--email", "morpheus@example.com"])
+            let promoted = try #require(try await User.find(user.id, on: app.db))
+            #expect(promoted.isSystemAdmin)
+        }
+    }
+
+    @Test("Every run writes an audit event naming what it did")
+    func writesAnAuditEvent() async throws {
+        try await withTestApp { app in
+            let user = try await makeUser(app)
+            try await run(app, arguments: ["--claim", "--quiet", "--email", "morpheus@example.com"])
+
+            let event = try #require(
+                try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == "iam.platform_admin_granted")
+                    .first())
+            #expect(event.userID == user.id)
+            #expect(event.resourceID == user.id?.uuidString)
+            #expect(event.metadata?["claim_minted"] == "true")
+            #expect(event.metadata?["already_admin"] == "false")
         }
     }
 
@@ -153,7 +246,8 @@ struct GrantPlatformAdminCommandTests {
 
             let console = try await run(app, arguments: ["--email", "oracle@example.com"])
 
-            #expect(try #require(try await User.find(user.id, on: app.db)).isSystemAdmin)
+            let promoted = try #require(try await User.find(user.id, on: app.db))
+            #expect(promoted.isSystemAdmin)
             #expect(console.lines.contains { $0.contains("was already a system administrator") })
         }
     }
