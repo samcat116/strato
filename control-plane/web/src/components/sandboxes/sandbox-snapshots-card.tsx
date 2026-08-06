@@ -19,7 +19,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useSandboxSnapshots } from "@/lib/hooks";
-import { useOperationsStore } from "@/lib/stores/operations-store";
+import {
+  acceptedMutation,
+  acceptedOperation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
 import { formatMemory } from "./format";
@@ -28,7 +32,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();
   const { data: snapshots, isLoading, error } = useSandboxSnapshots(sandbox.id);
   const { currentProject } = useProjectContext();
-  const watch = useOperationsStore((state) => state.watch);
+  const watch = useMutationsStore((state) => state.watch);
   const [selected, setSelected] = useState<SandboxSnapshot | null>(null);
   const [name, setName] = useState("");
   const [isForking, setIsForking] = useState(false);
@@ -49,7 +53,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
         sandbox.id,
         snapshot.id
       );
-      watch(operation, `${snapshot.name} export`);
+      watch(acceptedOperation(operation, `${snapshot.name} export`));
       toast.success(`Exporting snapshot "${snapshot.name}"`);
     } catch (exportError) {
       toast.error(
@@ -68,15 +72,23 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
 
     setIsForking(true);
     try {
-      const operation = await sandboxesApi.create({
+      // A fork is an ordinary sandbox create, so it answers with the new
+      // sandbox rather than an operation.
+      const accepted = await sandboxesApi.create({
         name: name.trim(),
         restoreFrom: selected.id,
         projectId: currentProject?.id ?? sandbox.projectId,
       });
-      watch(operation, name.trim());
+      watch(
+        acceptedMutation(accepted, {
+          kind: "create",
+          resourceKind: "sandbox",
+          resourceName: name.trim(),
+        })
+      );
       toast.success(`Forking sandbox "${name.trim()}"`);
       setSelected(null);
-      router.push(`/sandboxes/detail?id=${operation.resourceId}`);
+      router.push(`/sandboxes/detail?id=${accepted.resource.id}`);
     } catch (forkError) {
       toast.error(
         forkError instanceof Error ? forkError.message : "Failed to fork sandbox"

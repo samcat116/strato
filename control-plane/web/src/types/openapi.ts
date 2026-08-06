@@ -119,7 +119,7 @@ export interface paths {
         put?: never;
         /**
          * Create a virtual machine
-         * @description Records the VM and a pending `create` operation, returning the operation to poll. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
+         * @description Records the VM and returns it with the generation it is converging on; refetch it until its `conditions` report `converged`. `networkId`/`networkName` and `securityGroupIds` are resolved within the VM's own project: one naming something outside it is reported as `404`, not as a distinct cross-project refusal, since ids are opaque and names are per-project — confirming that one exists elsewhere would disclose another tenant's resources.
          */
         post: operations["createVM"];
         delete?: never;
@@ -148,7 +148,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a virtual machine
-         * @description Sets desired state to absent and returns a pending `delete` operation.
+         * @description Sets desired state to absent. The row survives until every finalizer clears, so poll `GET /api/operations/{operationID}` with the returned `mutationId` rather than the VM: once the VM is gone, a `404` on it is indistinguishable from never-existed and not-authorized.
          */
         delete: operations["deleteVM"];
         options?: never;
@@ -435,7 +435,10 @@ export interface paths {
          */
         put: operations["updateSandbox"];
         post?: never;
-        /** Delete a sandbox */
+        /**
+         * Delete a sandbox
+         * @description Sets desired state to absent. Poll `GET /api/operations/{operationID}` with the returned `mutationId` rather than the sandbox — see `deleteVM` for why.
+         */
         delete: operations["deleteSandbox"];
         options?: never;
         head?: never;
@@ -5078,7 +5081,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal. */
+        /**
+         * @description The body of a `202` from a VM lifecycle mutation. The VM as the mutation left it, plus the generation it now has to converge on.
+         *
+         *     Done means the VM's `conditions` report `converged` with `observedGeneration >= targetGeneration`; failed means `conditions.degraded.sinceGeneration == targetGeneration`, with the agent's reason. Both are readable from `GET /api/vms/{vmID}` — no operation object is involved.
+         *
+         *     `mutationId` names the audit record of the request, and is what `GET /api/operations/{operationID}` answers for. Its one *necessary* use is `deleteVM`: a delete succeeds by the VM ceasing to exist, and a client polling the VM would see a `404` that means deleted, never-existed and not-authorized alike.
+         */
+        AcceptedVMMutation: {
+            resource: components["schemas"]["VMDetail"];
+            /**
+             * Format: int64
+             * @description The generation the VM's `observedGeneration` must reach.
+             */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /** @description The body of a `202` from a sandbox lifecycle mutation — the sandbox counterpart of `AcceptedVMMutation`, with the same contract. */
+        AcceptedSandboxMutation: {
+            resource: components["schemas"]["SandboxDetail"];
+            /**
+             * Format: int64
+             * @description The generation the sandbox's `observedGeneration` must reach.
+             */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /**
+         * @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
+         *
+         *     Served from two sources. The verbs still dispatched as imperative agent commands — VM restart, and every snapshot verb — have real operation records. Everything else is synthesized on read from the mutation's audit record and the resource's `conditions`, so a client written against the older contract keeps working; those responses report no `completedAt` except for a completed delete.
+         */
         ResourceOperation: {
             /** Format: uuid */
             id?: string;
@@ -8800,6 +8835,24 @@ export interface components {
                 "application/json": components["schemas"]["ResourceOperation"];
             };
         };
+        /** @description The mutation was accepted. Refetch the VM until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedVMMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedVMMutation"];
+            };
+        };
+        /** @description The mutation was accepted. Refetch the sandbox until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedSandboxMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedSandboxMutation"];
+            };
+        };
         /** @description The log backend (Loki) could not be queried. */
         LogBackendUnavailable: {
             headers: {
@@ -9147,7 +9200,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9207,7 +9260,7 @@ export interface operations {
                     "application/json": components["schemas"]["VMDetail"];
                 };
             };
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9234,7 +9287,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9254,7 +9307,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9274,7 +9327,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9314,7 +9367,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9334,7 +9387,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9567,7 +9620,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9644,7 +9697,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9664,7 +9717,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9684,7 +9737,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9704,7 +9757,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

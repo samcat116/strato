@@ -7,10 +7,12 @@ import StratoShared
 import AppTestSupport
 @testable import App
 
-/// Tests for asynchronous VM operations (issue #259): mutation endpoints return
-/// `202 Accepted` with an operation record, agent failures land on the operation
-/// instead of vanishing, conflicting mutations are rejected with `409`, and the
-/// stuck-operation sweep resolves operations that survive a process restart.
+/// Tests for asynchronous VM operations (issue #259), as ADR 0001 stage 4
+/// left them (STR-147): lifecycle mutations return `202 Accepted` with
+/// `{resource, targetGeneration, mutationId}` and are judged by the VM's own
+/// `conditions`, the operations API keeps answering for them as a façade, and
+/// the stuck-operation sweep still covers the imperative verbs that kept their
+/// rows.
 @Suite("VM Operation Tests", .serialized)
 final class VMOperationTests {
 
@@ -71,52 +73,62 @@ final class VMOperationTests {
         Issue.record("VM \(vmID) never reached status \(expected.rawValue)")
     }
 
-    /// Waits for the background dispatch task to complete the operation. The
-    /// operation row and the VM row are written separately, so tests must poll
-    /// the row they assert on — a VM-status poll does not order the operation
-    /// write.
-    private func pollOperationCompleted(
-        _ operationId: UUID, on db: any Database
-    ) async throws -> ResourceOperation? {
+    /// Waits for the background dispatch to degrade the VM, returning its
+    /// `conditions`. The `202` returns before the dispatch runs, so a test
+    /// asserting on the outcome has to poll the row it asserts on.
+    private func pollDegraded(_ vmID: UUID, on db: any Database) async throws -> ResourceConditions? {
         for _ in 0..<100 {
-            if let operation = try await ResourceOperation.find(operationId, on: db),
-                operation.status != .pending
-            {
-                return operation
+            if let vm = try await VM.find(vmID, on: db), vm.conditions.degraded != nil {
+                return vm.conditions
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("Operation \(operationId) never completed")
+        Issue.record("VM \(vmID) never went degraded")
         return nil
     }
 
     // MARK: - 202 + async failure recording
 
-    @Test("POST /api/vms/:id/start returns 202 and records the dispatch failure on the operation")
-    func startReturnsAcceptedAndFailsWithoutAgent() async throws {
+    @Test("POST /api/vms/:id/start returns 202 with the VM and its target generation")
+    func startReturnsAcceptedAndDegradesWithoutAgent() async throws {
         try await withVMTestApp { app, _, vm, token in
-            var operationId: UUID?
+            var accepted: AcceptedMutation<VMDetailResponse>?
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                let operation = try res.content.decode(OperationResponse.self)
-                #expect(operation.kind == .boot)
-                #expect(operation.status == .pending)
-                #expect(operation.vmId == vm.id)
-                operationId = operation.id
+                let body = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                #expect(body.resource.id == vm.id)
+                // The generation the client waits for is the one the mutation
+                // just wrote, and the VM has not reached it yet.
+                #expect(body.targetGeneration == body.resource.conditions.targetGeneration)
+                #expect(!body.resource.conditions.converged)
+                accepted = body
             }
+            let body = try #require(accepted)
 
             // No agent is mapped to the VM, so the background dispatch fails
-            // immediately: the operation must record it and the VM must be
-            // restored to its pre-operation status (not left `.starting`).
-            let operation = try await pollOperationCompleted(operationId!, on: app.db)
-            #expect(operation?.status == .failed)
-            #expect(operation?.error?.isEmpty == false)
-            #expect(operation?.completedAt != nil)
+            // immediately: the VM must go degraded at this generation and be
+            // restored to its pre-mutation status (not left `.starting`).
+            let conditions = try await pollDegraded(vm.id!, on: app.db)
+            #expect(conditions?.degraded?.sinceGeneration == body.targetGeneration)
+            #expect(conditions?.degraded?.reason.isEmpty == false)
 
             try await pollVMStatus(vm.id!, until: .created, on: app.db)
+
+            // And the operations façade reports the same thing to a client that
+            // still polls the old way.
+            try await app.test(.GET, "/api/operations/\(body.mutationId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.kind == .boot)
+                #expect(operation.status == .failed)
+                #expect(operation.vmId == vm.id)
+                #expect(operation.error?.isEmpty == false)
+            }
         }
     }
 
@@ -143,18 +155,30 @@ final class VMOperationTests {
 
             // Unplaced VM, so the delete resolves directly instead of waiting
             // for an agent to confirm absence.
-            var operationId: UUID?
+            var mutationId: UUID?
             try await app.test(.DELETE, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operationId = try res.content.decode(OperationResponse.self).id
+                mutationId = try res.content.decode(AcceptedMutation<VMDetailResponse>.self).mutationId
             }
 
-            let operation = try await self.pollOperationCompleted(operationId!, on: app.db)
-            #expect(operation?.status == .succeeded)
+            try await self.pollVMRemoved(vmID, on: app.db)
             let gone = try await VM.find(vmID, on: app.db)
             #expect(gone == nil)
+
+            // The delete's completion signal: the reap appended a terminal
+            // event, and the façade answers `succeeded` off it — the one thing
+            // `conditions` cannot say, because the resource is gone.
+            try await app.test(.GET, "/api/operations/\(mutationId!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.kind == .delete)
+                #expect(operation.status == .succeeded)
+                #expect(operation.completedAt != nil)
+            }
 
             let vmBindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
@@ -169,23 +193,40 @@ final class VMOperationTests {
         }
     }
 
-    // MARK: - Conflict guard
+    /// Waits for the background dispatch to reap the deleted row.
+    private func pollVMRemoved(_ vmID: UUID, on db: any Database) async throws {
+        for _ in 0..<100 {
+            if try await VM.find(vmID, on: db) == nil { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("VM \(vmID) was never removed")
+    }
 
-    @Test("A pending operation on the VM rejects a new mutation with 409")
-    func conflictingPendingOperationRejected() async throws {
+    // MARK: - The dropped mutex
+
+    @Test("A pending snapshot operation no longer blocks a lifecycle mutation")
+    func pendingOperationDoesNotBlockLifecycleMutation() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let pending = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            // A checkpoint in flight: still an operation row, because it is an
+            // imperative agent RPC with no generation to converge on.
+            let pending = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .snapshot)
             try await pending.save(on: app.db)
 
+            // Starting the VM is a level-triggered desired-state write, so it
+            // is accepted rather than refused with the `409` the operation
+            // mutex used to produce (STR-147).
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
 
-            // The rejected mutation must not have touched the VM.
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.status == .created)
+            // The boot was recorded and bumped a generation of its own; what
+            // the background dispatch then does with an unplaced VM is the
+            // subject of `startReturnsAcceptedAndDegradesWithoutAgent`.
+            let boot = try await ResourceEvent.latest(
+                .requested, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.db)
+            #expect(boot?.mutation == .boot)
         }
     }
 
@@ -509,6 +550,253 @@ final class VMOperationTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
+        }
+    }
+
+    // MARK: - The operations façade (STR-147)
+
+    /// Records a mutation the way `ResourceMutation` does, without the dispatch.
+    private func record(
+        _ kind: VMOperationKind, on vm: VM, by user: User, on db: any Database
+    ) async throws -> ResourceEvent {
+        try await ResourceEvent.record(
+            kind, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+            actor: .user(try user.requireID()), on: db)
+    }
+
+    @Test("The façade reports pending, then succeeded, as the VM converges")
+    func facadeFollowsConvergence() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: app.db)
+            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            let eventID = try event.requireID()
+
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .pending)
+                #expect(operation.kind == .boot)
+            }
+
+            // The agent converges: observed generation reaches the target and
+            // the observed status satisfies the desired one.
+            vm.observedGeneration = vm.generation
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .succeeded)
+            }
+        }
+    }
+
+    @Test("The façade reports failed when the VM is degraded at the mutation's generation")
+    func facadeReportsDegradedAsFailed() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: app.db)
+            let event = try await record(.boot, on: vm, by: user, on: app.db)
+
+            vm.lastError = "image download failed"
+            vm.failedGeneration = vm.generation
+            try await vm.save(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .failed)
+                #expect(operation.error == "image download failed")
+            }
+        }
+    }
+
+    @Test("A superseded mutation reads as succeeded, not pending forever")
+    func facadeReportsSupersededAsSucceeded() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            vm.setDesiredStatus(.running)
+            try await vm.save(on: app.db)
+            let event = try await record(.boot, on: vm, by: user, on: app.db)
+
+            // The agent reached this mutation's generation, and a newer
+            // mutation has already moved the target on. The old one is not
+            // pending — the reconciler is past it.
+            vm.observedGeneration = vm.generation
+            vm.setDesiredStatus(.shutdown)
+            try await vm.save(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .succeeded)
+            }
+        }
+    }
+
+    @Test("A delete is visible to its initiator after the VM is gone, and hidden from others")
+    func facadeAnswersDeleteAfterTheRowIsGone() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let vmID = try vm.requireID()
+            ResourceFinalizerService.stampForDeletion(vm)
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            let eventID = try event.requireID()
+
+            // Still terminating: not done.
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .pending)
+            }
+
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .succeeded)
+                #expect(operation.completedAt != nil)
+            }
+
+            // 404 rather than 403 for a stranger, so the mutation's existence
+            // is not leaked now that there is no resource to authorize against.
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "facade-outsider", email: "facade-outsider@example.com")
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("A terminal event is not addressable as an operation of its own")
+    func facadeRefusesTerminalEventIds() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let terminal = try await ResourceEvent.record(
+                .delete, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), phase: .completed, on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(try terminal.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("GET /api/vms/:id/operations merges recorded mutations with operation rows")
+    func historyMergesBothSources() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let snapshotOp = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .snapshot)
+            snapshotOp.status = .succeeded
+            try await snapshotOp.save(on: app.db)
+            snapshotOp.createdAt = Date().addingTimeInterval(-60)
+            try await snapshotOp.save(on: app.db)
+
+            _ = try await record(.boot, on: vm, by: user, on: app.db)
+
+            try await app.test(.GET, "/api/vms/\(vm.id!)/operations") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operations = try res.content.decode([OperationResponse].self)
+                #expect(operations.map(\.kind) == [.boot, .snapshot])
+            }
+        }
+    }
+
+    // MARK: - Stuck-convergence sweep (STR-147)
+
+    @Test("The sweep degrades a VM past its convergence deadline")
+    func sweepDegradesOverdueConvergence() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            vm.setDesiredStatus(.running)
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await record(.boot, on: vm, by: user, on: app.db)
+
+            await app.agentService.sweepStuckConvergence()
+
+            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(swept.conditions.degraded?.reason.contains("Timed out") == true)
+            // One behind the target: abandoning the unachieved intent is itself
+            // a desired-state change, so the revert bumped the generation past
+            // the one that failed.
+            #expect(swept.conditions.degraded?.sinceGeneration == swept.generation - 1)
+            // The deadline is cleared, so the row drops out of the next scan.
+            #expect(swept.convergenceDeadline == nil)
+            // The unachieved intent is abandoned rather than left to replay.
+            #expect(swept.desiredStatus == .shutdown)
+        }
+    }
+
+    @Test("The sweep is idempotent, so every replica can run it lock-free")
+    func sweepIsIdempotent() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            vm.setDesiredStatus(.running)
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await record(.boot, on: vm, by: user, on: app.db)
+
+            await app.agentService.sweepStuckConvergence()
+            let first = try #require(try await VM.find(vm.id, on: app.db))
+            let generation = first.generation
+            let reason = first.lastError
+
+            // A second pass — the other replica's, or the next tick's — finds
+            // the deadline already claimed and changes nothing.
+            await app.agentService.sweepStuckConvergence()
+
+            let second = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(second.generation == generation)
+            #expect(second.lastError == reason)
+        }
+    }
+
+    @Test("The sweep leaves a VM that converged before its deadline alone")
+    func sweepIgnoresConvergedVM() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            vm.setDesiredStatus(.shutdown)
+            vm.observedGeneration = vm.generation
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+
+            await app.agentService.sweepStuckConvergence()
+
+            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(swept.conditions.degraded == nil)
+            #expect(swept.convergenceDeadline == nil)
+        }
+    }
+
+    @Test("A stuck delete degrades without resurrecting the VM")
+    func sweepDoesNotRevertATerminatingVM() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            ResourceFinalizerService.stampForDeletion(vm)
+            vm.setDesiredStatus(.absent)
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await record(.delete, on: vm, by: user, on: app.db)
+
+            await app.agentService.sweepStuckConvergence()
+
+            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(swept.conditions.degraded != nil)
+            // `.absent` is the one intent never abandoned: reverting it would
+            // resurrect a VM the user deleted.
+            #expect(swept.desiredStatus == .absent)
         }
     }
 }

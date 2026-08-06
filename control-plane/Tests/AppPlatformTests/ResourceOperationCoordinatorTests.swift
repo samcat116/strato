@@ -9,7 +9,7 @@ import AppTestSupport
 /// Fake `AgentDispatch` for driving the operation lifecycle through the
 /// coordinator's own interface — no HTTP round-trip, no agent socket, no
 /// `forTesting` back-doors. Records what the coordinator asked the agent to do.
-private actor FakeAgentDispatch: AgentDispatch {
+actor FakeAgentDispatch: AgentDispatch {
     var online: Bool
     var response: AgentServiceResponse
     private(set) var syncedAgentIds: [String] = []
@@ -32,10 +32,15 @@ private actor FakeAgentDispatch: AgentDispatch {
     }
 }
 
-/// Exercises `ResourceOperationCoordinator` directly: begin → dispatch (by
-/// strategy) → verdict, with a fake agent seam and a template-clone database.
-/// This is the seam the operation lifecycle previously lacked — the same logic
-/// used to be `private static` on the controllers, reachable only through HTTP.
+/// Exercises `ResourceOperationCoordinator` directly: begin → dispatch →
+/// verdict, with a fake agent seam and a template-clone database.
+///
+/// Its remit shrank with STR-147 — the state-sync, placement and
+/// direct-resolution strategies moved to `ResourceMutation` along with the
+/// lifecycle mutations, and are covered by `ResourceMutationTests`. What is
+/// left is what still has no generation to converge on: the imperative
+/// `awaitingResponse` dispatch (VM reboot), the verdict choke point the
+/// snapshot verbs share, and the double-submit guard that still protects them.
 @Suite("Resource Operation Coordinator", .serialized)
 final class ResourceOperationCoordinatorTests {
     /// Boots a configured test app with an org, project, and one VM. The
@@ -82,94 +87,6 @@ final class ResourceOperationCoordinatorTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("perform(.stateSync) on an online agent applies the mutation, nudges, and leaves the op pending")
-    func stateSyncOnlineNudges() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: true)
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: "agent-1", dispatch: .stateSync, on: app.db, app: app
-            ) { db in
-                vm.setDesiredStatus(.running)
-                try await vm.save(on: db)
-            }
-            #expect(operation.status == .pending)
-
-            // The mutation committed atomically with the operation record.
-            let reloadedVM = try await VM.find(vmID, on: app.db)
-            let desired = reloadedVM?.desiredStatus
-            #expect(desired == .running)
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            // The owning agent was nudged; the success verdict is deferred to the
-            // observed-state applier, so the operation is still pending.
-            let synced = await fake.syncedAgentIds
-            #expect(synced == ["agent-1"])
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .pending)
-        }
-    }
-
-    @Test("perform(.stateSync) on an offline agent fails the operation")
-    func stateSyncOfflineFails() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: false)
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: "agent-1", dispatch: .stateSync, on: app.db, app: app
-            ) { db in
-                vm.setDesiredStatus(.running)
-                try await vm.save(on: db)
-            }
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .failed)
-            let error = reloadedOp?.error ?? ""
-            #expect(error.contains("offline"))
-            let synced = await fake.syncedAgentIds
-            #expect(synced.isEmpty)
-        }
-    }
-
-    @Test("perform(.stateSync) on an unplaced resource fails the operation")
-    func stateSyncUnplacedFails() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: true)
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: nil, dispatch: .stateSync, on: app.db, app: app
-            ) { db in
-                vm.setDesiredStatus(.running)
-                try await vm.save(on: db)
-            }
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .failed)
-            let error = reloadedOp?.error ?? ""
-            #expect(error.contains("not placed"))
-        }
-    }
-
     @Test("a second operation for the same resource is rejected with 409")
     func doubleSubmitConflicts() async throws {
         try await withVM { app, vm, userID in
@@ -178,22 +95,14 @@ final class ResourceOperationCoordinatorTests {
             let vmID = try vm.requireID()
 
             _ = try await coordinator.perform(
-                .boot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: "agent-1", dispatch: .stateSync, on: app.db, app: app
-            ) { db in
-                vm.setDesiredStatus(.running)
-                try await vm.save(on: db)
-            }
+                .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
 
             var conflict: (any AbortError)?
             do {
                 _ = try await coordinator.perform(
-                    .shutdown, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                    hypervisorId: "agent-1", dispatch: .stateSync, on: app.db, app: app
-                ) { db in
-                    vm.setDesiredStatus(.shutdown)
-                    try await vm.save(on: db)
-                }
+                    .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
+                    dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
             } catch let error as any AbortError {
                 conflict = error
             }
@@ -212,7 +121,7 @@ final class ResourceOperationCoordinatorTests {
 
             let operation = try await coordinator.perform(
                 .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: "agent-1", dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
+                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
@@ -234,7 +143,7 @@ final class ResourceOperationCoordinatorTests {
 
             let operation = try await coordinator.perform(
                 .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: "agent-1", dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
+                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
@@ -295,67 +204,6 @@ final class ResourceOperationCoordinatorTests {
             let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
             let status = reloadedOp?.status
             #expect(status == .succeeded)
-        }
-    }
-
-    @Test("perform(.directResolution) removes the record and records success")
-    func directResolutionDeletesRecord() async throws {
-        try await withVM { app, vm, userID in
-            let coordinator = ResourceOperationCoordinator(
-                agentDispatch: FakeAgentDispatch(), logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                hypervisorId: nil,
-                dispatch: .directResolution { db in
-                    try await vm.delete(on: db)
-                    return true
-                },
-                on: app.db, app: app
-            ) { db in
-                vm.setDesiredStatus(.absent)
-                try await vm.save(on: db)
-            }
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .succeeded)
-            let goneVM = try await VM.find(vmID, on: app.db)
-            #expect(goneVM == nil)
-        }
-    }
-
-    @Test("directResolution short-circuits when the operation is already terminal")
-    func directResolutionGuardsResolvedOperation() async throws {
-        try await withVM { app, vm, userID in
-            let coordinator = ResourceOperationCoordinator(
-                agentDispatch: FakeAgentDispatch(), logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await ResourceOperation.begin(
-                .delete, resourceKind: .virtualMachine, resourceID: vmID, userID: userID, on: app.db)
-            let opID = try operation.requireID()
-            // The sweep already failed it.
-            _ = await coordinator.recordVerdict(operationID: opID, as: .failed, error: "swept", on: app)
-
-            coordinator.dispatch(
-                operation, resourceKind: .virtualMachine, resourceID: vmID, hypervisorId: nil,
-                dispatch: .directResolution { db in
-                    try await vm.delete(on: db)
-                    return true
-                }, app: app)
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            // The removal work must not have run under a failed operation.
-            let stillVM = try await VM.find(vmID, on: app.db)
-            #expect(stillVM != nil)
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .failed)
         }
     }
 

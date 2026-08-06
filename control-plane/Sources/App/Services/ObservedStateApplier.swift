@@ -71,42 +71,25 @@ struct ObservedStateApplier {
             .filter(\.$hypervisorId == report.agentId)
             .all()
 
-        // Pending operations are sparse but used by both the present and
-        // absent paths. Fetch every candidate in one report-level query
-        // instead of issuing a point query for every VM and sandbox.
-        let resourceIDs =
-            dbVMs.compactMap(\.id)
-            + dbSandboxes.compactMap(\.id)
-        let pendingOperations: [ResourceKey: ResourceOperation]
-        if resourceIDs.isEmpty {
-            pendingOperations = [:]
-        } else {
-            let operations = try await ResourceOperation.query(on: db)
-                .filter(\.$resourceID ~~ resourceIDs)
-                .filter(\.$status == .pending)
-                .all()
-            pendingOperations = Dictionary(
-                operations.map {
-                    (ResourceKey(kind: $0.resourceKind, id: $0.resourceID), $0)
-                },
-                uniquingKeysWith: { first, _ in first }
-            )
-        }
-
-        // Only a pending create can still own a placement reservation. Once
-        // the resource appears in this full report its resources are already
-        // reflected in the agent snapshot, so release that reservation before
-        // completing the operation below. Steady-state reports have no pending
-        // creates and therefore avoid the reservation-index SMEMBERS entirely.
-        let accountedReservationIDs = pendingOperations.compactMap { key, operation -> String? in
-            guard operation.kind == .create else { return nil }
-            switch key.kind {
-            case .virtualMachine:
-                return reported[key.id] == nil ? nil : key.id.uuidString
-            case .sandbox:
-                return reportedSandboxes[key.id] == nil ? nil : key.id.uuidString
+        // Only a workload no agent has ever confirmed can still own a placement
+        // reservation, and this report is that confirmation: once it appears
+        // here its resources are already reflected in the agent snapshot.
+        // `observedGeneration == 0` is what "no agent has confirmed this yet"
+        // means, and it replaces the pending-create lookup this used to do
+        // (STR-147) — same set, one fewer table. Steady-state reports have no
+        // unconfirmed workloads and therefore avoid the reservation-index
+        // SMEMBERS entirely.
+        let accountedReservationIDs =
+            dbVMs.compactMap { vm -> String? in
+                guard let id = vm.id, vm.observedGeneration == 0, reported[id] != nil else { return nil }
+                return id.uuidString
             }
-        }
+            + dbSandboxes.compactMap { sandbox -> String? in
+                guard let id = sandbox.id, sandbox.observedGeneration == 0,
+                    reportedSandboxes[id] != nil
+                else { return nil }
+                return id.uuidString
+            }
         if !accountedReservationIDs.isEmpty {
             await app.coordination.releaseReservations(
                 agentId: report.agentId,
@@ -142,46 +125,25 @@ struct ObservedStateApplier {
 
         for vm in dbVMs {
             guard let vmID = vm.id else { continue }
-            let operation = pendingOperations[
-                ResourceKey(kind: .virtualMachine, id: vmID)
-            ]
             if let observed = reported[vmID] {
                 try await applyObservedVMState(
                     vm: vm,
                     observed: observed,
-                    pendingOperation: operation,
                     interfaces: interfacesByVMID[vmID] ?? [],
                     on: db
                 )
             } else {
-                try await handleReportedAbsence(
-                    vm: vm,
-                    agentId: report.agentId,
-                    pendingOperation: operation,
-                    on: db
-                )
+                try await handleReportedAbsence(vm: vm, agentId: report.agentId, on: db)
             }
         }
 
         for sandbox in dbSandboxes {
             guard let sandboxID = sandbox.id else { continue }
-            let operation = pendingOperations[
-                ResourceKey(kind: .sandbox, id: sandboxID)
-            ]
             if let observed = reportedSandboxes[sandboxID] {
-                try await applyObservedSandboxState(
-                    sandbox: sandbox,
-                    observed: observed,
-                    pendingOperation: operation,
-                    on: db
-                )
+                try await applyObservedSandboxState(sandbox: sandbox, observed: observed, on: db)
             } else {
                 try await handleReportedSandboxAbsence(
-                    sandbox: sandbox,
-                    agentId: report.agentId,
-                    pendingOperation: operation,
-                    on: db
-                )
+                    sandbox: sandbox, agentId: report.agentId, on: db)
             }
         }
 
@@ -458,16 +420,28 @@ struct ObservedStateApplier {
         try await claim.save(on: db)
     }
 
-    /// Apply one settled (or failing) observation to its VM row and resolve
-    /// any pending operation it satisfies.
+    /// Apply one settled (or failing) observation to its VM row and record the
+    /// convergence transition it produces.
     private func applyObservedVMState(
         vm: VM,
         observed: ObservedVMState,
-        pendingOperation: ResourceOperation?,
         interfaces: [VMNetworkInterface],
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
+
+        // Where the VM stood before this report. Every convergence outcome
+        // below is a *transition* out of this state, which is what makes the
+        // completion webhook fire exactly once without a side-table row to
+        // compare-and-swap on (STR-147): `observedGeneration` only moves
+        // forward, and the read and the write share this transaction.
+        //
+        // `failedBefore` has to be captured here too, because `recordConvergence`
+        // below mirrors the agent's own `failedGeneration` onto the row — after
+        // which the row can no longer say whether *we* had already recorded the
+        // failure.
+        let wasConverged = vm.isConverged
+        let failedBefore = vm.failedGeneration
 
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
@@ -530,12 +504,13 @@ struct ObservedStateApplier {
             changed = true
             statusTransition = (previous, observed.status)
 
-            // Drift telemetry: an out-of-band change (no operation in flight
-            // asked for anything) means agent reality moved on its own — e.g.
-            // a guest powered itself off, or someone paused it over QMP.
-            if pendingOperation == nil, !previous.isTransitional {
+            // Drift telemetry: an out-of-band change on an already-converged VM
+            // (nothing in flight asked for anything) means agent reality moved
+            // on its own — e.g. a guest powered itself off, or someone paused
+            // it over QMP.
+            if wasConverged, !previous.isTransitional {
                 app.logger.warning(
-                    "VM state drifted without a pending operation",
+                    "VM state drifted with nothing in flight",
                     metadata: [
                         "vmId": .string(vmID.uuidString),
                         "previousStatus": .string(previous.rawValue),
@@ -553,50 +528,52 @@ struct ObservedStateApplier {
                 on: db, logger: app.logger)
         }
 
-        guard let operation = pendingOperation else { return }
+        // Deletions are settled by absence from the report, never by a status.
+        if vm.desiredStatus == .absent { return }
 
-        // Deletions complete by absence from the report, never by a status.
-        if operation.kind == .delete || vm.desiredStatus == .absent {
-            return
-        }
-
-        if observed.observedGeneration >= vm.generation, vm.desiredStatus.isSatisfied(by: observed.status) {
+        if !wasConverged, vm.isConverged {
             // The agent converged to the current generation and the observed
-            // status satisfies the desired one: the operation reached its goal.
-            _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+            // status satisfies the desired one: everything outstanding reached
+            // its goal.
+            try await ResourceConvergence.recordSuccess(vm, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
             // The agent tried to converge to *this* generation and failed —
             // the failedGeneration match is what distinguishes that from a
-            // stale error still carried on heartbeats while a newer operation
-            // waits for its first attempt. Fail the operation with the real
-            // reason instead of waiting out its completion budget.
-            if try await operation.completeIfPending(as: .failed, error: lastError, on: db) {
-                var failedChanged = false
-                var enteredError = false
-                if observed.status == .unknown {
-                    // The VM has no settled presence on the agent (e.g. the
-                    // create never got off the ground) — surface it as error
-                    // rather than leaving a healthy-looking resting state.
-                    vm.setStatus(.error)
-                    failedChanged = true
-                    enteredError = true
-                    Telemetry.vmEnteredError(reason: "convergence_failed")
-                }
-                // The intent was not achieved and the user has been told: stop
-                // pursuing it. Realigning desired with observed keeps a failed
-                // operation from leaving latent divergence that a later sync
-                // (or the reconciler's next generation) would replay.
-                if vm.revertDesiredToObserved() {
-                    failedChanged = true
-                }
-                if failedChanged {
-                    try await vm.save(on: db)
-                }
-                if enteredError {
-                    await WebhookEvents.emitVMStateChanged(
-                        vm: vm, previous: observed.status, current: .error,
-                        on: db, logger: app.logger)
-                }
+            // stale error still carried on heartbeats while a newer mutation
+            // waits for its first attempt. Report the real reason instead of
+            // waiting out the convergence deadline.
+            //
+            // `recordFailure` resolves the in-flight state and realigns desired
+            // with observed, so the unachieved intent does not linger and
+            // replay on a later sync; its `failedGeneration` guard is what
+            // keeps the failure webhook to one per generation, however many
+            // reports repeat the error.
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: .virtualMachine, resourceID: vmID, on: db
+                )?.mutation ?? .boot
+
+            // A VM with no settled presence on the agent (e.g. a create that
+            // never got off the ground) is surfaced as `.error` rather than
+            // left in a healthy-looking resting state — and *before*
+            // `recordFailure`, because the realignment of desired state it
+            // performs reads the status. Gated on the same guard
+            // `recordFailure` applies, so a repeated report of an
+            // already-recorded failure changes nothing.
+            let previousStatus = vm.status
+            var enteredError = false
+            if failedBefore != vm.generation, observed.status == .unknown, vm.status != .error {
+                vm.setStatus(.error)
+                enteredError = true
+                Telemetry.vmEnteredError(reason: "convergence_failed")
+            }
+
+            let recorded = try await ResourceConvergence.recordFailure(
+                vm, mutation: mutation, reason: lastError,
+                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+            if recorded, enteredError {
+                await WebhookEvents.emitVMStateChanged(
+                    vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
             }
         }
     }
@@ -737,21 +714,16 @@ struct ObservedStateApplier {
     private func handleReportedAbsence(
         vm: VM,
         agentId: String,
-        pendingOperation: ResourceOperation?,
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
 
         if vm.desiredStatus == .absent {
             // Teardown confirmed: this is the `agent.absent` finalizer's
-            // participant (ADR 0001). Complete the operation first, then clear
-            // the token: if we crash in between, the next report retries the
-            // (idempotent) clear, whereas clearing first would leave a pending
-            // operation with nothing to resolve it but the sweep.
-            if let operation = pendingOperation {
-                _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
-            }
-
+            // participant (ADR 0001). Nothing is recorded *here* — the reap
+            // that clearing the last token triggers appends the terminal
+            // `resource_events` row, which is what tells a client polling a
+            // delete that it finished (STR-147).
             switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
             case .reaped:
                 app.logger.info(
@@ -810,14 +782,15 @@ struct ObservedStateApplier {
     }
 
     /// Sandbox counterpart of `applyObservedVMState`: apply one settled (or
-    /// failing) observation and resolve any pending operation it satisfies.
+    /// failing) observation and record the convergence transition it produces.
     private func applyObservedSandboxState(
         sandbox: Sandbox,
         observed: ObservedSandboxState,
-        pendingOperation: ResourceOperation?,
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
+        let wasConverged = sandbox.isConverged
+        let failedBefore = sandbox.failedGeneration
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
@@ -855,9 +828,9 @@ struct ObservedStateApplier {
             // A workload finishing on its own (`.exited`) is the normal end
             // of a one-shot sandbox, not drift — only flag other unprompted
             // changes.
-            if pendingOperation == nil, !previous.isTransitional, observed.status != .exited {
+            if wasConverged, !previous.isTransitional, observed.status != .exited {
                 app.logger.warning(
-                    "Sandbox state drifted without a pending operation",
+                    "Sandbox state drifted with nothing in flight",
                     metadata: [
                         "sandboxId": .string(sandboxID.uuidString),
                         "previousStatus": .string(previous.rawValue),
@@ -873,34 +846,26 @@ struct ObservedStateApplier {
             try await sandbox.save(on: db)
         }
 
-        guard let operation = pendingOperation else { return }
+        // Deletions are settled by absence from the report, never by a status.
+        if sandbox.desiredStatus == .absent { return }
 
-        // Deletions complete by absence from the report, never by a status.
-        if operation.kind == .delete || sandbox.desiredStatus == .absent {
-            return
-        }
-
-        if observed.observedGeneration >= sandbox.generation,
-            sandbox.desiredStatus.isSatisfied(by: observed.status)
-        {
-            _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+        if !wasConverged, sandbox.isConverged {
+            try await ResourceConvergence.recordSuccess(sandbox, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == sandbox.generation {
             // The agent tried to converge to *this* generation and failed —
-            // fail the operation with the real reason instead of waiting out
-            // its completion budget (same contract as VMs).
-            if try await operation.completeIfPending(as: .failed, error: lastError, on: db) {
-                var failedChanged = false
-                if observed.status == .unknown {
-                    sandbox.setStatus(.error)
-                    failedChanged = true
-                }
-                if sandbox.revertDesiredToObserved() {
-                    failedChanged = true
-                }
-                if failedChanged {
-                    try await sandbox.save(on: db)
-                }
+            // report the real reason instead of waiting out the convergence
+            // deadline (same contract as VMs, including the pre-escalation of a
+            // sandbox with no settled presence on the agent).
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: .sandbox, resourceID: sandboxID, on: db
+                )?.mutation ?? .boot
+            if failedBefore != sandbox.generation, observed.status == .unknown {
+                sandbox.setStatus(.error)
             }
+            try await ResourceConvergence.recordFailure(
+                sandbox, mutation: mutation, reason: lastError,
+                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
         }
     }
 
@@ -909,18 +874,13 @@ struct ObservedStateApplier {
     private func handleReportedSandboxAbsence(
         sandbox: Sandbox,
         agentId: String,
-        pendingOperation: ResourceOperation?,
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
         if sandbox.desiredStatus == .absent {
-            // Teardown confirmed: the `agent.absent` participant, same
-            // crash-ordering rationale as VMs.
-            if let operation = pendingOperation {
-                _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
-            }
-
+            // Teardown confirmed: the `agent.absent` participant. The reap
+            // appends the terminal event, same as VMs.
             switch try await ResourceFinalizerService.clear(
                 .agentAbsent, from: sandbox, on: db, app: app)
             {

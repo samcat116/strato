@@ -157,7 +157,7 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("POST start against an offline agent fails the operation fast")
+    @Test("POST start against an offline agent degrades the VM fast")
     func startAgainstOfflineAgentFailsFast() async throws {
         try await withVMTestApp { app, _, vm, token in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
@@ -167,33 +167,29 @@ final class DesiredStateReconciliationTests {
             agent.status = .offline
             try await agent.save(on: app.db)
 
-            var operationId: UUID?
+            var targetGeneration: Int64?
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operationId = try res.content.decode(OperationResponse.self).id
+                targetGeneration = try res.content.decode(
+                    AcceptedMutation<VMDetailResponse>.self
+                ).targetGeneration
             }
 
-            // The dispatch fails immediately — not after the sweep budget.
-            var operation: ResourceOperation?
-            for _ in 0..<250 {
-                operation = try await ResourceOperation.find(operationId, on: app.db)
-                if operation?.status == .failed { break }
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            #expect(operation?.status == .failed)
-            #expect(operation?.error?.contains("offline") == true)
-
-            // The unachieved intent was realigned: desired reverts to the
-            // observed resting state instead of firing when the agent returns.
-            // The VM row is written after the operation row, so poll it too.
+            // The dispatch fails immediately — not after the convergence
+            // deadline — and the unachieved intent is realigned: desired
+            // reverts to the observed resting state instead of firing when the
+            // agent returns.
             var refreshed: VM?
-            for _ in 0..<100 {
+            for _ in 0..<250 {
                 refreshed = try await VM.find(vm.id, on: app.db)
-                if refreshed?.desiredStatus == .shutdown { break }
+                if refreshed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(20))
             }
+            let degraded = try #require(refreshed?.conditions.degraded)
+            #expect(degraded.reason.contains("offline"))
+            #expect(degraded.sinceGeneration == targetGeneration)
             #expect(refreshed?.desiredStatus == .shutdown)
         }
     }
@@ -209,19 +205,18 @@ final class DesiredStateReconciliationTests {
                 #expect(res.status == .accepted)
             }
 
-            // No `.starting` marker on the sync path: in-flight state is
-            // derived from desired != observed plus the pending operation.
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.status == .created)
-            #expect(refreshed?.desiredStatus == .running)
-            #expect(refreshed?.generation == 1)
+            // No `.starting` marker on the sync path: in-flight state is the
+            // gap between desired and observed.
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.status == .created)
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 1)
 
-            // The operation stays pending until an observed report confirms.
-            let pending = try await ResourceOperation.query(on: app.db)
-                .filter(\.$resourceID == vm.id!)
-                .filter(\.$status == .pending)
-                .count()
-            #expect(pending == 1)
+            // Unconverged until an observed report confirms, with a deadline
+            // for the stuck-convergence sweep to judge it against (STR-147).
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.observedGeneration == 0)
+            #expect(refreshed.convergenceDeadline != nil)
         }
     }
 
@@ -397,15 +392,14 @@ final class DesiredStateReconciliationTests {
 
     // MARK: - Observed-state report application
 
-    @Test("A converged report updates status, generation, and completes the operation")
-    func reportCompletesOperation() async throws {
-        try await withVMTestApp { app, user, vm, _ in
+    @Test("A converged report updates status and generation, and clears the deadline")
+    func reportRecordsConvergence() async throws {
+        try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
             vm.setDesiredStatus(.running)
+            vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -413,12 +407,12 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.status == .running)
-            #expect(refreshed?.observedGeneration == 1)
-
-            let completed = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(completed?.status == .succeeded)
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.status == .running)
+            #expect(refreshed.observedGeneration == 1)
+            #expect(refreshed.conditions.converged)
+            // Converged means nothing is outstanding to time out.
+            #expect(refreshed.convergenceDeadline == nil)
         }
     }
 
@@ -461,9 +455,11 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
             vm.setDesiredStatus(.running)
+            vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: vm.id!,
+                actor: .user(user.id!), on: app.db)
 
             // Generation 1 was attempted and failed; the agent reports the
             // failure tagged with the generation that produced it.
@@ -478,15 +474,16 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let failed = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(failed?.status == .failed)
-            #expect(failed?.error == "boot failed: no bootable device")
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let degraded = try #require(refreshed.conditions.degraded)
+            #expect(degraded.reason == "boot failed: no bootable device")
+            #expect(degraded.sinceGeneration == 1)
+            #expect(refreshed.convergenceDeadline == nil)
 
             // The unachieved intent must not linger: desired realigns with the
             // observed resting state (and bumps the generation).
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.desiredStatus == .shutdown)
-            #expect(refreshed?.generation == 2)
+            #expect(refreshed.desiredStatus == .shutdown)
+            #expect(refreshed.generation == 2)
         }
     }
 
@@ -550,15 +547,17 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("Absence with desired absent confirms deletion: row removed, operation succeeded")
+    @Test("Absence with desired absent confirms deletion: row removed, terminal event appended")
     func absenceConfirmsDeletion() async throws {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
+            ResourceFinalizerService.stampForDeletion(vm)
             vm.setDesiredStatus(.absent)
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
-            try await operation.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
+                actor: .user(user.id!), on: app.db)
 
             // The creator binding VM creation writes, plus a checkpoint whose
             // row cascades away with the VM. Bindings have no FK to either, so
@@ -583,8 +582,11 @@ final class DesiredStateReconciliationTests {
             let gone = try await VM.find(vm.id, on: app.db)
             #expect(gone == nil)
 
-            let completed = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(completed?.status == .succeeded)
+            // The reap appended the terminal event a client polling the delete
+            // reads as "done" (STR-147).
+            let terminal = try await ResourceEvent.latest(
+                .completed, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.db)
+            #expect(terminal?.mutation == .delete)
 
             let bindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)

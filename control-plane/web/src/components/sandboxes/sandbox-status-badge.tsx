@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { usePendingOperation } from "@/lib/stores/operations-store";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import type { SandboxStatus, OperationKind } from "@/types/api";
 
 const statusConfig: Record<SandboxStatus, { label: string; className: string }> =
@@ -40,7 +40,7 @@ const statusConfig: Record<SandboxStatus, { label: string; className: string }> 
 // Labels for sandbox states that only exist as an in-flight operation (the
 // server keeps the sandbox's resting status until the agent confirms). Sandboxes
 // never pause/resume, but the map covers every OperationKind for exhaustiveness.
-const pendingOperationLabels: Record<OperationKind, string> = {
+const pendingMutationLabels: Record<OperationKind, string> = {
   create: "Creating",
   boot: "Starting",
   shutdown: "Stopping",
@@ -61,20 +61,20 @@ export function SandboxStatusBadge({
   exitCode,
 }: {
   status: SandboxStatus;
-  /** When provided, an in-flight operation on this sandbox overrides the status label. */
+  /** When provided, an in-flight mutation on this sandbox overrides the status label. */
   sandboxId?: string;
   /** Shown alongside the "Exited" label; a non-zero code is styled as a failure. */
   exitCode?: number | null;
 }) {
-  const pendingOperation = usePendingOperation(sandboxId);
+  const pendingMutation = usePendingMutation(sandboxId);
 
-  if (pendingOperation) {
+  if (pendingMutation) {
     return (
       <Badge
         variant="outline"
         className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
       >
-        {pendingOperationLabels[pendingOperation.kind]}
+        {pendingMutationLabels[pendingMutation.kind]}
       </Badge>
     );
   }

@@ -93,8 +93,8 @@ The important ones to know when navigating `Services/`:
   registry material, agent-update payload, per-VM instance metadata). Pure
   assembly; when to sync and which socket carries it stay with `AgentService`.
 - **`ObservedStateApplier`** (`app.observedStateApplier`) — folds an agent's
-  `ObservedStateReport` into the database: observed status/generation,
-  operation completion, deletion-by-absence, guest info, reservation release,
+  `ObservedStateReport` into the database: observed status/generation, the
+  convergence transitions, deletion-by-absence, guest info, reservation release,
   and the teardown verdicts described below. The connection half (decode,
   ownership check, agent-row refresh, per-agent ordering) stays with
   `AgentService`.
@@ -167,23 +167,31 @@ The canonical mutation path (`Controllers/VMController.swift`):
    enough), environment and network selections are checked.
 3. **One transaction** (with constraint-failure retry for IPAM races):
    quota reservation → VM row → `setDesiredStatus(.shutdown)` (bumps
-   `generation`) → NIC rows with IPAM-allocated addresses → a
-   **`ResourceOperation`** row (`pending`) → a **`ResourceEvent`** row (the
-   append-only attribution record) → the creator's role binding on
-   the new VM (`RoleBindingService.grant` — an explicit, revocable grant,
-   transactional with the resource it protects). The desired-state change,
-   the operation, the event, and the grant commit atomically.
-4. The handler returns **202 Accepted** with the operation; the client polls
-   `/api/operations/:id`.
+   `generation`) → the convergence deadline → NIC rows with IPAM-allocated
+   addresses → a **`ResourceEvent`** row (the append-only attribution record)
+   → the creator's role binding on the new VM (`RoleBindingService.grant` — an
+   explicit, revocable grant, transactional with the resource it protects).
+   The desired-state change, the event, and the grant commit atomically.
+4. The handler returns **202 Accepted** with
+   `{resource, targetGeneration, mutationId}`; the client refetches the VM
+   until its `conditions` say it converged.
 5. The rest happens off-request on `app.backgroundTasks`: scheduling,
    placement, and a desired-state sync to the chosen agent.
 
 Lifecycle verbs (start/stop/pause/resume/delete) follow the same shape via
-`ResourceOperation.begin(...)` — which also enforces a 409 double-submit
-guard through a partial unique index on pending operations — followed by
-`dispatchStateSync`: push directly if this replica holds the agent's socket,
-otherwise publish a nudge to the replica that does. A lost nudge is harmless;
-the ~60s periodic sync re-sends full state.
+`ResourceMutation.accept(...)`, followed by a state-sync dispatch: push
+directly if this replica holds the agent's socket, otherwise publish a nudge to
+the replica that does. A lost nudge is harmless; the ~60s periodic sync
+re-sends full state.
+
+There is **no double-submit `409`** on these verbs (STR-147). Desired state is
+level-triggered, so two overlapping writes leave the last one standing and the
+agent converges on it — which is what a user pressing "stop" during a slow
+start actually wants. The one place the old mutex was load-bearing is the
+resize path's quota delta, and that is guarded where it belongs: by locking the
+row (`SELECT … FOR UPDATE`) and recomputing the delta inside the mutation's own
+transaction, so the loser of a race charges against the winner's committed
+sizing rather than the stale value its request read.
 
 `PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
 `cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
@@ -191,7 +199,8 @@ the ~60s periodic sync re-sends full state.
 otherwise, including when its agent predates `supportsVMResize`), reserved
 against quota as a *delta*, then written with a generation bump — desired
 status unchanged, since a resize is a spec change, not a power-state change
-— and answered `202` with a `resize` operation. On a **stopped** VM the new
+— and answered `202` with the VM and its new target generation. On a
+**stopped** VM the new
 sizing (and the ceilings, which the next boot re-spawns from) is simply
 persisted and answered `200`. Quota accounting always follows the *current*
 sizing, never the ceiling: reserving to the maximum would strand capacity
@@ -202,7 +211,7 @@ The same endpoint carries `balloonTarget` (issue #567 phase 2), the memory an
 operator will hold the guest to. It is deliberately *not* a quota movement:
 ballooning reclaims opportunistically, the grant stays committed, and the
 guest takes it all back the moment the target is cleared — so only the
-generation bump and the `resize` operation are shared with a real resize. The
+generation bump is shared with a real resize. The
 field is doubly optional on the wire: omitting it leaves the current target
 alone, while an explicit `null` clears it. Bounds are `<= memory` (a balloon
 can only take memory away; growing a guest is `memory`) and a 128 MiB floor,
@@ -210,37 +219,58 @@ the point where an over-aggressive target stops being reclaim and starts being
 an OOM. A running VM whose agent predates `supportsBalloonTarget` is a `422`
 with no restart remedy to offer, since the target only exists on a live guest.
 
-**Operations complete from observed state, not from the HTTP request**: when
-an agent's `ObservedStateReport` shows the VM's observed status/generation
-caught up to desired, `completeIfPending` marks the row terminal. The
-stuck-operation sweep is the backstop, failing operations past their per-kind
-budget (`OperationResourceKind.completionBudgetSeconds` in
-`Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
-the one imperative exception: it awaits a correlated agent response.
-
-**The same derivation is projected onto the resource** as a `conditions` block
+**Mutations settle from observed state, not from the HTTP request.** The
+answer lives on the resource, as a `conditions` block
 (`Models/ResourceConditions.swift`, STR-142) — converged / targetGeneration /
-observedGeneration / phase / degraded — so a client can refetch the VM or
-sandbox instead of polling an operation. Nothing stores it: `converged` is
-`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status)`, the
-same test `completeIfPending` runs, and `phase`/`degraded` read the
-`convergence_phase` / `last_error` / `failed_generation` columns that
-`ObservedStateApplier` mirrors from each report (clearing them when an attempt
-finally succeeds). This is stage 1 of
-[ADR 0001](/adr/0001-declarative-agent-protocol); the operations API is
-unchanged, and the stuck-operation sweep still has no conditions counterpart,
-so a resource whose agent goes silent reads as unconverged with no `degraded`
-reason until the sweep fails its operation.
+observedGeneration / phase / degraded. Nothing stores it: `converged` is
+`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status)`, and
+`phase`/`degraded` read the `convergence_phase` / `last_error` /
+`failed_generation` columns that `ObservedStateApplier` mirrors from each
+report (clearing them when an attempt finally succeeds). A client refetches the
+resource: done is `converged` at or past its `targetGeneration`; failed is a
+`degraded` whose `sinceGeneration` equals it.
 
-**Attribution outlives the operation** (ADR 0001 stage 2). Every mutation that
-writes an operation row also appends a `resource_events` row in the same
-transaction: the acting principal (type *and* id, so it is not restricted to
+**The stuck-convergence sweep** is the backstop. Every accepted mutation stamps
+`convergence_deadline = max(existing, now + budget(kind))` — a *deadline*
+rather than a `lastMutationKind`, so a reboot issued during a slow create can
+never shorten the create's runway, and the sweep needs no kind lookup at all.
+Past the deadline the resource is marked `degraded` and its unachieved intent
+realigned with observed reality. Unlike the operation sweep it replaced, it
+runs **lock-free on every replica**: the write is idempotent and convergent,
+and clearing the deadline is a conditional `UPDATE` that exactly one pass wins,
+so the completion webhook still fires once.
+
+**Two verbs still keep operation records** — VM restart, and every snapshot
+verb. They are imperative agent commands with no generation to converge on, so
+they answer `202` with a `ResourceOperation` to poll, keep the `409`
+double-submit guard, and are covered by the residual (cluster-singleton)
+stuck-operation sweep. They retire with STR-151 and ADR stage 8.
+
+**The operations API survives as a façade** (`Services/OperationFacade.swift`).
+`GET /api/operations/:id` resolves an operation row first, then falls back to
+the `resource_events` row a lifecycle mutation wrote, synthesizing status from
+the resource's conditions. Nothing new depends on the table, and a client
+written against the old contract keeps working.
+
+**Delete is the one mutation the resource cannot answer for.** Its success is
+the resource ceasing to exist, and a polling client's `404` means deleted,
+never-existed and not-authorized alike — a dangerous thing to build into a
+client, since the failure mode is a UI reporting a successful delete for a
+resource the caller simply cannot see. So the reap appends a *terminal*
+`resource_events` row inside its claim transaction, and the façade answers
+deletes off that positive record. The `mutationId` in the `202` is what a
+client polls.
+
+**Attribution outlives the resource** (ADR 0001 stage 2). Every mutation
+appends a `resource_events` row in its own transaction: the acting principal (type *and* id, so it is not restricted to
 users the way `resource_operations.user_id` is), the resource kind/id/name,
 the mutation kind, the target generation, and the org/project it happened in.
 Rows are never updated and never swept — there is no retention policy, because
 an audit trail that admits edits is not one, and a `BEFORE UPDATE OR DELETE`
-trigger enforces that rather than trusting every future caller.
-`ResourceOperation.begin` covers every mutation except VM and sandbox
+trigger enforces that rather than trusting every future caller. A `phase`
+column splits the request from its outcome: `requested` on every row, and
+`completed` on the one the finalizer reap appends for a delete.
+`ResourceMutation.accept` covers every mutation except VM and sandbox
 `create`, whose retrying transactions own their own inserts and so append
 their own events.
 
@@ -269,9 +299,9 @@ absence — the agent-confirmed tombstone dance, now expressed as one token amon
 a list. Offline or unplaced workloads take the direct path, which force-clears
 `agent.absent` for the same reason it always deleted directly: a dead agent
 must not make its workloads undeletable. That path reports back whether the row
-is actually gone; when another participant still holds it, the delete operation
-stays `pending` rather than telling the client a workload is deleted while its
-row is standing. `ipam.release`, `dns.deregister`, and
+is actually gone; when another participant still holds it, nothing terminal is
+recorded, rather than telling the client a workload is deleted while its row is
+standing. `ipam.release`, `dns.deregister`, and
 `fip.release` are named in the ADR but **not stamped**: each is a database
 cascade today (`vm_interface_addresses` CASCADE, zone contents derived on
 demand and never stored, `floating_ips.interface_id` SET NULL), and a token for
@@ -438,14 +468,21 @@ fallback.
 A single heartbeat-monitor loop in `AgentService` (30s tick, injectable for
 tests) runs, per tick: stale-agent detection (60s threshold, skipped when a
 live Valkey presence key exists), pub/sub subscription re-arming, the
-periodic full sync to this replica's agents (every other tick), and three
-sweeps — stuck operations, expired sandboxes (TTL + retention reaping), and
-agent auto-update rollout.
+periodic full sync to this replica's agents (every other tick), and four
+sweeps — stuck convergence, stuck operations, expired sandboxes (TTL +
+retention reaping), orphaned terminating rows, and agent auto-update rollout.
 
-Sweeps take singleton locks via `app.coordination.acquireSweepLock(...)`
+Most sweeps take singleton locks via `app.coordination.acquireSweepLock(...)`
 (Valkey `SET NX EX`, 25s TTL, never explicitly released — the TTL expiring
 is the release). Locking fails open: the sweeps are idempotent, so a
 duplicate pass beats no pass.
+
+The stuck-**convergence** sweep takes no lock at all (STR-147). Its verdict is
+computed from the row and written idempotently, so replicas cannot disagree,
+and the one non-idempotent effect — the completion webhook — is claimed by a
+conditional `UPDATE` on the convergence deadline. That is the ADR 0001
+multi-replica argument in miniature: coordination demoted from a correctness
+dependency to a latency optimization.
 
 Fire-and-forget work must go through `app.backgroundTasks.spawn { ... }`
 (`Services/BackgroundTaskRegistry.swift`) — shutdown drains the registry so
@@ -459,11 +496,12 @@ what makes the test harness safe.
 - VM and Sandbox carry the reconciliation quartet: observed `status`,
   `desiredStatus`, `generation`, `observedGeneration`, with helpers
   `setDesiredStatus` (bumps generation), `isConverged`, and
-  `revertDesiredToObserved()` (called when an operation fails so unachieved
+  `revertDesiredToObserved()` (called when a mutation fails so unachieved
   intent doesn't replay). Alongside it they mirror the agent's reported
   convergence progress — `convergencePhase`, `lastError`, `failedGeneration`
   — which only `ObservedStateApplier` writes and only the `conditions`
-  projection reads.
+  projection reads, plus `convergenceDeadline`, which only the mutation path
+  writes and only the stuck-convergence sweep reads.
 - `ResourceOperation` has a plain `resource_id` column, deliberately **not**
   a foreign key, so delete operations survive the resource row's removal.
   `ResourceEvent` goes further: *every* id on it is foreign-key-free, since

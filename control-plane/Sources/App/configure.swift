@@ -746,6 +746,13 @@ public func configure(_ app: Application) async throws {
     // making clients poll an operation to learn the same thing (ADR 0001).
     app.migrations.add(AddConvergenceStateToWorkloads())
 
+    // STR-147: the two columns ADR 0001 stage 4 needs to stop writing operation
+    // rows for lifecycle mutations — the deadline the stuck-convergence sweep
+    // judges a resource against, and the request/terminal split that lets the
+    // operations façade answer a delete after its row is gone.
+    app.migrations.add(AddConvergenceDeadlineToWorkloads())
+    app.migrations.add(AddPhaseToResourceEvents())
+
     // Per-network switch for the instance metadata service (STR-49).
     app.migrations.add(AddMetadataEnabledToLogicalNetwork())
 

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Header, Sidebar } from "@/components/layout";
-import { OperationWatcher } from "@/components/vms";
+import { MutationWatcher } from "@/components/vms";
 import { useAuth, useOrganization } from "@/providers";
 
 export default function DashboardLayout({
@@ -49,8 +49,8 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Polls in-flight VM operations to completion across page navigations */}
-      <OperationWatcher />
+      {/* Follows in-flight mutations to completion across page navigations */}
+      <MutationWatcher />
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header />

@@ -197,6 +197,8 @@ export interface VM {
   guestMemoryUsedBytes?: number;
   guestMemoryUsedFormatted?: string;
   guestMemoryStatsAt?: string;
+  /** Convergence state (backend STR-142): what a client refetching after a 202 reads. */
+  conditions: ResourceConditions;
   /**
    * Balloon target (issue #567 phase 2). `balloonTarget` is the memory an
    * operator asked the guest to be held to; `guestMemoryBalloonActualBytes` is
@@ -1095,6 +1097,50 @@ export type OperationKind =
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
+/**
+ * How far a resource is from the state the API was last asked to put it in
+ * (backend STR-142). Derived server-side on every read; nothing stores it.
+ *
+ * This is what replaced operation polling for lifecycle mutations (backend
+ * STR-147). After a 202, refetch the resource: done is `converged` with
+ * `observedGeneration >= targetGeneration`; failed is a `degraded` whose
+ * `sinceGeneration` equals the generation the mutation targeted.
+ */
+export interface ResourceConditions {
+  /** The owning agent confirmed the target generation *and* the desired state is satisfied. */
+  converged: boolean;
+  /** The generation the resource is trying to reach — what the last mutation bumped it to. */
+  targetGeneration: number;
+  /** The newest generation the owning agent confirmed; 0 means never confirmed. */
+  observedGeneration: number;
+  /** The agent's current step, present only while it is actively converging. */
+  phase?: string | null;
+  /**
+   * The last convergence attempt that failed. Can stand against a *newer*
+   * `targetGeneration` while a retry is in flight, which is why callers
+   * compare `sinceGeneration` against the generation they are waiting on
+   * rather than treating any `degraded` as their own failure.
+   */
+  degraded?: { reason: string; sinceGeneration: number } | null;
+}
+
+/**
+ * The 202 body of a VM or sandbox lifecycle mutation (backend STR-147): the
+ * resource as the mutation left it, the generation it now has to reach, and
+ * the id of the mutation's audit record.
+ *
+ * `mutationId` matters for **delete**, and only for delete: every other
+ * mutation is answerable from the resource, but a delete succeeds by the
+ * resource ceasing to exist, and a 404 on it means deleted, never-existed and
+ * not-authorized alike. `operationsApi.get(mutationId)` answers authoritatively
+ * once the row is gone.
+ */
+export interface AcceptedMutation<Resource> {
+  resource: Resource;
+  targetGeneration: number;
+  mutationId: string;
+}
+
 // The resource an operation targets. Operations are shared machinery across VMs
 // and sandboxes (backend issue #412), discriminated by `resourceKind`.
 export type OperationResourceKind = "virtual_machine" | "sandbox";
@@ -1161,6 +1207,8 @@ export interface Sandbox {
    * sandbox NICs are still omitted from the agent sync entirely.
    */
   securityGroupIds?: string[];
+  /** Convergence state (backend STR-142) — the VM contract exactly. */
+  conditions: ResourceConditions;
   createdAt: string;
   updatedAt: string;
 }

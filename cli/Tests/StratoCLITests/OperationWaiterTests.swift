@@ -4,6 +4,13 @@ import Testing
 
 @testable import StratoCLICore
 
+/// Counts the waiter's sleeps, which the `Sendable` sleeper closure cannot do
+/// with a captured `var`.
+private actor SleepCounter {
+    private(set) var count = 0
+    func record() { count += 1 }
+}
+
 @Suite("OperationWaiter")
 struct OperationWaiterTests {
     private static let operationID = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff"
@@ -81,6 +88,30 @@ struct OperationWaiterTests {
                 client: try client(transport: transport, directory: directory))
             #expect(final.succeeded)
             #expect(transport.recordedRequests.isEmpty)
+        }
+    }
+
+    @Test("A lifecycle mutation id is polled from the first pass, with no sleep")
+    func testWaitsOnAMutationIdWithNoSeed() async throws {
+        // A generation-backed lifecycle mutation answers with the resource and
+        // a `mutationId`, not an operation (STR-147), so the waiter has nothing
+        // to short-circuit on and must read the operations endpoint straight
+        // away rather than sleeping a poll interval first.
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(statusCode: 200, json: Self.json(status: "succeeded"))
+            ])
+            let slept = SleepCounter()
+            let waiter = OperationWaiter(
+                pollInterval: 5, timeout: 60, sleeper: { _ in await slept.record() })
+
+            let final = try await waiter.wait(
+                for: AcceptedMutation(id: Self.operationID),
+                client: try client(transport: transport, directory: directory))
+            #expect(final.succeeded)
+            #expect(await slept.count == 0)
+            #expect(transport.recordedRequests.count == 1)
+            #expect(transport.recordedRequests.first?.path == "/api/operations/\(Self.operationID)")
         }
     }
 

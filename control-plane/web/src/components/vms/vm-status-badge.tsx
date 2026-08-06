@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { usePendingOperation } from "@/lib/stores/operations-store";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import type { VMStatus, OperationKind } from "@/types/api";
 
 const statusConfig: Record<
@@ -45,7 +45,7 @@ const statusConfig: Record<
 
 // Labels for VM states that only exist as an in-flight operation (the server
 // keeps the VM's resting status until the agent confirms).
-const pendingOperationLabels: Record<OperationKind, string> = {
+const pendingMutationLabels: Record<OperationKind, string> = {
   create: "Creating",
   boot: "Starting",
   shutdown: "Stopping",
@@ -66,18 +66,18 @@ export function VMStatusBadge({
   vmId,
 }: {
   status: VMStatus;
-  /** When provided, an in-flight operation on this VM overrides the status label. */
+  /** When provided, an in-flight mutation on this VM overrides the status label. */
   vmId?: string;
 }) {
-  const pendingOperation = usePendingOperation(vmId);
+  const pendingMutation = usePendingMutation(vmId);
 
-  if (pendingOperation) {
+  if (pendingMutation) {
     return (
       <Badge
         variant="outline"
         className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
       >
-        {pendingOperationLabels[pendingOperation.kind]}
+        {pendingMutationLabels[pendingMutation.kind]}
       </Badge>
     );
   }

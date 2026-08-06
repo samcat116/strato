@@ -44,51 +44,32 @@ extension AgentService: AgentDispatch {
 
 /// The deep module that owns one asynchronous resource operation end to end —
 /// `begin` → dispatch → `recordVerdict` — for both VMs and sandboxes (issue
-/// #259/#412). Controllers name a transition and a dispatch strategy; the
-/// coordinator owns the ordering, the background hand-off after the `202`, and
-/// the single verdict-recording choke point the stuck-operation sweep shares.
+/// #259/#412).
+///
+/// Its remit is now the *residue* of ADR 0001 stage 4 (STR-147): the mutations
+/// that are still imperative agent RPCs with no generation to converge on, and
+/// so still need a side-table row to carry their in-flight state — VM reboot,
+/// and the VM/sandbox snapshot verbs. Every generation-backed lifecycle
+/// mutation moved to `ResourceMutation`, which answers from the resource's own
+/// `conditions` instead. What is left here retires with STR-151 (reboot as an
+/// edge-nonce) and ADR stage 8 (snapshots as desired artifacts).
 ///
 /// Divergence between resource kinds rides the `OperationResourceKind`
 /// discriminator (its budgets, its `resolveForStuckOperation`), not a generic
-/// protocol — the same idiom the sweep already uses.
+/// protocol.
 struct ResourceOperationCoordinator {
     /// The agent seam. Injected so tests substitute a fake for the live actor.
     let agentDispatch: any AgentDispatch
     let logger: Logger
 
-    /// How an operation reaches its agent after `begin`. The uniform scaffolding
-    /// (background hand-off, drain guards, verdict recording) is the
-    /// coordinator's; only the reach-the-agent step differs per strategy.
+    /// How an operation reaches its agent after `begin`.
+    ///
+    /// One case, since the state-sync/placement/direct-resolution strategies
+    /// went with the lifecycle mutations: what remains is genuinely imperative.
     enum Strategy {
-        /// Desired state is already written in `begin`; nudge the owning agent,
-        /// or fail the operation now if it is unplaced/offline instead of
-        /// letting it sit pending for the sweep budget. The success verdict
-        /// arrives later, from the observed-state applier.
-        case stateSync
         /// Await a correlated imperative agent command and record the verdict
         /// immediately from the response (VM reboot).
         case awaitingResponse(MessageType)
-        /// Run background work that reaches an agent (create: schedule, place,
-        /// first sync). Records a failure verdict on throw; success is deferred
-        /// to the observed-state applier.
-        case placement(@Sendable (any Database) async throws -> Void)
-        /// Resolve the operation locally without agent teardown (offline/
-        /// unplaced delete): run the removal work, then record the verdict here
-        /// — but only if the work reports it finished. Returning `false` leaves
-        /// the operation `pending` for whoever still owes cleanup (a finalizer
-        /// another participant holds), with the stuck-operation sweep as the
-        /// backstop; recording success there would tell the user a resource is
-        /// gone while its row is still standing.
-        case directResolution(@Sendable (any Database) async throws -> Bool)
-    }
-
-    /// Wraps a dispatch-work failure with a locating prefix so it reads well in
-    /// the operation row's `error` — `.directResolution` records the thrown
-    /// error's `localizedDescription`, which is bare without this.
-    struct WorkError: Error, LocalizedError {
-        let message: String
-        init(_ message: String) { self.message = message }
-        var errorDescription: String? { message }
     }
 
     /// Begins the operation (atomic insert + 409 double-submit guard + the
@@ -100,7 +81,6 @@ struct ResourceOperationCoordinator {
         resourceKind: OperationResourceKind,
         resourceID: UUID,
         userID: UUID,
-        hypervisorId: String?,
         dispatch strategy: Strategy,
         on db: any Database,
         app: Application,
@@ -109,27 +89,8 @@ struct ResourceOperationCoordinator {
         let operation = try await ResourceOperation.begin(
             kind, resourceKind: resourceKind, resourceID: resourceID, userID: userID,
             on: db, applying: mutation)
-        dispatchInBackground(
-            operation, resourceKind: resourceKind, resourceID: resourceID,
-            hypervisorId: hypervisorId, strategy: strategy, app: app)
+        dispatchInBackground(operation, resourceID: resourceID, strategy: strategy, app: app)
         return operation
-    }
-
-    /// Dispatches an operation that was begun *outside* the coordinator — the
-    /// create path, whose retrying IPAM transaction owns its own row insert, and
-    /// the sandbox expiry sweep. Same background hand-off and verdict path as
-    /// `perform`, without the `begin`.
-    func dispatch(
-        _ operation: ResourceOperation,
-        resourceKind: OperationResourceKind,
-        resourceID: UUID,
-        hypervisorId: String?,
-        dispatch strategy: Strategy,
-        app: Application
-    ) {
-        dispatchInBackground(
-            operation, resourceKind: resourceKind, resourceID: resourceID,
-            hypervisorId: hypervisorId, strategy: strategy, app: app)
     }
 
     /// Hands the freshly begun operation to a detached background task (the
@@ -137,9 +98,7 @@ struct ResourceOperationCoordinator {
     /// alive) and drives its dispatch strategy to a verdict.
     private func dispatchInBackground(
         _ operation: ResourceOperation,
-        resourceKind: OperationResourceKind,
         resourceID: UUID,
-        hypervisorId: String?,
         strategy: Strategy,
         app: Application
     ) {
@@ -147,25 +106,6 @@ struct ResourceOperationCoordinator {
         let budget = operation.completionBudget
 
         switch strategy {
-        case .stateSync:
-            app.backgroundTasks.spawn {
-                guard let agentId = hypervisorId else {
-                    await recordVerdict(
-                        operationID: operationID, as: .failed,
-                        error: "This \(resourceKind.displayName) is not placed on any agent", on: app)
-                    return
-                }
-                guard await agentDispatch.agentIsOnline(agentId: agentId) else {
-                    await recordVerdict(
-                        operationID: operationID, as: .failed,
-                        error:
-                            "Agent \(agentId) is offline; the \(resourceKind.displayName) cannot converge to the requested state",
-                        on: app)
-                    return
-                }
-                await agentDispatch.syncDesiredState(agentId: agentId)
-            }
-
         case .awaitingResponse(let message):
             app.backgroundTasks.spawn {
                 do {
@@ -178,37 +118,6 @@ struct ResourceOperationCoordinator {
                         let reason = details.map { "\(message): \($0)" } ?? message
                         await recordVerdict(operationID: operationID, as: .failed, error: reason, on: app)
                     }
-                } catch {
-                    await recordVerdict(
-                        operationID: operationID, as: .failed, error: error.localizedDescription, on: app)
-                }
-            }
-
-        case .placement(let work):
-            app.backgroundTasks.spawn {
-                // Bail if shutdown's drain already cancelled us — placement work
-                // dereferences `app.db` immediately (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
-                do {
-                    try await work(db)
-                } catch {
-                    await recordVerdict(
-                        operationID: operationID, as: .failed, error: error.localizedDescription, on: app)
-                }
-            }
-
-        case .directResolution(let work):
-            app.backgroundTasks.spawn {
-                guard let db = app.liveDB else { return }
-                do {
-                    // If the sweep already failed this operation, stop: the user
-                    // will retry, and resolving under a failed operation would
-                    // contradict it.
-                    guard let current = try await ResourceOperation.find(operationID, on: db),
-                        current.status == .pending
-                    else { return }
-                    guard try await work(db) else { return }
-                    await recordVerdict(operationID: operationID, as: .succeeded, error: nil, on: app)
                 } catch {
                     await recordVerdict(
                         operationID: operationID, as: .failed, error: error.localizedDescription, on: app)
@@ -272,13 +181,15 @@ struct ResourceOperationCoordinator {
             switch operation.resourceKind {
             case .virtualMachine:
                 if let vm = try await VM.find(operation.resourceID, on: db),
-                    vm.resolveForStuckOperation(operation, telemetryReason: telemetryReason)
+                    vm.resolveForStuckOperation(
+                        mutation: operation.kind, telemetryReason: telemetryReason)
                 {
                     try await vm.save(on: db)
                 }
             case .sandbox:
                 if let sandbox = try await Sandbox.find(operation.resourceID, on: db),
-                    sandbox.resolveForStuckOperation(operation)
+                    sandbox.resolveForStuckOperation(
+                        mutation: operation.kind, telemetryReason: telemetryReason)
                 {
                     try await sandbox.save(on: db)
                 }

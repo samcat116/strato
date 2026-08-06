@@ -28,9 +28,10 @@ import {
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { friendlyErrorMessage } from "@/lib/errors";
 import {
-  usePendingOperation,
-  useOperationsStore,
-} from "@/lib/stores/operations-store";
+  acceptedMutation,
+  usePendingMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { Sandbox, OperationKind } from "@/types/api";
 
@@ -41,9 +42,21 @@ interface SandboxActionsProps {
 
 type SandboxAction = "start" | "stop" | "restart" | "delete";
 
-// Maps an in-flight operation (which may have been started elsewhere, e.g. on
-// the detail page) back to the action button that should show the spinner.
-// Sandboxes never pause/resume, but the map stays total over OperationKind.
+// The verb each button reports, since a lifecycle mutation answers with the
+// sandbox rather than an operation that names its own kind. Unlike a VM's,
+// every sandbox verb here is generation-backed — restart included, because it
+// rides the desired-state sync.
+const actionToKind: Record<SandboxAction, OperationKind> = {
+  start: "boot",
+  stop: "shutdown",
+  restart: "reboot",
+  delete: "delete",
+};
+
+// The other direction: maps an in-flight mutation (which may have been started
+// elsewhere, e.g. on the detail page) back to the action button that should
+// show the spinner. Sandboxes never pause/resume, but the map stays total over
+// OperationKind.
 const kindToAction: Record<OperationKind, SandboxAction | null> = {
   create: null,
   boot: "start",
@@ -68,25 +81,30 @@ export function SandboxActions({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const watch = useOperationsStore((state) => state.watch);
-  const pendingOperation = usePendingOperation(sandbox.id);
+  const watch = useMutationsStore((state) => state.watch);
+  const pendingMutation = usePendingMutation(sandbox.id);
 
-  // Busy while the request is in flight OR while an accepted operation is still
-  // pending on the server — mutations no longer resolve synchronously.
-  const isLoading = isSubmitting || !!pendingOperation;
+  // Busy while the request is in flight OR while an accepted mutation is still
+  // converging on the server — mutations no longer resolve synchronously.
+  const isLoading = isSubmitting || !!pendingMutation;
   const activeAction =
     submittingAction ??
-    (pendingOperation ? kindToAction[pendingOperation.kind] : null);
+    (pendingMutation ? kindToAction[pendingMutation.kind] : null);
 
   const handleAction = async (action: SandboxAction) => {
     setIsSubmitting(true);
     setSubmittingAction(action);
 
     try {
-      // Each call returns 202 with an operation record; the OperationWatcher
-      // polls it to a terminal state and toasts the outcome.
-      const operation = await sandboxesApi[action](sandbox.id);
-      watch(operation, sandbox.name);
+      // Each call returns 202; the MutationWatcher follows it to a terminal
+      // state and toasts the outcome.
+      watch(
+        acceptedMutation(await sandboxesApi[action](sandbox.id), {
+          kind: actionToKind[action],
+          resourceKind: "sandbox",
+          resourceName: sandbox.name,
+        })
+      );
 
       switch (action) {
         case "start":

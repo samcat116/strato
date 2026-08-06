@@ -16,6 +16,14 @@ what happens during deploys and failures.
 | Sync nudges | Valkey pub/sub `replica:{id}:nudges` | Latency optimization only |
 | Imperative RPC forwarding | Valkey pub/sub `replica:{id}:rpc`, `replica:{id}:rpc-replies` | Volume operations and reboot |
 | Placement reservations, sweep locks | Valkey (`resv:*`, `lock:sweep:*`) | Phase 0 (issue #258) |
+
+The stuck-**convergence** sweep is deliberately absent from that table
+(STR-147). Marking a resource degraded past its deadline is idempotent and
+convergent, so every replica runs it lock-free; the one non-idempotent effect —
+the completion webhook — is claimed by a conditional `UPDATE` on the deadline
+column rather than by a cluster singleton. The residual stuck-*operation* sweep
+keeps its `lock:sweep:stuck_operations` singleton until the last imperative
+verb (VM restart, the snapshot verbs) converts.
 | Image download grants | Valkey `imggrant:agent:{agentId}:image:{imageId}` (TTL 30m) | Written by the replica that emits the download URLs; read by whichever replica serves the fetch (issue #562) |
 | Browser sessions | Valkey `vrs-{sessionID}` (idle TTL, `SESSION_TTL_SECONDS`) | **Not** coordination state — a separate store with the opposite failure contract (below) |
 
@@ -85,12 +93,12 @@ agent errors propagate; an unroutable agent fails fast.
   backoff + jitter) to surviving replicas, which take over the routing keys.
   The registration-triggered sync converges any drift. Stale routing keys
   expire within one TTL (60s); until reconnect the agent is effectively
-  offline, and in-flight operations complete via reconciliation or the
-  stuck-operation sweep.
+  offline, and in-flight mutations settle via reconciliation or the
+  stuck-convergence sweep.
 - **Rolling deploy**: same as a crash, one replica at a time. In-flight
-  operations are not lost — they live in PostgreSQL and complete from
-  observed-state reports (or are failed by the sweep and surfaced to the
-  client, never silently dropped).
+  mutations are not lost — the desired state and its convergence deadline live
+  in PostgreSQL, and they settle from observed-state reports (or are degraded
+  by the sweep and surfaced to the client, never silently dropped).
 - **Coordination-store outage**: coordination fails open (issue #258 policy).
   Agents keep converging via their socket-holding replica's periodic sync;
   cross-replica nudges and RPC are unavailable until Valkey returns.

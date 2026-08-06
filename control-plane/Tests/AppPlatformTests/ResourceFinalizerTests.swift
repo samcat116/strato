@@ -277,7 +277,7 @@ final class ResourceFinalizerTests {
 
     // MARK: - The direct path (offline agent)
 
-    @Test("An offline agent's VM is reaped by the direct path and the operation succeeds")
+    @Test("An offline agent's VM is reaped by the direct path, and the reap records it")
     func offlineAgentDirectPathReaps() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
             // Placed on an agent that was never registered: online lookup
@@ -294,13 +294,13 @@ final class ResourceFinalizerTests {
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
             #expect(try await VM.find(vmID, on: app.db) == nil)
-            let operation = try #require(try await self.deleteOperation(for: vmID, on: app.db))
-            #expect(operation.status == .succeeded)
+            let terminal = try #require(try await self.deletionCompleted(for: vmID, on: app.db))
+            #expect(terminal.mutation == .delete)
         }
     }
 
-    @Test("The direct path leaves the operation pending while another finalizer holds the row")
-    func offlineAgentDirectPathLeavesOperationPendingWhenHeld() async throws {
+    @Test("The direct path records nothing terminal while another finalizer holds the row")
+    func offlineAgentDirectPathRecordsNothingWhenHeld() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
             vm.hypervisorId = UUID().uuidString
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
@@ -316,11 +316,11 @@ final class ResourceFinalizerTests {
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
             // Force-clearing the agent's token does not finish the delete, so
-            // the operation must not claim it did.
+            // nothing may record that it did — a client polling the delete
+            // would otherwise be told a still-standing row is gone.
             let held = try #require(try await VM.find(vmID, on: app.db))
             #expect(held.finalizers == [Self.foreign.rawValue])
-            let operation = try #require(try await self.deleteOperation(for: vmID, on: app.db))
-            #expect(operation.status == .pending)
+            #expect(try await self.deletionCompleted(for: vmID, on: app.db) == nil)
         }
     }
 
@@ -457,13 +457,14 @@ final class ResourceFinalizerTests {
 
     // MARK: - Helpers
 
-    private func deleteOperation(for resourceID: UUID, on db: any Database) async throws
-        -> ResourceOperation?
+    /// The terminal `resource_events` row the reap appends — the delete's
+    /// completion signal now that there is no operation row to succeed
+    /// (STR-147).
+    private func deletionCompleted(for resourceID: UUID, on db: any Database) async throws
+        -> ResourceEvent?
     {
-        try await ResourceOperation.query(on: db)
-            .filter(\.$resourceID == resourceID)
-            .filter(\.$kind == .delete)
-            .first()
+        try await ResourceEvent.latest(
+            .completed, resourceKind: .virtualMachine, resourceID: resourceID, on: db)
     }
 
     /// Ages a row's `updatedAt` past a sweep's budget. Raw SQL because Fluent

@@ -5,6 +5,7 @@ import type {
   VM,
   CreateVMRequest,
   UpdateVMRequest,
+  AcceptedMutation,
   Operation,
   Page,
   VMLogEntry,
@@ -16,8 +17,11 @@ import type {
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
-// an Operation record, and the actual work completes in the background. Poll
-// operationsApi.get (see OperationWatcher) until the operation is terminal.
+// the VM, the generation it now has to converge on, and the id of the
+// mutation's audit record (backend STR-147). The work completes in the
+// background; MutationWatcher refetches the VM until its `conditions` say it
+// converged — or, for a delete, polls operationsApi.get(mutationId), because a
+// deleted VM has nothing left to refetch.
 export const vmsApi = {
   list(organizationId?: string): Promise<VM[]> {
     return api
@@ -32,8 +36,8 @@ export const vmsApi = {
     return api.get<VM>(`/api/vms/${id}`);
   },
 
-  create(data: CreateVMRequest): Promise<Operation> {
-    return api.post<Operation>("/api/vms", data);
+  create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>("/api/vms", data);
   },
 
   update(id: string, data: UpdateVMRequest): Promise<VM> {
@@ -48,28 +52,30 @@ export const vmsApi = {
     return api.post<VNCSession>(`/api/vms/${id}/console/vnc`, {});
   },
 
-  delete(id: string): Promise<Operation> {
-    return api.delete<Operation>(`/api/vms/${id}`);
+  delete(id: string): Promise<AcceptedMutation<VM>> {
+    return api.delete<AcceptedMutation<VM>>(`/api/vms/${id}`);
   },
 
-  start(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/start`);
+  start(id: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/start`);
   },
 
-  stop(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/stop`);
+  stop(id: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/stop`);
   },
 
+  // Restart alone still answers with an Operation: it is an imperative agent
+  // command with no generation to converge on, until backend STR-151.
   restart(id: string): Promise<Operation> {
     return api.post<Operation>(`/api/vms/${id}/restart`);
   },
 
-  pause(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/pause`);
+  pause(id: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/pause`);
   },
 
-  resume(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/resume`);
+  resume(id: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/resume`);
   },
 
   listOperations(id: string, limit?: number): Promise<Operation[]> {

@@ -61,6 +61,15 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
+    /// When the stuck-convergence sweep gives up on the outstanding mutations
+    /// and marks this VM degraded (STR-147). Unlike the three fields above this
+    /// is written by the *mutation* path, not the report: every accepted
+    /// mutation stamps `max(existing, now + budget)`, so a short-budget
+    /// mutation cannot shorten a long one's runway. Nil means nothing is
+    /// outstanding — cleared on convergence and on failure alike.
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
+
     /// Outstanding cleanup participants blocking this VM's removal (ADR 0001,
     /// stage 3). Empty for a live VM; stamped when a `DELETE` marks
     /// `desiredStatus = .absent`, and drained a token at a time until the row
@@ -340,6 +349,14 @@ extension VM {
         generation += 1
     }
 
+    /// True once the owning agent has confirmed converging to the current
+    /// generation and the observed status satisfies the desired one — the
+    /// `conditions.converged` predicate, in the shape the reconciliation paths
+    /// need it (sandbox parity).
+    var isConverged: Bool {
+        observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
+    }
+
     /// Realigns desired state with observed reality after a failed operation,
     /// bumping the generation. Without this, the unachieved intent lingers —
     /// e.g. a failed boot leaves `desired_status = .running`, which a later
@@ -371,24 +388,29 @@ extension VM {
         return true
     }
 
-    /// Resolves the in-flight state a failed operation left on this VM
+    /// Resolves the in-flight state a failed mutation left on this VM
     /// (issue #259/#412): a still-transitional VM — or one whose `create` never
     /// settled (`.created`) — is escalated to `.error`, then desired state is
     /// realigned with observed reality (`revertDesiredToObserved`) so the
     /// unachieved intent does not linger and replay on a later sync. A stuck
     /// *delete* is exempt from that realignment — see
     /// `revertDesiredToObserved` — so a timed-out delete cannot resurrect the
-    /// VM. Shared by `ResourceOperationCoordinator.recordVerdict` and the
-    /// stuck-operation sweep; `telemetryReason` keeps a reported failure
-    /// (`operation_failed`) distinct from a swept timeout (`stuck_operation`)
-    /// in the error metric. Returns whether anything changed; does not persist
-    /// — call `save(on:)` afterwards.
+    /// VM. Shared by `ResourceOperationCoordinator.recordVerdict` (the residual
+    /// snapshot/reboot operations) and the stuck-convergence sweep;
+    /// `telemetryReason` keeps a reported failure (`operation_failed`) distinct
+    /// from a swept timeout (`stuck_convergence`) in the error metric. Returns
+    /// whether anything changed; does not persist — call `save(on:)`
+    /// afterwards.
+    ///
+    /// Takes the mutation kind rather than an operation row: lifecycle
+    /// mutations no longer write one (STR-147), and `.create` is the only thing
+    /// this ever read off it.
     @discardableResult
     func resolveForStuckOperation(
-        _ operation: ResourceOperation, telemetryReason: String = "operation_failed"
+        mutation: VMOperationKind, telemetryReason: String
     ) -> Bool {
         var changed = false
-        if status.isTransitional || (operation.kind == .create && status == .created) {
+        if status.isTransitional || (mutation == .create && status == .created) {
             setStatus(.error)
             changed = true
             Telemetry.vmEnteredError(reason: telemetryReason)

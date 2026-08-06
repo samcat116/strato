@@ -379,6 +379,12 @@ extension ResourceOperation {
 /// polling decodes — even though for a sandbox operation it carries the
 /// sandbox's id; `resourceKind`/`resourceId` are the kind-aware fields new
 /// clients should read.
+///
+/// Since STR-147 this shape is served from two sources: rows of this table, for
+/// the verbs still dispatched as imperative agent RPCs, and `OperationFacade`'s
+/// synthesis over `resource_events` + the resource's `conditions`, for the
+/// lifecycle mutations that stopped writing rows. Nothing about the wire shape
+/// distinguishes them, which is the point.
 struct OperationResponse: Content {
     let id: UUID?
     let vmId: UUID
@@ -390,16 +396,37 @@ struct OperationResponse: Content {
     let createdAt: Date?
     let completedAt: Date?
 
+    init(
+        id: UUID?,
+        resourceKind: OperationResourceKind,
+        resourceID: UUID,
+        kind: VMOperationKind,
+        status: VMOperationStatus,
+        error: String?,
+        createdAt: Date?,
+        completedAt: Date?
+    ) {
+        self.id = id
+        self.vmId = resourceID
+        self.resourceKind = resourceKind
+        self.resourceId = resourceID
+        self.kind = kind
+        self.status = status
+        self.error = error
+        self.createdAt = createdAt
+        self.completedAt = completedAt
+    }
+
     init(from operation: ResourceOperation) {
-        self.id = operation.id
-        self.vmId = operation.resourceID
-        self.resourceKind = operation.resourceKind
-        self.resourceId = operation.resourceID
-        self.kind = operation.kind
-        self.status = operation.status
-        self.error = operation.error
-        self.createdAt = operation.createdAt
-        self.completedAt = operation.completedAt
+        self.init(
+            id: operation.id,
+            resourceKind: operation.resourceKind,
+            resourceID: operation.resourceID,
+            kind: operation.kind,
+            status: operation.status,
+            error: operation.error,
+            createdAt: operation.createdAt,
+            completedAt: operation.completedAt)
     }
 }
 

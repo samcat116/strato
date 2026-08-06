@@ -46,12 +46,28 @@ info:
     ## Asynchronous mutations
 
     VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
-    pause/resume, sandbox snapshot/restore) are **asynchronous**. They persist a
-    desired-state change plus a `ResourceOperation` row in one transaction and
-    return `202 Accepted` with that operation. Clients poll
-    `GET /api/operations/{operationID}` (or the per-resource operations list)
-    until `status` is terminal (`succeeded` or `failed`). A second mutation on a
-    resource that already has a pending operation is rejected with `409`.
+    pause/resume, sandbox snapshot/restore) are **asynchronous**: they persist a
+    desired-state change and return `202 Accepted`.
+
+    Most of them — everything with a generation to converge on — answer with
+    `{resource, targetGeneration, mutationId}`. Refetch the resource and read
+    its `conditions`: done is `converged` with
+    `observedGeneration >= targetGeneration`; failed is
+    `degraded.sinceGeneration == targetGeneration`, carrying the agent's
+    reason. Overlapping mutations are accepted rather than refused — desired
+    state is level-triggered, so the last write wins and the agent converges on
+    it.
+
+    The exceptions are the verbs still dispatched as imperative agent commands
+    — VM restart, and every snapshot verb — which answer with a
+    `ResourceOperation` to poll to a terminal `status`, and which do reject a
+    second mutation on the same resource with `409`.
+
+    **Deletion** is the one case where the resource cannot answer for itself:
+    once the row is removed, polling it returns a `404` indistinguishable from
+    never-existed and not-authorized. Poll
+    `GET /api/operations/{operationID}` with the delete's `mutationId`
+    instead; it reports `succeeded` from the record the deletion left behind.
 
     Image and volume mutations are synchronous at the API layer: they return the
     resource immediately (often in a transitional `status` such as `pending` or
@@ -292,8 +308,9 @@ paths:
       operationId: createVM
       summary: Create a virtual machine
       description: >-
-        Records the VM and a pending `create` operation, returning the
-        operation to poll. `networkId`/`networkName` and `securityGroupIds` are
+        Records the VM and returns it with the generation it is converging on;
+        refetch it until its `conditions` report `converged`.
+        `networkId`/`networkName` and `securityGroupIds` are
         resolved within the VM's own project: one naming something outside it
         is reported as `404`, not as a distinct cross-project refusal, since
         ids are opaque and names are per-project — confirming that one exists
@@ -306,7 +323,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateVMRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -353,7 +370,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VMDetail"
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -366,10 +383,14 @@ paths:
     delete:
       operationId: deleteVM
       summary: Delete a virtual machine
-      description: Sets desired state to absent and returns a pending `delete` operation.
+      description: >-
+        Sets desired state to absent. The row survives until every finalizer
+        clears, so poll `GET /api/operations/{operationID}` with the returned
+        `mutationId` rather than the VM: once the VM is gone, a `404` on it is
+        indistinguishable from never-existed and not-authorized.
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -383,7 +404,7 @@ paths:
       summary: Start a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -397,7 +418,7 @@ paths:
       summary: Stop a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -425,7 +446,7 @@ paths:
       summary: Pause a virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -439,7 +460,7 @@ paths:
       summary: Resume a paused virtual machine
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -611,7 +632,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSandboxRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -659,9 +680,13 @@ paths:
     delete:
       operationId: deleteSandbox
       summary: Delete a sandbox
+      description: >-
+        Sets desired state to absent. Poll
+        `GET /api/operations/{operationID}` with the returned `mutationId`
+        rather than the sandbox — see `deleteVM` for why.
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -675,7 +700,7 @@ paths:
       summary: Start a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -689,7 +714,7 @@ paths:
       summary: Stop a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -703,7 +728,7 @@ paths:
       summary: Restart a sandbox
       tags: [Sandboxes]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -8431,6 +8456,22 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ResourceOperation"
+    AcceptedVMMutation:
+      description: >-
+        The mutation was accepted. Refetch the VM until its `conditions` report
+        `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedVMMutation"
+    AcceptedSandboxMutation:
+      description: >-
+        The mutation was accepted. Refetch the sandbox until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedSandboxMutation"
     LogBackendUnavailable:
       description: The log backend (Loki) could not be queried.
       content:
@@ -8460,11 +8501,67 @@ components:
           type: string
       additionalProperties: true
 
+    AcceptedVMMutation:
+      type: object
+      description: >-
+        The body of a `202` from a VM lifecycle mutation. The VM as the
+        mutation left it, plus the generation it now has to converge on.
+
+
+        Done means the VM's `conditions` report `converged` with
+        `observedGeneration >= targetGeneration`; failed means
+        `conditions.degraded.sinceGeneration == targetGeneration`, with the
+        agent's reason. Both are readable from `GET /api/vms/{vmID}` — no
+        operation object is involved.
+
+
+        `mutationId` names the audit record of the request, and is what
+        `GET /api/operations/{operationID}` answers for. Its one *necessary*
+        use is `deleteVM`: a delete succeeds by the VM ceasing to exist, and a
+        client polling the VM would see a `404` that means deleted,
+        never-existed and not-authorized alike.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/VMDetail"
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the VM's `observedGeneration` must reach.
+        mutationId:
+          type: string
+          format: uuid
+
+    AcceptedSandboxMutation:
+      type: object
+      description: >-
+        The body of a `202` from a sandbox lifecycle mutation — the sandbox
+        counterpart of `AcceptedVMMutation`, with the same contract.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/SandboxDetail"
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the sandbox's `observedGeneration` must reach.
+        mutationId:
+          type: string
+          format: uuid
+
     ResourceOperation:
       type: object
       description: >-
         A durable record of one asynchronous resource lifecycle mutation. Poll
         it until `status` is terminal.
+
+
+        Served from two sources. The verbs still dispatched as imperative agent
+        commands — VM restart, and every snapshot verb — have real operation
+        records. Everything else is synthesized on read from the mutation's
+        audit record and the resource's `conditions`, so a client written
+        against the older contract keeps working; those responses report no
+        `completedAt` except for a completed delete.
       required: [vmId, resourceKind, resourceId, kind, status]
       properties:
         id:

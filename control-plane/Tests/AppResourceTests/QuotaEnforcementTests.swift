@@ -546,10 +546,11 @@ final class QuotaEnforcementTests {
                         networkName: "default"))
             } afterResponse: { res in
                 // Creation is asynchronous (issue #259): the endpoint commits the
-                // VM row + quota reservation, then accepts with an operation record.
+                // VM row + quota reservation, then accepts with the VM and the
+                // generation it is converging on (STR-147).
                 #expect(res.status == .accepted)
-                let operation = try res.content.decode(OperationResponse.self)
-                createdVMID = operation.vmId
+                let body = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                createdVMID = body.resource.id
             }
 
             let afterCreate = try await ResourceQuota.find(quota.id, on: app.db)!

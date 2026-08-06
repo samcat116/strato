@@ -1248,7 +1248,7 @@ final class SecurityGroupControllerTests {
                     .map { $0.$securityGroup.id }
             }
 
-            var defaulted: OperationResponse?
+            var defaulted: AcceptedMutation<SandboxDetailResponse>?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -1259,16 +1259,16 @@ final class SecurityGroupControllerTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                defaulted = try res.content.decode(OperationResponse.self)
+                defaulted = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self)
             }
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
             #expect(
-                try await groupIDs(ofSandbox: try #require(defaulted).resourceId) == [
+                try await groupIDs(ofSandbox: try #require(defaulted?.resource.id)) == [
                     try defaultGroup.requireID()
                 ])
 
-            var chosen: OperationResponse?
+            var chosen: AcceptedMutation<SandboxDetailResponse>?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -1280,9 +1280,9 @@ final class SecurityGroupControllerTests {
                         securityGroupIds: [explicit.id]))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                chosen = try res.content.decode(OperationResponse.self)
+                chosen = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self)
             }
-            #expect(try await groupIDs(ofSandbox: try #require(chosen).resourceId) == [explicit.id])
+            #expect(try await groupIDs(ofSandbox: try #require(chosen?.resource.id)) == [explicit.id])
 
             // Naming groups with no network has nothing to attach them to.
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -1299,7 +1299,7 @@ final class SecurityGroupControllerTests {
             }
 
             // A sandbox with no network gets no NIC and so no memberships.
-            var networkless: OperationResponse?
+            var networkless: AcceptedMutation<SandboxDetailResponse>?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -1309,9 +1309,9 @@ final class SecurityGroupControllerTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                networkless = try res.content.decode(OperationResponse.self)
+                networkless = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self)
             }
-            #expect(try await groupIDs(ofSandbox: try #require(networkless).resourceId).isEmpty)
+            #expect(try await groupIDs(ofSandbox: try #require(networkless?.resource.id)).isEmpty)
         }
     }
 }
