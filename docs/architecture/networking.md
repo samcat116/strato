@@ -293,7 +293,9 @@ namespace, owned by that uid.
 
 The path is `NetworkServiceLinux`, driven through the same `NetworkOrchestrator`
 the VM path uses — not a special case inside the sandbox runtime — selected by a
-`NICPlacement` the agent derives from the jail plan (STR-100).
+`NICPlacement` the agent derives from the jail plan (STR-100; the jail itself —
+chroot, per-sandbox uid, netns lifecycle — is described in
+[sandboxes.md](./sandboxes.md#jailer-hardening)).
 
 **Port namespace.** Sandbox ports are `sbx-<id>[-<n>]`, deliberately disjoint
 from the VM path's `vm-<id>[-<n>]`, so the two kinds are distinguishable in OVN
@@ -376,10 +378,10 @@ refuses rather than skipping the device and booting a sandbox with no interface
 that the control plane still records as having one.
 
 **Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
-still `false`, so no sandbox `NetworkSpec` reaches an agent; STR-103 replaces
-that fleet-wide flag with a per-agent capability gate. The guest also cannot yet
-configure the interface (STR-101), and a networked sandbox is cold-only —
-snapshot restore and fork are refused until STR-104 remaps the device on load.
+still `false`, so no sandbox `NetworkSpec` reaches an agent. The full holding
+pattern — what blocks the flag (STR-101, STR-103) and the security-group and
+snapshot arms queued behind it (STR-102, STR-104) — is tracked in
+[sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
 
 ## Security groups
 
