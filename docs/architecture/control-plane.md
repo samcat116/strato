@@ -138,6 +138,15 @@ The important ones to know when navigating `Services/`:
 - Hierarchy/reporting: `OrganizationAccessService` (the org list filter used
   by list endpoints), `HierarchyTreeBuilder` and friends,
   `QuotaUsageService`/`QuotaComplianceService`, `ProjectStatsService`.
+- **`HierarchyMaintenanceService`** — backs the system-admin-only
+  `GET /api/hierarchy/validate` and `POST /api/hierarchy/repair`. The org tree
+  is stored twice: as relational parent links and as the materialized `path` /
+  `depth` each folder and project carries. The links are the source of truth
+  (authorization walks them), so validation re-derives every path from them and
+  reports the rows that disagree, plus parent cycles and missing parents;
+  `repairOptions.rebuildPaths` rewrites what it found. Drift is otherwise
+  invisible — a folder move that rewrote only descendant *folders* left the
+  projects beneath naming an ancestor they no longer had (STR-114).
 
 ## Request lifecycle: `POST /api/vms`
 
@@ -216,9 +225,45 @@ users the way `resource_operations.user_id` is), the resource kind/id/name,
 the mutation kind, the target generation, and the org/project it happened in.
 Rows are never updated and never swept — there is no retention policy, because
 an audit trail that admits edits is not one, and a `BEFORE UPDATE OR DELETE`
-trigger enforces that rather than trusting every future caller. `ResourceOperation.begin` covers
-every mutation except VM and sandbox `create`, whose retrying transactions own
-their own inserts and so append their own events.
+trigger enforces that rather than trusting every future caller.
+`ResourceOperation.begin` covers every mutation except VM and sandbox
+`create`, whose retrying transactions own their own inserts and so append
+their own events.
+
+**`DELETE` never removes a row; finalizers do** (STR-144, ADR 0001 stage 3).
+A delete marks desired state `.absent` and stamps the resource's `finalizers`
+list — the named cleanup participants its teardown owes (`agent.absent` for a
+placed workload; nothing for one that never reached an agent). Each participant
+clears its own token from wherever it actually runs, and
+`ResourceFinalizerService.clear` reaps the row — external cleanup, IAM
+bindings, the record, quota, placement reservation
+(`FinalizableResource.reap`) — when the last token goes. The token is cleared
+with a single `array_remove`, never a read-modify-write, so two participants on
+two replicas cannot lose each other's update, and the reap claims the row
+(`SELECT … FOR UPDATE`) inside its own transaction so exactly one of two racing
+clears reports the removal. Clearing the token and reaping the row are two
+commits: a crash in between leaves a terminating row with an empty list, which
+the participant's next trigger reaps, since clearing an already-cleared token
+still reaps an empty list. `agent.absent` re-triggers on every observed-state
+report; the one-shot direct path and unattended expiry deletions have no such
+trigger, so `sweepOrphanedTerminatingResources` (cluster-singleton, 60s budget)
+is the universal backstop — and the reason a new participant does not have to
+invent its own retry.
+
+The only participant today is the observed-state applier's confirmation of
+absence — the agent-confirmed tombstone dance, now expressed as one token among
+a list. Offline or unplaced workloads take the direct path, which force-clears
+`agent.absent` for the same reason it always deleted directly: a dead agent
+must not make its workloads undeletable. That path reports back whether the row
+is actually gone; when another participant still holds it, the delete operation
+stays `pending` rather than telling the client a workload is deleted while its
+row is standing. `ipam.release`, `dns.deregister`, and
+`fip.release` are named in the ADR but **not stamped**: each is a database
+cascade today (`vm_interface_addresses` CASCADE, zone contents derived on
+demand and never stored, `floating_ips.interface_id` SET NULL), and a token for
+work Postgres already does transactionally would trade an atomic cascade for an
+eventually-consistent one. They become participants when they gain an effect
+outside the row's transaction.
 
 **Resource list endpoints page by default** (issue #700): every list (VMs,
 sandboxes, volumes, networks, security groups, floating IPs/pools, agents,

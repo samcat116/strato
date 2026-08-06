@@ -736,10 +736,20 @@ public func configure(_ app: Application) async throws {
     // table itself is retired.
     app.migrations.add(CreateResourceEvent())
 
+    // STR-144: the agent-confirmed tombstone dance generalizes into finalizers
+    // — a list of outstanding cleanup participants that keeps a deleted row
+    // alive until the last one clears its token.
+    app.migrations.add(AddFinalizersToWorkloads())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
     app.migrations.add(DeleteOrphanedResourceRoleBindings())
+
+    // One-time sweep of the project paths folder moves left stale (STR-114).
+    // Also runs late: it recomputes derived data over the folder and project
+    // tables, so it wants them in their final shape.
+    app.migrations.add(RebuildDriftedHierarchyPaths())
 
     try await app.autoMigrate()
 

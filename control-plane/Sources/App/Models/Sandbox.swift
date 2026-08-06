@@ -113,6 +113,11 @@ final class Sandbox: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    /// Outstanding cleanup participants blocking this sandbox's removal
+    /// (ADR 0001, stage 3) — the VM contract exactly. See `ResourceFinalizer`.
+    @Field(key: "finalizers")
+    var finalizers: [String]
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -159,6 +164,7 @@ final class Sandbox: Model, @unchecked Sendable {
         self.desiredStatus = .stopped
         self.generation = 0
         self.observedGeneration = 0
+        self.finalizers = []
     }
 }
 
