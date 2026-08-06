@@ -1,0 +1,184 @@
+docs/.vitepress/config.mts
+  s_08f323ac086b1c::t_519e5f70bc9a63 64-66
+  s_08f323ac086b1c::t_006c66ae020672 29
+docs/deployment/audit-logging.md
+  s_08f323ac086b1c::t_689d3e066f5725 5-6,14-24
+  s_08f323ac086b1c::t_253cac16f0e7d0 35,38
+docs/development/local-development.md
+  s_08f323ac086b1c::t_1529a20560a66e 57-59
+  s_08f323ac086b1c::t_a308bde7caae4a 193-194
+  s_08f323ac086b1c::t_614648dd1c2472 3-8
+  s_08f323ac086b1c::t_23b52014545c99 186
+  s_08f323ac086b1c::t_cafda0b09f970b 32
+docs/debugging/webauthn.md
+  s_08f323ac086b1c::t_4653f45e7f481e 3-5,7,9-10,12-18,20-23,25,27-28,31,33-36,38-39,42-45,47-49,51-52,54,56-61,63,65-66,68,70-76,78-85
+docs/deployment/rate-limiting.md
+  s_08f323ac086b1c::t_6aff26b1b4d4b4 14-17,19-21,28-31
+docs/deployment/logging.md
+  s_08f323ac086b1c::t_684c8b5e03f83c 14-17
+  s_08f323ac086b1c::t_844520340bfdb2 18-26
+docs/deployment/overview.md
+  s_08f323ac086b1c::t_090b71c56a1ccd 41
+  s_08f323ac086b1c::t_30f66943f1c046 14-28
+deploy/compose/README.md
+  s_08f323ac086b1c::t_23b52014545c99 121
+  s_08f323ac086b1c::t_4401cc8676488e 135-138
+  s_08f323ac086b1c::t_52c895043e6c12 82-91
+deploy/compose/docker-compose.yml
+  s_08f323ac086b1c::t_dd5f47438020dc 20-22
+docs/deployment/health-checks.md
+  s_08f323ac086b1c::t_5b3e76fd5f6806 15-18
+  s_08f323ac086b1c::t_f4361ee7a75a3d 115
+sandbox-guest/README.md
+  s_08f323ac086b1c::t_a98df043a58baa 123-126
+docs/agents/issue-tracker.md
+  s_08f323ac086b1c::t_5e966c681a0f21 42
+  s_08f323ac086b1c::t_15fab4a8126798 5-6
+docs/guide/quick-start.md
+  s_08f323ac086b1c::t_299567c68549d2 3-5
+docs/development/code-review.md
+  s_08f323ac086b1c::t_5386e91151a714 106
+README.md
+  s_08f323ac086b1c::t_1bfd583835f906 12-17,36-38,50-52,56,70-74,79,89,101,105,123-124,126-134,149-150
+docs/architecture/multi-replica.md
+  s_08f323ac086b1c::t_b30794930497a1 72-73,77-81
+  s_08f323ac086b1c::t_40a237bca7c20d 17-18
+docs/deployment/docker-compose.md
+  s_08f323ac086b1c::t_f86cbcca95e6fb 186-188,193-206
+  s_08f323ac086b1c::t_8b058299a5c4dd 8-10
+  s_08f323ac086b1c::t_8bb5ff3fb00bef 77-82,87-93
+  s_08f323ac086b1c::t_f34f2a9cfb90eb 103-109,114-126,128
+  s_08f323ac086b1c::t_2c7f2c397279c1 127
+  s_08f323ac086b1c::t_9aacde49a37f4f 94
+  s_08f323ac086b1c::t_223e519e2a737e 129
+  s_08f323ac086b1c::t_d07667b7678172 207
+docs/guide/what-is-strato.md
+  s_08f323ac086b1c::t_2cf8230b602bc4 3-8,10,12,14-22,24,26,28,30-35,37,39-41,43,45-48,50,52-58,60,62-65,67,69-73,75,77-82,84,86-87,89,91-92
+docs/architecture/overview.md
+  s_08f323ac086b1c::t_28ca53ab6bf96d 41-44
+  s_08f323ac086b1c::t_216f5ac07a02bc 198-206
+  s_08f323ac086b1c::t_7d10cf4f95e48f 154-158
+  s_08f323ac086b1c::t_a4cdd5b4d7bea4 152-153
+  s_08f323ac086b1c::t_de03ef3ca23325 232
+  s_08f323ac086b1c::t_8fdc5c6dbd6121 148-151,166-185
+docs/api-reference.md
+  s_08f323ac086b1c::t_1bc13beab867f0 30-31
+  s_08f323ac086b1c::t_6d0635d851fb24 38-45
+docs/architecture/scheduler.md
+  s_08f323ac086b1c::t_e5d20636e068ee 309-311
+  s_08f323ac086b1c::t_b872d96ea103ad 25-26
+  s_08f323ac086b1c::t_c89e58ab1e68f8 116-117
+  s_08f323ac086b1c::t_828c6ef39ea266 281,283-288
+  s_08f323ac086b1c::t_0278a40e45de8d 299-303
+  s_08f323ac086b1c::t_7cbfd84adbf960 134
+  s_08f323ac086b1c::t_4966ad0049ed16 263-269,272-274,276-277
+  s_08f323ac086b1c::t_af0bf4cc4c542e 55-57,60-63
+  s_08f323ac086b1c::t_57ac27a592167a 250-251,254,258
+  s_08f323ac086b1c::t_6f955dfd606ca3 201
+  s_08f323ac086b1c::t_ceaaedc39493fd 151-157
+  s_08f323ac086b1c::t_880ba41ef27054 64
+docs/architecture/networking.md
+  s_08f323ac086b1c::t_668cf5865e258b 19-54
+  s_08f323ac086b1c::t_d566be802a6d0b 172-182
+  s_08f323ac086b1c::t_549294754ad708 4-6
+docs/deployment/observability.md
+  s_08f323ac086b1c::t_c1ff92ab06a611 22
+  s_08f323ac086b1c::t_9301e8fde1d87f 29-32
+  s_08f323ac086b1c::t_39667578e1c2c8 157
+  s_08f323ac086b1c::t_0f6dc3f2307d62 374-376
+  s_08f323ac086b1c::t_13d7eb13908b9e 164-173
+  s_08f323ac086b1c::t_4ab6c6deb4c312 394-399
+docs/deployment/kubernetes.md
+  s_08f323ac086b1c::t_16fc5aed07c5d8 46-51,55,57-62,64-68,71-72,83-106,108-120,127-158,160
+docs/development/troubleshooting-k8s.md
+  s_08f323ac086b1c::t_e000443e261cdb 3-4,6,8-9,11-19,21-23,25,28-30,33,35,37-39,42-43,45-47,50-52,54,57-58,61,63-64,69-70,72,75,78-79,81,83-84,87-88,91-93,95,97,101,104-105,108-111,114-124,145-165,167-169,178-179,186-187,189,191-192,195-196,198-199,201-202,205,209,217,219-221
+  s_08f323ac086b1c::t_64fc59953fb154 210
+  s_08f323ac086b1c::t_570cacf21aba35 65-68
+CLAUDE.md
+  s_08f323ac086b1c::t_d377e9ea3099ae 58
+  s_08f323ac086b1c::t_23b52014545c99 53
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_08f323ac086b1c::t_1653157be549af 29-31
+docs/deployment/iam.md
+  s_08f323ac086b1c::t_cbb13309a43095 1,3-7,9,11-15,17,19-20,22-73
+helm/strato-control-plane/README.md
+  s_08f323ac086b1c::t_1e18cb0a811ba3 126
+  s_08f323ac086b1c::t_7253d3408ec811 138,140
+  s_08f323ac086b1c::t_b70f73f7297fcd 97-102
+  s_08f323ac086b1c::t_b5027c7afdf505 194,196
+  s_08f323ac086b1c::t_483b725ec61988 3
+.claude/README.md
+  s_08f323ac086b1c::t_eb87247729d17c 25
+  s_08f323ac086b1c::t_c22921df600ad7 16
+docs/architecture/iam.md
+  s_08f323ac086b1c::t_f6de5caba506c7 975-976
+docs/adr/0001-declarative-agent-protocol.md
+  s_08f323ac086b1c::t_1aed0660f6e352 3-6
+docs/adr/0002-ceph-for-distributed-block-storage.md
+  s_08f323ac086b1c::t_1c44ef38fc3b66 14-17
+CONTEXT.md
+  s_08f323ac086b1c::t_03883e91882573 130-143
+  s_08f323ac086b1c::t_752d2cc9fcd229 155-158
+  s_08f323ac086b1c::t_ff9fb2d077ab11 31-35
+docs/architecture/frontend.md
+  s_08f323ac086b1c::t_ffe5c580f483c3 153-156
+  s_08f323ac086b1c::t_2fa3822b64d416 48-55
+docs/deployment/agents.md
+  s_08f323ac086b1c::t_d9d1c277503753 458-459
+  s_08f323ac086b1c::t_4e1e844cabc42f 565-569
+  s_08f323ac086b1c::t_23b52014545c99 86
+docs/index.md
+  s_08f323ac086b1c::t_c18af40834180a 57-59
+docs/guide/getting-started.md
+  s_08f323ac086b1c::t_01e72195a0f6f5 3-16,33-41,45,63-67,78-79,84,87,90-91,98,100-102,112-116,118,122-150,168-169,171
+docs/architecture/storage.md
+  s_08f323ac086b1c::t_8608cc80c85ce1 124-126
+docs/architecture/wire-protocol.md
+  s_08f323ac086b1c::t_1b3a6efd77a589 158-161
+  s_08f323ac086b1c::t_3f2c6280eb464f 72-75,77
+  s_08f323ac086b1c::t_0800b2095443a6 10-15
+  s_08f323ac086b1c::t_de99151974c917 85-90,92
+  s_08f323ac086b1c::t_7f1ffffc1679cd 237-238,242-246
+docs/architecture/sandboxes.md
+  s_08f323ac086b1c::t_dd2393b2427c84 296-300
+  s_08f323ac086b1c::t_e8eeffad70ead1 412
+  s_08f323ac086b1c::t_62ff2b4f9b3339 192-194
+  s_08f323ac086b1c::t_b2ea3eda67fdd9 148
+  s_08f323ac086b1c::t_7235e682e78b13 212-213
+  s_08f323ac086b1c::t_ace800f68d31e1 11-23
+  s_08f323ac086b1c::t_4b7e0a3dbaedba 287,289-292
+docs/architecture/agent.md
+  s_08f323ac086b1c::t_3a70b0b1c5b696 15-20
+  s_08f323ac086b1c::t_dd201f90095da0 646
+  s_08f323ac086b1c::t_00a33e3878c3b3 128-135
+  s_08f323ac086b1c::t_a2f51365a7c82e 39-42
+  s_08f323ac086b1c::t_abb59d9341b2a5 602-621
+docs/architecture/authorization-edge-audit.md
+  s_08f323ac086b1c::t_184eca5891621e 1-5
+docs/architecture/control-plane.md
+  s_08f323ac086b1c::t_9161d2afb5ea24 73
+  s_08f323ac086b1c::t_1c311f6e25062d 51-57
+  s_08f323ac086b1c::t_44226d5c478d6b 135-137
+  s_08f323ac086b1c::t_42588a5a3c220b 239-244
+  s_08f323ac086b1c::t_aa8913b73962bd 466-471
+  s_08f323ac086b1c::t_960ccc8a56883f 197-207
+  s_08f323ac086b1c::t_f417d6e0682105 106-113
+  s_08f323ac086b1c::t_fd9388bd2ff937 19-22,25
+  s_08f323ac086b1c::t_9c15c93dc86cec 350-351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2f0579b87a2729f5992a4b4a96daf2f40eee7667",
+  "prompts": {},
+  "sessions": {
+    "s_08f323ac086b1c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5dbc5171-f32e-4ebd-85f0-e761a26355ec",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
