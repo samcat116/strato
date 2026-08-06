@@ -465,7 +465,34 @@ public enum WireProtocol {
     /// endpoint, but an operator can pin it back to push mode with one config
     /// key, and the control plane has its own kill switch — neither of which a
     /// version number can express.
-    public static let currentVersion = 29
+    ///
+    /// Version 30: the agent can say "I don't know what is on this host"
+    /// (STR-138). Adds `ObservedStateReport.manifestStatus` inbound.
+    ///
+    /// Until now an agent whose durable workload manifest failed to decode
+    /// reported the same thing as a freshly imaged host: no workloads. Every
+    /// consumer of that answer treats it as fact — capacity accounting frees
+    /// the whole machine, the reconciler plans `.create` for guests that are
+    /// still running, and the full-list `vms`/`sandboxes` semantics confirm
+    /// deletions that never happened. One undecodable byte on a node running
+    /// 40 VMs is indistinguishable from an empty node.
+    ///
+    /// `manifestStatus.inventoryComplete == false` marks a report whose
+    /// workload lists are *not* an inventory: the control plane must apply
+    /// nothing from it — no absences, no claims — beyond the resource snapshot
+    /// and the condition itself. Non-nil with `inventoryComplete == true` is
+    /// the partial case: the manifest decoded, but some entries did not, and
+    /// those workloads are unroutable (see `quarantinedEntries`).
+    ///
+    /// No gate, and no placement refusal, for the same reason as v25: the
+    /// field only ever *withholds* action. A pre-v30 control plane ignores it
+    /// and reads the empty lists as it always did — which is the bug this
+    /// fixes, not a regression it introduces — while the agent half of the fix
+    /// (zero advertised capacity, no `.create` against an unreadable manifest)
+    /// works against any control plane, because it never needs permission to
+    /// refuse. Upgrade the control plane first to get the operator-visible
+    /// half.
+    public static let currentVersion = 30
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

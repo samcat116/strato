@@ -28,15 +28,23 @@ interface AgentWorkloadSafetyCardProps {
  * - **A refused teardown.** The agent declined to converge a batch of
  *   authorized teardowns because it would have emptied too much of the host at
  *   once.
+ * - **An unreadable workload manifest** (STR-138). The manifest is the agent's
+ *   only memory of what it is running, so a host that cannot read it does not
+ *   know its own contents. It quarantines itself — no advertised capacity,
+ *   nothing converged — until an operator repairs the file on the node. This
+ *   one is the most urgent of the three: nothing on that host is being managed.
  *
- * The card renders nothing when neither applies, which is the normal case.
+ * The card renders nothing when none applies, which is the normal case.
  */
 export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps) {
   const adopt = useAdoptAgentWorkloads();
   const [adopting, setAdopting] = useState<string | null>(null);
 
   const held = agent.heldWorkloads ?? [];
-  if (held.length === 0 && !agent.teardownRefusalReason) {
+  // `manifestInventoryComplete === false` is the blind host; a reason with the
+  // flag true (or absent) is the milder "some entries can't be routed".
+  const blind = agent.manifestInventoryComplete === false;
+  if (held.length === 0 && !agent.teardownRefusalReason && !agent.manifestStatusReason) {
     return null;
   }
 
@@ -79,6 +87,27 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
+        {agent.manifestStatusReason && (
+          <div
+            className={
+              blind
+                ? "flex items-start gap-2 text-red-600 dark:text-red-400"
+                : "flex items-start gap-2 text-amber-600 dark:text-amber-400"
+            }
+          >
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <p>
+              {blind
+                ? "This node cannot read its workload manifest, so it does not know what it is running. It is advertising no capacity and converging nothing: "
+                : "Workload manifest: "}
+              {agent.manifestStatusReason}
+              {agent.manifestStatusAt
+                ? ` (reported ${new Date(agent.manifestStatusAt).toLocaleString()})`
+                : ""}
+            </p>
+          </div>
+        )}
+
         {agent.teardownRefusalReason && (
           <div className="flex items-start gap-2 text-red-600 dark:text-red-400">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />

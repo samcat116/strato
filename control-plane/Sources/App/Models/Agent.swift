@@ -204,6 +204,26 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Timestamp(key: "teardown_refused_at", on: .none)
     var teardownRefusedAt: Date?
 
+    /// What the agent last said about its durable workload manifest — its only
+    /// memory of what it is running (STR-138). Non-nil means either that the
+    /// manifest is unreadable (see `manifestInventoryComplete`) or that some
+    /// entries in it are unroutable by the running build. Cleared by the first
+    /// report that carries no manifest status.
+    @OptionalField(key: "manifest_status_reason")
+    var manifestStatusReason: String?
+
+    /// When that status was last reported.
+    @Timestamp(key: "manifest_status_at", on: .none)
+    var manifestStatusAt: Date?
+
+    /// False while the agent cannot enumerate its own workloads, which makes
+    /// its observed-state reports carry no inventory at all: nothing may be
+    /// concluded from a workload's absence from them. Nil is the steady state
+    /// (and every pre-STR-138 agent), meaning reports are complete as they
+    /// always were.
+    @OptionalField(key: "manifest_inventory_complete")
+    var manifestInventoryComplete: Bool?
+
     init() {}
 
     init(
@@ -541,6 +561,15 @@ struct AgentResponse: Content {
     /// (STR-98); nil in the steady state.
     let teardownRefusalReason: String?
     let teardownRefusedAt: Date?
+    /// What the agent last reported about its workload manifest (STR-138); nil
+    /// in the steady state. Non-nil is always operator-actionable: either the
+    /// host is quarantined because it cannot read the manifest, or it is
+    /// holding workloads this agent build cannot route.
+    let manifestStatusReason: String?
+    let manifestStatusAt: Date?
+    /// False while this agent cannot enumerate its own workloads. Its capacity
+    /// reads as zero and it converges nothing until the manifest is repaired.
+    let manifestInventoryComplete: Bool?
     /// Workloads this agent holds that no desired-state sync accounts for and
     /// whose teardown the control plane refused to authorize, because a row
     /// still exists for them. Non-empty means the control plane is describing
@@ -614,6 +643,9 @@ struct AgentResponse: Content {
         self.updateFailureReason = agent.updateFailureReason
         self.teardownRefusalReason = agent.teardownRefusalReason
         self.teardownRefusedAt = agent.teardownRefusedAt
+        self.manifestStatusReason = agent.manifestStatusReason
+        self.manifestStatusAt = agent.manifestStatusAt
+        self.manifestInventoryComplete = agent.manifestInventoryComplete
         self.heldWorkloads = heldWorkloads
     }
 }

@@ -156,6 +156,18 @@ enum Telemetry {
         Counter(label: "strato_agent_teardown_refusals_total").increment()
     }
 
+    /// Whether an agent can currently enumerate its own workloads (STR-138).
+    /// A gauge rather than a counter for the same reason as
+    /// `workloadClaimsHeld`: a blind host is a standing condition — it
+    /// advertises no capacity and converges nothing for as long as it lasts —
+    /// so the alert is "above zero", not a rate.
+    static func agentManifestUnreadable(agentName: String, unreadable: Bool) {
+        Gauge(
+            label: "strato_agent_manifest_unreadable",
+            dimensions: [("agent", agentName)]
+        ).record(unreadable ? 1 : 0)
+    }
+
     // MARK: - HTTP request layer
 
     /// RED metrics for the whole API surface, emitted once per request by
