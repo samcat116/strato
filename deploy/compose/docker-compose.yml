@@ -414,17 +414,22 @@ services:
     restart: unless-stopped
 
   # One-shot, manual: seed a first admin user + organization + project and
-  # print an admin-scoped API key once, so the deployment can be driven
-  # programmatically (CI, end-to-end tests) without the browser WebAuthn flow.
-  # Hard-refuses when any user already exists. Never started by
-  # `docker compose up` (profile-gated) — run it explicitly:
+  # print an admin-scoped API key once. Hard-refuses when any user already
+  # exists. Never started by `docker compose up` (profile-gated) — run it
+  # explicitly:
   #
+  #   # Recommended for an interactive install: the seeded admin is you, and
+  #   # the command prints a claim link for registering your passkey.
+  #   docker compose run --rm bootstrap bootstrap --admin-email you@example.com --env production
+  #
+  #   # Headless (CI, end-to-end tests): an automation identity with no passkey,
+  #   # reachable only through the printed API key.
   #   docker compose run --rm bootstrap
   #   # key only on stdout (for scripting; startup logs go to stdout too,
   #   # hence the lowered log level):
   #   docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
   #
-  # (The second form overrides the command; the first `bootstrap` is the
+  # (The overriding forms replace the command; the first `bootstrap` is the
   # service, the rest is the container command.)
   bootstrap:
     image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-main}

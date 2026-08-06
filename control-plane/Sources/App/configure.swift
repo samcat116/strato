@@ -891,6 +891,12 @@ public func configure(_ app: Application) async throws {
     // Registered unconditionally; the command itself refuses if any user exists.
     app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
 
+    // `App grant-platform-admin`: the break-glass path back in when a
+    // deployment has no reachable administrator (STR-178). Seeding the first
+    // admin cannot be an authorization decision, so it lives here rather than
+    // behind an API — named and documented instead of a hand-written UPDATE.
+    app.asyncCommands.use(GrantPlatformAdminCommand(), as: "grant-platform-admin")
+
     // Open the readiness gate: every migration, schema load, and boot-time
     // backfill above has finished. Vapor binds the port only after `configure`
     // returns, so in the normal path a probe cannot arrive before this line —
