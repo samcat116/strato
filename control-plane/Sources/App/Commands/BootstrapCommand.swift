@@ -11,17 +11,41 @@ import Vapor
 /// system admin), so the command needs no extra "I really mean it" flag — on a
 /// deployment that has any user at all it does nothing.
 ///
-/// The seeded user has no WebAuthn credential and cannot log in to the UI; it
-/// is an automation identity. Note that it consumes the first-user slot: a
-/// person who registers in the browser afterwards will NOT become system
-/// admin. Runs after `configure`, so migrations and the IAM role registry are
-/// already in place.
+/// Two shapes, chosen by `--admin-email` (STR-178):
+///
+/// - **With `--admin-email`** the seeded account belongs to a *person*. It gets
+///   an `AccountClaimToken`, and the command prints the claim link they open in
+///   a browser to enroll a passkey. This is the recommended path for an
+///   interactive install: the operator ends up administering the deployment as
+///   themselves, rather than through a second account.
+/// - **Without it** the seeded account is a headless automation identity with
+///   no WebAuthn credential, reachable only through the printed API key — the
+///   original behaviour, kept for CI and IaC.
+///
+/// Either way it consumes the first-user slot, so a person who self-registers
+/// in the browser afterwards does NOT become system admin. That is why the
+/// human path exists at all: before it, a fresh deployment's only admin was an
+/// account nobody could log in as. Runs after `configure`, so migrations and
+/// the IAM role registry are already in place.
 struct BootstrapCommand: AsyncCommand {
     struct Signature: CommandSignature {
-        @Option(name: "username", help: "Username for the seeded admin user (default: bootstrap)")
+        @Option(
+            name: "admin-email",
+            help: """
+                Email of the person who will administer this deployment. Seeds them as the \
+                first admin and prints a one-time claim link for enrolling a passkey. \
+                Recommended for interactive installs; mutually exclusive with --email.
+                """)
+        var adminEmail: String?
+
+        @Option(
+            name: "username",
+            help: "Username for the seeded admin user (default: bootstrap, or the local part of --admin-email)")
         var username: String?
 
-        @Option(name: "email", help: "Email for the seeded admin user (default: bootstrap@localhost)")
+        @Option(
+            name: "email",
+            help: "Email for the seeded headless automation user (default: bootstrap@localhost)")
         var email: String?
 
         @Option(name: "org-name", help: "Organization name (default: Default Organization)")
@@ -33,7 +57,9 @@ struct BootstrapCommand: AsyncCommand {
         @Option(name: "key-name", help: "Name of the created API key (default: bootstrap)")
         var keyName: String?
 
-        @Flag(name: "quiet", short: "q", help: "Print only the API key on stdout (for scripting)")
+        @Flag(
+            name: "quiet", short: "q",
+            help: "Print only the API key on stdout, plus the claim URL on a second line when --admin-email is given")
         var quiet: Bool
     }
 
@@ -47,6 +73,25 @@ struct BootstrapCommand: AsyncCommand {
         }
     }
 
+    struct ConflictingEmailError: Error, CustomStringConvertible {
+        var description: String {
+            """
+            bootstrap refused: pass either --admin-email (a person who claims the account \
+            in a browser) or --email (a headless automation identity), not both.
+            """
+        }
+    }
+
+    struct UnusableDerivedUsernameError: Error, CustomStringConvertible {
+        let attempted: String
+        var description: String {
+            """
+            bootstrap refused: could not derive a usable username from --admin-email \
+            (got '\(attempted)'). Pass --username explicitly.
+            """
+        }
+    }
+
     func run(using context: CommandContext, signature: Signature) async throws {
         let app = context.application
         let console = context.console
@@ -57,8 +102,15 @@ struct BootstrapCommand: AsyncCommand {
             throw RefusedError()
         }
 
-        let username = signature.username ?? "bootstrap"
-        let email = signature.email ?? "bootstrap@localhost"
+        // `--admin-email` and `--email` name the same column for opposite
+        // purposes, so taking both would silently drop one. Only the human path
+        // is validated: the headless default (`bootstrap@localhost`) has no dot
+        // in its domain and `validateEmail` would rightly refuse it.
+        guard signature.adminEmail == nil || signature.email == nil else { throw ConflictingEmailError() }
+        let adminEmail = try signature.adminEmail.map { try UserController.validateEmail($0) }
+
+        let username = try Self.resolveUsername(signature.username, adminEmail: adminEmail)
+        let email = adminEmail ?? signature.email ?? "bootstrap@localhost"
         let orgName = signature.orgName ?? "Default Organization"
         let projectName = signature.projectName ?? "Default Project"
         let keyName = signature.keyName ?? "bootstrap"
@@ -71,6 +123,11 @@ struct BootstrapCommand: AsyncCommand {
         let user = User(username: username, email: email, displayName: username, isSystemAdmin: true)
         let organization = Organization(name: orgName, description: "Created by `App bootstrap`")
         let fullKey = APIKey.generateAPIKey()
+        // Minted outside the transaction like the API key, so the raw value
+        // survives for printing; only its hash is ever stored. Nil on the
+        // headless path, which seeds no credential of any kind.
+        let claimToken = adminEmail == nil ? nil : AccountClaimToken.generateToken()
+        let claimExpiresAt = Date().addingTimeInterval(UserController.claimTokenTTL)
 
         let project = try await app.db.transaction { db -> Project in
             // Re-ask under the registration lock. The check above is a
@@ -82,6 +139,22 @@ struct BootstrapCommand: AsyncCommand {
 
             try await user.save(on: db)
             let userID = try user.requireID()
+
+            // The invite rides the same transaction as the user row, so the
+            // token is visible the instant the account is — the same ordering
+            // `UserController.create` relies on to keep a racing
+            // /auth/register/begin from attaching a passkey to an unclaimed
+            // account.
+            if let claimToken {
+                let claim = AccountClaimToken(
+                    userID: userID,
+                    tokenHash: AccountClaimToken.hashToken(claimToken),
+                    tokenPrefix: AccountClaimToken.extractPrefix(claimToken),
+                    expiresAt: claimExpiresAt,
+                    createdByID: userID
+                )
+                try await claim.save(on: db)
+            }
 
             try await organization.save(on: db)
             let orgID = try organization.requireID()
@@ -143,6 +216,11 @@ struct BootstrapCommand: AsyncCommand {
 
         if signature.quiet {
             console.print(fullKey)
+            // Second line only in the human shape, which is a new flag
+            // combination — no existing script reading one line can break.
+            if let claimToken {
+                console.print(UserController.claimURL(for: claimToken))
+            }
             return
         }
 
@@ -158,8 +236,54 @@ struct BootstrapCommand: AsyncCommand {
         console.print("    \(fullKey)")
         console.print()
         console.print("  Use it as:  Authorization: Bearer <key>")
-        console.warning("The seeded user has no passkey and cannot log in to the UI, and the")
-        console.warning("first-user-becomes-admin slot is now used: users registering in the")
-        console.warning("browser get no special privileges. Manage them with this API key.")
+
+        guard let claimToken else {
+            console.warning("The seeded user has no passkey and cannot log in to the UI, and the")
+            console.warning("first-user-becomes-admin slot is now used: users registering in the")
+            console.warning("browser get no special privileges. Manage them with this API key, or")
+            console.warning("re-run with --admin-email to seed a person who can sign in instead.")
+            return
+        }
+
+        console.print()
+        console.success("  Next: open this link in a browser to register your passkey.")
+        console.print("  Single use, valid until \(Self.expiryFormatter.string(from: claimExpiresAt)).")
+        console.print()
+        console.print("    \(UserController.claimURL(for: claimToken))")
+        console.print()
+        console.warning("The link's origin comes from WEBAUTHN_RELYING_PARTY_ORIGIN and must match")
+        console.warning("the URL you browse to, or the passkey ceremony will fail.")
     }
+
+    /// The seeded account's username: the flag when given, `bootstrap` for the
+    /// headless identity, otherwise the admin email's local part.
+    ///
+    /// Only the *derived* name is validated. Inventing a value obliges us to
+    /// invent a usable one, so an address whose local part survives sanitising
+    /// as something too short or empty (`a+b@x.com`, `+++@x.com`) asks for
+    /// `--username` rather than seeding a name the API would refuse. An
+    /// explicit `--username` is passed through as it always has been —
+    /// tightening it here would break existing automation over a rule this
+    /// command never enforced.
+    private static func resolveUsername(_ explicit: String?, adminEmail: String?) throws -> String {
+        if let explicit { return explicit }
+        guard let adminEmail else { return "bootstrap" }
+
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        let localPart = adminEmail.prefix { $0 != "@" }
+        let sanitized = String(String.UnicodeScalarView(localPart.unicodeScalars.filter(allowed.contains)))
+        do {
+            return try UserController.validateUsername(sanitized)
+        } catch {
+            throw UnusableDerivedUsernameError(attempted: sanitized)
+        }
+    }
+
+    private static let expiryFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm 'UTC'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
 }
