@@ -5,8 +5,9 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-/// Captures console output so the printed API key can be recovered and checked.
-private final class CaptureConsole: Console, @unchecked Sendable {
+/// Captures console output so printed secrets (the API key, a claim URL) can be
+/// recovered and checked. Shared with `GrantPlatformAdminCommandTests`.
+final class CaptureConsole: Console, @unchecked Sendable {
     var lines: [String] = []
     var userInfo: [AnySendableHashable: any Sendable] = [:]
     var size: (width: Int, height: Int) { (80, 25) }
@@ -73,6 +74,171 @@ struct BootstrapCommandTests {
             #expect(apiKey.scopes == [APIKeyScope.admin.rawValue])
             #expect(apiKey.isActive)
             #expect(apiKey.expiresAt == nil)
+        }
+    }
+
+    @Test("The headless shape mints no claim invite")
+    func headlessSeedIsNotClaimable() async throws {
+        try await withTestApp { app in
+            try await runBootstrap(app, arguments: ["--quiet"])
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    /// The STR-178 shape: the seeded admin is a person who can actually sign in.
+    @Test("--admin-email seeds a claimable human and prints the claim link")
+    func adminEmailSeedsClaimableHuman() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(
+                app, arguments: ["--quiet", "--admin-email", "ada.lovelace@example.com"])
+
+            let user = try #require(try await User.query(on: app.db).first())
+            #expect(user.email == "ada.lovelace@example.com")
+            // Derived from the local part rather than left as `bootstrap`.
+            #expect(user.username == "ada.lovelace")
+            #expect(user.isSystemAdmin)
+
+            // --quiet stays machine-readable: key first, claim URL second.
+            #expect(console.lines.count == 2)
+            let printedKey = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(printedKey.hasPrefix("sk_"))
+            let claimURL = try #require(console.lines.last).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // The printed link carries the one raw token the stored hash matches,
+            // and the invite is live — this is the whole fix, so pin it end to end.
+            let rawToken = try #require(claimURL.split(separator: "=").last.map(String.init))
+            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
+            #expect(claim.tokenHash == AccountClaimToken.hashToken(rawToken))
+            #expect(claim.$user.id == user.id)
+            #expect(claim.isValid)
+        }
+    }
+
+    /// Explicit names are passed through unchanged — including ones the API's
+    /// own validator would reject, which `seedsEverything`'s two-character `ci`
+    /// already relies on. Only derived names are validated.
+    @Test("--username wins over the address-derived name")
+    func explicitUsernameOverridesDerivation() async throws {
+        try await withTestApp { app in
+            try await runBootstrap(
+                app, arguments: ["--quiet", "--admin-email", "ada@example.com", "--username", "ci"])
+            let user = try #require(try await User.query(on: app.db).first())
+            #expect(user.username == "ci")
+        }
+    }
+
+    /// The prose path is what an interactive operator actually reads, and it is
+    /// the only place the claim link appears outside `--quiet`.
+    @Test("The human output carries the claim link, its expiry, and the origin warning")
+    func humanOutputCarriesTheClaimLink() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(app, arguments: ["--admin-email", "ada@example.com"])
+            let output = console.lines.joined(separator: "\n")
+
+            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
+            #expect(output.contains("/claim?token="))
+            #expect(output.contains(Self.expiryText(claim.expiresAt)))
+            #expect(output.contains("WEBAUTHN_RELYING_PARTY_ORIGIN"))
+            #expect(output.contains("register your passkey"))
+            // The headless warning belongs to the other shape only.
+            #expect(!output.contains("cannot log in to the UI"))
+        }
+    }
+
+    @Test("The headless human output still warns that nobody can sign in")
+    func headlessHumanOutputWarns() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(app)
+            let output = console.lines.joined(separator: "\n")
+            #expect(output.contains("cannot log in to the UI"))
+            #expect(output.contains("--admin-email"))
+            #expect(!output.contains("/claim?token="))
+        }
+    }
+
+    /// Deriving `adaci` from `ada+ci@example.com` would seed an account under a
+    /// name the operator never typed and, under `--quiet`, never sees.
+    @Test("A local part needing sanitisation is refused rather than mangled")
+    func mangledLocalPartRefuses() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada+ci@example.com"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
+    @Test("--no-api-key seeds a passkey-only administrator")
+    func noAPIKeySkipsTheKey() async throws {
+        try await withTestApp { app in
+            let console = try await runBootstrap(
+                app, arguments: ["--quiet", "--no-api-key", "--admin-email", "ada@example.com"])
+
+            let keyCount = try await APIKey.query(on: app.db).count()
+            #expect(keyCount == 0)
+            // Quiet output is one secret per line, so only the claim URL remains.
+            #expect(console.lines.count == 1)
+            #expect(try #require(console.lines.first).contains("/claim?token="))
+        }
+    }
+
+    /// Neither passkey nor key would leave the seeded admin unreachable — the
+    /// STR-178 failure, made worse.
+    @Test("--no-api-key without --admin-email is refused")
+    func noAPIKeyWithoutHumanRefuses() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.UnreachableSeedError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--no-api-key"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
+    @Test("--admin-email refuses on a populated deployment too")
+    func adminEmailRefusesWhenUsersExist() async throws {
+        try await withTestApp { app in
+            let existing = User(username: "someone", email: "someone@example.com", displayName: "Someone")
+            try await existing.save(on: app.db)
+
+            await #expect(throws: BootstrapCommand.RefusedError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada@example.com"])
+            }
+            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            #expect(claimCount == 0)
+        }
+    }
+
+    private static func expiryText(_ date: Date?) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm 'UTC'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: date ?? Date())
+    }
+
+    @Test("--admin-email and --email are mutually exclusive")
+    func conflictingEmailFlagsRefuse() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.ConflictingEmailError.self) {
+                try await runBootstrap(
+                    app,
+                    arguments: ["--quiet", "--admin-email", "ada@example.com", "--email", "ci@example.com"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
+    @Test("An address whose local part cannot make a username asks for --username")
+    func underivableUsernameRefuses() async throws {
+        try await withTestApp { app in
+            await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "a+b@example.com"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
         }
     }
 

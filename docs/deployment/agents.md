@@ -215,6 +215,21 @@ size ever matters for large fleets, a lean per-arch agent asset can be added
 later without breaking consumers — the manifest below names assets explicitly
 rather than by convention.
 
+The CLI is the one exception, because it installs onto laptops rather than
+nodes: alongside each bundle, a release also publishes
+`strato-cli-<os>-<arch>.tar.gz` (`strato-cli-linux-x86_64`,
+`strato-cli-linux-arm64`, `strato-cli-macos-arm64`) with its own `.sha256`
+sidecar. Each contains exactly one file — the same stripped `strato` binary as
+the bundle — so a Homebrew or `curl | sh` install does not also drop a Vapor
+server and a hypervisor node agent on a workstation. These assets are **not**
+in `agent-manifest.json` and are never served as an agent update: the manifest
+selects assets with `^strato-(linux|macos)-(x86_64|arm64)\.tar\.gz$`, whose
+os alternation is anchored right after `strato-`. The release workflow asserts
+that selection twice before publishing — against a fixture of asset names, and
+against the live release, where any `strato-*.tar.gz` the pattern did not pick
+up (other than the CLI and source archives) fails the job rather than going
+quietly missing from the manifest.
+
 All three binaries are **stripped** before packaging — debug symbols were most
 of the download. That means a crash on a node yields addresses rather than
 function names if you enable the Swift backtracer (`SWIFT_BACKTRACE=enable=yes`

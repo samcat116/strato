@@ -27,11 +27,27 @@ To keep anyone else from signing themselves up afterwards, set
 too — the first account is always creatable). See
 [Self-registration](/deployment/overview#self-registration).
 
-### Without a browser (CI / automation)
+### Seeding the first administrator from the command line
 
-First-user registration is a WebAuthn browser flow. To drive a fresh
-deployment entirely from scripts instead, seed an admin user, organization,
-and project and get an admin-scoped API key:
+`bootstrap` seeds an admin user, an organization, a project, and an
+admin-scoped API key on an empty deployment. Give it `--admin-email` and the
+seeded account belongs to *you*: it prints a one-time claim link you open in a
+browser to register your passkey.
+
+```bash
+docker compose run --rm bootstrap bootstrap \
+  --admin-email you@example.com --env production
+```
+
+Use this instead of browser registration whenever you are installing from a
+terminal. Bootstrapping without `--admin-email` seeds a headless account that
+has no passkey and cannot sign in, *and* consumes the
+first-user-becomes-admin slot — so a person registering in the browser
+afterwards gets no privileges, and the deployment's admin surfaces are
+reachable only through the API key.
+
+For CI and IaC, where nobody is going to open a link, the headless shape is
+still the right one:
 
 ```bash
 docker compose run --rm bootstrap        # human-readable
@@ -39,10 +55,53 @@ docker compose run --rm bootstrap        # human-readable
 docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
 ```
 
+`--quiet` prints one secret per line: the API key, then the claim URL if one
+was minted.
+
+On the `--admin-email` path the passkey is your credential, so the API key is
+an extra long-lived admin secret you may not want in scrollback — add
+`--no-api-key` to skip it. (It is refused without `--admin-email`, which would
+leave the seeded admin with no way in at all.)
+
 The command hard-refuses when any user already exists, and the key is printed
-exactly once. The seeded user has no passkey (it is an automation identity)
-and consumes the first-user-becomes-admin slot — later browser registrations
-get no special privileges.
+exactly once. The claim link is single-use and valid for seven days; its origin
+comes from `WEBAUTHN_RELYING_PARTY_ORIGIN` and must match the URL you browse
+to, or the passkey ceremony fails.
+
+### Recovering a deployment with no reachable administrator
+
+If the admin slot went to a headless account, or an administrator's claim link
+expired, promote an existing account from the control-plane container:
+
+```bash
+# promote someone who can already sign in
+docker compose run --rm bootstrap grant-platform-admin \
+  --email you@example.com --env production
+
+# ...or promote and mint a fresh passkey link for an account that has none
+docker compose run --rm bootstrap grant-platform-admin \
+  --email bootstrap@localhost --claim --env production
+```
+
+The `bootstrap` service is just a one-shot control-plane container with the
+same environment, so it is the right place to run any `App` subcommand. Prefer
+it over `docker compose exec control-plane`, which would boot a second full
+Vapor app — migrations, lifecycle handlers and all — inside the container that
+is serving traffic. (If you do use `exec`, the binary is `./App`: the image's
+`ENTRYPOINT` is what normally supplies it, and `exec` bypasses that.)
+
+`--claim` is refused for an account that already has a passkey — an unclaimed
+invite blocks passkey enrollment, so minting one would take away the sign-in it
+was meant to restore — and likewise for a disabled account or one provisioned
+by OIDC/SCIM, where the link would be dead on arrival. The command runs on a
+populated deployment (unlike `bootstrap`), writes an
+`iam.platform_admin_granted` audit event, and its only guard is shell access to
+the control plane, which is the same trust level a direct database write
+already needed.
+
+This recovery path is currently documented for Docker Compose only; on
+Kubernetes, run the same subcommand in a control-plane pod
+(`kubectl exec deploy/strato-control-plane -- ./App grant-platform-admin …`).
 
 ### With a real hostname
 
@@ -81,7 +140,7 @@ share its network namespace (see [Operations](#operations)).
 | `spire-server`, `spire-bootstrap`, `spire-agent-cp`, `spire-api-bridge`, `spire-bundle-refresher` | SPIRE stack | Issues the X.509 SVIDs agents authenticate with; `spire-bootstrap` is one-shot, `spire-api-bridge` shares the control-plane namespace |
 | `prometheus`, `loki` | Host telemetry + VM logs | Reached only through Envoy's `/ingest/*` routes (and, for Loki, the control plane); no published ports |
 | `image-storage-init` | One-shot volume chown | Makes the image volume writable by the control plane's non-root user; runs on every `up` |
-| `bootstrap` | Headless first-user seeding | Profile-gated; never started by `docker compose up` — see [above](#without-a-browser-ci-automation) |
+| `bootstrap` | First-administrator seeding | Profile-gated; never started by `docker compose up` — see [above](#seeding-the-first-administrator-from-the-command-line) |
 
 The one-shot services showing `Exited (0)` in `docker compose ps` is
 expected.

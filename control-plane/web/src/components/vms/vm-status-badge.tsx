@@ -1,8 +1,9 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { pendingMutationLabel } from "@/lib/operation-labels";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
-import type { VMStatus, OperationKind } from "@/types/api";
+import type { VMStatus } from "@/types/api";
 
 const statusConfig: Record<
   VMStatus,
@@ -43,24 +44,6 @@ const statusConfig: Record<
   },
 };
 
-// Labels for VM states that only exist as an in-flight operation (the server
-// keeps the VM's resting status until the agent confirms).
-const pendingMutationLabels: Record<OperationKind, string> = {
-  create: "Creating",
-  boot: "Starting",
-  shutdown: "Stopping",
-  reboot: "Restarting",
-  pause: "Pausing",
-  resume: "Resuming",
-  delete: "Deleting",
-  resize: "Resizing",
-  // Sandbox-only kinds; VMs never carry them but the map stays total.
-  snapshot: "Snapshotting",
-  snapshot_delete: "Deleting snapshot",
-  restore: "Restoring",
-  snapshot_export: "Exporting snapshot",
-};
-
 export function VMStatusBadge({
   status,
   vmId,
@@ -77,7 +60,7 @@ export function VMStatusBadge({
         variant="outline"
         className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
       >
-        {pendingMutationLabels[pendingMutation.kind]}
+        {pendingMutationLabel(pendingMutation.kind)}
       </Badge>
     );
   }
