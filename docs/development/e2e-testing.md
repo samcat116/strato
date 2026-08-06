@@ -84,22 +84,35 @@ the whole script is idempotent, so re-running it reuses whatever already exists.
 
 ## Booting a VM
 
-`e2e-up.sh` prints a ready-to-paste create call. Two things about the API shape
-catch people out:
+`e2e-up.sh` prints a ready-to-paste create call.
 
-- Mutations return **202 with an operation object**, whose `id` is *not* the VM
-  id. Poll `GET /api/operations/{id}` to a terminal status.
-- VMs are created in `Created`, not running. Start them explicitly with
-  `POST /api/vms/{id}/start`. Calling start while create is still pending is a
-  409 — operations serialize per resource.
+Lifecycle endpoints (create/start/stop/delete, plus VM pause/resume/resize) are
+**level-triggered**, not job-queue style. They return **202 Accepted** with
+`{resource, targetGeneration, mutationId}` — there is no operation object to
+poll, and no "already pending" 409, because overlapping writes to desired state
+are safe by construction.
 
-Poll `GET /api/vms/{id}` and watch `conditions`:
+To wait for one, refetch the resource and read its `conditions`:
 
 ```json
 {"targetGeneration": 2, "observedGeneration": 2, "converged": true}
 ```
 
-That is the authoritative convergence signal; prefer it over `status` alone.
+- **done** ⇔ `converged`, at or past the `targetGeneration` you were handed
+- **failed** ⇔ `degraded.sinceGeneration == targetGeneration`
+
+Prefer that over `status` alone. VMs are still created in `Created` rather than
+running, so start them explicitly with `POST /api/vms/{id}/start`.
+
+Two carve-outs keep the older machinery:
+
+- **Delete** is the one mutation whose success is the resource's *absence*, so
+  conditions cannot report it. Poll the compatibility façade
+  `GET /api/operations/{mutationId}` instead. Past its deadline a delete reads
+  `pending`, not `failed` — a slow teardown is not a failed one.
+- **VM restart** and every **snapshot** verb are imperative agent RPCs with no
+  generation to converge on. They still write `ResourceOperation` rows and still
+  return 409 when one is already pending.
 
 ### Confirming the guest actually booted
 
@@ -154,15 +167,6 @@ switches and VMs hang in create. `e2e-up.sh` sets it once an agent is online.
 
 **List endpoints do not share a shape.** `/api/projects` returns a bare array;
 sites, networks, agents and VMs return `{items, total, limit, offset}`.
-
-## Known issues that affect E2E results
-
-- [STR-176](https://linear.app/stratocloud/issue/STR-176/vm-delete-leaks-the-boot-disk-and-cloud-init-iso) —
-  deleting a VM leaves its `disk.qcow2` and `cloud-init.iso` behind. Repeated
-  create/delete cycles fill the disk; clear `/var/lib/strato/vms` between runs.
-- [STR-177](https://linear.app/stratocloud/issue/STR-177/cloud-init-hardcodes-the-guest-hostname-disagreeing-with-vmhostname) —
-  the guest's hostname is `vm-<first 8 of the VM id>`, not `VM.hostname`, so it
-  disagrees with what DNS publishes.
 
 ## Tearing down
 

@@ -46,10 +46,13 @@ swiftly run +6.3.2 swift build --package-path agent
 
 `e2e-up.sh` prints the ids and a ready-made create call. Cover at least:
 
-1. **Create** → 202 with an operation whose `id` is *not* the VM id; poll
-   `GET /api/operations/{id}` to terminal.
+1. **Create** → 202 with `{resource, targetGeneration, mutationId}`. Lifecycle
+   mutations are level-triggered: there is no operation object to poll and no
+   "already pending" 409. Wait by refetching the resource — done ⇔ `conditions`
+   `converged` at or past your `targetGeneration`, failed ⇔
+   `degraded.sinceGeneration == targetGeneration`.
 2. **Start** → `POST /api/vms/{id}/start` (VMs are created in `Created`, not
-   running). Starting during a pending create is a 409 by design.
+   running).
 3. **Boot proof** → poll `GET /api/vms/{id}` for
    `conditions.converged == true`, then confirm `guestMemoryUsedBytes` with a
    recent `guestMemoryStatsAt`. Those come from virtio-balloon guest-stats and
@@ -59,8 +62,10 @@ swiftly run +6.3.2 swift build --package-path agent
    needs `write` scope. Use an Ubuntu cloud image if you want boot output;
    cirros under UEFI puts no getty on ttyS0 and looks silent.
 5. **Stop / start again**, watching `conditions` transition.
-6. **Delete**, then verify the QEMU process, the OVN logical switch port and the
-   TAP are gone.
+6. **Delete**, then verify the QEMU process, the OVN logical switch port, the
+   TAP and the VM's directory under `/var/lib/strato/vms` are all gone. Delete
+   is the one mutation conditions cannot report (success is the row's absence),
+   so poll the façade `GET /api/operations/{mutationId}` instead.
 
 Also worth checking on the host: `pgrep -f qemu-system`, the agent log at
 `/home/sam/strato-agent-run/strato-agent.log`, and the `resource_events` table
@@ -78,9 +83,9 @@ wrong are deliberate:
 - The libvirt version advisory is non-gating while
   `LibvirtProbe.driverBuilt == false`.
 
-Known-open issues that will show up: STR-176 (VM delete leaks the boot disk —
-clear `/var/lib/strato/vms` between runs), STR-177 (guest hostname disagrees
-with `VM.hostname`), STR-178 (after bootstrap, no reachable system admin).
+Known-open issue: STR-178 — after `bootstrap`, no reachable system admin, so a
+passkey registered in the browser gets no privileges and the admin-only nav
+items stay hidden.
 
 ## Cleanup
 

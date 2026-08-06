@@ -344,7 +344,8 @@ cat <<EOF
   network     $NET_ID
   image       ${IMAGE_ID:-<none seeded>}
 
-  Create a VM (202 + an operation; VMs start Created and need an explicit start):
+  Create a VM (202 + {resource, targetGeneration, mutationId}; VMs start
+  Created and need an explicit start):
 
     KEY=\$(cat $KEY_FILE)
     curl -sS -X POST -H "Authorization: Bearer \$KEY" -H 'Content-Type: application/json' \\
@@ -352,6 +353,8 @@ cat <<EOF
            "networkId":"$NET_ID","cpu":1,"memory":268435456,"disk":1073741824,
            "environment":"development"}' $ORIGIN/api/vms
 
-  Then POST /api/vms/<id>/start and poll GET /api/vms/<id> until
-  conditions.converged is true. Tear down with ./e2e-up.sh --down.
+  Then POST /api/vms/<id>/start. Lifecycle mutations are level-triggered, so
+  wait by refetching GET /api/vms/<id> until conditions.converged is at or past
+  the targetGeneration you were handed (delete is the exception — poll
+  GET /api/operations/<mutationId>). Tear down with ./e2e-up.sh --down.
 EOF
