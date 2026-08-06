@@ -899,6 +899,8 @@ export interface paths {
         /**
          * Attach a volume to a VM
          * @description Requires `attach` on the volume and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the volume, never to the VM.
          */
         post: operations["attachVolume"];
         delete?: never;
@@ -1163,6 +1165,8 @@ export interface paths {
         /**
          * Attach a floating IP to a VM NIC
          * @description Requires `update` on the floating IP and on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the floating IP, never to the VM.
          */
         post: operations["attachFloatingIP"];
         delete?: never;
@@ -1294,6 +1298,8 @@ export interface paths {
         /**
          * Attach a security group to a VM NIC
          * @description Requires `attach` on the group and `update` on the VM. Refused with `400` when the two belong to different projects — the status every cross-project refusal answers with.
+         *
+         *     A `vmId` this caller cannot reach is answered `404`, whether no such VM exists or the caller merely lacks `update` on it: the two are deliberately indistinguishable, so the endpoint cannot be used to probe which VM ids exist. `403` on this endpoint therefore refers to the security group, never to the VM. A `sandboxId` still separates the two — `404` absent, `403` forbidden.
          */
         post: operations["attachSecurityGroup"];
         delete?: never;
@@ -1317,6 +1323,8 @@ export interface paths {
         /**
          * Detach a security group from a VM NIC
          * @description Refused when it would leave the NIC with no security group — every NIC keeps at least one.
+         *
+         *     Resolves the target the same way attach does: a `vmId` this caller cannot reach is answered `404` whether no such VM exists or the caller merely lacks `update` on it, so the two are indistinguishable and the endpoint cannot be used to probe which VM ids exist. `403` therefore refers to the security group, never to the VM; a `sandboxId` still separates the two.
          */
         post: operations["detachSecurityGroup"];
         delete?: never;

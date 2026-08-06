@@ -1861,6 +1861,14 @@ paths:
       description: >-
         Refused when it would leave the NIC with no security group — every
         NIC keeps at least one.
+
+
+        Resolves the target the same way attach does: a `vmId` this caller
+        cannot reach is answered `404` whether no such VM exists or the caller
+        merely lacks `update` on it, so the two are indistinguishable and the
+        endpoint cannot be used to probe which VM ids exist. `403` therefore
+        refers to the security group, never to the VM; a `sandboxId` still
+        separates the two.
       tags: [Security Groups]
       requestBody:
         required: true

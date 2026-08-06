@@ -7,23 +7,29 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-/// The three attach endpoints answer "the VM you named isn't reachable by you"
-/// the same way, and that answer says nothing about whether the VM exists
-/// (issue #881).
+/// Every endpoint that takes a VM id in its *body* answers "the VM you named
+/// isn't reachable by you" the same way, and that answer says nothing about
+/// whether the VM exists (issue #881).
 ///
-/// Volume, security-group, and floating-IP attach all take a VM id in the
-/// request body, look it up, and then check `update` on it. They had drifted to
-/// three answers for the same condition — `404 "VM not found"`, and two
-/// spellings of `400 "VM {id} does not exist"` — and each of those answers
-/// arrived *before* any authorization check, so an unknown id and a VM in
-/// another tenant's project were distinguishable to a caller who could see
-/// neither: an existence oracle over VM ids.
+/// Volume attach, security-group attach and detach, and floating-IP attach all
+/// take a VM id in the request body, look it up, and then check `update` on it.
+/// They had drifted to three answers for the same condition — `404 "VM not
+/// found"`, and two spellings of `400 "VM {id} does not exist"` — and each of
+/// those answers arrived *before* any authorization check, so an unknown id and
+/// a VM in another tenant's project were distinguishable to a caller who could
+/// see neither: an existence oracle over VM ids.
 ///
 /// The fix is `Request.reachableVM(_:permission:)`: one `404` for both cases at
-/// all three sites. These tests pin the status and the indistinguishability —
-/// the reasons must match once the id is elided, not merely share a status —
-/// and pin that the refusal is not unconditional, by checking that a caller who
+/// every site. These tests pin the status and the indistinguishability — the
+/// reasons must match once the id is elided, not merely share a status — and
+/// pin that the refusal is not unconditional, by checking that a caller who
 /// *can* reach the VM gets past it to the containment guard behind it.
+///
+/// Not pinned here, because it is deliberately still split: the `sandboxId`
+/// half of security-group attach/detach, which resolves through
+/// `Request.authorizedSandbox` and answers `404` absent / `403` forbidden. The
+/// scope of #881 was VMs; the sandbox oracle is the same shape and awaits
+/// parity (see `docs/architecture/iam.md`).
 ///
 /// The sibling refusal, "the two resources you named live in different
 /// projects", is pinned in `CrossProjectContainmentTests`.
@@ -31,9 +37,15 @@ import AppTestSupport
 struct VMAttachTargetDisclosureTests {
 
     /// The attachable resource, by id — one per endpoint under test.
+    ///
+    /// Security-group detach is its own case rather than a flag: it shares
+    /// `resolveTargetNIC` with attach, which is exactly why it must be pinned
+    /// separately — nothing but a test stops a refactor from splitting the two
+    /// resolvers and leaving detach on a raw `VM.find`.
     private enum AttachEndpoint {
         case volume(UUID)
         case securityGroup(UUID)
+        case securityGroupDetach(UUID)
         case floatingIP(UUID)
     }
 
@@ -152,8 +164,8 @@ struct VMAttachTargetDisclosureTests {
         }
     }
 
-    /// POSTs the endpoint's attach with `vmId` in the body and reports what
-    /// came back.
+    /// POSTs the endpoint's attach — or detach — with `vmId` in the body and
+    /// reports what came back.
     private func attach(
         _ endpoint: AttachEndpoint, vmId: UUID, as token: String, on app: Application
     ) async throws -> Refusal {
@@ -169,6 +181,13 @@ struct VMAttachTargetDisclosureTests {
             }
         case .securityGroup(let groupId):
             try await app.test(.POST, "/api/security-groups/\(groupId)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachSecurityGroupRequest(vmId: vmId))
+            } afterResponse: { res in
+                result = Self.refusal(from: res)
+            }
+        case .securityGroupDetach(let groupId):
+            try await app.test(.POST, "/api/security-groups/\(groupId)/detach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vmId))
             } afterResponse: { res in
@@ -232,6 +251,18 @@ struct VMAttachTargetDisclosureTests {
         }
     }
 
+    @Test("Security-group detach cannot tell a missing VM from a forbidden one")
+    func securityGroupDetachHidesExistence() async throws {
+        try await withApp { fixture in
+            // Detach resolves its target through the same `resolveTargetNIC`,
+            // so it moved off `400 "VM {id} does not exist"` with attach. The
+            // group need not be attached to anything: the target resolution
+            // refuses before the membership read.
+            try await self.expectIndistinguishable(
+                .securityGroupDetach(fixture.groupId), fixture: fixture)
+        }
+    }
+
     @Test("Floating-IP attach cannot tell a missing VM from a forbidden one")
     func floatingIPAttachHidesExistence() async throws {
         try await withApp { fixture in
@@ -246,15 +277,20 @@ struct VMAttachTargetDisclosureTests {
 
     // MARK: - The same status at every site, and not unconditionally
 
-    @Test("The three endpoints answer one status for an unknown VM id")
-    func allThreeAgreeOnUnknownVM() async throws {
+    /// Every site that takes a body-supplied `vmId`.
+    private static func allEndpoints(_ fixture: Fixture) -> [AttachEndpoint] {
+        [
+            .volume(fixture.volumeId),
+            .securityGroup(fixture.groupId),
+            .securityGroupDetach(fixture.groupId),
+            .floatingIP(fixture.floatingIpId),
+        ]
+    }
+
+    @Test("Every endpoint taking a body vmId answers one status for an unknown id")
+    func allSitesAgreeOnUnknownVM() async throws {
         try await withApp { fixture in
-            let endpoints: [AttachEndpoint] = [
-                .volume(fixture.volumeId),
-                .securityGroup(fixture.groupId),
-                .floatingIP(fixture.floatingIpId),
-            ]
-            for endpoint in endpoints {
+            for endpoint in Self.allEndpoints(fixture) {
                 let refusal = try await self.attach(
                     endpoint, vmId: UUID(), as: fixture.adminToken, on: fixture.app)
                 // Even for a system admin: the id names nothing, so there is
@@ -270,12 +306,7 @@ struct VMAttachTargetDisclosureTests {
             // The admin holds rights in both projects — the case the
             // containment guard exists for. Reaching a `400` proves the `404`
             // above is the VM check answering, not a blanket not-found.
-            let endpoints: [AttachEndpoint] = [
-                .volume(fixture.volumeId),
-                .securityGroup(fixture.groupId),
-                .floatingIP(fixture.floatingIpId),
-            ]
-            for endpoint in endpoints {
+            for endpoint in Self.allEndpoints(fixture) {
                 let refusal = try await self.attach(
                     endpoint, vmId: fixture.foreignVMId, as: fixture.adminToken, on: fixture.app)
                 #expect(refusal.status == .badRequest)
