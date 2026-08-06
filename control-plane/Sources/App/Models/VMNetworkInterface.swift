@@ -87,3 +87,18 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
 }
 
 extension VMNetworkInterface: Content {}
+
+extension Sequence where Element == VMNetworkInterface {
+    /// The interfaces in the VM's device order: `orderIndex`, then
+    /// `deviceName` for stability when orders collide.
+    ///
+    /// One definition because four things have to agree on it — the `VMSpec`'s
+    /// `NetworkSpec` list, the `InstanceMetadata` the guest reads, the API's
+    /// `VMDetailResponse`, and a floating IP's `nicIndex`, which *is* a
+    /// position in this order on the wire. Four copies of the comparator meant
+    /// four places to change it and one guest whose NIC list disagreed with its
+    /// links if you missed one.
+    var inDeviceOrder: [VMNetworkInterface] {
+        sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+    }
+}

@@ -90,8 +90,8 @@ The important ones to know when navigating `Services/`:
 - **`DesiredStateAssembler`** (`app.desiredStateAssembler`) — assembles the
   full authoritative `DesiredStateMessage` for one agent straight from
   Postgres (VM/sandbox specs, network scope, security groups, floating IPs,
-  registry material, agent-update payload). Pure assembly; when to sync and
-  which socket carries it stay with `AgentService`.
+  registry material, agent-update payload, per-VM instance metadata). Pure
+  assembly; when to sync and which socket carries it stay with `AgentService`.
 - **`ObservedStateApplier`** (`app.observedStateApplier`) — folds an agent's
   `ObservedStateReport` into the database: observed status/generation,
   operation completion, deletion-by-absence, guest info, reservation release,
@@ -330,7 +330,12 @@ future work.
   artifacts (download URLs are mTLS-authenticated relative paths, so nothing
   expires or gets re-signed), sandboxes with pull credentials, and the
   logical networks in the agent's assembly scope — into one
-  `DesiredStateMessage`.
+  `DesiredStateMessage`. Each VM also carries the `InstanceMetadata` its
+  link-local metadata service serves (hostname, project/environment, the
+  site/agent placement keys, per-NIC addressing, SSH keys, user data), built
+  from rows the assembly already loaded and omitted for pre-v26 agents. It
+  costs no extra query per VM by design: assembly runs for every agent on
+  every sync, so a per-VM read here is a fleet-wide load multiplier.
 - **Observed-state ingestion** chains per-agent tasks so reports apply in
   send order; `ObservedStateApplier.apply` updates observed
   status/generation, completes satisfied operations, and confirms deletions

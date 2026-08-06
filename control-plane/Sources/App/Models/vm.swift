@@ -572,7 +572,7 @@ struct VMDetailResponse: Content {
         // `.value ?? []` tolerates callers that didn't eager-load the children;
         // sorted to match the deterministic ordering agents receive in the spec.
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
-            .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+            .inDeviceOrder
             .map(NetworkInterfaceResponse.init)
         self.securityGroupsEnforced = securityGroupsEnforced
         self.hostname = vm.hostname
