@@ -22,7 +22,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Splits concatenated DER values")
     func splitsConcatenatedDER() throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let single = [UInt8](pki.caDER)
         let doubled = single + single
 
@@ -53,7 +53,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Converts an X509SVIDResponse to a PEM-based SVID")
     func convertsSVIDResponse() throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let expiry = Date().addingTimeInterval(1800)
         let response = try pki.makeSVIDResponse(
             spiffeURI: "spiffe://strato.local/agent/agent-1",
@@ -79,7 +79,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Conversion output is accepted by NIOSSL for mTLS configuration")
     func conversionOutputBuildsTLSConfig() throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let response = try pki.makeSVIDResponse(
             spiffeURI: "spiffe://strato.local/agent/agent-1",
             notValidAfter: Date().addingTimeInterval(1800)
@@ -101,7 +101,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Converts an X509BundlesResponse keyed by trust domain")
     func convertsBundlesResponse() throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         var response = Workload_X509BundlesResponse()
         response.bundles = ["spiffe://strato.local": pki.caDER]
 
@@ -116,7 +116,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Fetches the initial SVID over a Unix domain socket", .timeLimit(.minutes(1)))
     func fetchesInitialSVID() async throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let expiry = Date().addingTimeInterval(1800)
         let response = try pki.makeSVIDResponse(
             spiffeURI: "spiffe://strato.local/agent/agent-1",
@@ -134,7 +134,7 @@ struct WorkloadAPIClientTests {
 
     @Test("Watch stream delivers rotated SVIDs", .timeLimit(.minutes(1)))
     func watchDeliversRotation() async throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let firstExpiry = Date().addingTimeInterval(600)
         let secondExpiry = Date().addingTimeInterval(3600)
         let responses = [
@@ -176,7 +176,7 @@ struct WorkloadAPIClientTests {
 
     @Test("SVIDManager applies rotated SVIDs and notifies callbacks", .timeLimit(.minutes(1)))
     func svidManagerHandlesRotation() async throws {
-        let pki = try WorkloadAPITestPKI()
+        let pki = try SPIFFETestPKI()
         let initial = try WorkloadAPIConversion.makeSVID(
             from: pki.makeSVIDResponse(
                 spiffeURI: "spiffe://strato.local/agent/agent-1",
@@ -307,86 +307,5 @@ private final class MockSPIFFEClient: SPIFFEClientProtocol, Sendable {
 
     func pushRotation(_ svid: X509SVID) {
         continuation.yield(svid)
-    }
-}
-
-// MARK: - Test PKI
-
-/// Generates SPIRE-like SVID material: a CA and short-lived leaf certificates
-/// carrying SPIFFE IDs, packaged as Workload API protobuf responses (DER).
-private struct WorkloadAPITestPKI {
-    let caDER: Data
-    private let caPrivateKey: Certificate.PrivateKey
-    private let caName: DistinguishedName
-
-    init() throws {
-        caPrivateKey = Certificate.PrivateKey(P256.Signing.PrivateKey())
-        caName = try DistinguishedName {
-            CommonName("Test SPIRE CA \(UUID().uuidString.prefix(8))")
-        }
-        let caCertificate = try Certificate(
-            version: .v3,
-            serialNumber: .init(),
-            publicKey: caPrivateKey.publicKey,
-            notValidBefore: Date().addingTimeInterval(-3600),
-            notValidAfter: Date().addingTimeInterval(86400),
-            issuer: caName,
-            subject: caName,
-            signatureAlgorithm: .ecdsaWithSHA256,
-            extensions: try Certificate.Extensions {
-                Critical(BasicConstraints.isCertificateAuthority(maxPathLength: nil))
-                Critical(KeyUsage(keyCertSign: true))
-            },
-            issuerPrivateKey: caPrivateKey
-        )
-        caDER = try Self.derData(from: caCertificate)
-    }
-
-    /// Build a complete Workload API response for one SVID: leaf + CA chain,
-    /// PKCS#8 key, and the CA as trust bundle.
-    func makeSVIDResponse(
-        spiffeURI: String,
-        notValidAfter: Date
-    ) throws -> Workload_X509SVIDResponse {
-        let leafKey = P256.Signing.PrivateKey()
-        let leaf = try Certificate(
-            version: .v3,
-            serialNumber: .init(),
-            publicKey: Certificate.PrivateKey(leafKey).publicKey,
-            notValidBefore: Date().addingTimeInterval(-60),
-            notValidAfter: notValidAfter,
-            issuer: caName,
-            subject: try DistinguishedName {
-                CommonName("test-workload")
-            },
-            signatureAlgorithm: .ecdsaWithSHA256,
-            extensions: try Certificate.Extensions {
-                Critical(BasicConstraints.notCertificateAuthority)
-                KeyUsage(digitalSignature: true)
-                SubjectAlternativeNames([.uniformResourceIdentifier(spiffeURI)])
-            },
-            issuerPrivateKey: caPrivateKey
-        )
-
-        var svid = Workload_X509SVID()
-        svid.spiffeID = spiffeURI
-        svid.x509Svid = try Self.derData(from: leaf) + caDER
-        svid.x509SvidKey = leafKey.derRepresentation
-        svid.bundle = caDER
-
-        var response = Workload_X509SVIDResponse()
-        response.svids = [svid]
-        return response
-    }
-
-    /// DER bytes of a certificate, obtained by stripping its PEM envelope
-    /// (avoids a direct SwiftASN1 dependency in this test target).
-    private static func derData(from certificate: Certificate) throws -> Data {
-        let pem = try certificate.serializeAsPEM().pemString
-        let body = pem.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()
-        guard let der = Data(base64Encoded: body) else {
-            throw SPIFFEError.parseError("Failed to decode test certificate PEM")
-        }
-        return der
     }
 }

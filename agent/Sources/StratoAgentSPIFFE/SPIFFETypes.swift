@@ -337,6 +337,13 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
     /// domain nor any domain it federates with. Fail-closed counterpart of
     /// `X509SVID.roots(forTrustDomain:)` returning nil.
     case noRootsForTrustDomain(peerTrustDomain: String, ownTrustDomain: String, federated: [String])
+    /// The local SPIRE agent refused this process as a delegate on its
+    /// Delegated Identity API. The associated value is SPIRE's own message.
+    case delegateNotAuthorized(String)
+    /// A delegated subscription that named the identity it was for received an
+    /// SVID for someone else — meaning its selectors match a registration entry
+    /// they should not. Fail-closed: the whole response is refused, not filtered.
+    case unexpectedDelegatedIdentity(expected: String, received: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -367,6 +374,18 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
             return
                 "No trust roots for peer trust domain '\(peer)': this SVID is issued in '\(own)' and federates with [\(known)]. "
                 + "Establish federation between the two trust domains, or correct the pinned peer identity."
+        case .delegateNotAuthorized(let reason):
+            // This string is the entire operator experience of the failure, so
+            // it names both the setting and the file it lives in.
+            return
+                "SPIRE refused this process as a delegate (\(reason)). Add this agent's SPIFFE ID to "
+                + "`authorized_delegates` in the `agent { }` block of /etc/spire/agent.conf and restart spire-agent."
+        case .unexpectedDelegatedIdentity(let expected, let received):
+            let others = received.sorted().joined(separator: ", ")
+            return
+                "Delegated subscription for '\(expected)' received an SVID for [\(others)]. "
+                + "The subscription's selectors match a registration entry they should not — check that every "
+                + "guest entry carries a unique strato:instance:<uuid> selector."
         }
     }
 }

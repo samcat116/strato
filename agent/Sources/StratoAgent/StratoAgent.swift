@@ -14,7 +14,7 @@ struct StratoAgent: AsyncParsableCommand {
         commandName: "strato-agent",
         abstract: "Strato hypervisor agent for managing VMs on QEMU",
         version: BuildInfo.displayVersion,
-        subcommands: [Run.self],
+        subcommands: [Run.self, SpiffeDelegatedProbe.self],
         defaultSubcommand: Run.self
     )
 }
@@ -366,7 +366,9 @@ private let shutdownWatchdogSeconds: Double = 20
 /// needs no hop. `_exit` rather than `exit` so it cannot deadlock in an atexit
 /// handler or a static destructor; there is nothing to lose — the log handler
 /// writes to stderr with unbuffered `write(2)` — beyond stdio, flushed below.
-private func exitImmediately(_ code: Int32) -> Never {
+/// Not `private`: `SPIFFEDelegatedProbeCommand` builds a gRPC transport, and so
+/// hits the same hang for the same reason.
+func exitImmediately(_ code: Int32) -> Never {
     // `fflush(nil)` flushes every open stream. Naming `stdout`/`stderr`
     // individually does not compile under strict concurrency on Glibc, where
     // they are non-Sendable global `var`s.
