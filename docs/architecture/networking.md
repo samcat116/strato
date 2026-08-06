@@ -1,8 +1,9 @@
 # Networking Architecture &amp; Roadmap
 
 > **Status:** Design / roadmap document. Describes the current state of Strato
-> networking and the intended evolution toward L3, multi-node, and multi-site
-> connectivity. Sections marked _(future)_ are not yet implemented.
+> networking (L3 and multi-node are implemented) and the intended evolution
+> toward multi-site connectivity. Sections marked _(future)_ are not yet
+> implemented.
 
 Strato's networking is built on **OVN/OVS** on Linux (via
 [SwiftOVN](https://github.com/samcat116/swift-ovn)) and QEMU user-mode SLIRP on
@@ -15,38 +16,42 @@ building toward, and a phased roadmap.
 
 ## Current state (as of this writing)
 
-Strato does **L2-only, single-switch, single-node** networking:
+Most of the layered model below is implemented. What exists today:
 
-- **Control plane** models a `LogicalNetwork` as a flat L2 segment: `subnet`,
-  an optional `gateway` (used only as an excluded IP + DHCP `router` option),
-  and DHCP config. **Every network belongs to exactly one project** (issue
-  #765): names are unique only within their project — two tenants may each own
-  a `default`, on the same subnet — and everything that identifies a network
-  keys on its row id. IPAM (`IPAMService`) allocates per network id, so one
-  project exhausting its subnet cannot affect another. Nothing provisions a
-  network automatically: VM create names one explicitly or is refused.
-- **Networks are not first-class in reconciliation.** They are realized as a
-  side effect of each VM's `VMSpec.networks` — the agent finds or creates the
-  switch (named after the network's id) when a VM lands. There is no imperative
-  network wire message: topology is level-triggered from the desired-state sync
-  alone.
-- **Agent** (`NetworkServiceLinux`) creates one OVN **logical switch** per
-  network name, one **logical switch port** per NIC bound to a TAP on the
-  `br-int` integration bridge, and optionally programs OVN-native DHCP. Nothing
-  else — **no routers, NAT, ACLs, load balancers, or floating IPs**.
-- **Deployment reality:** each agent image ships its _own_ `ovn-central`
-  (northd + NB + SB) and talks to it over local Unix sockets. So the same
-  network name on two agents is **two disconnected local segments** that merely
-  share an IP pool. The geneve/chassis bootstrap (`OVNChassisBootstrap`, issue
-  #328) is in place and `ovn-controller`'s southbound is repointable to
-  `tcp:host:6642`, but nothing central exists to point it at.
+- **First-class networks.** Every `LogicalNetwork` belongs to exactly one
+  project (issue #765) — names are unique only within their project, IPAM
+  (`IPAMService`) allocates per network id — and networks ride the periodic
+  sync as `DesiredNetworkState` entries, so topology is level-triggered from
+  desired state rather than a side effect of VM placement (§Phase 1).
+- **L3 within a site.** Per-project logical routers, cross-switch east-west,
+  and SNAT egress through an operator-configured uplink (§Phase 1).
+- **Multi-node sites.** A shared per-site OVN central
+  (`deploy/ovn-central/`) with a CP-designated network-controller agent as
+  the single topology writer; one logical network spans a site's nodes over
+  geneve (§Phase 2).
+- **Floating IPs**, realized as distributed `dnat_and_snat`, with opt-in BGP
+  advertisement via OVN dynamic routing + FRR (§Phase 3).
+- **Security groups** as OVN ACLs on port groups, with a site-wide
+  default-drop group (§Security groups).
+- **IPv4/IPv6 dual-stack**: a generated ULA /64 alongside each network's v4
+  subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
+- **Instance metadata dataplane**: the per-VM metadata document rides the
+  sync (wire v26) and the OVN localport + per-chassis namespace exist (wire
+  v27) — see §Instance metadata (IMDS).
 
-### Consequences
+What genuinely remains missing (details in §Known gaps):
 
-- VMs cannot reach anything outside their own logical switch (no L3 router, no
-  NAT/egress).
-- A single logical network cannot span multiple hypervisors.
-- There is no north-south story (no floating/public IPs).
+- **No guest-visible metadata service yet**: nothing listens in the metadata
+  namespace (STR-56), and no advertised route (STR-53) or implicit
+  security-group allow (STR-54) delivers guests to it.
+- **Sandbox guest networking** is plumbed but off the wire — the guest can't
+  configure the NIC (STR-101) and the fleet-wide flag awaits its per-agent
+  gate (STR-103).
+- **CP-hosted ingress** (§Phase 4) and **inter-site L3** (§Phase 5) are
+  unbuilt.
+- **DNS realization**: zones are modeled control-plane-side, but guests still
+  get DHCP option delivery only; the OVN `DNS` table is not yet written (see
+  [dns](./dns.md)).
 
 ## Target deployment topology
 
@@ -164,8 +169,17 @@ ovn-kubernetes' management port both use it. OVN answers guest ARP and Neighbor
 Solicitation from the port's `addresses` field, which is why the addresses need
 not belong to the switch's subnets.
 
-The feature has **two halves with two different owners**, and that shape is
-load-bearing rather than incidental:
+The localport is the *transport* half of the IMDS story. The *payload* half
+is the per-VM metadata document itself: `InstanceMetadataFactory` builds it
+control-plane-side and `DesiredStateAssembler` attaches it to each VM's
+`DesiredVMState.metadata` (wire v26, STR-48/51;
+`shared/Sources/StratoShared/InstanceMetadata.swift`), so agents already hold,
+per VM, exactly what a metadata listener should serve. With both halves in
+place, the only piece missing for guest-visible IMDS is the HTTP listener
+inside the namespace (STR-56).
+
+The localport realization itself has **two halves with two different owners**,
+and that shape is load-bearing rather than incidental:
 
 - The **localport itself** is one row in the shared northbound database, so it
   is authored only by the site's network controller, from

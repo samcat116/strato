@@ -28,9 +28,11 @@ use in code, tests, docs, and review. Architecture-level maps live in
     level-triggered sync). The verdict is recorded immediately.
   - *placement* — background scheduling + placement + first sync (`create`).
     Records a failure verdict on error; success is deferred to the applier.
-  - *deletion* — nudge the agent when online (the row is reaped once its
-    report confirms absence clears the `agent.absent` finalizer), else clear
-    that finalizer directly.
+  - *direct resolution* — resolve the operation locally without agent
+    teardown (the offline/unplaced delete; online deletes ride *state sync*):
+    run the removal work, recording the verdict only if the work reports it
+    finished — otherwise the row stays `pending` for whoever still owes
+    cleanup, with the stuck-operation sweep as the backstop.
 
 - **Verdict** — the terminal outcome recorded on the operation row
   (`succeeded` / `failed`). `recordVerdict` is the single choke point for the
@@ -125,6 +127,20 @@ use in code, tests, docs, and review. Architecture-level maps live in
   commits). `sweepOrphanedTerminatingResources` is the cluster-singleton
   backstop that reaps them, so no participant has to invent its own retry.
 
+- **Unrecognized / held workload** — a workload an agent holds that its last
+  sync did not list (STR-98). Omission is not destructive: the agent *holds*
+  it and reports it, and the control plane records one
+  `AgentWorkloadClaim` disposition — `held` when a row exists (the omitting
+  sync is what is wrong, never the workload; the claim stays as evidence an
+  operator or the re-point endpoint acts on), or `tombstoned` when none does.
+
+- **Tombstone** — the explicit teardown authorization for a workload the
+  control plane has no row for: a `tombstoned` claim becomes a
+  `DesiredWorkloadTombstone` in the next sync, carrying a generation that
+  must outrank whatever the agent last applied. Only a tombstone (or an
+  ordinary `.absent` entry) tears down; a blast-radius guard bounds how much
+  of a host one sync's tombstones may remove.
+
 ## Cross-replica coordination
 
 - **Replica** — one control-plane process. Each generates a fresh `replicaID`
@@ -136,9 +152,10 @@ use in code, tests, docs, and review. Architecture-level maps live in
   mutating replica sends to the socket-holding replica so it pushes a fresh
   sync. A latency optimization only — the periodic sync is the backstop, so a
   lost nudge is always safe.
-- **Cross-replica RPC** — the correlated request/reply forwarding for the two
-  exchanges that are *actions, not states* (volume operations, VM reboot) and
-  so cannot ride the level-triggered sync. When the serving replica lacks the
+- **Cross-replica RPC** — the correlated request/reply forwarding for the
+  exchanges that are *actions, not states* (volume operations, VM reboot, VM
+  checkpoint/restore/snapshot-delete, sandbox snapshot operations) and so
+  cannot ride the level-triggered sync. When the serving replica lacks the
   socket, the exchange is forwarded to the holder and the verdict returns on
   the requester's reply channel.
 - **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns

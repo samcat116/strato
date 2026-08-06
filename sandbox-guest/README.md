@@ -120,7 +120,10 @@ cargo test --manifest-path init/Cargo.toml --lib
 (`.github/workflows/sandbox-guest.yaml`) builds both arches on a tag, uploads
 the artifacts + `.sha256` sidecars as GitHub Release assets, and publishes a
 `sandbox-guest-manifest.json` (download URLs + checksums) mirroring the agent
-release flow. Install onto a host with `task install-sandbox-guest`.
+release flow. Install onto a host with `deploy/agent/install.sh
+--sandbox-guest`, which downloads the published `sandbox-guest-<arch>.tar.gz`
+into the agent's `sandbox_guest_image_path` (default
+`/var/lib/strato/sandbox/guest`).
 
 ## Kernel version
 

@@ -26,8 +26,7 @@ export default defineConfig({
         text: 'Introduction',
         items: [
           { text: 'What is Strato?', link: '/guide/what-is-strato' },
-          { text: 'Getting Started', link: '/guide/getting-started' },
-          { text: 'Quick Start', link: '/guide/quick-start' }
+          { text: 'Getting Started', link: '/guide/getting-started' }
         ]
       },
       {
@@ -62,7 +61,9 @@ export default defineConfig({
         text: 'Architecture Decisions',
         items: [
           { text: 'ADR 0001: Declarative Agent Protocol', link: '/adr/0001-declarative-agent-protocol' },
-          { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' }
+          { text: 'ADR 0002: Ceph for Distributed Block Storage', link: '/adr/0002-ceph-for-distributed-block-storage' },
+          { text: 'ADR 0003: IMDS Chassis Namespace', link: '/adr/0003-imds-chassis-namespace' },
+          { text: 'Authorization Edge Audit (July 2026)', link: '/architecture/authorization-edge-audit' }
         ]
       },
       {

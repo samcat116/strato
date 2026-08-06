@@ -1,105 +1,85 @@
 # WebAuthn Debugging Guide
 
-## Quick Fix for Remote Deployment
+Strato's interactive login is WebAuthn passkeys. Registration and login fail
+when the relying-party configuration does not match the origin the browser
+actually visits, so almost every WebAuthn problem is an origin mismatch.
 
-### Step 1: Update Environment Variables
+## How it's configured
 
-Create a `.env` file in your project root:
+The control plane reads three environment variables (defaults in
+parentheses):
 
-```bash
-# Replace YOUR_SERVER_IP with your actual server IP
-WEBAUTHN_RELYING_PARTY_ID=YOUR_SERVER_IP
-WEBAUTHN_RELYING_PARTY_ORIGIN=http://YOUR_SERVER_IP:8080
-WEBAUTHN_RELYING_PARTY_NAME=Strato
-```
+- `WEBAUTHN_RELYING_PARTY_ID` (`localhost`) — the domain only, no scheme or
+  port.
+- `WEBAUTHN_RELYING_PARTY_NAME` (`Strato`) — display name shown by the
+  browser.
+- `WEBAUTHN_RELYING_PARTY_ORIGIN` (`http://localhost:8080`) — the **exact**
+  origin in the browser's address bar: scheme + host + port (port only if
+  non-standard).
 
-### Step 2: Restart the Application
+Browsers additionally require a secure context: HTTPS everywhere, with plain
+HTTP allowed only for `localhost`. There is no way to use WebAuthn on
+`http://<some-ip>` or `http://<hostname>` — put TLS in front or use
+`localhost`.
 
-```bash
-docker compose down
-docker compose up app
-```
-
-### Step 3: Clear Browser Data
-
-1. Open browser developer tools (F12)
-2. Go to Application/Storage tab
-3. Clear all site data for your Strato instance
-4. Reload the page
-
-## Debugging Steps
-
-### 1. Check Browser Console
-
-Open developer tools and look for:
-- "WebAuthn Support Debug" log entry
-- Any WebAuthn-related errors
-- Network errors during authentication
-
-### 2. Verify Configuration
-
-Check that your environment variables match your access method:
-
-| Access Method | RELYING_PARTY_ID | RELYING_PARTY_ORIGIN |
+| Access method | RELYING_PARTY_ID | RELYING_PARTY_ORIGIN |
 |---------------|------------------|----------------------|
-| `http://localhost:8080` | `localhost` | `http://localhost:8080` |
-| `http://192.168.1.100:8080` | `192.168.1.100` | `http://192.168.1.100:8080` |
+| `http://localhost` (compose default) | `localhost` | `http://localhost` |
+| `http://localhost:8080` (native `swift run`) | `localhost` | `http://localhost:8080` |
 | `https://strato.example.com` | `strato.example.com` | `https://strato.example.com` |
 
-### 3. Test WebAuthn Support
+## Docker Compose
 
-Run this in the browser console:
+`deploy/compose/setup.sh` writes all three variables into
+`deploy/compose/.env`. The browser enters through the nginx proxy on
+`${HTTP_PORT:-80}`, so the default origin is `http://localhost` (no `:8080`
+anywhere). For a real hostname:
 
-```javascript
-console.log('WebAuthn Support:', {
-    hasCredentials: !!(navigator.credentials),
-    hasCreate: !!(navigator.credentials?.create),
-    hasGet: !!(navigator.credentials?.get),
-    hasPublicKeyCredential: !!(window.PublicKeyCredential),
-    origin: location.origin,
-    protocol: location.protocol,
-    hostname: location.hostname
-});
+```bash
+./setup.sh --hostname strato.example.com   # non-localhost forces https://
 ```
 
-### 4. Common Issues
+`setup.sh` is idempotent and never overwrites an existing `.env`. To change
+the hostname on an existing deployment, edit `.env` directly —
+`STRATO_HOSTNAME`, the three `WEBAUTHN_*` variables, plus
+`CONTROL_PLANE_URL`/`BASE_URL` — then restart the service:
+
+```bash
+docker compose up -d control-plane
+```
+
+Changing the relying-party ID orphans existing passkeys; users must
+re-register.
+
+## Helm
+
+Set `strato.webauthn.relyingPartyId` / `relyingPartyName` /
+`relyingPartyOrigin` in your values. When left empty, the chart derives them:
+the ID from the gateway/ingress hostname, and the origin from the Gateway
+(`https://<host>`) or Ingress (`https://` with TLS, `http://` without),
+falling back to `http://localhost:8080` — which matches a plain
+`kubectl port-forward` to the service port.
+
+## Native `swift run`
+
+The defaults (`localhost` / `http://localhost:8080`) match browsing to
+`http://localhost:8080` with no configuration at all.
+
+## Debugging steps
+
+1. **Compare origins.** Run `location.origin` in the browser console and
+   check it is byte-for-byte identical to `WEBAUTHN_RELYING_PARTY_ORIGIN`.
+   Watch for a missing or extra port, `http` vs `https`, and `www.`.
+2. **Check the network tab** during registration/login — the control plane
+   rejects a mismatched origin with an error naming the expected one.
+3. **Clear site data** (developer tools → Application/Storage) after any
+   configuration change, then reload and retry.
+
+## Common issues
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| "Passkeys not supported" | Origin mismatch | Update RELYING_PARTY_ID and ORIGIN |
-| "Invalid domain" | Domain doesn't match | Ensure exact domain match |
-| HTTPS required | Non-localhost HTTP | Use HTTPS or localhost |
-| Registration fails | Mixed origins | Clear browser data |
-
-### 5. Browser Requirements
-
-- **Chrome/Edge**: Full WebAuthn support
-- **Firefox**: Full WebAuthn support (may need to enable in settings)
-- **Safari**: WebAuthn support available
-- **Mobile browsers**: Generally supported on HTTPS
-
-### 6. Network Issues
-
-- Ensure port 8080 is accessible from your client
-- Check firewall settings
-- Verify DNS resolution if using domain names
-
-## Example Working Configurations
-
-### Local Development
-```bash
-WEBAUTHN_RELYING_PARTY_ID=localhost
-WEBAUTHN_RELYING_PARTY_ORIGIN=http://localhost:8080
-```
-
-### Remote IP Access
-```bash
-WEBAUTHN_RELYING_PARTY_ID=192.168.1.100
-WEBAUTHN_RELYING_PARTY_ORIGIN=http://192.168.1.100:8080
-```
-
-### Production with HTTPS
-```bash
-WEBAUTHN_RELYING_PARTY_ID=strato.yourdomain.com
-WEBAUTHN_RELYING_PARTY_ORIGIN=https://strato.yourdomain.com
-```
+| "Invalid domain" / SecurityError | RELYING_PARTY_ID is not the domain being visited | Set the ID to the exact hostname (no scheme/port) |
+| Ceremony rejected by server | Origin mismatch | Make RELYING_PARTY_ORIGIN exactly match the browser URL |
+| Passkey prompt never appears | Non-localhost HTTP | Browsers refuse WebAuthn outside a secure context — use HTTPS or localhost |
+| Login fails after a hostname change | Passkeys are bound to the old relying-party ID | Re-register users under the new hostname |

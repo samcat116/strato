@@ -1,6 +1,9 @@
 # ADR 0001: A fully declarative agent protocol
 
-- **Status**: Proposed
+- **Status**: Accepted
+- **Progress**: stages 1 (conditions, STR-142), 2 (`resource_events`,
+  STR-143), 3 (finalizers, STR-144), and 6 (`agent_update` removal, STR-145)
+  have landed; later stages pending.
 - **Date**: 2026-08-02
 - **Deciders**: Sam Schmitt
 - **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,

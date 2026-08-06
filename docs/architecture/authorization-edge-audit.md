@@ -1,4 +1,8 @@
-# Authorization enforcement-edge audit (STR-116)
+# Authorization Edge Audit (July 2026)
+
+> **Status**: point-in-time record of the STR-116 enforcement-edge pass; its
+> fixes landed in July 2026. The "Open findings" table reflects that date and
+> is not maintained — current invariants live in [iam](./iam.md).
 
 The Cedar evaluator answers correctly. Every authorization defect found during
 IAM E2E testing lived in the layer *around* it — the HTTP boundary asking the

@@ -16,12 +16,13 @@ Two targets under `control-plane/Sources/`:
 
   | Directory | Contents |
   |---|---|
-  | `Controllers/` | ~31 `RouteCollection` structs, one per resource area (`VMController`, `SandboxController`, ...); WebSocket endpoints suffixed `WebSocketController` |
-  | `Models/` | ~39 Fluent models plus `…DTOs.swift` bundles |
-  | `Migrations/` | ~87 `AsyncMigration`s, verb-named (`Create…`, `Add…To…`, `Backfill…`, `Drop…`) |
-  | `Services/` | ~50 service types (actors/structs), plus `SCIM/` and `SPIFFE/` subdirectories |
+  | `Controllers/` | ~43 `RouteCollection` structs, one per resource area (`VMController`, `SandboxController`, ...); WebSocket endpoints suffixed `WebSocketController` |
+  | `Models/` | ~65 Fluent models plus `…DTOs.swift` bundles |
+  | `Migrations/` | ~154 `AsyncMigration`s, verb-named (`Create…`, `Add…To…`, `Backfill…`, `Drop…`) |
+  | `Services/` | ~69 service files (actors/structs), plus `SCIM/` and `SPIFFE/` subdirectories |
   | `IAM/` | The authorization engine: `IAMAuthorizer`, the Cedar encoding (`Cedar/`), `RoleRegistry`/`RoleBindingService`, the guardrail store, `WhoCanService`, decision recording — see [iam](./iam.md) |
   | `Middleware/` | The request pipeline: auth, rate limiting, audit, authorization |
+  | `OpenAPI/` | The OpenAPI-generated handler surface (issue #583): `ProjectsAPIService.swift` implements the project routes generated from `Sources/App/openapi.yaml` (scoped by the generator config's `filter`) |
   | `Extensions/` | `Request+…` per-object authz helpers, `Application+LazyService.swift` |
   | `Telemetry/` | Static metrics facade (`Telemetry.…`) |
 
@@ -47,9 +48,13 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
 
 1. Instance identity (per-process `replicaID`) and the **background task
    registry** — registered first so nothing can spawn untracked work.
-2. **Middleware chain** (outermost→innermost): request logging, security
-   headers, sessions (+ `User.sessionAuthenticator()`), bearer API-key
-   authenticator, rate limiting, audit, API-key scoping, user-security
+2. **Middleware chain** (outermost→innermost): request logging,
+   `TracingMiddleware` (one server span per request) and `MetricsMiddleware`
+   (RED metrics per route), security headers, sessions
+   (+ `User.sessionAuthenticator()`), bearer API-key authenticator,
+   `ServiceContextRestoringMiddleware` (re-binds the trace context the
+   future-based session middleware severs, so downstream spans nest under
+   the request span), rate limiting, audit, API-key scoping, user-security
    (SSF revocation enforcement), and `AuthorizationMiddleware` — the
    structurally default-deny authorization gate, which runs in every
    environment including tests.
@@ -65,7 +70,7 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    slides, and the driver skips the write-back when a request left the session
    data unchanged.
 4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
-   ~87 ordered migrations and `autoMigrate()`. Migrations run at startup;
+   ~154 ordered migrations and `autoMigrate()`. Migrations run at startup;
    there is no separate migrate step.
 5. Post-migration convergence: the Cedar policy set is compiled at its
    current version, stored secrets are re-encrypted, and `role_bindings` are
@@ -98,6 +103,14 @@ The important ones to know when navigating `Services/`:
   and the teardown verdicts described below. The connection half (decode,
   ownership check, agent-row refresh, per-agent ordering) stays with
   `AgentService`.
+- **`ResourceOperationCoordinator`** — owns one asynchronous resource
+  operation end to end (begin → dispatch → verdict) for VMs and sandboxes
+  alike: controllers name a transition and a dispatch strategy, and the
+  coordinator owns the background hand-off after the 202 and the single
+  verdict-recording choke point the stuck-operation sweep shares. It reaches
+  agents through the `AgentDispatch` seam (`syncDesiredState(agentId:)`,
+  `performOperationAwaitingResponse`), which `AgentService` implements and
+  tests replace with a fake.
 - **`CoordinationService`** (actor) — the Valkey layer: agent presence keys,
   socket routing, singleton sweep locks, placement reservations, and
   replica pub/sub (nudges + RPC). See [multi-replica](./multi-replica.md).
@@ -119,6 +132,9 @@ The important ones to know when navigating `Services/`:
   **`ImageObjectStore`** (where image bytes live — filesystem or S3-compatible,
   selected by `IMAGE_STORAGE_BACKEND`; see `storage.md`),
   **`RegistryClientService`** (OCI tag resolution + pull tokens for sandboxes).
+- **`DNSZoneService` / `DNSZoneAssembler`** — zone CRUD and network
+  attachment, plus the on-demand derived ∪ authored assembly of a zone's
+  contents (never stored); see [dns](./dns.md).
 - **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
   WebSockets to the agent socket for consoles and sandbox exec.
   `ConsoleSessionManager` carries both of a VM's consoles: the serial console
@@ -178,12 +194,17 @@ The canonical mutation path (`Controllers/VMController.swift`):
 5. The rest happens off-request on `app.backgroundTasks`: scheduling,
    placement, and a desired-state sync to the chosen agent.
 
-Lifecycle verbs (start/stop/pause/resume/delete) follow the same shape via
-`ResourceOperation.begin(...)` — which also enforces a 409 double-submit
-guard through a partial unique index on pending operations — followed by
-`dispatchStateSync`: push directly if this replica holds the agent's socket,
-otherwise publish a nudge to the replica that does. A lost nudge is harmless;
-the ~60s periodic sync re-sends full state.
+Lifecycle verbs (start/stop/pause/resume/delete) follow the same shape
+through `ResourceOperationCoordinator.perform`, which wraps
+`ResourceOperation.begin(...)` — that also enforces a 409 double-submit
+guard through a partial unique index on pending operations — and then drives
+a dispatch strategy in the background. For the state-sync strategy that is
+the `AgentDispatch` seam's `syncDesiredState(agentId:)`: push directly if
+this replica holds the agent's socket, otherwise publish a nudge to the
+replica that does. A lost nudge is harmless but not instantly repaired: the
+periodic sync re-sends state to dirty agents every minute, and the
+unconditional full-fleet resend that catches a lost cross-replica nudge runs
+every ~10 minutes.
 
 `PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
 `cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
@@ -215,8 +236,12 @@ an agent's `ObservedStateReport` shows the VM's observed status/generation
 caught up to desired, `completeIfPending` marks the row terminal. The
 stuck-operation sweep is the backstop, failing operations past their per-kind
 budget (`OperationResourceKind.completionBudgetSeconds` in
-`Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
-the one imperative exception: it awaits a correlated agent response.
+`Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). The
+imperative exceptions await a correlated agent response instead: reboot,
+full-VM checkpoint/restore/snapshot-delete (issue #564), and sandbox
+snapshot/restore/export — each with an RPC timeout sized under its operation
+budget, so the verdict comes from the response, not the sweep, whenever the
+dispatching replica survives.
 
 **The same derivation is projected onto the resource** as a `conditions` block
 (`Models/ResourceConditions.swift`, STR-142) — converged / targetGeneration /
@@ -322,8 +347,8 @@ future work.
   the other's desired state. Bare names remain what logs and metric labels
   show.
 - Message dispatch switches on the envelope type: registration, heartbeats,
-  correlated success/error responses, status updates, observed-state
-  reports, console/exec/log frames (see [wire-protocol](./wire-protocol.md)
+  correlated success/error responses, observed-state reports,
+  console/exec/log frames (see [wire-protocol](./wire-protocol.md)
   for the catalog).
 - **Sync assembly** (`DesiredStateAssembler.assemble`) reads the
   authoritative set straight from Postgres — VMs with volumes/NICs/image
@@ -438,9 +463,12 @@ fallback.
 A single heartbeat-monitor loop in `AgentService` (30s tick, injectable for
 tests) runs, per tick: stale-agent detection (60s threshold, skipped when a
 live Valkey presence key exists), pub/sub subscription re-arming, the
-periodic full sync to this replica's agents (every other tick), and three
-sweeps — stuck operations, expired sandboxes (TTL + retention reaping), and
-agent auto-update rollout.
+periodic sync to this replica's agents (every other tick, revision-gated to
+agents whose desired state changed since their last successful sync; every
+20th tick — ~10 minutes — forces an unconditional full-fleet resend, the
+backstop for a lost cross-replica nudge), and four sweeps — stuck
+operations, orphaned terminating resources (STR-144), expired sandboxes
+(TTL + retention reaping), and agent auto-update rollout.
 
 Sweeps take singleton locks via `app.coordination.acquireSweepLock(...)`
 (Valkey `SET NX EX`, 25s TTL, never explicitly released — the TTL expiring

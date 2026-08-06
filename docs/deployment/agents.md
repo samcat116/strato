@@ -83,7 +83,7 @@ reporting the problem rather than dead alongside it.
 
 ## Enrolling a node
 
-Enrollment is one API call — or **Agents → Enroll node** in the web UI:
+Enrollment is one API call — or **Agents → Add Agent** in the web UI:
 
 ```bash
 curl -X POST https://strato.example.com/api/agent-enrollments \
@@ -455,8 +455,8 @@ fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
 
 Most settings have platform defaults; see
 [`config.toml.example`](https://github.com/samcat116/strato/blob/main/config.toml.example)
-for the full list (QEMU paths, storage directories, network mode, SPIFFE/mTLS,
-`state_file` location). Command-line flags override the config file.
+for the full list (QEMU paths, storage directories, network mode,
+SPIFFE/mTLS). Command-line flags override the config file.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
@@ -562,25 +562,8 @@ is exposed depends on the deployment:
   Each must be reachable from the hypervisor.
 - **Kubernetes (Helm chart, `gateway.enabled`)** collapses all three onto a
   single LoadBalancer on **:443**, routed by SNI with Gateway API (Envoy
-  Gateway) so nothing extra needs opening:
-
-  | SNI host | Gateway route | Terminates where | Backend |
-  | --- | --- | --- | --- |
-  | `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (web UI and JSON API) |
-  | `agents.<host>` | `TLSRoute` passthrough | at the Envoy sidecar (sees the SVID) | control-plane `agent-mtls` `:8443` |
-  | `spire.<host>` | `TLSRoute` passthrough | at the SPIRE server | SPIRE node API `:8081` |
-
-  So an SVID node connects to `wss://agents.<host>/agent/ws` and attests against
-  `spire.<host>:443` — outbound-443-only, the friendliest shape for nodes behind
-  home networks. The chart points
-  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the bootstrap command and
-  telemetry-ingest origin the UI hands you already target the
-  passthrough listener — no manual rewrite needed. `TLSRoute` is an experimental
-  Gateway API channel; the chart pins `gateway.networking.k8s.io/v1alpha2` for
-  it, matching Envoy Gateway's experimental install. See the `gateway:` block in
-  the chart's `values.yaml`.
-
-  > Deploying Envoy Gateway and cutting the LoadBalancer/DNS over from
-  > ingress-nginx are infrastructure concerns handled outside the chart; by
-  > default the chart only attaches its routes to an operator-provided Gateway
-  > (`gateway.create=false`).
+  Gateway): an SVID node connects to `wss://agents.<host>/agent/ws` and
+  attests against `spire.<host>:443` — outbound-443-only, the friendliest
+  shape for nodes behind home networks. The SNI routing table and the
+  `gateway:` values live in
+  [Kubernetes Deployment](/deployment/kubernetes#production-configuration).

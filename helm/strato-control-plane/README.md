@@ -1,6 +1,6 @@
 # Strato Control Plane Helm Chart
 
-This Helm chart deploys the Strato control plane application with all its dependencies including a PostgreSQL database. Authorization is handled by the control plane's built-in Cedar policy engine — no external authorization service is deployed.
+This Helm chart deploys the Strato control plane (Vapor API server) and its Next.js frontend, together with a PostgreSQL database and a Valkey coordination/session store (the bitnami `redis` chart aliased `valkey` with a Valkey image), a full SPIRE stack — server, agent DaemonSet, Envoy mTLS sidecar, and entry-bootstrap job — which is on by default and is the only way hypervisor agents authenticate, an OpenTelemetry collector, and a bundled Prometheus (optional, on by default). Authorization is handled by the control plane's built-in Cedar policy engine — no external authorization service is deployed.
 
 ## Prerequisites
 
@@ -94,12 +94,12 @@ podDisruptionBudget:
 networkPolicy:
   enabled: true
 
-# Monitoring
-monitoring:
-  serviceMonitor:
-    enabled: true
-  metrics:
-    enabled: true
+# Monitoring — scrape from an existing Prometheus Operator stack
+# (see "Monitoring and Observability" below)
+opentelemetry:
+  prometheusExport:
+    serviceMonitor:
+      enabled: true
 ```
 
 #### External Database
@@ -123,7 +123,7 @@ externalDatabase:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `image.repository` | string | `"strato-control-plane"` | Container image repository |
-| `image.tag` | string | `""` | Container image tag (defaults to chart appVersion) |
+| `image.tag` | string | `"latest"` | Container image tag (falls back to chart appVersion when empty) |
 | `image.pullPolicy` | string | `"IfNotPresent"` | Image pull policy |
 | `replicaCount` | int | `1` | Number of replicas |
 | `frontend.enabled` | bool | `true` | Deploy the standalone Next.js frontend |
@@ -135,9 +135,9 @@ externalDatabase:
 | `resources.requests.cpu` | string | `"500m"` | CPU request |
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
-| `strato.webauthn.relyingPartyId` | string | `"localhost"` | WebAuthn relying party identifier |
+| `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the gateway/ingress hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
-| `strato.webauthn.relyingPartyOrigin` | string | `"http://localhost:8080"` | WebAuthn relying party origin |
+| `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the gateway/ingress settings (falling back to `http://localhost:8080`) |
 | `strato.selfRegistrationEnabled` | bool | `true` | Allow visitors to create their own accounts from the sign-in screen. The first account is always creatable, so this can be `false` from the start |
 | `postgresql.enabled` | bool | `true` | Enable PostgreSQL subchart |
 | `postgresql.auth.database` | string | `"vapor_database"` | PostgreSQL database name |
@@ -191,7 +191,9 @@ The chart includes test values files for different scenarios:
 - `ci/default-values.yaml` - Basic configuration for CI
 - `ci/production-values.yaml` - Production-like settings
 - `ci/external-db-values.yaml` - External database configuration
+- `ci/external-monitoring-values.yaml` - Prometheus Operator scraping, no bundled Prometheus
 - `ci/minimal-values.yaml` - Minimal resource configuration
+- `ci/session-valkey-values.yaml` - Dedicated session-store Valkey split from coordination
 
 ## Troubleshooting
 

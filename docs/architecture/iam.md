@@ -972,8 +972,8 @@ legacy-vocabulary question as asked at the check site, the latter is always
   `untranslated` — because an unmapped pair is a check site nobody mapped,
   not an allowance; a mapping is only emitted if the action exists in the
   registry and is schema-applicable to the node. The legacy vocabulary
-  outlived SpiceDB itself: `req.can` still speaks it so the ~55 handler call
-  sites need not churn, and converting them to IAM action names is the
+  outlived SpiceDB itself: `req.can` still speaks it so the dozens of handler
+  call sites need not churn, and converting them to IAM action names is the
   remaining cleanup.
 - **Decision rows record why, not just what**: the determining policy ids
   (which is why the engine compiles policies under their assembler ids), the
