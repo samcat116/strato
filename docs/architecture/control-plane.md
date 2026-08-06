@@ -138,6 +138,15 @@ The important ones to know when navigating `Services/`:
 - Hierarchy/reporting: `OrganizationAccessService` (the org list filter used
   by list endpoints), `HierarchyTreeBuilder` and friends,
   `QuotaUsageService`/`QuotaComplianceService`, `ProjectStatsService`.
+- **`HierarchyMaintenanceService`** — backs the system-admin-only
+  `GET /api/hierarchy/validate` and `POST /api/hierarchy/repair`. The org tree
+  is stored twice: as relational parent links and as the materialized `path` /
+  `depth` each folder and project carries. The links are the source of truth
+  (authorization walks them), so validation re-derives every path from them and
+  reports the rows that disagree, plus parent cycles and missing parents;
+  `repairOptions.rebuildPaths` rewrites what it found. Drift is otherwise
+  invisible — a folder move that rewrote only descendant *folders* left the
+  projects beneath naming an ancestor they no longer had (STR-114).
 
 ## Request lifecycle: `POST /api/vms`
 
@@ -159,10 +168,11 @@ The canonical mutation path (`Controllers/VMController.swift`):
 3. **One transaction** (with constraint-failure retry for IPAM races):
    quota reservation → VM row → `setDesiredStatus(.shutdown)` (bumps
    `generation`) → NIC rows with IPAM-allocated addresses → a
-   **`ResourceOperation`** row (`pending`) → the creator's role binding on
+   **`ResourceOperation`** row (`pending`) → a **`ResourceEvent`** row (the
+   append-only attribution record) → the creator's role binding on
    the new VM (`RoleBindingService.grant` — an explicit, revocable grant,
    transactional with the resource it protects). The desired-state change,
-   the operation, and the grant commit atomically.
+   the operation, the event, and the grant commit atomically.
 4. The handler returns **202 Accepted** with the operation; the client polls
    `/api/operations/:id`.
 5. The rest happens off-request on `app.backgroundTasks`: scheduling,
@@ -207,6 +217,67 @@ stuck-operation sweep is the backstop, failing operations past their per-kind
 budget (`OperationResourceKind.completionBudgetSeconds` in
 `Models/ResourceOperation.swift` — e.g. VM create 600s, boot 180s). Reboot is
 the one imperative exception: it awaits a correlated agent response.
+
+**The same derivation is projected onto the resource** as a `conditions` block
+(`Models/ResourceConditions.swift`, STR-142) — converged / targetGeneration /
+observedGeneration / phase / degraded — so a client can refetch the VM or
+sandbox instead of polling an operation. Nothing stores it: `converged` is
+`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status)`, the
+same test `completeIfPending` runs, and `phase`/`degraded` read the
+`convergence_phase` / `last_error` / `failed_generation` columns that
+`ObservedStateApplier` mirrors from each report (clearing them when an attempt
+finally succeeds). This is stage 1 of
+[ADR 0001](/adr/0001-declarative-agent-protocol); the operations API is
+unchanged, and the stuck-operation sweep still has no conditions counterpart,
+so a resource whose agent goes silent reads as unconverged with no `degraded`
+reason until the sweep fails its operation.
+
+**Attribution outlives the operation** (ADR 0001 stage 2). Every mutation that
+writes an operation row also appends a `resource_events` row in the same
+transaction: the acting principal (type *and* id, so it is not restricted to
+users the way `resource_operations.user_id` is), the resource kind/id/name,
+the mutation kind, the target generation, and the org/project it happened in.
+Rows are never updated and never swept — there is no retention policy, because
+an audit trail that admits edits is not one, and a `BEFORE UPDATE OR DELETE`
+trigger enforces that rather than trusting every future caller.
+`ResourceOperation.begin` covers every mutation except VM and sandbox
+`create`, whose retrying transactions own their own inserts and so append
+their own events.
+
+**`DELETE` never removes a row; finalizers do** (STR-144, ADR 0001 stage 3).
+A delete marks desired state `.absent` and stamps the resource's `finalizers`
+list — the named cleanup participants its teardown owes (`agent.absent` for a
+placed workload; nothing for one that never reached an agent). Each participant
+clears its own token from wherever it actually runs, and
+`ResourceFinalizerService.clear` reaps the row — external cleanup, IAM
+bindings, the record, quota, placement reservation
+(`FinalizableResource.reap`) — when the last token goes. The token is cleared
+with a single `array_remove`, never a read-modify-write, so two participants on
+two replicas cannot lose each other's update, and the reap claims the row
+(`SELECT … FOR UPDATE`) inside its own transaction so exactly one of two racing
+clears reports the removal. Clearing the token and reaping the row are two
+commits: a crash in between leaves a terminating row with an empty list, which
+the participant's next trigger reaps, since clearing an already-cleared token
+still reaps an empty list. `agent.absent` re-triggers on every observed-state
+report; the one-shot direct path and unattended expiry deletions have no such
+trigger, so `sweepOrphanedTerminatingResources` (cluster-singleton, 60s budget)
+is the universal backstop — and the reason a new participant does not have to
+invent its own retry.
+
+The only participant today is the observed-state applier's confirmation of
+absence — the agent-confirmed tombstone dance, now expressed as one token among
+a list. Offline or unplaced workloads take the direct path, which force-clears
+`agent.absent` for the same reason it always deleted directly: a dead agent
+must not make its workloads undeletable. That path reports back whether the row
+is actually gone; when another participant still holds it, the delete operation
+stays `pending` rather than telling the client a workload is deleted while its
+row is standing. `ipam.release`, `dns.deregister`, and
+`fip.release` are named in the ADR but **not stamped**: each is a database
+cascade today (`vm_interface_addresses` CASCADE, zone contents derived on
+demand and never stored, `floating_ips.interface_id` SET NULL), and a token for
+work Postgres already does transactionally would trade an atomic cascade for an
+eventually-consistent one. They become participants when they gain an effect
+outside the row's transaction.
 
 **Resource list endpoints page by default** (issue #700): every list (VMs,
 sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
@@ -384,9 +455,14 @@ what makes the test harness safe.
   `desiredStatus`, `generation`, `observedGeneration`, with helpers
   `setDesiredStatus` (bumps generation), `isConverged`, and
   `revertDesiredToObserved()` (called when an operation fails so unachieved
-  intent doesn't replay).
+  intent doesn't replay). Alongside it they mirror the agent's reported
+  convergence progress — `convergencePhase`, `lastError`, `failedGeneration`
+  — which only `ObservedStateApplier` writes and only the `conditions`
+  projection reads.
 - `ResourceOperation` has a plain `resource_id` column, deliberately **not**
   a foreign key, so delete operations survive the resource row's removal.
+  `ResourceEvent` goes further: *every* id on it is foreign-key-free, since
+  the audit row has to outlive both the resource and the principal it names.
 - Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),
   and never query live models in a migration — snapshot the columns in a
   private model instead. Migration ordering in `configure.swift` matters when

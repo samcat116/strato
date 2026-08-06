@@ -28,8 +28,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
     level-triggered sync). The verdict is recorded immediately.
   - *placement* — background scheduling + placement + first sync (`create`).
     Records a failure verdict on error; success is deferred to the applier.
-  - *deletion* — nudge the agent when online (row removed once its report
-    confirms absence), else remove the record directly.
+  - *deletion* — nudge the agent when online (the row is reaped once its
+    report confirms absence clears the `agent.absent` finalizer), else clear
+    that finalizer directly.
 
 - **Verdict** — the terminal outcome recorded on the operation row
   (`succeeded` / `failed`). `recordVerdict` is the single choke point for the
@@ -55,6 +56,21 @@ use in code, tests, docs, and review. Architecture-level maps live in
   Both controllers and the sweep drive operations through its small interface
   instead of re-spelling the begin/dispatch/verdict sequence per handler.
 
+- **Resource event** — one append-only `resource_events` row describing a
+  mutation: the **actor** that asked for it, the resource it acted on (kind,
+  id, and name snapshot), the mutation kind, the **target generation**, and
+  the org/project it happened in. Written in the mutation's own transaction,
+  never updated, never swept, no retention — the immutability enforced by a
+  trigger, not just by convention. It is the durable attribution record;
+  `resource_operations.user_id` is the transitional one, and mutations
+  dual-write both until the operations table retires (ADR 0001).
+
+- **Actor** — who performed a mutation, as a *principal type plus id*
+  (`user` / `service_account` / `workload` / `system`) rather than the plain
+  user id an operation row carries. `system` is the control plane acting with
+  no principal behind it — the sandbox expiry sweep — and is the one actor
+  with no id, because it is not a row.
+
 - **AgentDispatch** — the seam the coordinator depends on to reach agents
   (`agentIsOnline`, `syncDesiredState`, `performOperationAwaitingResponse`).
   Production adapter: `AgentService`. Test adapter: an in-memory fake, so the
@@ -70,6 +86,44 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
+- **Conditions** — the `conditions` block VM and sandbox API responses carry:
+  *converged* / *targetGeneration* / *observedGeneration* / *phase* /
+  *degraded*. Derived on read, never stored, and never written by a mutation —
+  it restates the reconciliation loop's own state, so refetching a resource
+  until `converged` is the alternative to polling its **resource operation**.
+- **Degraded** — the last convergence attempt that failed (its error and the
+  generation that produced it), carried until something converges. Deliberately
+  independent of `targetGeneration`: a degraded condition naming an older
+  generation is a failure a newer mutation is already retrying.
+
+## Deletion
+
+- **Terminating** — a resource whose `DELETE` has been accepted: desired state
+  is `.absent` and the row is still there. `DELETE` never removes a row.
+
+- **Finalizer** — one named cleanup participant a terminating resource still
+  owes, held as a token in its `finalizers` list (`ResourceFinalizer`, e.g.
+  `agent.absent`). Stamped in the same write that marks the resource absent.
+  A token this replica does not recognize holds the row exactly like one it
+  does — the replica that owns it will clear it.
+
+- **Participant** — the code that clears one token, from wherever it actually
+  runs. Every participant is **idempotent** (its trigger repeats), **crash-safe**
+  (a crash mid-cleanup leaves the token stamped and the step is retried), and
+  **independently retryable** (no participant depends on another's order). The
+  first and currently only one is the observed-state applier's confirmation of
+  absence, which clears `agent.absent`.
+
+- **Reap** — removing the row and everything that goes with it (external
+  cleanup, IAM bindings, quota, placement reservation) once the last finalizer
+  clears. `ResourceFinalizerService.clear` is the single entry point;
+  `FinalizableResource.reap` is the per-kind teardown, which claims the row so
+  exactly one of two racing clears reports the removal.
+
+- **Orphaned terminating resource** — a terminating row whose finalizers all
+  cleared but whose removal never happened (a crash or drain between the two
+  commits). `sweepOrphanedTerminatingResources` is the cluster-singleton
+  backstop that reaps them, so no participant has to invent its own retry.
 
 ## Cross-replica coordination
 

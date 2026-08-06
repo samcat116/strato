@@ -492,9 +492,22 @@ struct ObservedStateApplier {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
+        // Mirror the report's convergence progress onto the row (STR-142) so
+        // the API can project it as the VM's `conditions` block. Recorded on
+        // both the converging and settled paths — the phase only exists on the
+        // former, and the error pair has to be *cleared* on the latter.
+        var changed = vm.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if observed.convergencePhase != nil {
+            if changed {
+                try await vm.save(on: db)
+            }
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
@@ -505,7 +518,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > vm.observedGeneration {
             vm.observedGeneration = observed.observedGeneration
             changed = true
@@ -731,36 +743,56 @@ struct ObservedStateApplier {
         let vmID = try vm.requireID()
 
         if vm.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row: if we crash in between, the next report retries the
-            // (idempotent) removal, whereas removing first would leave a
-            // pending operation with nothing to resolve it but the sweep.
+            // Teardown confirmed: this is the `agent.absent` finalizer's
+            // participant (ADR 0001). Complete the operation first, then clear
+            // the token: if we crash in between, the next report retries the
+            // (idempotent) clear, whereas clearing first would leave a pending
+            // operation with nothing to resolve it but the sweep.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            // Bindings first, unlike the delete-then-revoke order the other
-            // controllers use: the revoke reads the VM's checkpoints, whose
-            // rows the delete below cascades away (STR-112).
-            try await db.transaction { db in
-                try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: db)
-                try await vm.delete(on: db)
-                try await QuotaEnforcementService.release(for: vm, on: db)
+            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
+            case .reaped:
+                app.logger.info(
+                    "VM deletion confirmed by agent report; record removed",
+                    metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                // Other participants still owe cleanup. Logged on every report
+                // until they finish, so this stays at debug.
+                app.logger.debug(
+                    "VM teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "vmId": .string(vmID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                // Raced another reaper, or the row went between the query and
+                // here. Nothing to say: whoever removed it logged the removal.
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
-
-            app.logger.info(
-                "VM deletion confirmed by agent report; record removed",
-                metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
             return
         }
+
+        // A report lists everything the agent is converging or has failed to
+        // converge, so an omitted VM has no progress to report at all — most
+        // often because the agent restarted and lost its in-memory view. Drop
+        // whatever it last said, rather than leave `conditions` claiming a
+        // download that nothing is doing (STR-142).
+        let convergenceCleared = vm.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
 
         // Same established-state rule as the heartbeat reconciliation: only
         // states that assert live agent presence are safe to escalate on
         // absence. (`.created` may be mid-create on an agent that hasn't
         // received the sync yet.) The reconcile loop will re-create the VM on
         // its next sync; if it succeeds, a later report restores the status.
-        guard vm.status.assertsAgentPresence else { return }
+        guard vm.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await vm.save(on: db)
+            }
+            return
+        }
 
         let previous = vm.status
         vm.setStatus(.error)
@@ -787,8 +819,19 @@ struct ObservedStateApplier {
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
+        // Convergence progress for the `conditions` block (STR-142) — same
+        // contract as VMs, recorded on both paths for the same reasons.
+        var changed = sandbox.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
+            if changed {
+                try await sandbox.save(on: db)
+            }
             app.logger.debug(
                 "Sandbox converging on agent",
                 metadata: [
@@ -799,7 +842,6 @@ struct ObservedStateApplier {
             return
         }
 
-        var changed = false
         if observed.observedGeneration > sandbox.observedGeneration {
             sandbox.observedGeneration = observed.observedGeneration
             changed = true
@@ -873,36 +915,47 @@ struct ObservedStateApplier {
         let sandboxID = try sandbox.requireID()
 
         if sandbox.desiredStatus == .absent {
-            // Deletion confirmed. Complete the operation first, then remove
-            // the row (same crash-ordering rationale as VMs).
+            // Teardown confirmed: the `agent.absent` participant, same
+            // crash-ordering rationale as VMs.
             if let operation = pendingOperation {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            // Exported snapshot objects first: the snapshot rows cascade with
-            // the sandbox row below (issue #428).
-            await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
-
-            // Bindings first: the revoke reads the sandbox's snapshots, whose
-            // rows the delete below cascades away (STR-112).
-            try await db.transaction { db in
-                try await ResourceBindingCleanup.revokeBindings(forDeletedSandbox: sandboxID, on: db)
-                try await sandbox.delete(on: db)
-                try await QuotaEnforcementService.release(for: sandbox, on: db)
+            switch try await ResourceFinalizerService.clear(
+                .agentAbsent, from: sandbox, on: db, app: app)
+            {
+            case .reaped:
+                app.logger.info(
+                    "Sandbox deletion confirmed by agent report; record removed",
+                    metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                app.logger.debug(
+                    "Sandbox teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                break
             }
-            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
-
-            app.logger.info(
-                "Sandbox deletion confirmed by agent report; record removed",
-                metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
             return
         }
+
+        // Nothing to report means no progress to report — same rationale as
+        // the VM path (STR-142).
+        let convergenceCleared = sandbox.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
 
         // Only escalate established sandboxes: a never-confirmed row
         // (observedGeneration 0) may be mid-create on an agent that hasn't
         // received the sync yet, and non-presence-asserting states are owned
         // by the sweep.
-        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else { return }
+        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else {
+            if convergenceCleared {
+                try await sandbox.save(on: db)
+            }
+            return
+        }
 
         let previous = sandbox.status
         sandbox.setStatus(.error)

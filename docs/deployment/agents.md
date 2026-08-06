@@ -206,14 +206,23 @@ flow) verifies before use:
 | `strato-linux-arm64.tar.gz` | Linux arm64/aarch64 (static Swift stdlib) |
 | `strato-macos-arm64.tar.gz` | macOS Apple Silicon (dev/test) |
 
-Each tarball contains both `strato-control-plane` and `strato-agent`. There is
-deliberately **no separate agent-only asset**: every consumer extracts just the
-`strato-agent` member (`install.sh` and the agent self-update flow both do a
-single-member `tar -xzf ... strato-agent`), and one asset per platform keeps
-the release matrix and checksum handling simple. If download size ever matters
-for large fleets, a lean per-arch agent asset can be added later without
-breaking consumers — the manifest below names assets explicitly rather than by
-convention.
+Each tarball contains `strato-control-plane`, `strato-agent`, and the `strato`
+CLI. There is deliberately **no separate agent-only asset**: every consumer
+extracts just the `strato-agent` member (`install.sh` and the agent self-update
+flow both do a single-member `tar -xzf ... strato-agent`), and one asset per
+platform keeps the release matrix and checksum handling simple. If download
+size ever matters for large fleets, a lean per-arch agent asset can be added
+later without breaking consumers — the manifest below names assets explicitly
+rather than by convention.
+
+All three binaries are **stripped** before packaging — debug symbols were most
+of the download. That means a crash on a node yields addresses rather than
+function names if you enable the Swift backtracer (`SWIFT_BACKTRACE=enable=yes`
+in the unit). Build from the release's `gitSHA` — which `strato-agent
+--version` and `agent-manifest.json` both report — to read the code that
+crashed; mapping those addresses back onto a rebuild needs debug artifacts,
+which releases do not publish today. The published container images are not
+stripped, so the same crash under `docker compose` still symbolicates.
 
 ### agent-manifest.json
 
