@@ -151,9 +151,10 @@ environment, development included, goes through the same passkey flows.
 - **Deployed**: `control-plane/web/Dockerfile` builds with Bun and runs the
   standalone server on Node as a non-root user. In the compose deployment,
   `deploy/compose/nginx.conf` splits traffic: `/api/`, `/auth/`, `/oauth/`
-  (the CLI's OAuth device grant), `/agent/`, `/health`, `/organizations/` go
-  to the control plane (with hour-long read timeouts for the WebSockets),
-  everything else to the frontend.
+  (the CLI's OAuth device grant), `/agent/`, `/health`, `/organizations/`,
+  and `/ssf/` (the Shared Signals receiver) go to the control plane (with
+  hour-long read timeouts for the WebSockets), everything else to the
+  frontend.
 - **Tailwind v4** is configured CSS-first: no `tailwind.config`; the theme
   lives in `app/globals.css` via `@theme`, processed by
   `@tailwindcss/postcss`.
