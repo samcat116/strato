@@ -337,22 +337,41 @@ struct DesiredStateAssembler {
             .sorted { $0.workloadId.uuidString < $1.workloadId.uuidString }
     }
 
-    /// The agent self-update this sync should carry (issue #434): the rollout
-    /// sweep's assignment on the agent row, with its artifact re-resolved on
-    /// every assembly, so a long-assigned update never carries a stale
-    /// (possibly presigned) link. Nil whenever there is
-    /// nothing actionable: not enrolled, not assigned, already converged, an
-    /// agent too old to act on the field (a pre-v7 agent would wait out the
-    /// rollout's health budget against silence), or an artifact that cannot
-    /// currently be resolved (best effort — the sync also carries workload
-    /// state and must not fail on the release host being down).
+    /// The agent self-update this sync should carry (issue #434): whatever
+    /// version the agent row has been assigned — by the fleet rollout sweep or
+    /// by an operator's "update now", which since STR-145 is the same field —
+    /// with its artifact re-resolved on every assembly, so a long-assigned
+    /// update never carries a stale (possibly presigned) link. An operator's
+    /// explicit artifact override has no release to re-resolve from and rides
+    /// the row instead.
+    ///
+    /// Deliberately keyed on the assignment rather than on `autoUpdate`:
+    /// enrollment governs whether the *sweep* may assign this agent, not
+    /// whether an assignment is delivered — and withdrawing enrollment clears
+    /// the assignment anyway. Nil whenever there is nothing actionable: not
+    /// assigned, already converged, an agent too old to act on the field (a
+    /// pre-v7 agent would wait out the health budget against silence), or an
+    /// artifact that cannot currently be resolved (best effort — the sync also
+    /// carries workload state and must not fail on the release host being
+    /// down).
     private func desiredAgentUpdateForSync(agent: Agent?) async -> DesiredAgentUpdate? {
         guard let agent,
-            agent.autoUpdate,
             let assigned = agent.updateDesiredVersion,
             AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned),
-            WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0),
-            let operatingSystem = agent.hostOperatingSystem,
+            WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0)
+        else { return nil }
+
+        if let override = agent.updateArtifactOverride {
+            return DesiredAgentUpdate(
+                targetVersion: assigned,
+                artifactURL: override.url,
+                sha256: override.sha256,
+                artifactKind: override.kind,
+                tarballMember: override.kind == .tarball ? override.tarballMember : nil
+            )
+        }
+
+        guard let operatingSystem = agent.hostOperatingSystem,
             let architecture = agent.cpuArchitecture
         else { return nil }
 

@@ -34,10 +34,18 @@ export const agentsApi = {
     return api.post(`/api/agents/${id}/actions/force-offline`);
   },
 
-  // Synchronous long poll: the control plane replies only after the agent has
-  // downloaded, verified, and installed the new binary (or refused).
+  // Assigns the target version as desired state and returns 202 immediately
+  // (STR-145). The agent converges on its next sync; watch
+  // `updateDesiredVersion` / `updateBlockedReason` / `updateFailureReason` on
+  // the agent for progress.
   update(id: string, options?: { force?: boolean }): Promise<AgentUpdateResult> {
     return api.post<AgentUpdateResult>(`/api/agents/${id}/actions/update`, options ?? {});
+  },
+
+  // Withdraws an update assignment (rollout's or an operator's). Works while
+  // the agent is offline, which is when a stuck update usually needs clearing.
+  cancelUpdate(id: string): Promise<Agent> {
+    return api.delete<Agent>(`/api/agents/${id}/actions/update`);
   },
 
   patch(id: string, data: { autoUpdate?: boolean }): Promise<Agent> {
