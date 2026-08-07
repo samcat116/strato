@@ -46,7 +46,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 31), stamped on
+`WireProtocol.swift` holds the protocol version (currently 34), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -63,7 +63,6 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
 | `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v28) |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
-| `supportsSandboxSnapshots` | 9 | `sandbox_restore` (capture/delete/export became desired state at v33) |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
@@ -72,7 +71,6 @@ ad-hoc checks scattered through the code:
 | `supportsBalloonTarget` | 19 | `VMSpec.balloonTargetBytes` — operator balloon targets on a running guest |
 | `supportsSecurityGroups` | 20 | Security groups: OVN port groups/ACLs from the sync, membership per NIC |
 | `supportsProjectNetworkIsolation` | 21 | Id-keyed OVN naming, so two same-named networks can coexist |
-| `supportsVMCheckpoint` | 22 | `vm_restore` (capture/delete became desired state at v33) |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
 | `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
@@ -80,6 +78,12 @@ ad-hoc checks scattered through the code:
 | `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
 | `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
 | `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
+| `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
+
+The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
+removed with the last frames they guarded (v33 and v34): every question either
+answered is now answered, at a higher floor, by `supportsSnapshotSync` and
+`supportsEdgeNonces`.
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -276,7 +280,7 @@ gains its counterpart; seven imperative frames go — `volume_snapshot`,
 `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`,
 `sandbox_snapshot_create`, `sandbox_snapshot_delete` and
 `sandbox_snapshot_export`. `vm_restore` and `sandbox_restore` survive; they are
-edges rather than states, and convert to nonces in ADR stage 9.
+edges rather than states, and convert to nonces at v34.
 
 Both hazard shapes are v31's, and the `Optional`-not-`[]` treatment is the
 same, one step more expensive to get wrong: an empty `snapshots` the control
@@ -291,6 +295,36 @@ instead — `POST .../snapshots` against a pre-v33 agent is refused with `409`,
 which is exactly what the pre-v22/v9 capability preflights already did, one
 floor higher. Artifacts already on such an agent freeze until it is upgraded;
 deleting one still works, by force-clearing the agent-absence finalizer.
+
+Version 34 makes reboot and restore edge-nonces (ADR 0001 stage 9, STR-151),
+and takes the last three durable-resource RPCs with them: `vm_reboot`,
+`vm_restore`, `sandbox_restore`. `DesiredVMState` gains `rebootGeneration` and
+`restore`; `DesiredSandboxState` gains `restore`. Nothing imperative is left on
+the wire but live byte streams.
+
+These three resisted every earlier stage because they really are edges: a
+reboot starts and ends `running`, and "be at checkpoint C" stops being true the
+moment the guest resumes. Counting them is what makes them states — the
+`kubectl rollout restart` shape, where the edge becomes a state once *how many
+times it was asked* is part of the state. The agent applies one only when the
+desired count outranks the one it recorded, so a dropped, replayed or re-driven
+sync converges instead of restarting a guest twice.
+
+Two things are worth knowing about this bump specifically. First, it is
+**strictly better than what it replaces**: a fire-and-forget RPC whose socket
+dropped mid-flight lost the reboot silently, where a nonce survives and
+converges. Second, the correctness invariant moved to the agent and became a
+*durability* question rather than a delivery one — the applied nonces live in
+`VMManifestStore`, and an entry with **no record** (written by an older build,
+or never converged here) is *adopted* rather than read as zero. Reading it as
+zero would have a re-registered agent replay a VM's whole restore history.
+
+The gate is unusual too. Both fields are `Optional` like v31's and v33's, but
+absence here is inert in every direction — a count of requests can only mean
+"nothing was asked for" — so `supportsEdgeNonces` is not defending the payload.
+It defends the *request*: with no fallback frame left, a reboot aimed at a
+pre-v34 agent would be accepted into a field that agent ignores and then
+reported as converged, so it is refused with `409` at admission.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
@@ -307,16 +341,16 @@ dual-mode rollout.
 |---|---|
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
-| `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
-| `vm_restore` | Load a full-VM checkpoint back into a live QEMU process and resume (v22+, issue #564). Still imperative because a restore is an *edge*: "this VM should be at checkpoint C" is not something an agent can re-converge on, since the guest starts writing the moment it resumes. Gated on the `snapshot:VMCheckpoint` capability, since only a QEMU-capable agent can realize it |
-| `sandbox_restore` | The sandbox counterpart (v9+, issue #426), with optional artifact descriptors for a cross-agent restore (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
 
-There are deliberately no `network_*` messages: network topology is
-level-triggered from `DesiredStateMessage.networks` alone (the imperative
-frames were removed in issue #781, as were the pre-sync `vm_*` lifecycle
-messages and `status_update` in issue #512).
+Everything the control plane sends is now either the sync or a live byte
+stream — the disposition ADR 0001 set out to reach. There are deliberately no
+`network_*` messages (topology is level-triggered from
+`DesiredStateMessage.networks` alone; the imperative frames went in issue #781,
+as did the pre-sync `vm_*` lifecycle messages and `status_update` in issue
+#512), no `volume_*` messages (v31/v32/v33), no snapshot verbs (v33), and since
+v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 
 **Agent → control plane**
 
@@ -352,11 +386,17 @@ design; the short version:
 - `DesiredVMState`: the VM's ID, pinned `hypervisorType`, full `VMSpec`,
   desired status, a **generation** counter, optional `imageInfo` whose
   download URLs are control-plane-relative paths the agent fetches over
-  SVID mTLS (issue #493) — nothing in them expires — and optional `metadata`
+  SVID mTLS (issue #493) — nothing in them expires — optional `metadata`
   (`InstanceMetadata`, v26+), the content the agent's link-local metadata
-  service serves to the guest.
+  service serves to the guest, and the two **edge nonces** (v34+):
+  `rebootGeneration` and `restore` (a `DesiredRestore` of a nonce plus the
+  checkpoint it names). Both are counts of requests, so absence is inert; the
+  agent acts only when one outranks what it recorded in `VMManifestStore`, and
+  a missing record is adopted rather than read as zero.
 - `DesiredSandboxState` mirrors it for sandboxes (with an optional registry
-  credential); `DesiredNetworkState` reconciles OVN logical networks
+  credential, and its own `restore` nonce — not to be confused with
+  `restoreFrom`, which is a fork's *create strategy* and is read only while the
+  sandbox is absent); `DesiredNetworkState` reconciles OVN logical networks
   (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP, and an
   optional `floatingIPs` list — external→fixed address mappings plus
   `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,

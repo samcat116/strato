@@ -44,6 +44,31 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    // Edge nonces (ADR 0001 stage 9, STR-151). Reboot and restore are the two
+    // VM verbs `desiredStatus` cannot express: a reboot starts and ends
+    // `.running`, and "be at checkpoint C" stops being true the moment the guest
+    // resumes. Counting each request turns both into ordinary desired state —
+    // the agent applies one only when the count outranks the one it durably
+    // recorded, so a replayed sync converges instead of restarting a guest
+    // twice.
+    //
+    // They are deliberately *separate* from `generation` rather than folded into
+    // it. `generation` guards ordering and is idempotent by design: an agent
+    // that re-applies it does nothing. An edge is the opposite, so it needs its
+    // own counter, applied once, and a durable record on the other side.
+    @Field(key: "reboot_generation")
+    var rebootGeneration: Int64
+
+    @Field(key: "restore_generation")
+    var restoreGeneration: Int64
+
+    /// The checkpoint `restoreGeneration` names. Meaningless while that counter
+    /// is zero. Not a foreign key: the checkpoint may be deleted long after the
+    /// restore it drove, and a `RESTRICT` would make ordinary cleanup fail on a
+    /// VM that was once restored.
+    @OptionalField(key: "restore_snapshot_id")
+    var restoreSnapshotID: UUID?
+
     // Convergence progress mirrored from the agent's observed-state report
     // (STR-142). Purely observed and written only by `ObservedStateApplier`:
     // `convergencePhase` is the agent's human-readable current step, non-nil
@@ -293,6 +318,8 @@ final class VM: Model, @unchecked Sendable {
         self.desiredStatus = .shutdown
         self.generation = 0
         self.observedGeneration = 0
+        self.rebootGeneration = 0
+        self.restoreGeneration = 0
         self.finalizers = []
         self.hypervisorType = hypervisorType
         self.hugepages = hugepages
@@ -347,6 +374,34 @@ extension VM {
     /// be dropped as stale. Does not persist — call `save(on:)` afterwards.
     func bumpGeneration() {
         generation += 1
+    }
+
+    /// Asks the owning agent to restart this VM once (ADR 0001 stage 9,
+    /// STR-151): bumps the reboot nonce and the ordinary generation alongside
+    /// it. Does not persist — call `save(on:)` afterwards.
+    ///
+    /// Both counters move because they answer different questions. The nonce is
+    /// what the *agent* diffs against its durable record to decide whether to
+    /// act; `generation` is what the *control plane* diffs to decide whether the
+    /// mutation has converged, and it is what carries the reboot into the
+    /// conditions block, the stuck-convergence sweep and the webhook without a
+    /// single branch of its own.
+    ///
+    /// The desired status is deliberately untouched: a reboot starts and ends
+    /// `.running`, which is exactly why it needed a nonce in the first place.
+    func requestReboot() {
+        rebootGeneration += 1
+        generation += 1
+    }
+
+    /// Asks the owning agent to load `snapshotID` back into this VM once
+    /// (STR-151). Sets the desired status to `.running` alongside the nonce —
+    /// the restored guest resumes, so desired state has to agree or the next
+    /// sync would stop it right back — which also bumps `generation`.
+    func requestRestore(snapshotID: UUID) {
+        restoreGeneration += 1
+        restoreSnapshotID = snapshotID
+        setDesiredStatus(.running)
     }
 
     /// True once the owning agent has confirmed converging to the current

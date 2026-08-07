@@ -183,7 +183,7 @@ final class ReplicaMessageBridgeTests {
             }
 
             let envelope = try MessageEnvelope(
-                message: VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString))
+                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
             let response = try await bridge.call(
                 envelope, requestId: "rpc-err", agentId: UUID().uuidString,
                 agentKey: "agent-x", toReplica: "replica-b", timeout: .seconds(5))
@@ -216,7 +216,7 @@ final class ReplicaMessageBridgeTests {
             }
 
             let envelope = try MessageEnvelope(
-                message: VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString))
+                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
             await #expect(throws: AgentServiceError.self) {
                 _ = try await bridge.call(
                     envelope, requestId: "rpc-unreach", agentId: UUID().uuidString,
@@ -235,7 +235,7 @@ final class ReplicaMessageBridgeTests {
             }
 
             let envelope = try MessageEnvelope(
-                message: VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString))
+                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
             let request = ReplicaMessageBridge.AgentRPCRequest(
                 rpcId: "rpc-nosock",
                 replyChannel: replyChannel,

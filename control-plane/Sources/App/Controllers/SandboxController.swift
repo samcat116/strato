@@ -47,70 +47,23 @@ struct SandboxController: RouteCollection {
     /// (STR-147) — the sandbox as the mutation left it, plus the generation its
     /// `conditions.observedGeneration` has to reach. Sandbox counterpart of
     /// `VMController.acceptedResponse`.
-    private static func acceptedResponse(
+    /// Internal, not private: the snapshot handlers in
+    /// `SandboxSnapshotController.swift` extend this same type from another file
+    /// and answer a restore with the sandbox's own accepted-mutation shape
+    /// (STR-151).
+    static func acceptedResponse(
         for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request
     ) async throws -> Response {
         try await loadNICSecurityGroups(sandbox, on: req.db)
         return try AcceptedMutation(SandboxDetailResponse(from: sandbox), accepted).acceptedResponse()
     }
 
-    /// Sandbox-flavored front of `ResourceOperation.begin`: creates the pending
-    /// operation record and applies the sandbox's desired-state change in one
-    /// transaction, rejecting with `409 Conflict` when any operation is already
-    /// pending for the sandbox.
-    ///
-    /// Only the snapshot verbs use this now (STR-147): they are still
-    /// imperative agent RPCs with no generation to converge on, so they still
-    /// need a row to carry their in-flight state until ADR 0001 stage 8 makes
-    /// snapshots desired artifacts. Lifecycle mutations go through
-    /// `ResourceMutation.accept`. Internal (not private) because the snapshot
-    /// handlers in SandboxSnapshotController.swift share it.
-    func beginOperation(
-        _ kind: VMOperationKind,
-        sandbox: Sandbox,
-        user: User,
-        settingDesiredStatus desiredStatus: DesiredSandboxStatus? = nil,
-        on db: Database,
-        preparing mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
-    ) async throws -> ResourceOperation {
-        try await ResourceOperation.begin(
-            kind,
-            resourceKind: .sandbox,
-            resourceID: sandbox.requireID(),
-            userID: user.requireID(),
-            on: db
-        ) { db in
-            try await mutation(db)
-            if let desiredStatus {
-                sandbox.setDesiredStatus(desiredStatus)
-                try await sandbox.save(on: db)
-            }
-        }
-    }
-
-    /// Records an operation verdict through the shared
-    /// `ResourceOperationCoordinator` and, when this path won the verdict race,
-    /// stamps a caller-supplied terminal sandbox status (e.g. a restore's
-    /// `.running`). The snapshot and transfer controllers drive their own
-    /// bespoke agent dispatch and call this to close the operation.
-    static func completeOperation(
-        _ operationId: UUID,
-        sandboxID: UUID,
-        as status: VMOperationStatus,
-        error: String?,
-        settingSandboxStatus sandboxStatus: SandboxStatus?,
-        app: Application
-    ) async {
-        let won = await app.resourceOperationCoordinator.recordVerdict(
-            operationID: operationId, as: status, error: error, on: app)
-        // A terminal status applies only when we won the race and Fluent is
-        // still up; a lost race means the sweep already resolved the sandbox.
-        guard won, let sandboxStatus, !Task.isCancelled, let db = app.liveDB else { return }
-        if let sandbox = try? await Sandbox.find(sandboxID, on: db) {
-            sandbox.setStatus(sandboxStatus)
-            try? await sandbox.save(on: db)
-        }
-    }
+    // `beginOperation` and `completeOperation` — the sandbox-flavored front of
+    // `ResourceOperation.begin` and its verdict half — went with the last
+    // mutation that needed them. Snapshot capture, delete and export became
+    // desired artifacts at wire v33 (STR-150) and restore became an edge-nonce
+    // at v34 (STR-151), so every sandbox mutation now goes through
+    // `ResourceMutation.accept` and answers from the sandbox's own `conditions`.
 
     // MARK: - Reads
 

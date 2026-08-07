@@ -9,10 +9,15 @@ import Foundation
 // control plane's object store", with the byte transfer beneath left as a
 // transport concern (`SnapshotArtifactTransfer`), exactly like a console pipe.
 //
-// What is left here is the vocabulary those desired entries are written in —
+// `sandbox_restore` went at wire v34 (stage 9, STR-151), for `vm_restore`'s
+// reason and by its route: an edge becomes a state once it is counted, so it
+// rides `DesiredSandboxState.restore` as a monotonic nonce naming the snapshot
+// to load — with the exported artifacts' transfer descriptors alongside it when
+// the sandbox has moved off the host that captured it.
+//
+// What is left here is the vocabulary those desired entries are written in:
 // capture mode, fork-layout versioning, artifact kinds and their transfer
-// descriptors — plus `sandbox_restore`, which stays imperative until STR-151
-// makes it a nonce for `vm_restore`'s reason.
+// descriptors.
 
 /// How the sandbox proceeds once its checkpoint is captured.
 public enum SandboxSnapshotMode: String, Codable, CaseIterable, Sendable {
@@ -102,38 +107,6 @@ public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable 
     public init(kind: SandboxSnapshotArtifactKind, uploadURL: String) {
         self.kind = kind
         self.uploadURL = uploadURL
-    }
-}
-
-/// Ask an agent to restore a sandbox in place from one of its snapshots:
-/// tear down the current microVM, load the checkpointed memory + rootfs, and
-/// resume. Same sandbox, same identity — it keeps its ID, NIC, and addresses.
-/// When the sandbox no longer lives on the agent that took the snapshot,
-/// `artifacts` carries signed download descriptors for the exported copy and
-/// the agent stages the archive from object storage first (issue #428).
-public struct SandboxRestoreMessage: WebSocketMessage {
-    public var type: MessageType { .sandboxRestore }
-    public let requestId: String
-    public let timestamp: Date
-    public let sandboxId: String
-    public let snapshotId: String
-    /// Download descriptors for an exported snapshot, present only when this
-    /// agent does not hold the local artifacts. Additive: absent decodes to
-    /// nil, preserving the v9 local-restore contract.
-    public let artifacts: [SandboxSnapshotArtifactDescriptor]?
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        sandboxId: String,
-        snapshotId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.sandboxId = sandboxId
-        self.snapshotId = snapshotId
-        self.artifacts = artifacts
     }
 }
 

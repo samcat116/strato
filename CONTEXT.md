@@ -23,9 +23,6 @@ use in code, tests, docs, and review. Architecture-level maps live in
   - *state sync* — the desired state is already written; nudge the owning
     agent (or fail the operation if it is unplaced/offline). The success
     verdict arrives later, from the observed-state applier.
-  - *awaiting response* — a correlated imperative command the agent answers
-    after it runs (VM reboot: "an action, not a state", so it cannot ride the
-    level-triggered sync). The verdict is recorded immediately.
   - *placement* — background scheduling + placement + first sync (`create`).
     Records a failure verdict on error; success is deferred to the applier.
   - *direct resolution* — resolve the operation locally without agent
@@ -163,13 +160,13 @@ use in code, tests, docs, and review. Architecture-level maps live in
   mutating replica sends to the socket-holding replica so it pushes a fresh
   sync. A latency optimization only — the periodic sync is the backstop, so a
   lost nudge is always safe.
-- **Cross-replica RPC** — the correlated request/reply forwarding for the
-  exchanges that are *actions, not states* (VM reboot, VM restore, sandbox
-  restore) and so cannot ride the level-triggered sync. A volume's own lifecycle
-  left this list in STR-148 and every snapshot artifact's in STR-150; what
-  remains is the restores, which convert to nonces in STR-151. When the serving
-  replica lacks the socket, the exchange is forwarded to the holder and the
-  verdict returns on the requester's reply channel.
+- **Cross-replica RPC** — the correlated request/reply forwarding for exchanges
+  that are *actions, not states* and so cannot ride the level-triggered sync.
+  Volumes left this list in STR-148, snapshot artifacts in STR-150, and the last
+  three — VM reboot, VM restore, sandbox restore — in STR-151, which counted
+  them instead. **Nothing sends on it now**: console and exec write straight to
+  the local socket, so the machinery is reachable only from itself and retires
+  in STR-152.
 - **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns
   the whole cross-replica seam: route recording, the local-vs-forward routing
   decision, nudge fan-out, RPC forwarding, and the subscription lifecycle. It
@@ -227,8 +224,8 @@ use in code, tests, docs, and review. Architecture-level maps live in
   delete are desired state, and each family is its own `ConvergingResource` and
   `FinalizableResource`. What is *not* a state is a **restore** — "this VM
   should be at checkpoint C" cannot be re-converged on, because the guest
-  starts writing the moment it resumes — so restore stays an imperative
-  operation until STR-151 makes it a nonce.
+  starts writing the moment it resumes. STR-151 made it a state anyway, by
+  counting it — see **edge nonce** below.
 
 - **Capture strategy** — how an artifact that does not exist yet gets taken
   (`DesiredSnapshotCapture`): a sandbox's resume/stop mode, a volume's
@@ -248,3 +245,28 @@ use in code, tests, docs, and review. Architecture-level maps live in
   cluster-singleton pass that issues the same delete an operator would,
   attributed to the `system` actor. Absolute rather than relative, because a
   TTL re-evaluated against "now" drifts with every restart.
+
+- **Edge nonce** — a monotonic count of *how many times a verb was asked for*,
+  carried on a workload's desired entry (ADR 0001 stage 9, STR-151;
+  `DesiredVMState.rebootGeneration`, `DesiredVMState.restore`,
+  `DesiredSandboxState.restore`). The `kubectl rollout restart` answer to a verb
+  that has no state delta: a reboot starts and ends `running`, and a restore
+  stops being true the moment the guest resumes, so neither can be a desired
+  *status* — but "asked 3 times" is as diffable as any other state. Separate
+  from `generation`, which guards ordering and is idempotent by design; an edge
+  re-applied is a second disruption, so it needs its own counter.
+
+- **Applied-nonce record** — what the agent has already consumed, per workload,
+  in `VMManifestStore` beside the specs. **Nonce durability is stage 9's
+  correctness invariant**, and its sharpest edge is that *no record is not
+  zero*: an entry written by an older build, or a workload this agent has never
+  converged, is **adopted** — the desired nonces are written down without being
+  performed. Reading a missing record as zero would have a re-registered agent
+  replay every restore in a VM's history.
+
+- **Superseded** — an edge consumed without being performed, because something
+  else made it moot: a stop (the user's later intent wins), or a boot (a guest
+  built from scratch is at least as restarted as a reboot would make it). The
+  nonce is recorded either way, or a stop-then-start weeks later would surprise
+  the guest with an ancient reboot. A boot deliberately does *not* supersede a
+  restore — a checkpoint needs a process to load into.
