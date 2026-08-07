@@ -1281,6 +1281,45 @@ actor AgentService {
                 },
                 kind: .sandbox, timeout: timeout, on: db)
 
+            // Stranded attachments (STR-129): a row that lost its VM but kept
+            // the rest of the attachment. The VM reap releases volumes inside
+            // the delete transaction, so this should never fire — it is the
+            // backstop for a replica still running an older build during a
+            // rolling upgrade, and for any future path that removes a VM
+            // without going through the reap.
+            //
+            // No age budget, unlike the convergence sweeps above: nothing is in
+            // flight that could still land, and until the columns are cleared
+            // the volume names a device on a VM that does not exist. The
+            // generation bump is what makes the agent act on it — a desired
+            // entry no newer than the last one applied is dropped, so clearing
+            // the columns alone would leave the disk plugged into a guest the
+            // control plane no longer describes.
+            // The same predicate `NormalizeVolumeAttachments` repairs on, column
+            // for column: they describe one state, so they must agree or a row
+            // the one-off repair fixes is one this backstop never sees again.
+            let strandedVolumes = try await Volume.query(on: db)
+                .filter(\.$vm.$id == nil)
+                .group(.or) { unresolved in
+                    unresolved.filter(\.$deviceName != nil)
+                    unresolved.filter(\.$bootOrder != nil)
+                    unresolved.filter(\.$attachedAgentId != nil)
+                    unresolved.filter(\.$readonly == true)
+                }
+                .all()
+
+            for volume in strandedVolumes {
+                guard let volumeID = volume.id else { continue }
+                VolumeAttachmentService.clearAttachment(volume)
+                try await volume.save(on: db)
+
+                app.logger.warning(
+                    "Volume left attachment fields set with no VM; released",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "generation": .string("\(volume.generation)"),
+                    ])
+            }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
         }

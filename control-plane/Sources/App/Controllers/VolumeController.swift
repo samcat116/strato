@@ -467,33 +467,41 @@ struct VolumeController: RouteCollection {
 
         try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
-        // Generate device name if not provided
-        let deviceName: String
-        if let providedName = request.deviceName {
-            deviceName = providedName
-        } else {
-            deviceName = try await generateDeviceName(for: vm, on: req.db)
+        // A device name from the request body becomes a hypervisor object id,
+        // so it is validated here rather than at the point it would otherwise
+        // fail — an opaque hot-plug rejection, or a recorded attachment that
+        // breaks the guest's next boot (STR-129).
+        let requestedDeviceName: VolumeDeviceName? = try request.deviceName.map {
+            guard let name = VolumeDeviceName($0) else {
+                throw Abort(.badRequest, reason: InvalidVolumeDeviceName(rawValue: $0).description)
+            }
+            return name
         }
 
         let userID = try user.requireID()
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
-        let vmAgentId = vm.hypervisorId
 
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable tx in
             // The desired attachment, and nothing else. There is no
             // `.attaching` status to set and revert: the agent reports what it
             // realized, and `conditions` is what a client watches.
-            volume.$vm.id = vmID
-            volume.deviceName = deviceName
-            volume.bootOrder = bootOrder
-            volume.readonly = readonly
-            volume.attachedAgentId = vmAgentId
-            volume.bumpGeneration()
+            //
+            // Choosing the device name belongs *here*, inside the mutation's
+            // transaction and under the per-VM advisory lock, not before it:
+            // generating the next free `disk<N>` is a read-then-write, and two
+            // attaches that read before either wrote both picked the same slot
+            // (STR-129).
+            try await VolumeAttachmentService.claim(
+                volume, to: vm,
+                deviceName: requestedDeviceName,
+                bootOrder: bootOrder,
+                readonly: readonly,
+                on: tx)
         }
 
         req.logger.info(
@@ -501,7 +509,7 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "vmId": .string(vmID.uuidString),
-                "deviceName": .string(deviceName),
+                "deviceName": .string(volume.deviceName ?? ""),
             ])
 
         return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
@@ -541,12 +549,10 @@ struct VolumeController: RouteCollection {
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable _ in
-            volume.$vm.id = nil
-            volume.deviceName = nil
-            volume.bootOrder = nil
-            volume.readonly = false
-            volume.attachedAgentId = nil
-            volume.bumpGeneration()
+            // Every attachment column at once, through the one function that
+            // owns the transition, so the row can never come to rest describing
+            // half an attachment (STR-129).
+            VolumeAttachmentService.clearAttachment(volume)
         }
 
         req.logger.info(
@@ -990,15 +996,5 @@ struct VolumeController: RouteCollection {
         }
 
         return volume
-    }
-
-    /// Generate a device name for a new volume attachment
-    private func generateDeviceName(for vm: VM, on db: Database) async throws -> String {
-        // Get existing volumes attached to this VM
-        let attachedVolumes = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vm.id!)
-            .all()
-
-        return VolumeNaming.nextDeviceName(existingDeviceNames: attachedVolumes.map { $0.deviceName })
     }
 }

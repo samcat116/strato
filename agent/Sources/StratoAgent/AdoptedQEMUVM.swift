@@ -37,6 +37,10 @@ protocol QEMUVMHandle: Sendable {
     ///   pick — which on a machine type whose default bus refuses hot-plug
     ///   (q35, arm `virt`) means one of the `pcie-root-port` devices the VM was
     ///   launched with.
+    /// - Parameter deviceName: the QMP `device_id` to register the disk under.
+    ///   Named for SwiftQEMU's parameter; what callers pass is a *device id*
+    ///   derived from the volume (`QEMUDiskIdentity`), not the volume's
+    ///   guest-facing device name (STR-129).
     func attachDisk(path: String, deviceName: String, readOnly: Bool, bus: String?) async throws
     /// - Parameter timeout: how long to wait for QEMU's `DEVICE_DELETED` before
     ///   giving up. Hot-unplug needs the guest to release the device, so a guest

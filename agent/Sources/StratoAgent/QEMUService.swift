@@ -1437,19 +1437,25 @@ actor QEMUService: HypervisorService {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
+        // The QMP device is named after the volume, not after `deviceName`: the
+        // volume id is unique by construction, so detach can resolve exactly
+        // this disk and no other (STR-129).
+        let deviceID = QEMUDiskIdentity.deviceID(volumeId: volumeId)
+
         logger.info(
             "Attaching disk to VM via QMP hot-plug",
             metadata: [
                 "vmId": .string(vmId),
                 "volumeId": .string(volumeId),
                 "deviceName": .string(deviceName),
+                "deviceId": .string(deviceID),
                 "volumePath": .string(volumePath),
                 "readonly": .stringConvertible(readonly),
             ])
 
         do {
             try await controlled("qmp-attach-disk", vmId: vmId) {
-                try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+                try await manager.attachDisk(path: volumePath, deviceName: deviceID, readOnly: readonly)
             }
             logger.info(
                 "Disk attached successfully",
@@ -1457,6 +1463,7 @@ actor QEMUService: HypervisorService {
                     "vmId": .string(vmId),
                     "volumeId": .string(volumeId),
                     "deviceName": .string(deviceName),
+                    "deviceId": .string(deviceID),
                 ])
         } catch {
             logger.error(
@@ -1471,11 +1478,17 @@ actor QEMUService: HypervisorService {
     }
 
     /// Detaches a disk from a running VM using QMP hot-unplug
-    /// This uses QEMU's device_del and blockdev-del commands via SwiftQEMU
+    ///
+    /// Resolves the disk by *volume id* (`QEMUDiskIdentity`), never by device
+    /// name: a device name is a per-VM label, and two volumes claiming one used
+    /// to mean `device_del` unplugged whichever QEMU had registered — a live
+    /// disk pulled out from under the guest (STR-129).
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
         guard let manager = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
+
+        let deviceID = QEMUDiskIdentity.deviceID(volumeId: volumeId)
 
         logger.info(
             "Detaching disk from VM via QMP hot-unplug",
@@ -1483,11 +1496,32 @@ actor QEMUService: HypervisorService {
                 "vmId": .string(vmId),
                 "volumeId": .string(volumeId),
                 "deviceName": .string(deviceName),
+                "deviceId": .string(deviceID),
             ])
+
+        // Captured for the escaping closure below: the actor's own property is
+        // not reachable from there.
+        let logger = self.logger
 
         do {
             try await controlled("qmp-detach-disk", vmId: vmId) {
-                try await manager.detachDisk(deviceName: deviceName)
+                do {
+                    try await manager.detachDisk(deviceName: deviceID)
+                } catch let error as QMPError where error.isDeviceNotFound {
+                    // A disk hot-plugged by an agent older than this change is
+                    // registered under its device name, and the VM's QEMU has
+                    // been running since. Only on QEMU's own "no such device",
+                    // so a guest that simply ignores the unplug still fails once
+                    // rather than waiting out a second `device_del` timeout.
+                    logger.warning(
+                        "No volume-id device; retrying hot-unplug under the legacy device name",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "volumeId": .string(volumeId),
+                            "deviceName": .string(deviceName),
+                        ])
+                    try await manager.detachDisk(deviceName: deviceName)
+                }
             }
             logger.info(
                 "Disk detached successfully",
@@ -1495,6 +1529,7 @@ actor QEMUService: HypervisorService {
                     "vmId": .string(vmId),
                     "volumeId": .string(volumeId),
                     "deviceName": .string(deviceName),
+                    "deviceId": .string(deviceID),
                 ])
         } catch {
             logger.error(
@@ -1993,6 +2028,18 @@ enum QEMUServiceError: Error, LocalizedError, Sendable {
         case .hotPlugFailed(let message):
             return "Hot-plug operation failed: \(message)"
         }
+    }
+}
+
+extension QMPError {
+    /// QEMU's own answer when a command names a device id it does not have —
+    /// error class `DeviceNotFound`. Distinguishing it from every other QMP
+    /// failure is what lets the hot-unplug path fall back to a legacy device
+    /// name without also retrying a guest that is merely refusing to release
+    /// the disk.
+    var isDeviceNotFound: Bool {
+        guard case .qmpError(let errorClass, _) = self else { return false }
+        return errorClass == "DeviceNotFound"
     }
 }
 #endif
