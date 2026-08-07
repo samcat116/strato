@@ -145,7 +145,9 @@ struct SandboxReconciliationTests {
     }
 
     private func makeReconciler(_ actuator: MockActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     // MARK: - Pure diff engine

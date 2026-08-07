@@ -17,6 +17,11 @@ import StratoShared
 // sandboxes (deliberately not forked — two copies would drift); only the step
 // vocabulary and the actuator routing differ per kind.
 //
+// STR-52 hung one more job off the same sync: each VM's `InstanceMetadata` is
+// projected onto the `MetadataStore` the guest-facing IMDS reads. It is not
+// actuation — no work item carries it — because a VM already in its desired
+// status plans no steps, and a metadata-only edit bumps no generation.
+//
 // STR-98 took omission out of the destructive path. A workload present here
 // that a sync does not list is *held* and reported as unrecognized; it is torn
 // down only when the control plane answers with an explicit tombstone (or an
@@ -838,6 +843,9 @@ public actor Reconciler {
     private let queue: SerialTaskQueue
     private let logger: Logger
     private let teardownGuard: TeardownGuard
+    /// What this host's metadata service serves, projected from each sync's
+    /// `DesiredVMState.metadata` (STR-52).
+    private let metadataStore: MetadataStore
 
     /// Last generation fully applied per workload. Rejects older syncs (the
     /// generation guard) and feeds `observed_generation` in reports.
@@ -858,16 +866,23 @@ public actor Reconciler {
     /// blast-radius guard; cleared by the first sync that passes it.
     private var teardownRefusal: ObservedTeardownRefusal?
 
+    /// `metadataStore` is passed in rather than owned, because the reconciler
+    /// only writes it — the guest-facing listener reads the same instance. It
+    /// is required rather than defaulted for exactly that reason: a reconciler
+    /// handed its own private store would write metadata nobody can serve, and
+    /// nothing about that failure is visible from either side.
     public init(
         actuator: any ReconcileActuator,
         queue: SerialTaskQueue,
         logger: Logger,
-        teardownGuard: TeardownGuard = TeardownGuard()
+        teardownGuard: TeardownGuard = TeardownGuard(),
+        metadataStore: MetadataStore
     ) {
         self.actuator = actuator
         self.queue = queue
         self.logger = logger
         self.teardownGuard = teardownGuard
+        self.metadataStore = metadataStore
     }
 
     // MARK: Report accessors
@@ -955,13 +970,35 @@ public actor Reconciler {
     /// against an empty desired list would report every checkpoint on the host
     /// as unaccounted for, and invite a future reading of that silence as
     /// teardown — of a point in time the user chose to keep and cannot recreate.
+    ///
+    /// `includeMetadata` gates the payload half of instance metadata (STR-52)
+    /// on `WireProtocol.supportsInstanceMetadata(senderVersion)`, for the
+    /// v3/v5 reason again: from a control plane that speaks the field a nil
+    /// `metadata` is authoritative and drops what this host serves, while from
+    /// an older one it is silence — reading that as an instruction would empty
+    /// every VM's metadata the moment a control plane is rolled back.
     public func apply(
         _ message: DesiredStateMessage,
         includeSandboxes: Bool = false,
         includeVolumes: Bool = false,
-        includeSnapshots: Bool = false
+        includeSnapshots: Bool = false,
+        includeMetadata: Bool = false
     ) async {
         let tombstones = message.tombstones ?? []
+
+        // Instance metadata is recorded before anything else this sync does,
+        // and deliberately outside the presence guard below: the store is a
+        // projection of what the control plane said, not of what this host
+        // holds, so an agent that cannot enumerate its own workloads can still
+        // serve their guests fresh metadata — which is the fail-static posture
+        // the whole IMDS design rests on.
+        //
+        // It is not carried on a work item either. A VM already in its desired
+        // status plans no steps at all, and an edit to what metadata carries
+        // (a hostname, an SSH key) changes no realization and so bumps no
+        // generation — so routing it through actuation would drop exactly the
+        // edits the metadata service exists to deliver.
+        await recordMetadata(message.vms, includeMetadata: includeMetadata)
 
         // An agent that cannot enumerate its own workloads converges nothing
         // (STR-138). Every item this sync could plan rests on the presence
@@ -1241,6 +1278,56 @@ public actor Reconciler {
         return result
     }
 
+    /// Project this sync's per-VM metadata onto the store the guest-facing
+    /// metadata service reads (STR-52).
+    ///
+    /// Two rules, because the two writes answer to different senders:
+    ///
+    /// * An entry that wants the VM **absent** withdraws its metadata whatever
+    ///   the sender's version is. `desiredStatus` is a field every control
+    ///   plane sends, and having nothing to serve is the safe state for a VM
+    ///   leaving this host: the IMDS identifies its caller by source address,
+    ///   and an address outlives the VM it was allocated to. This also covers
+    ///   the VM that was already gone when the sync arrived, for which the
+    ///   planner has no work to do and therefore no teardown to hook — and it
+    ///   is why this withdrawal *leads* the VM off the host while the
+    ///   tombstoned one trails it. The consequence is deliberate: a VM whose
+    ///   delete keeps failing is still running with its metadata already gone,
+    ///   which is the safe end of a trade whose other end serves a released
+    ///   VM's SSH keys and user data to whoever next holds its address.
+    /// * Otherwise the payload is written only when the sender speaks the
+    ///   field, so that an older control plane's silence leaves what this host
+    ///   serves alone.
+    ///
+    /// Staleness is the store's own guard rather than `lastApplied`, which
+    /// tracks convergence and so lags behind: a VM whose create keeps failing
+    /// holds `lastApplied` still while generations advance, and every one of
+    /// those syncs would look equally current to a guard reading it. A refused
+    /// write is logged rather than swallowed — "the metadata the operator
+    /// edited never took" is otherwise invisible in a service with no request
+    /// log of its own.
+    private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
+        for entry in desired {
+            let outcome: MetadataWriteOutcome
+            if entry.wantsAbsent {
+                outcome = await metadataStore.withdraw(
+                    entry.vmId, generation: entry.generation, because: .desiredAbsent)
+            } else if includeMetadata {
+                outcome = await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
+            } else {
+                continue
+            }
+            guard case .stale(let recorded) = outcome else { continue }
+            logger.debug(
+                "Ignoring stale instance metadata; a newer sync is already recorded for this VM",
+                metadata: [
+                    "vmId": .string(entry.vmId.uuidString),
+                    "generation": .stringConvertible(entry.generation),
+                    "recordedGeneration": .stringConvertible(recorded),
+                ])
+        }
+    }
+
     private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {
         var result: [String: Int64] = [:]
         for (ref, generation) in lastApplied where ref.kind == kind {
@@ -1346,6 +1433,24 @@ public actor Reconciler {
                     }
                 }
                 index += 1
+            }
+            // A VM that just left this host takes its metadata with it
+            // (STR-52). The `.absent` entries already withdrew theirs at sync
+            // time; what this reaches is the tombstoned teardown, which has no
+            // desired entry to carry a withdrawal. Doing it here rather than
+            // when the tombstone is planned is what keeps a teardown the
+            // blast-radius guard refused from silently blinding a VM this agent
+            // deliberately kept running.
+            //
+            // Reading `.delete` as "the VM is gone" rests on it never sharing
+            // an item with the steps that would put it back: every planner site
+            // emits `[.delete]` alone, because there is no recreate flow. A
+            // future one — say a resize that cannot happen in place planning
+            // `delete` then `create` — must withdraw from the delete's own
+            // completion instead, or it would blind a VM that is still here,
+            // and the withdrawal's seal would hold until the generation moves.
+            if item.kind == .vm, item.steps.contains(.delete), let vmId = UUID(uuidString: item.id) {
+                await metadataStore.withdraw(vmId, generation: item.generation, because: .tornDown)
             }
             lastApplied[ref] = item.generation
             failures.removeValue(forKey: ref)
