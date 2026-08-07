@@ -40,6 +40,8 @@
 set -uo pipefail
 
 say() { printf '  %s\n' "$*"; }
+# Warnings go to stderr, matching deploy/agent/install.sh's warn().
+warn() { printf '  %s\n' "$*" >&2; }
 die() { printf '\033[31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 ACTION="${1:-}"
@@ -143,31 +145,72 @@ do_status() {
 
 # strato_unit_state — how systemd relates to a strato-agent unit on this host.
 #
-#   in-use   systemd is running it now, or would start it at the next boot
-#   stale    a unit file exists, but it is disabled and inactive
+# Echoes three fields: `<state> <is-active> <is-enabled>`, where state is
+#
+#   in-use   systemd is running it now, or owns it for the next boot
+#   stale    a unit file exists, but systemd is not running it
 #   absent   no unit file, or no systemd at all
+#
+# The raw values ride along so the caller can report what it actually saw
+# rather than restating the branch it landed in.
 #
 # The mere existence of the unit file is too weak a signal to refuse on. An
 # install.sh run months ago leaves a disabled, inactive unit whose ExecStart may
 # no longer even resolve; it manages nothing, and refusing on it strands a dev
 # host mid-run with no recourse but deleting the unit by hand.
 strato_unit_state() {
-  command -v systemctl >/dev/null 2>&1 || { echo absent; return; }
-  # Matched at line start: `list-unit-files` prints the unit name in column one,
-  # and a bare grep would also match it inside a path or a status word.
-  systemctl list-unit-files strato-agent.service 2>/dev/null \
-    | grep -q '^strato-agent\.service' || { echo absent; return; }
+  local units active enabled
+  command -v systemctl >/dev/null 2>&1 || { echo "absent - -"; return; }
 
-  # `activating`/`deactivating` are mid-transition, not idle, so they count as
-  # in use. `is-enabled` covers the other half: a unit that happens to be
-  # stopped right now but comes back on the next boot still belongs to systemd.
-  case "$(systemctl is-active strato-agent.service 2>/dev/null)" in
-    active|activating|reloading|deactivating) echo in-use; return ;;
+  # Deliberately not a pipeline. `grep -q` exits at its first match, so under
+  # `pipefail` a SIGPIPE'd `systemctl` would fail the test and report `absent` —
+  # the guard vanishing in the unsafe direction.
+  units="$(systemctl list-unit-files strato-agent.service 2>/dev/null)"
+  # Anchored at line start: a bare `strato-agent` would also match the name
+  # inside a path or a status word.
+  grep -q '^strato-agent\.service' <<<"$units" || { echo "absent - -"; return; }
+
+  active="$(systemctl is-active strato-agent.service 2>/dev/null)"
+  enabled="$(systemctl is-enabled strato-agent.service 2>/dev/null)"
+
+  # A denylist, not an allowlist: everything that falls through here reaches
+  # `rm -rf /var/lib/strato/vms`, so the unknown case has to land on the safe
+  # side. Only these two mean "genuinely not running"; transitional states,
+  # states systemd adds later (`refreshing`, v254+), and the empty string from a
+  # systemctl that failed after the unit-file check all read as in use. A false
+  # refusal costs the one command the error message prints; a false `stale`
+  # deletes VM disks.
+  case "$active" in
+    inactive|failed) ;;
+    *) echo "in-use ${active:-unknown} ${enabled:-unknown}"; return ;;
   esac
-  case "$(systemctl is-enabled strato-agent.service 2>/dev/null)" in
-    enabled|enabled-runtime|linked|linked-runtime) echo in-use; return ;;
+
+  # `is-enabled` stays an allowlist: the values it can return that are missing
+  # here (`static`, `indirect`, `generated`, `transient`) all describe units
+  # whose live instances `is-active` has already caught above. What these five
+  # share is that systemd owns the unit file — `enabled`/`enabled-runtime` start
+  # it at the next boot, while `linked`/`linked-runtime`/`alias` make a file
+  # outside the search path known to systemd under another path or name. None of
+  # them is a file this script gets to call abandoned.
+  case "$enabled" in
+    enabled|enabled-runtime|linked|linked-runtime|alias)
+      echo "in-use ${active:-unknown} ${enabled:-unknown}"; return ;;
   esac
-  echo stale
+  echo "stale ${active:-unknown} ${enabled:-unknown}"
+}
+
+# strato_guests_running — pids of hypervisor processes backed by the VM state
+# directory `reset` deletes. Empty output means none.
+#
+# Scoped to /var/lib/strato/vms rather than matching qemu/firecracker outright:
+# a dev host may legitimately run unrelated guests, and refusing on those would
+# recreate the very false positive this guard exists to remove. Matching the
+# path matches the disks that are about to disappear, which is the thing worth
+# protecting. It also covers the Firecracker jailer (its chroot lives under the
+# same tree, see Agent.swift's sandboxJailerChrootDir), and it is the only half
+# of this guard that works at all on the non-systemd hosts install.sh supports.
+strato_guests_running() {
+  pgrep -f '/var/lib/strato/vms' 2>/dev/null | grep -vx "$$" || true
 }
 
 do_reset() {
@@ -176,20 +219,41 @@ do_reset() {
   # live VM state, so that stays a refusal rather than a prompt. A leftover unit
   # nobody runs only warrants a warning — the confirmation below is already the
   # gate on everything destructive.
-  case "$(strato_unit_state)" in
+  local state active enabled guests
+  read -r state active enabled <<<"$(strato_unit_state)"
+
+  case "$state" in
     in-use)
-      die "the strato-agent systemd unit is active or enabled — this looks like a
-       managed hypervisor node, not a dev host. Refusing to delete
-       /var/lib/strato/vms.
+      die "the strato-agent systemd unit is in use (is-active=$active,
+       is-enabled=$enabled) — this looks like a managed hypervisor node, not a
+       dev host. Refusing to delete /var/lib/strato/vms.
        If you really mean it: systemctl disable --now strato-agent"
       ;;
     stale)
-      say "WARNING: a strato-agent systemd unit exists but is disabled and inactive."
-      say "         Treating it as a leftover from deploy/agent/install.sh rather"
-      say "         than a managed node. If it is dead weight, delete it:"
-      say "           rm /etc/systemd/system/strato-agent.service && systemctl daemon-reload"
+      warn "WARNING: strato-agent.service exists but systemd is not running it"
+      warn "         (is-active=$active, is-enabled=$enabled). Treating it as a"
+      warn "         leftover from deploy/agent/install.sh, not a managed node."
+      if [[ "$enabled" == masked ]]; then
+        warn "         To clear it: systemctl unmask strato-agent"
+      else
+        warn "         To clear it: rm /etc/systemd/system/strato-agent.service &&"
+        warn "                      systemctl daemon-reload"
+      fi
       ;;
   esac
+
+  # Checked independently of systemd's opinion. Live guests are what
+  # /var/lib/strato/vms actually protects, and reaching `stale` only takes a
+  # deliberate `systemctl disable --now` — which is exactly what someone does
+  # for maintenance while the guests it started keep running, since they outlive
+  # the agent by design. On a non-systemd host this is the only check there is.
+  guests="$(strato_guests_running)"
+  if [[ -n "$guests" ]]; then
+    die "hypervisor processes are still backed by /var/lib/strato/vms
+       (pids: $(tr '\n' ' ' <<<"$guests"))
+       Deleting it would pull the disks out from under live guests. Stop them
+       first, or remove the paths by hand if you know they are already dead."
+  fi
 
   if [[ "$ASSUME_YES" != 1 ]]; then
     say "reset will DELETE, as root:"

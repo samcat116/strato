@@ -210,6 +210,16 @@ the confirmation prompt already gates the deletion. Remove the dead unit with
 `rm /etc/systemd/system/strato-agent.service && systemctl daemon-reload` to
 silence the warning.
 
+**`reset` also refuses while guests are live on those paths**, whatever systemd
+thinks. It looks for processes whose command line references
+`/var/lib/strato/vms` — QEMU, Firecracker, and the jailer, whose chroot is under
+the same tree — and stops with their pids rather than deleting disks out from
+under them. Hypervisor processes outlive the agent by design, so `systemctl
+disable --now strato-agent` alone does not make the tree safe to remove. This is
+also the only half of the guard that engages on the non-systemd hosts
+`install.sh` supports. Stop the guests first, or remove the paths by hand if you
+know they are already dead.
+
 **The site needs a network controller.** Without
 `networkControllerAgentId` on the site, nothing authors the OVN logical
 switches and VMs hang in create. `e2e-up.sh` sets it once an agent is online.

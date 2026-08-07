@@ -91,8 +91,13 @@ jobs:
             # filter unmatchable rather than broader, silently skipping the job
             # for every PR that only touched a script. Same trap `ci_scripts`
             # documents below. OR across the two lives in the job's `if:`.
+            # `**/*.sh` rather than `*.sh` so deploy/compose/tests/ counts too,
+            # and still a single pattern because of the `every` trap above. Kept
+            # to .sh instead of borrowing `deploy/agent/**`'s shape: this
+            # directory is mostly compose files, nginx.conf and spiffe/ config,
+            # none of which this job looks at.
             compose_scripts:
-              - 'deploy/compose/*.sh'
+              - 'deploy/compose/**/*.sh'
             # The Homebrew formula template. Its render/push scripts live under
             # .github/scripts, which `ci_scripts` already covers — the job below
             # gates on both.
@@ -154,15 +159,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check syntax
-        run: bash -n deploy/agent/install.sh deploy/compose/*.sh
+        run: bash -n deploy/agent/install.sh deploy/compose/*.sh deploy/*/tests/*.sh
 
       - name: Lint with shellcheck
         # Warnings only: install.sh predates this job, and style findings should
         # not gate a node-provisioning fix.
-        run: shellcheck --severity=warning deploy/agent/install.sh deploy/agent/tests/*.sh deploy/compose/*.sh
+        run: shellcheck --severity=warning deploy/agent/install.sh deploy/compose/*.sh deploy/*/tests/*.sh
 
-      - name: Test install.sh helpers
-        run: bash deploy/agent/tests/install-sh-test.sh
+      - name: Test script helpers
+        # A glob, not a list: these suites exist because the helpers they cover
+        # `rm -rf` VM state and rewrite root-owned config, and a new one added
+        # beside them should not need this file edited to actually run.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          suites=(deploy/*/tests/*-test.sh)
+          if [ ${#suites[@]} -eq 0 ]; then
+            echo "no test suites matched deploy/*/tests/*-test.sh" >&2
+            exit 1
+          fi
+          for suite in "${suites[@]}"; do
+            echo "== $suite"
+            bash "$suite"
+          done
 
   homebrew-formula:
     name: Homebrew Formula Template
