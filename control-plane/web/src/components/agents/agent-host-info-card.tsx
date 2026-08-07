@@ -2,16 +2,14 @@
 
 import { Server } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatCapacity } from "@/lib/format-bytes";
 import type { Agent } from "@/types/api";
 
 // Host memory can be reported in host-info; fall back to the scheduler's total
-// so the card still shows a value for pre-host-info agents.
-function formatBytes(bytes: number | undefined): string | undefined {
-  if (bytes == null) return undefined;
-  const gb = bytes / 1024 ** 3;
-  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`;
-  if (gb >= 1) return `${gb.toFixed(0)} GB`;
-  return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+// so the card still shows a value for pre-host-info agents. `undefined` in,
+// `undefined` out, so the row drops out of the card entirely.
+function formatHostMemory(bytes: number | undefined): string | undefined {
+  return bytes == null ? undefined : formatCapacity(bytes);
 }
 
 function formatCores(
@@ -54,7 +52,7 @@ export function AgentHostInfoCard({ agent }: { agent: Agent }) {
     { label: "Architecture", value: agent.architecture },
     {
       label: "Memory",
-      value: formatBytes(host?.totalMemoryBytes ?? agent.resources.totalMemory),
+      value: formatHostMemory(host?.totalMemoryBytes ?? agent.resources.totalMemory),
     },
     { label: "Machine model", value: host?.machineModel },
     { label: "Operating system", value: host?.osName ?? agent.operatingSystem },

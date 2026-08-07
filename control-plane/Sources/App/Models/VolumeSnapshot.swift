@@ -154,23 +154,10 @@ struct SnapshotResponse: Content {
         self.volumeId = snapshot.$volume.id
         self.projectId = snapshot.$project.id
         self.size = snapshot.size
-        self.sizeFormatted = SnapshotResponse.formatSize(snapshot.size)
+        self.sizeFormatted = snapshot.size.formattedByteSize
         self.status = snapshot.status
         self.errorMessage = snapshot.errorMessage
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt
-    }
-
-    static func formatSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
-        if gb >= 1.0 {
-            return String(format: "%.2f GB", gb)
-        }
-        let mb = Double(bytes) / 1024.0 / 1024.0
-        if mb >= 1.0 {
-            return String(format: "%.2f MB", mb)
-        }
-        let kb = Double(bytes) / 1024.0
-        return String(format: "%.2f KB", kb)
     }
 }

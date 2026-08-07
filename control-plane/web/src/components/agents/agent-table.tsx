@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { AgentStatusBadge } from "./agent-status-badge";
 import { AgentUpdateAction } from "./agent-update-action";
+import { formatCapacity } from "@/lib/format-bytes";
 import { useOrganization } from "@/providers/organization-provider";
 import type { Agent } from "@/types/api";
 
@@ -108,8 +109,8 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
               {agent.resources.availableCPU} / {agent.resources.totalCPU} cores
             </TableCell>
             <TableCell className="text-foreground/80">
-              {Math.round(agent.resources.availableMemory / 1024 / 1024 / 1024)} /{" "}
-              {Math.round(agent.resources.totalMemory / 1024 / 1024 / 1024)} GB
+              {formatCapacity(agent.resources.availableMemory)} /{" "}
+              {formatCapacity(agent.resources.totalMemory)}
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
               {agent.lastHeartbeat

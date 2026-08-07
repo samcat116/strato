@@ -17,7 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
-import { formatMemory } from "@/lib/format-memory";
+import { formatMemory } from "@/lib/format-bytes";
 import { useVMSnapshots } from "@/lib/hooks";
 import {
   acceptedOperation,

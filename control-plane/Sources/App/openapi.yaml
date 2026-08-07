@@ -8863,6 +8863,7 @@ components:
           format: int64
         memoryFormatted:
           type: string
+          description: Display form of `memory` in binary units (e.g. `4 GiB`, `512 MiB`).
         maxMemory:
           type: integer
           format: int64
@@ -8872,6 +8873,7 @@ components:
           format: int64
         diskFormatted:
           type: string
+          description: Display form of `disk` in binary units (e.g. `40 GiB`).
         networkInterfaces:
           type: array
           items:
@@ -9428,6 +9430,7 @@ components:
           format: int64
         sizeFormatted:
           type: string
+          description: Display form of `size` in binary units (e.g. `2.4 GiB`).
         format:
           $ref: "#/components/schemas/ImageFormat"
         architecture:
@@ -9618,6 +9621,7 @@ components:
           format: int64
         sizeFormatted:
           type: string
+          description: Display form of `size` in binary units (e.g. `10 GiB`).
         format:
           $ref: "#/components/schemas/VolumeFormat"
         volumeType:
@@ -9682,6 +9686,7 @@ components:
           format: int64
         sizeFormatted:
           type: string
+          description: Display form of `size` in binary units (e.g. `10 GiB`).
         status:
           $ref: "#/components/schemas/VolumeSnapshotStatus"
         errorMessage:

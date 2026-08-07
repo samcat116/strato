@@ -18,6 +18,7 @@ import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
 import { AgentWorkloadSafetyCard } from "@/components/agents/agent-workload-safety";
 import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
+import { formatCapacity } from "@/lib/format-bytes";
 import { useAgent, useVMs } from "@/lib/hooks";
 
 export default function AgentDetailPage() {
@@ -77,25 +78,6 @@ export default function AgentDetailPage() {
     );
   }
 
-  // Memory values are in bytes
-  const formatMemory = (bytes: number) => {
-    const gb = bytes / 1024 / 1024 / 1024;
-    if (gb >= 1) {
-      return `${gb.toFixed(0)} GB`;
-    }
-    const mb = bytes / 1024 / 1024;
-    return `${Math.round(mb)} MB`;
-  };
-
-  // Disk values are in bytes
-  const formatDisk = (bytes: number) => {
-    const gb = bytes / 1024 / 1024 / 1024;
-    if (gb >= 1024) {
-      return `${(gb / 1024).toFixed(0)} TB`;
-    }
-    return `${gb.toFixed(0)} GB`;
-  };
-
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
@@ -147,20 +129,20 @@ export default function AgentDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground">
-              {formatMemory(agent.resources.availableMemory)}
+              {formatCapacity(agent.resources.availableMemory)}
             </div>
             <p className="text-sm text-muted-foreground">
-              of {formatMemory(agent.resources.totalMemory)} available
+              of {formatCapacity(agent.resources.totalMemory)} available
             </p>
             <p className="text-sm text-muted-foreground">
-              {formatMemory(
+              {formatCapacity(
                 agent.resources.totalMemory - agent.resources.availableMemory
               )}{" "}
               committed to VMs
             </p>
             {reportingVMs.length > 0 && (
               <p className="text-sm text-muted-foreground">
-                {formatMemory(guestUsedBytes)} used in guests (
+                {formatCapacity(guestUsedBytes)} used in guests (
                 {reportingVMs.length}/{agentVMs.length} VMs reporting)
               </p>
             )}
@@ -175,10 +157,10 @@ export default function AgentDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground">
-              {formatDisk(agent.resources.availableDisk)}
+              {formatCapacity(agent.resources.availableDisk)}
             </div>
             <p className="text-sm text-muted-foreground">
-              of {formatDisk(agent.resources.totalDisk)} available
+              of {formatCapacity(agent.resources.totalDisk)} available
             </p>
           </CardContent>
         </Card>

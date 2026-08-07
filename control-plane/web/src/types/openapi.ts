@@ -5266,6 +5266,7 @@ export interface components {
             maxCpu: number;
             /** Format: int64 */
             memory: number;
+            /** @description Display form of `memory` in binary units (e.g. `4 GiB`, `512 MiB`). */
             memoryFormatted: string;
             /**
              * Format: int64
@@ -5274,6 +5275,7 @@ export interface components {
             maxMemory: number;
             /** Format: int64 */
             disk: number;
+            /** @description Display form of `disk` in binary units (e.g. `40 GiB`). */
             diskFormatted: string;
             networkInterfaces: components["schemas"]["NetworkInterface"][];
             /** @description Whether the guest boots with UEFI Secure Boot. */
@@ -5563,6 +5565,7 @@ export interface components {
             filename: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `2.4 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["ImageFormat"];
             architecture: components["schemas"]["CPUArchitecture"];
@@ -5661,6 +5664,7 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["VolumeFormat"];
             volumeType: components["schemas"]["VolumeType"];
@@ -5699,6 +5703,7 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             status: components["schemas"]["VolumeSnapshotStatus"];
             errorMessage?: string;
