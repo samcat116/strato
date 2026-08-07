@@ -75,7 +75,9 @@ struct SnapshotReconciliationTests {
     }
 
     private static func reconciler(_ actuator: MockSnapshotActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     private static func sync(
