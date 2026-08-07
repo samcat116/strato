@@ -502,6 +502,9 @@ final class WorkloadTombstoneTests {
             attached.hypervisorId = oldId
             attached.attachedAgentId = oldId
             attached.$vm.id = try vm.requireID()
+            // An attached row names its device: `NormalizeVolumeAttachments`
+            // makes that a check constraint (STR-129).
+            attached.deviceName = "disk0"
             try await attached.save(on: app.db)
             try await VolumeReplica(
                 volumeID: try attached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
@@ -574,6 +577,9 @@ final class WorkloadTombstoneTests {
                 size: 1 << 30, createdByID: try user.requireID())
             stayedVolume.hypervisorId = oldId
             stayedVolume.$vm.id = try stayed.requireID()
+            // An attached row names its device: `NormalizeVolumeAttachments`
+            // makes that a check constraint (STR-129).
+            stayedVolume.deviceName = "disk0"
             try await stayedVolume.save(on: app.db)
 
             _ = try await app.observedStateApplier.apply(

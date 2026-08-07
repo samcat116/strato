@@ -181,6 +181,29 @@ use in code, tests, docs, and review. Architecture-level maps live in
   adapter: `AgentService`. Test adapter: an in-memory fake, so the bridge is
   testable through its own interface without a real agent socket.
 
+## Volume attachment
+
+- **Attachment** — the **desired attachment** as it is stored: `vm_id`,
+  `device_name`, `boot_order`, `readonly` and `attached_agent_id` on `volumes`.
+  Not five independent columns — `VolumeAttachmentService` is the only thing
+  that moves them, and it moves them together, generation included. The
+  database enforces the shape: unique `(vm_id, device_name)` and
+  `(vm_id, boot_order)` per VM, an attached row must name its device, and
+  `vm_id` is `ON DELETE RESTRICT`.
+
+- **Claim / release** — the two transitions. A claim is one transaction under a
+  per-VM advisory lock (the `IPAMService` idiom), so generating the next free
+  `disk<N>` cannot race another attach; a release clears every column. Both
+  bump the generation, which is what makes them reach the agent at all — and
+  neither writes `status`, which is only ever what the agent last observed.
+  Deleting a VM releases its volumes inside the delete transaction: the volume
+  outlives the VM.
+
+- **Device name** — the volume's stable label within its VM (`VolumeDeviceName`
+  in `StratoShared`, validated at the API boundary). It is a *label*, not an
+  identifier: the agent names the QEMU device after the **volume id**
+  (`QEMUDiskIdentity`), so nothing resolves a disk by device name.
+
 ## Snapshots
 
 - **Volume snapshot** — a **disk-only** point-in-time copy of one volume, an

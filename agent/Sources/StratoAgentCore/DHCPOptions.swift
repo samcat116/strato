@@ -11,8 +11,13 @@ public enum OVNDHCPOptionsBuilder {
     /// domain is quoted per OVN's option grammar. The DNS list may be mixed —
     /// only its IPv4 entries belong in a DHCPv4 option (v6 entries go to
     /// `v6Options`).
+    ///
+    /// `metadataEnabled` adds option 121 (`classless_static_route`) so guests on
+    /// a network publishing the instance metadata service actually have a route
+    /// to it — see `classlessStaticRoute`.
     public static func v4Options(
-        gateway: String, dnsServers: [String], domainName: String?, leaseTime: Int?, subnet: String
+        gateway: String, dnsServers: [String], domainName: String?, leaseTime: Int?, subnet: String,
+        metadataEnabled: Bool = false
     ) -> [String: String] {
         var options: [String: String] = [
             "server_id": gateway,
@@ -30,7 +35,30 @@ public enum OVNDHCPOptionsBuilder {
         if let domainName = wellFormedDomain(domainName) {
             options["domain_name"] = "\"\(domainName)\""
         }
+        if metadataEnabled {
+            options["classless_static_route"] = classlessStaticRoute(gateway: gateway)
+        }
         return options
+    }
+
+    /// DHCP option 121's route list: the IPv4 metadata address on-link, plus
+    /// this network's default route (STR-53).
+    ///
+    /// **The default route is repeated here on purpose.** RFC 3442 requires a
+    /// client that understands option 121 to ignore option 3 (`router`)
+    /// entirely, so advertising only the metadata route would hand every guest
+    /// a path to the IMDS and take away its default gateway. `router` stays in
+    /// the map for the clients that don't implement 121 — the two options are
+    /// alternatives, never a merge.
+    ///
+    /// `0.0.0.0` as the next hop is RFC 3442's on-link encoding: the guest ARPs
+    /// for `169.254.169.254` itself, and OVN's ARP responder answers from the
+    /// metadata `localport`'s `addresses` (STR-49). On-link rather than via the
+    /// gateway because there is nothing to route it *through* — the localport
+    /// hangs off the logical switch, the logical router has no route to the
+    /// address, and an isolated network has no router at all.
+    static func classlessStaticRoute(gateway: String) -> String {
+        "{\(InstanceMetadataEndpoint.cidr),0.0.0.0, 0.0.0.0/0,\(gateway)}"
     }
 
     /// Builds the OVN DHCPv6 option map. OVN keys the family off the
@@ -40,6 +68,13 @@ public enum OVNDHCPOptionsBuilder {
     /// There is deliberately no router option: guests learn their default
     /// route from Router Advertisements (`ipv6_ra_configs` on the router
     /// port), not DHCPv6.
+    ///
+    /// There is likewise no metadata route here, and no `metadataEnabled`
+    /// parameter to take one: DHCPv6 has no counterpart to option 121, and the
+    /// RA cannot carry an on-link route to `fd00:ec2::254` either (RFC 4191
+    /// route information is a route *via the advertising router*, which has no
+    /// path to a localport on the switch). The v6 metadata route reaches guests
+    /// only through `CloudInitProvisioner.networkConfigYAML` — see STR-53.
     public static func v6Options(
         dnsServers: [String], domainName: String?, subnet6: String
     ) -> [String: String] {
