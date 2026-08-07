@@ -760,4 +760,127 @@ final class NetworkControllerTests {
             #expect(stillThere != nil)
         }
     }
+
+    // MARK: - Search domain
+    //
+    // `domainName` is not carried as text anywhere it lands: the agent
+    // interpolates it into the guest's netplan `network-config` and into OVN's
+    // DHCP option map (issue #876). Held to the DNS zone grammar on write, so a
+    // value that would restructure either document never reaches the row.
+
+    @Test("POST /api/networks normalizes the search domain to the zone-name spelling")
+    func createNormalizesDomainName() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "domain-net", subnet: "10.92.0.0/24", projectId: project.id!,
+                        domainName: "  Corp.Example.COM.  "))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(NetworkResponse.self)
+                #expect(created.domainName == "corp.example.com")
+            }
+        }
+    }
+
+    @Test("POST /api/networks rejects a search domain carrying netplan structure (400)")
+    func createRejectsStructuredDomainName() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            // The interior newlines used to survive the trim and land at
+            // netplan's key indentation, giving every static NIC on the network
+            // an attacker-chosen default route.
+            let smuggled = """
+                corp.example.com
+                    routes:
+                      - to: 0.0.0.0/0
+                        via: 10.0.0.99
+                """
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "smuggle-net", subnet: "10.93.0.0/24", projectId: project.id!,
+                        domainName: smuggled))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let stored = try await LogicalNetwork.query(on: app.db).filter(\.$name == "smuggle-net").first()
+            #expect(stored == nil)
+        }
+    }
+
+    @Test("POST /api/networks rejects search domains that break the documents they land in (400)")
+    func createRejectsMalformedDomainNames() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            // `]`/`,`/`#` make netplan's flow sequence unparseable — cloud-init
+            // then discards the whole network-config and the VM boots with no
+            // addressing; `"` ends OVN's quoted option early, failing DHCP.
+            // `internal` is well-formed but a single label, which is a host.
+            let rejected = ["corp.example.com]", "a,b.example.com", "corp.example.com # x", "corp\".com", "internal"]
+
+            for (index, domain) in rejected.enumerated() {
+                try await app.test(.POST, "/api/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkRequest(
+                            name: "bad-domain-\(index)", subnet: "10.94.\(index).0/24", projectId: project.id!,
+                            domainName: domain))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest, "'\(domain)' should be rejected")
+                }
+            }
+        }
+    }
+
+    @Test("POST /api/networks treats a blank search domain as absent")
+    func createTreatsBlankDomainNameAsAbsent() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "blank-domain-net", subnet: "10.95.0.0/24", projectId: project.id!,
+                        domainName: "   "))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(NetworkResponse.self)
+                #expect(created.domainName == nil)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks validates the search domain, leaving the stored one intact on refusal")
+    func updateValidatesDomainName() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let network = LogicalNetwork(
+                name: "domain-edit-net", subnet: "10.96.0.0/24", gateway: "10.96.0.1",
+                projectID: project.id!, createdByID: user.id!, domainName: "corp.example.com")
+            try await network.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(domainName: "corp.example.com\n    routes: []"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let unchanged = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(unchanged?.domainName == "corp.example.com")
+
+            // An empty string still clears it — the one non-domain value the
+            // field accepts.
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(domainName: ""))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let cleared = try res.content.decode(NetworkResponse.self)
+                #expect(cleared.domainName == nil)
+            }
+        }
+    }
 }

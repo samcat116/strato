@@ -213,6 +213,33 @@ public struct CloudInitProvisioner {
         return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 
+    /// `value` as a YAML double-quoted scalar, escaping what would otherwise end
+    /// the scalar or restructure the document around it.
+    ///
+    /// The control plane validates the values that reach these documents, but
+    /// rows written before a given validation landed keep whatever they hold
+    /// (issue #876), and validation on write can only ever cover the sender the
+    /// agent happens to be talking to. Quoting is what makes the renderer safe
+    /// on its own terms: inside double quotes a `]`, `,`, or `#` is data rather
+    /// than syntax, and the escapes below cover the three characters that still
+    /// aren't — the quote and backslash that end or reinterpret the scalar, and
+    /// the newline that would otherwise fold into whatever the next line's
+    /// indentation makes of it.
+    static func yamlQuoted(_ value: String) -> String {
+        var escaped = ""
+        for character in value {
+            switch character {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\n": escaped += "\\n"
+            case "\r": escaped += "\\r"
+            case "\t": escaped += "\\t"
+            default: escaped.append(character)
+            }
+        }
+        return "\"\(escaped)\""
+    }
+
     // MARK: - User-data document assembly
 
     /// Builds the NoCloud `user-data` document.
@@ -581,17 +608,20 @@ public struct CloudInitProvisioner {
                 section += "\n    accept-ra: true"
                 section += "\n    ipv6-address-generation: eui64"
             }
-            let dns = nic.dnsServers.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let dns =
+                nic.dnsServers
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
             // The network's domain reaches DHCP guests as the OVN responder's
             // domain_name/domain_search option; static guests only get it here,
             // so unqualified lookups need this `search` list to behave the same.
             let searchDomain = nic.domainName
-                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .flatMap { $0.isEmpty ? nil : $0 }
             if !dns.isEmpty || searchDomain != nil {
                 section += "\n    nameservers:"
                 if let searchDomain {
-                    section += "\n      search: [\(searchDomain)]"
+                    section += "\n      search: [\(yamlQuoted(searchDomain))]"
                 }
                 if !dns.isEmpty {
                     section += "\n      addresses: [\(dns.joined(separator: ", "))]"

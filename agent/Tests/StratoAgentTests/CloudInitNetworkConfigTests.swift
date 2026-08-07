@@ -152,7 +152,7 @@ struct CloudInitNetworkConfigTests {
                       - 192.168.1.5/24
                     gateway4: 192.168.1.1
                     nameservers:
-                      search: [corp.example.com]
+                      search: ["corp.example.com"]
                       addresses: [1.1.1.1]
                 """)
     }
@@ -172,7 +172,7 @@ struct CloudInitNetworkConfigTests {
 
         let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
         #expect(yaml?.contains("nameservers:") == true)
-        #expect(yaml?.contains("search: [corp.example.com]") == true)
+        #expect(yaml?.contains(#"search: ["corp.example.com"]"#) == true)
         #expect(yaml?.contains("addresses: [") == false)
     }
 
@@ -192,6 +192,73 @@ struct CloudInitNetworkConfigTests {
         let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
         #expect(yaml != nil)
         #expect(yaml?.contains("nameservers") == false)
+    }
+
+    @Test("a domain that is only a newline renders no search list")
+    func newlineOnlySearchDomainOmitted() {
+        // The trim used to be `.whitespaces`, which leaves a newline standing:
+        // the domain read as non-empty and rendered an empty `search` entry.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                domainName: " \n "
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml != nil)
+        #expect(yaml?.contains("nameservers") == false)
+    }
+
+    @Test("a structured domain from a row predating validation stays one scalar")
+    func searchDomainCannotRestructureTheDocument() {
+        // The control plane rejects this on write (issue #876), but rows written
+        // before that validation keep whatever they hold, so the renderer has to
+        // be safe on its own: the smuggled netplan keys must land inside the
+        // search scalar rather than beside it as a sibling `routes:` block.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                domainName: "corp.example.com\n    routes:\n      - to: 0.0.0.0/0\n        via: 10.0.0.99"
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(
+            yaml == """
+                version: 2
+                ethernets:
+                  nic0:
+                    match:
+                      macaddress: "52:54:00:aa:bb:cc"
+                    set-name: nic0
+                    addresses:
+                      - 192.168.1.5/24
+                    gateway4: 192.168.1.1
+                    nameservers:
+                      search: ["corp.example.com\\n    routes:\\n      - to: 0.0.0.0/0\\n        via: 10.0.0.99"]
+                """)
+        #expect(yaml?.contains("\n    routes:") == false)
+    }
+
+    @Test("quoting escapes what would otherwise end the search scalar")
+    func searchDomainQuotingEscapesDelimiters() {
+        #expect(CloudInitProvisioner.yamlQuoted("corp.example.com") == #""corp.example.com""#)
+        // `]`, `,`, and `#` are data inside quotes — unquoted, each one made the
+        // flow sequence unparseable and cost the guest its whole network-config.
+        #expect(CloudInitProvisioner.yamlQuoted("a],b # c") == #""a],b # c""#)
+        // The quote and backslash would end or reinterpret the scalar itself.
+        #expect(CloudInitProvisioner.yamlQuoted(#"a"b\c"#) == #""a\"b\\c""#)
+        #expect(CloudInitProvisioner.yamlQuoted("a\nb\tc\rd") == #""a\nb\tc\rd""#)
     }
 
     @Test("DHCP NIC writes no search list (OVN's responder delivers the domain)")

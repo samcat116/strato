@@ -105,6 +105,10 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           className="bg-background border-border text-foreground"
           disabled={disabled || !value.dhcpEnabled}
         />
+        <p className="text-xs text-muted-foreground">
+          Appended to unqualified lookups in the guest. Must be fully qualified
+          — at least two labels, like a DNS zone name.
+        </p>
       </div>
 
       <div className="space-y-2">

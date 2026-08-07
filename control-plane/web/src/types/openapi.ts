@@ -5709,6 +5709,7 @@ export interface components {
             projectId?: string;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. Must be a fully-qualified domain name — at least two RFC 1123 labels, e.g. `corp.example.com` — and is stored lowercased without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
@@ -5726,6 +5727,7 @@ export interface components {
             ipv6Enabled?: boolean;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. Must be a fully-qualified domain name — at least two RFC 1123 labels, e.g. `corp.example.com` — and is stored lowercased without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;

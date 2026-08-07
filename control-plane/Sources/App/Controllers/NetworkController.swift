@@ -204,7 +204,7 @@ struct NetworkController: RouteCollection {
             createdByID: user.id!,
             dhcpEnabled: request.dhcpEnabled ?? true,
             dnsServers: dnsServers,
-            domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            domainName: try Self.validatedDomainName(request.domainName),
             leaseTime: request.leaseTime,
             externalAccess: request.externalAccess ?? true,
             metadataEnabled: request.metadataEnabled ?? true,
@@ -452,7 +452,7 @@ struct NetworkController: RouteCollection {
             network.dnsServers = try Self.validatedDNS(dnsServers)
         }
         if let domainName = request.domainName {
-            network.domainName = domainName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            network.domainName = try Self.validatedDomainName(domainName)
         }
         if let leaseTime = request.leaseTime {
             try Self.validateLeaseTime(leaseTime)
@@ -804,6 +804,22 @@ struct NetworkController: RouteCollection {
             }
         }
         return cleaned
+    }
+
+    /// Validates the network's DHCP search domain. Absent or blank clears it;
+    /// anything else must satisfy the same grammar as a DNS zone name.
+    ///
+    /// Held to a real grammar rather than trimmed free text (issue #876)
+    /// because the value is not carried as a string anywhere it lands: the
+    /// agent interpolates it into the guest's netplan `network-config` and into
+    /// OVN's DHCP option map, where a newline authors netplan *keys* and a
+    /// quote ends an OVN option early. That makes an unvalidated domain a
+    /// structural edit to a file the VM configures itself from — a `routes:`
+    /// block smuggled through this field would give every statically addressed
+    /// NIC on the network an attacker-chosen default route.
+    static func validatedDomainName(_ raw: String?) throws -> String? {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return try DNSName.normalizedZoneName(raw, field: "Domain name")
     }
 
     static func validateLeaseTime(_ leaseTime: Int?) throws {
