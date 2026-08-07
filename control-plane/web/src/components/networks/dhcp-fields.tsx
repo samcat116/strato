@@ -53,8 +53,12 @@ interface DHCPFieldsProps {
 }
 
 /**
- * DHCP configuration inputs. When enabled, agents program OVN's DHCP responder
- * to deliver the control-plane-allocated IP plus this DNS/lease config to guests.
+ * DHCP and DNS configuration inputs. DHCP decides how guests are addressed:
+ * when enabled, agents program OVN's DHCP responder to deliver the
+ * control-plane-allocated IP plus this DNS/lease config. The DNS servers and
+ * search domain reach guests either way — over DHCP when it's on, and through
+ * cloud-init's `nameservers` block on statically addressed NICs when it's off —
+ * so only lease time is gated on the checkbox.
  */
 export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
   return (
@@ -70,9 +74,9 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
         Manage guest addressing with OVN DHCP
       </label>
       <p className="text-xs text-muted-foreground">
-        When on, agents answer guest DHCP requests with the allocated IP,
-        gateway, and the DNS below. When off, VMs are configured statically via
-        cloud-init.
+        When on, agents answer guest DHCP requests with the allocated IP and
+        gateway. When off, VMs are configured statically via cloud-init. Either
+        way, guests get the DNS settings below.
       </p>
 
       <div className="space-y-2">
@@ -85,11 +89,12 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           value={value.dnsServers}
           onChange={(e) => onChange({ ...value, dnsServers: e.target.value })}
           className="bg-background border-border text-foreground font-mono"
-          disabled={disabled || !value.dhcpEnabled}
+          disabled={disabled}
         />
         <p className="text-xs text-muted-foreground">
-          Comma- or space-separated IPv4 or IPv6 addresses advertised over
-          DHCP (each family&apos;s servers go to its own DHCP options).
+          Comma- or space-separated IPv4 or IPv6 addresses. Advertised over DHCP
+          when it&apos;s on (each family&apos;s servers go to its own DHCP
+          option), and written into cloud-init on statically addressed NICs.
         </p>
       </div>
 
@@ -103,8 +108,12 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           value={value.domainName}
           onChange={(e) => onChange({ ...value, domainName: e.target.value })}
           className="bg-background border-border text-foreground"
-          disabled={disabled || !value.dhcpEnabled}
+          disabled={disabled}
         />
+        <p className="text-xs text-muted-foreground">
+          Appended to unqualified hostname lookups — delivered as a DHCP option
+          when DHCP is on, and as the cloud-init search list otherwise.
+        </p>
       </div>
 
       <div className="space-y-2">
