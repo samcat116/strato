@@ -772,6 +772,49 @@ listener is future work. See
 [ADR 0003](../adr/0003-imds-chassis-namespace.md) and
 [networking](./networking.md).
 
+### Instance metadata store (IMDS payload)
+
+`StratoAgentCore/MetadataStore.swift` holds what that service will serve:
+one `InstanceMetadata` per VM (wire v26, STR-52), written by the reconciler
+from each sync's `DesiredVMState.metadata` before it plans anything.
+Reads are answered entirely from here, with no control-plane round trip —
+the same fail-static posture as the rest of the reconciler, and deliberate,
+because a guest that cannot read its metadata may fail to boot.
+
+Three rules keep it honest, and each is a place the obvious implementation
+would be wrong:
+
+- **The store's own generation guard**, not `lastApplied`. A strictly older
+  sync is refused so a replay cannot roll metadata backward; an *equal*
+  generation still applies, because editing only what metadata carries (a
+  hostname, an SSH key) changes no realization and so bumps no VM generation
+  — a strict `>` would freeze out exactly the edits the IMDS exists to
+  deliver. `lastApplied` cannot serve as that guard: it tracks convergence,
+  so a VM whose create keeps failing holds it still while generations
+  advance.
+- **Metadata is recorded outside the presence guard** that stops all
+  convergence on a host whose manifest is unreadable (STR-138). The store
+  projects what the control plane said, not what the host holds, so a blind
+  agent's guests keep getting current metadata.
+- **Withdrawal follows the VM off the host, and never further.** A desired
+  entry that wants the VM `.absent` drops the payload whatever the sender's
+  wire version, since an address outlives the VM it was allocated to and the
+  IMDS identifies its caller by source address; a tombstoned teardown drops
+  it only once the delete has actually converged, so a teardown the
+  blast-radius guard refused keeps serving. That second withdrawal is *not*
+  generation guarded — a teardown is authorized from the observed generation
+  the agent reported, which lags the sync generations the store records
+  whenever convergence is failing — but it keeps the high-water mark and
+  remembers the teardown, so no replay resurrects the payload. Withdrawn
+  records are kept rather than deleted for exactly that guard. A VM the sync
+  merely *omits* keeps its metadata (STR-98: omission is not an instruction).
+
+The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
+the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`
+is authoritative and withdraws what we serve, while from an older one it is
+silence, and reading it as an instruction would empty every VM's metadata the
+moment a control plane is rolled back.
+
 ## Self-update
 
 `StratoAgentCore/AgentUpdater.swift`: stages next to the binary (same

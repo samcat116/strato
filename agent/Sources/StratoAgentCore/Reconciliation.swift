@@ -17,6 +17,11 @@ import StratoShared
 // sandboxes (deliberately not forked — two copies would drift); only the step
 // vocabulary and the actuator routing differ per kind.
 //
+// STR-52 hung one more job off the same sync: each VM's `InstanceMetadata` is
+// projected onto the `MetadataStore` the guest-facing IMDS reads. It is not
+// actuation — no work item carries it — because a VM already in its desired
+// status plans no steps, and a metadata-only edit bumps no generation.
+//
 // STR-98 took omission out of the destructive path. A workload present here
 // that a sync does not list is *held* and reported as unrecognized; it is torn
 // down only when the control plane answers with an explicit tombstone (or an
@@ -544,6 +549,9 @@ public actor Reconciler {
     private let queue: SerialTaskQueue
     private let logger: Logger
     private let teardownGuard: TeardownGuard
+    /// What this host's metadata service serves, projected from each sync's
+    /// `DesiredVMState.metadata` (STR-52).
+    private let metadataStore: MetadataStore
 
     /// Last generation fully applied per workload. Rejects older syncs (the
     /// generation guard) and feeds `observed_generation` in reports.
@@ -564,16 +572,20 @@ public actor Reconciler {
     /// blast-radius guard; cleared by the first sync that passes it.
     private var teardownRefusal: ObservedTeardownRefusal?
 
+    /// `metadataStore` is passed in rather than owned, because the reconciler
+    /// only writes it — the guest-facing listener reads the same instance.
     public init(
         actuator: any ReconcileActuator,
         queue: SerialTaskQueue,
         logger: Logger,
-        teardownGuard: TeardownGuard = TeardownGuard()
+        teardownGuard: TeardownGuard = TeardownGuard(),
+        metadataStore: MetadataStore = MetadataStore()
     ) {
         self.actuator = actuator
         self.queue = queue
         self.logger = logger
         self.teardownGuard = teardownGuard
+        self.metadataStore = metadataStore
     }
 
     // MARK: Report accessors
@@ -655,10 +667,32 @@ public actor Reconciler {
     /// empty desired list instead would report every volume on the host as
     /// unaccounted for and invite a future reading of that silence as
     /// teardown — of the only copy of a user's data.
+    ///
+    /// `includeMetadata` gates the payload half of instance metadata (STR-52)
+    /// on `WireProtocol.supportsInstanceMetadata(senderVersion)`, for the
+    /// v3/v5 reason again: from a control plane that speaks the field a nil
+    /// `metadata` is authoritative and drops what this host serves, while from
+    /// an older one it is silence — reading that as an instruction would empty
+    /// every VM's metadata the moment a control plane is rolled back.
     public func apply(
-        _ message: DesiredStateMessage, includeSandboxes: Bool = false, includeVolumes: Bool = false
+        _ message: DesiredStateMessage, includeSandboxes: Bool = false, includeVolumes: Bool = false,
+        includeMetadata: Bool = false
     ) async {
         let tombstones = message.tombstones ?? []
+
+        // Instance metadata is recorded before anything else this sync does,
+        // and deliberately outside the presence guard below: the store is a
+        // projection of what the control plane said, not of what this host
+        // holds, so an agent that cannot enumerate its own workloads can still
+        // serve their guests fresh metadata — which is the fail-static posture
+        // the whole IMDS design rests on.
+        //
+        // It is not carried on a work item either. A VM already in its desired
+        // status plans no steps at all, and an edit to what metadata carries
+        // (a hostname, an SSH key) changes no realization and so bumps no
+        // generation — so routing it through actuation would drop exactly the
+        // edits the metadata service exists to deliver.
+        await recordMetadata(message.vms, includeMetadata: includeMetadata)
 
         // An agent that cannot enumerate its own workloads converges nothing
         // (STR-138). Every item this sync could plan rests on the presence
@@ -875,6 +909,36 @@ public actor Reconciler {
         return previous != refusal
     }
 
+    /// Project this sync's per-VM metadata onto the store the guest-facing
+    /// metadata service reads (STR-52).
+    ///
+    /// Two rules, because the two writes answer to different senders:
+    ///
+    /// * An entry that wants the VM **absent** withdraws its metadata whatever
+    ///   the sender's version is. `desiredStatus` is a field every control
+    ///   plane sends, and having nothing to serve is the safe state for a VM
+    ///   leaving this host: the IMDS identifies its caller by source address,
+    ///   and an address outlives the VM it was allocated to. This also covers
+    ///   the VM that was already gone when the sync arrived, for which the
+    ///   planner has no work to do and therefore no teardown to hook.
+    /// * Otherwise the payload is written only when the sender speaks the
+    ///   field, so that an older control plane's silence leaves what this host
+    ///   serves alone.
+    ///
+    /// Staleness is the store's own guard rather than `lastApplied`, which
+    /// tracks convergence and so lags behind: a VM whose create keeps failing
+    /// holds `lastApplied` still while generations advance, and every one of
+    /// those syncs would look equally current to a guard reading it.
+    private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
+        for entry in desired {
+            if entry.wantsAbsent {
+                await metadataStore.apply(nil, generation: entry.generation, for: entry.vmId)
+            } else if includeMetadata {
+                await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
+            }
+        }
+    }
+
     private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {
         var result: [String: Int64] = [:]
         for (ref, generation) in lastApplied where ref.kind == kind {
@@ -955,6 +1019,16 @@ public actor Reconciler {
                     }
                 }
                 index += 1
+            }
+            // A VM that just left this host takes its metadata with it
+            // (STR-52). The `.absent` entries already withdrew theirs at sync
+            // time; what this reaches is the tombstoned teardown, which has no
+            // desired entry to carry a withdrawal. Doing it here rather than
+            // when the tombstone is planned is what keeps a teardown the
+            // blast-radius guard refused from silently blinding a VM this agent
+            // deliberately kept running.
+            if item.kind == .vm, item.steps.contains(.delete), let vmId = UUID(uuidString: item.id) {
+                await metadataStore.withdraw(vmId, generation: item.generation)
             }
             lastApplied[ref] = item.generation
             failures.removeValue(forKey: ref)

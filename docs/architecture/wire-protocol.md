@@ -157,10 +157,11 @@ the sync is the whole point of the design: the metadata store inherits
 level-triggering, generation guards, and replay safety from the machinery that
 already exists, so an operator's edit propagates on the next sync with no
 second control loop, no second transport, and nothing in the payload that can
-expire. Carrying the metadata on the sync is shipped; serving it is not — no
-agent yet answers HTTP on `169.254.169.254`, so the guest-facing IMDS listener
-is future work (only the v27 chassis/localport half exists agent-side, see
-[agent](./agent.md)).
+expire. Carrying the metadata on the sync is shipped, and so is holding it: the
+agent's `MetadataStore` records each VM's copy as syncs arrive (STR-52). Serving
+it is not — no agent yet answers HTTP on `169.254.169.254`, so the guest-facing
+IMDS listener is future work (the v27 chassis/localport half and the store are
+what exist agent-side, see [agent](./agent.md)).
 
 Absence is asymmetric in the v3/v5 sense rather than the harmless v7 sense,
 which is why `supportsInstanceMetadata` gates both directions. Agent-side it

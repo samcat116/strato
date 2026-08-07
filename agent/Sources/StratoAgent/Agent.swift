@@ -114,6 +114,11 @@ actor Agent {
     // per-VM lanes as imperative messages, so the two modes can never
     // interleave operations on one VM.
     private var reconciler: Reconciler?
+    // What this host's link-local metadata service serves its guests (STR-52),
+    // written by the reconciler from each sync's `DesiredVMState.metadata`.
+    // Owned here rather than by the reconciler because the guest-facing
+    // listener will read the same instance.
+    private let metadataStore = MetadataStore()
     // Whether the control plane we registered with speaks state sync (wire
     // protocol >= 2). Gates observed-state reports so an old control plane
     // isn't sent envelopes it logs as unknown.
@@ -704,7 +709,8 @@ actor Agent {
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
         reconciler = Reconciler(
-            actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard)
+            actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard,
+            metadataStore: metadataStore)
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
@@ -2197,11 +2203,15 @@ extension Agent {
                 // Volumes carry the same gate, plus a stricter one inside
                 // `apply`: a nil `volumes` field skips the half whatever the
                 // version says, because misreading silence there destroys the
-                // only copy of user data (STR-148).
+                // only copy of user data (STR-148). Instance metadata (STR-52)
+                // is gated for the same "silence is not an instruction" reason:
+                // a rolled-back control plane must not empty what this host's
+                // metadata service serves.
                 await reconciler?.apply(
                     message,
                     includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion),
-                    includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion))
+                    includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion),
+                    includeMetadata: WireProtocol.supportsInstanceMetadata(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
