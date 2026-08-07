@@ -518,6 +518,10 @@ jobs:
     # Backstop for a hung cold build (default would be 360 minutes).
     timeout-minutes: 90
     strategy:
+      # The three legs produce independent release assets; letting one leg's
+      # failure cancel the others just means a rerun rebuilds everything
+      # instead of the one leg that failed.
+      fail-fast: false
       matrix:
         include:
           - os: self-hosted
@@ -551,6 +555,23 @@ jobs:
         uses: vapor/swiftly-action@v0.2
         with:
           toolchain: "6.3.2"
+
+      # swiftly's `install --use` short-circuits when the requested toolchain
+      # is already present — it prints "already installed" and never switches
+      # the in-use toolchain. On the persistent self-hosted runner that means
+      # whatever toolchain was last selected on the host wins, not the pin
+      # above: the v0.1.0 release built with a stale 6.2.1 default, whose
+      # release-mode compiler crashes on FluentKit (SIL ownership verifier).
+      # Select the toolchain explicitly and refuse to build with anything else.
+      - name: Pin the in-use toolchain
+        if: matrix.os == 'self-hosted'
+        run: |
+          swiftly use --global-default --assume-yes "6.3.2"
+          swift --version
+          swift --version | grep -q "Swift version 6.3.2" || {
+            echo "swift on PATH is not the pinned 6.3.2 toolchain (see above)" >&2
+            exit 1
+          }
 
       # The asset upload below is raw curl; make sure the container has it
       # (the self-hosted and macOS legs always do).

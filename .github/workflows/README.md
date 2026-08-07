@@ -177,7 +177,9 @@ Requirements:
 - curl (release assets upload via the raw REST endpoint — the runner needs no
   gh CLI)
 - swiftly-installable environment (the job installs Swift 6.3.2 via
-  vapor/swiftly-action) and libjemalloc
+  vapor/swiftly-action, then pins it as the host's in-use toolchain — swiftly
+  state persists between runs on this machine, and `install --use` alone does
+  not switch an already-installed toolchain) and libjemalloc
 
 ### GitHub-Hosted Runners
 Used for:
