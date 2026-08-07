@@ -121,7 +121,8 @@ struct EdgeNonceReconciliationTests {
         let vmId = UUID()
         let actuator = MockEdgeActuator(presence: [vmId.uuidString: .managed(.running)])
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.vm(vmId, generation: 5, rebootGeneration: 7)]))
@@ -147,7 +148,8 @@ struct EdgeNonceReconciliationTests {
         let actuator = MockEdgeActuator(presence: [vmId.uuidString: .orphaned])
         await actuator.setNonces([vmId.uuidString: AppliedEdgeNonces(restore: 1)])
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.vm(vmId, generation: 3, restoreGeneration: 2)]))
@@ -196,7 +198,8 @@ struct EdgeNonceReconciliationTests {
         let actuator = MockEdgeActuator(presence: [vmId.uuidString: .managed(.shutdown)])
         await actuator.setNonces([vmId.uuidString: AppliedEdgeNonces()])
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(
@@ -213,7 +216,8 @@ struct EdgeNonceReconciliationTests {
         let actuator = MockEdgeActuator(presence: [vmId.uuidString: .managed(.running)])
         await actuator.setNonces([vmId.uuidString: AppliedEdgeNonces(reboot: 1)])
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(
@@ -234,7 +238,8 @@ struct EdgeNonceReconciliationTests {
         await actuator.setNonces([vmId.uuidString: AppliedEdgeNonces()])
         await actuator.setFailure(TestFailure())
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.vm(vmId, generation: 2, rebootGeneration: 1)]))
