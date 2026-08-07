@@ -297,18 +297,47 @@ struct SPIREServerAPIClientTests {
         }
     }
 
-    @Test("mintJWTSVID refuses an empty audience without calling SPIRE", .timeLimit(.minutes(1)))
-    func mintJWTSVIDRejectsEmptyAudience() async throws {
+    @Test("mintJWTSVID refuses unusable input without calling SPIRE", .timeLimit(.minutes(1)))
+    func mintJWTSVIDRejectsUnusableInput() async throws {
         let state = FakeSPIREServerState()
         try await withFakeSPIREServer(state: state) { client in
-            // An audience-less JWT-SVID would be accepted by every verifier in
-            // the trust domain, not just the one it was minted for.
+            // A token with no usable audience would be accepted by every
+            // verifier in the trust domain, not just the one it was minted
+            // for — and `[""]` reaches that outcome just as well as `[]`.
+            for audience in [[], [""], ["   "]] {
+                await #expect(throws: SPIREServerAPIError.self) {
+                    _ = try await client.mintJWTSVID(
+                        spiffeID: "spiffe://strato.local/vm/abc-123", audience: audience, ttlSeconds: 300)
+                }
+            }
+            // A negative TTL mints a token that is already expired, which the
+            // response guards cannot see: its expiry is a positive epoch.
             await #expect(throws: SPIREServerAPIError.self) {
                 _ = try await client.mintJWTSVID(
-                    spiffeID: "spiffe://strato.local/vm/abc-123", audience: [], ttlSeconds: 300)
+                    spiffeID: "spiffe://strato.local/vm/abc-123",
+                    audience: ["strato-control-plane"],
+                    ttlSeconds: -1
+                )
             }
+
             let requests = await state.mintJWTSVIDRequests
             #expect(requests.isEmpty)
+        }
+    }
+
+    @Test("mintJWTSVID drops blank audience entries but keeps the rest", .timeLimit(.minutes(1)))
+    func mintJWTSVIDDropsBlankAudienceEntries() async throws {
+        let state = FakeSPIREServerState()
+        try await withFakeSPIREServer(state: state) { client in
+            _ = try await client.mintJWTSVID(
+                spiffeID: "spiffe://strato.local/vm/abc-123",
+                audience: ["strato-control-plane", "", "  ", "strato-agent"],
+                ttlSeconds: 300
+            )
+            // Dropping blanks can only narrow the token's scope, so the
+            // usable audiences still reach SPIRE.
+            let requests = await state.mintJWTSVIDRequests
+            #expect(requests.first?.audience == ["strato-control-plane", "strato-agent"])
         }
     }
 
@@ -330,6 +359,98 @@ struct SPIREServerAPIClientTests {
                 )
             }
         }
+    }
+
+    @Test("mintJWTSVID rejects an empty token", .timeLimit(.minutes(1)))
+    func mintJWTSVIDRejectsEmptyToken() async throws {
+        let state = FakeSPIREServerState()
+        var svid = Spire_Api_Types_JWTSVID()
+        svid.token = ""
+        svid.expiresAt = 1_800_000_000
+        await state.setMintedJWTSVID(svid)
+
+        try await withFakeSPIREServer(state: state) { client in
+            // A "successful" mint that produced no credential.
+            await #expect(throws: SPIREServerAPIError.self) {
+                _ = try await client.mintJWTSVID(
+                    spiffeID: "spiffe://strato.local/vm/abc-123",
+                    audience: ["strato-control-plane"],
+                    ttlSeconds: 300
+                )
+            }
+        }
+    }
+
+    @Test("mintJWTSVID falls back to the requested ID when the echo is unusable", .timeLimit(.minutes(1)))
+    func mintJWTSVIDFallsBackToRequestedID() async throws {
+        let state = FakeSPIREServerState()
+        let absent: Spire_Api_Types_JWTSVID = {
+            var svid = Spire_Api_Types_JWTSVID()
+            svid.token = "minted-jwt-svid"
+            svid.expiresAt = 1_800_000_000
+            return svid
+        }()
+        await state.setMintedJWTSVID(absent)
+
+        try await withFakeSPIREServer(state: state) { client in
+            // No denormalized `id` at all: SPIRE mints what it was asked for,
+            // so the requested ID is the right subject to report.
+            let noEcho = try await client.mintJWTSVID(
+                spiffeID: "spiffe://strato.local/vm/abc-123",
+                audience: ["strato-control-plane"],
+                ttlSeconds: 300
+            )
+            #expect(noEcho.spiffeID == "spiffe://strato.local/vm/abc-123")
+
+            // Present but default: `hasID` is true, so a presence-only check
+            // would assert the bare string "spiffe://" as the subject.
+            var degenerate = absent
+            degenerate.id = Spire_Api_Types_SPIFFEID()
+            await state.setMintedJWTSVID(degenerate)
+
+            let emptyEcho = try await client.mintJWTSVID(
+                spiffeID: "spiffe://strato.local/vm/abc-123",
+                audience: ["strato-control-plane"],
+                ttlSeconds: 300
+            )
+            #expect(emptyEcho.spiffeID == "spiffe://strato.local/vm/abc-123")
+        }
+    }
+
+    @Test("mintJWTSVID reports no issuedAt when the server omits it", .timeLimit(.minutes(1)))
+    func mintJWTSVIDMapsMissingIssuedAtToNil() async throws {
+        let state = FakeSPIREServerState()
+        var svid = Spire_Api_Types_JWTSVID()
+        svid.token = "minted-jwt-svid"
+        svid.expiresAt = 1_800_000_000
+        svid.issuedAt = 0
+        await state.setMintedJWTSVID(svid)
+
+        try await withFakeSPIREServer(state: state) { client in
+            let minted = try await client.mintJWTSVID(
+                spiffeID: "spiffe://strato.local/vm/abc-123",
+                audience: ["strato-control-plane"],
+                ttlSeconds: 300
+            )
+            // The only optional on the type, and 0 means "not reported"
+            // rather than the epoch.
+            #expect(minted.issuedAt == nil)
+            #expect(minted.expiresAt == Date(timeIntervalSince1970: 1_800_000_000))
+        }
+    }
+
+    @Test("A minted JWT-SVID does not print its token")
+    func mintedJWTSVIDRedactsTokenInDescription() {
+        let svid = SPIREJWTSVID(
+            token: "eyJhbGciOiJFUzI1NiJ9.super-secret",
+            spiffeID: "spiffe://strato.local/vm/abc-123",
+            expiresAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        // Interpolating one into a log line or a test failure must not
+        // publish a live bearer token.
+        #expect(!"\(svid)".contains("super-secret"))
+        #expect(!String(reflecting: svid).contains("super-secret"))
+        #expect("\(svid)".contains("spiffe://strato.local/vm/abc-123"))
     }
 
     // MARK: - Federation-aware entry fields
