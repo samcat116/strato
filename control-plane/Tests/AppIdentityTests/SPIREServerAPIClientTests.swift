@@ -272,6 +272,66 @@ struct SPIREServerAPIClientTests {
         }
     }
 
+    // MARK: - MintJWTSVID
+
+    @Test("MintJWTSVID round trip", .timeLimit(.minutes(1)))
+    func mintJWTSVIDRoundTrip() async throws {
+        let state = FakeSPIREServerState()
+        try await withFakeSPIREServer(state: state) { client in
+            let svid = try await client.mintJWTSVID(
+                spiffeID: "spiffe://strato.local/vm/abc-123",
+                audience: ["strato-control-plane"],
+                ttlSeconds: 300
+            )
+            #expect(svid.token == "minted-jwt-svid")
+            #expect(svid.spiffeID == "spiffe://strato.local/vm/abc-123")
+            #expect(svid.expiresAt == Date(timeIntervalSince1970: 1_800_000_000))
+            #expect(svid.issuedAt == Date(timeIntervalSince1970: 1_700_000_000))
+
+            let requests = await state.mintJWTSVIDRequests
+            #expect(requests.count == 1)
+            #expect(requests.first?.id.trustDomain == "strato.local")
+            #expect(requests.first?.id.path == "/vm/abc-123")
+            #expect(requests.first?.audience == ["strato-control-plane"])
+            #expect(requests.first?.ttl == 300)
+        }
+    }
+
+    @Test("mintJWTSVID refuses an empty audience without calling SPIRE", .timeLimit(.minutes(1)))
+    func mintJWTSVIDRejectsEmptyAudience() async throws {
+        let state = FakeSPIREServerState()
+        try await withFakeSPIREServer(state: state) { client in
+            // An audience-less JWT-SVID would be accepted by every verifier in
+            // the trust domain, not just the one it was minted for.
+            await #expect(throws: SPIREServerAPIError.self) {
+                _ = try await client.mintJWTSVID(
+                    spiffeID: "spiffe://strato.local/vm/abc-123", audience: [], ttlSeconds: 300)
+            }
+            let requests = await state.mintJWTSVIDRequests
+            #expect(requests.isEmpty)
+        }
+    }
+
+    @Test("mintJWTSVID rejects a token with no expiry", .timeLimit(.minutes(1)))
+    func mintJWTSVIDRejectsExpiryless() async throws {
+        let state = FakeSPIREServerState()
+        var svid = Spire_Api_Types_JWTSVID()
+        svid.token = "minted-jwt-svid"
+        svid.expiresAt = 0
+        await state.setMintedJWTSVID(svid)
+
+        try await withFakeSPIREServer(state: state) { client in
+            // A bearer token the caller would be entitled to cache forever.
+            await #expect(throws: SPIREServerAPIError.self) {
+                _ = try await client.mintJWTSVID(
+                    spiffeID: "spiffe://strato.local/vm/abc-123",
+                    audience: ["strato-control-plane"],
+                    ttlSeconds: 300
+                )
+            }
+        }
+    }
+
     // MARK: - Federation-aware entry fields
 
     @Test("BatchCreateEntry carries federatesWith and admin", .timeLimit(.minutes(1)))
@@ -711,6 +771,29 @@ private actor FakeSPIREServerState {
     func recordDelete(_ request: Spire_Api_Server_Entry_V1_BatchDeleteEntryRequest) {
         deleteRequests.append(request)
     }
+
+    private(set) var mintJWTSVIDRequests: [Spire_Api_Server_Svid_V1_MintJWTSVIDRequest] = []
+    private var mintedJWTSVID: Spire_Api_Types_JWTSVID?
+
+    /// Serve this JWT-SVID instead of the default echo — for the malformed
+    /// responses the client is expected to reject.
+    func setMintedJWTSVID(_ svid: Spire_Api_Types_JWTSVID) { mintedJWTSVID = svid }
+
+    func recordMintJWTSVID(
+        _ request: Spire_Api_Server_Svid_V1_MintJWTSVIDRequest
+    ) -> Spire_Api_Types_JWTSVID {
+        mintJWTSVIDRequests.append(request)
+        if let mintedJWTSVID { return mintedJWTSVID }
+
+        // Fixed timestamps rather than now-relative ones, so the mapping is
+        // asserted against exact values.
+        var svid = Spire_Api_Types_JWTSVID()
+        svid.token = "minted-jwt-svid"
+        svid.id = request.id
+        svid.expiresAt = 1_800_000_000
+        svid.issuedAt = 1_700_000_000
+        return svid
+    }
 }
 
 /// Minimal SPIRE server Agent + Entry API implementation backed by
@@ -818,6 +901,20 @@ private struct FakeSPIREServerService: RegistrableRPCService {
                 result.status.code = 0
                 return result
             }
+            return Self.singleResponse(response)
+        }
+
+        router.registerHandler(
+            forMethod: MethodDescriptor(
+                service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.svid.v1.SVID"),
+                method: "MintJWTSVID"
+            ),
+            deserializer: ProtobufDeserializer<Spire_Api_Server_Svid_V1_MintJWTSVIDRequest>(),
+            serializer: ProtobufSerializer<Spire_Api_Server_Svid_V1_MintJWTSVIDResponse>()
+        ) { request, _ in
+            let message = try await Self.singleMessage(request)
+            var response = Spire_Api_Server_Svid_V1_MintJWTSVIDResponse()
+            response.svid = await self.state.recordMintJWTSVID(message)
             return Self.singleResponse(response)
         }
 
