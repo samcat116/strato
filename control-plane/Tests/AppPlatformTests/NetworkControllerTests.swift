@@ -819,8 +819,7 @@ final class NetworkControllerTests {
             // `]`/`,`/`#` make netplan's flow sequence unparseable — cloud-init
             // then discards the whole network-config and the VM boots with no
             // addressing; `"` ends OVN's quoted option early, failing DHCP.
-            // `internal` is well-formed but a single label, which is a host.
-            let rejected = ["corp.example.com]", "a,b.example.com", "corp.example.com # x", "corp\".com", "internal"]
+            let rejected = ["corp.example.com]", "a,b.example.com", "corp.example.com # x", "corp\".com"]
 
             for (index, domain) in rejected.enumerated() {
                 try await app.test(.POST, "/api/networks") { req in
@@ -832,6 +831,27 @@ final class NetworkControllerTests {
                 } afterResponse: { res in
                     #expect(res.status == .badRequest, "'\(domain)' should be rejected")
                 }
+            }
+        }
+    }
+
+    @Test("POST /api/networks accepts a single-label search domain")
+    func createAcceptsSingleLabelDomainName() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            // Unlike a zone name, which is a name to serve: `internal` is a
+            // legitimate thing to append to an unqualified lookup, and both
+            // delivery paths take it. The structural safety comes from the
+            // label grammar, not from the label count.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "single-label-net", subnet: "10.97.0.0/24", projectId: project.id!,
+                        domainName: "internal"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(NetworkResponse.self)
+                #expect(created.domainName == "internal")
             }
         }
     }

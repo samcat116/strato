@@ -208,9 +208,7 @@ public struct CloudInitProvisioner {
     /// carrying a newline or a colon would author *keys* in `meta-data` rather
     /// than fail, and the agent cannot see the validation the sender did.
     static func isValidHostnameLabel(_ label: String) -> Bool {
-        guard (1...63).contains(label.count) else { return false }
-        guard !label.hasPrefix("-"), !label.hasSuffix("-") else { return false }
-        return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        DNSNameSyntax.isValidLabel(label)
     }
 
     /// `value` as a YAML double-quoted scalar, escaping what would otherwise end
@@ -608,10 +606,16 @@ public struct CloudInitProvisioner {
                 section += "\n    accept-ra: true"
                 section += "\n    ipv6-address-generation: eui64"
             }
+            // Filtered to addresses that parse, matching what `OVNDHCPOptionsBuilder`
+            // does on the DHCP path: these land in the same kind of flow sequence
+            // the search domain does, so anything that isn't an address is a
+            // character that could end it. `validatedDNS` has enforced this on
+            // write since the field's first release, so nothing reachable is
+            // dropped here — the renderer just stops depending on that.
             let dns =
                 nic.dnsServers
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+                .filter { IPv4Address($0) != nil || IPv6Address($0) != nil }
             // The network's domain reaches DHCP guests as the OVN responder's
             // domain_name/domain_search option; static guests only get it here,
             // so unqualified lookups need this `search` list to behave the same.

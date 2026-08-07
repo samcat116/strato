@@ -36,11 +36,17 @@ enum DNSName {
     /// exactly what makes split-horizon possible later (issue #769). At least
     /// two labels are required — a bare single label is a host, not a zone.
     ///
-    /// `field` names the thing being validated in the rejection message, since
-    /// this grammar is also what a logical network's DHCP search domain must
-    /// satisfy (issue #876) — the two names in the DNS model agree on one
-    /// grammar rather than each re-deriving one.
-    static func normalizedZoneName(_ raw: String, field: String = "Zone name") throws -> String {
+    /// `field` and `minimumLabels` exist because this grammar is also what a
+    /// logical network's DHCP search domain must satisfy (issue #876) — the two
+    /// names in the DNS model agree on one grammar rather than each re-deriving
+    /// one. They differ in exactly one rule: a search domain may be a single
+    /// label, since `internal` and `lan` are legitimate things to append to an
+    /// unqualified lookup and both delivery paths accept them. The structural
+    /// safety both names depend on comes from `isValidLabel`, not from the
+    /// label count.
+    static func normalizedZoneName(
+        _ raw: String, field: String = "Zone name", minimumLabels: Int = 2
+    ) throws -> String {
         let normalized = normalize(raw)
         guard !normalized.isEmpty else {
             throw Abort(.badRequest, reason: "\(field) must not be empty")
@@ -49,10 +55,11 @@ enum DNSName {
             throw Abort(.badRequest, reason: "\(field) must not exceed \(maxNameLength) characters")
         }
         let labels = normalized.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        guard labels.count >= 2 else {
+        guard labels.count >= minimumLabels else {
             throw Abort(
                 .badRequest,
-                reason: "\(field) '\(raw)' must be fully qualified (at least two labels, e.g. 'acme.internal')")
+                reason: "\(field) '\(raw)' must be fully qualified (at least \(minimumLabels) labels, "
+                    + "e.g. 'acme.internal')")
         }
         guard labels.allSatisfy(isValidLabel) else {
             throw Abort(

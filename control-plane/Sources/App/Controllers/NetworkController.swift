@@ -807,7 +807,7 @@ struct NetworkController: RouteCollection {
     }
 
     /// Validates the network's DHCP search domain. Absent or blank clears it;
-    /// anything else must satisfy the same grammar as a DNS zone name.
+    /// anything else must be a sequence of RFC 1123 labels.
     ///
     /// Held to a real grammar rather than trimmed free text (issue #876)
     /// because the value is not carried as a string anywhere it lands: the
@@ -817,9 +817,14 @@ struct NetworkController: RouteCollection {
     /// structural edit to a file the VM configures itself from — a `routes:`
     /// block smuggled through this field would give every statically addressed
     /// NIC on the network an attacker-chosen default route.
+    ///
+    /// A single label is allowed, unlike a zone name: `internal` and `lan` are
+    /// legitimate search domains, and netplan's `search` list and OVN's
+    /// `domain_name` both take them. The safety property above comes from the
+    /// label grammar, which a one-label name satisfies just as well.
     static func validatedDomainName(_ raw: String?) throws -> String? {
         guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return try DNSName.normalizedZoneName(raw, field: "Domain name")
+        return try DNSName.normalizedZoneName(raw, field: "Domain name", minimumLabels: 1)
     }
 
     static func validateLeaseTime(_ leaseTime: Int?) throws {

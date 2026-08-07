@@ -9730,10 +9730,9 @@ components:
           type: string
           maxLength: 253
           description: >-
-            DHCP search domain for the network's guests. Must be a
-            fully-qualified domain name — at least two RFC 1123 labels, e.g.
-            `corp.example.com` — and is stored lowercased without a trailing
-            dot. An empty string clears it.
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:
@@ -9771,10 +9770,9 @@ components:
           type: string
           maxLength: 253
           description: >-
-            DHCP search domain for the network's guests. Must be a
-            fully-qualified domain name — at least two RFC 1123 labels, e.g.
-            `corp.example.com` — and is stored lowercased without a trailing
-            dot. An empty string clears it.
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:

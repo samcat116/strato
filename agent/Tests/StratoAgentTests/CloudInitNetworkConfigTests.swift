@@ -250,6 +250,27 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("\n    routes:") == false)
     }
 
+    @Test("resolvers that are not addresses are dropped from the flow sequence")
+    func nonAddressResolversDropped() {
+        // Same flow sequence the search domain is quoted for, so the entries
+        // are filtered the way `OVNDHCPOptionsBuilder` filters them rather than
+        // being trusted to be addresses.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                dnsServers: ["1.1.1.1", "not-an-address]", "fd00::53"]
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("addresses: [1.1.1.1, fd00::53]") == true)
+        #expect(yaml?.contains("not-an-address") == false)
+    }
+
     @Test("quoting escapes what would otherwise end the search scalar")
     func searchDomainQuotingEscapesDelimiters() {
         #expect(CloudInitProvisioner.yamlQuoted("corp.example.com") == #""corp.example.com""#)
