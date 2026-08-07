@@ -46,7 +46,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 29), stamped on
+`WireProtocol.swift` holds the protocol version (currently 30), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -78,7 +78,7 @@ ad-hoc checks scattered through the code:
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 | `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
-| `supportsVolumeSync` | 30 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
+| `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -224,7 +224,12 @@ of waiting for a push (ADR 0001 stage 10). Nothing about the payload changes,
 so this gates the transport rather than the schema, and both directions of skew
 simply keep pushing.
 
-Version 30 makes volumes desired state (ADR 0001 stage 5, STR-148).
+Version 30 lets an agent say "I don't know what is on this host" (STR-138),
+via `ObservedStateReport.manifestStatus`. It carries no gate and refuses no
+placement, for the same reason v25 doesn't: the field only ever *withholds*
+action.
+
+Version 31 makes volumes desired state (ADR 0001 stage 5, STR-148).
 `DesiredStateMessage` gains `volumes` and `ObservedStateReport` gains its
 counterpart; the six imperative frames `volume_create`, `volume_delete`,
 `volume_attach`, `volume_detach`, `volume_resize` and `volume_clone` are
@@ -243,7 +248,7 @@ reading the absence as "every volume on this agent is gone" and reaping the
 rows.
 
 Unlike v26/v27 and like v18/v23, this gate **does** refuse placement: with no
-imperative fallback left, a volume placed on a pre-v30 agent could never be
+imperative fallback left, a volume placed on a pre-v31 agent could never be
 created. Volumes already sitting on such an agent when the control plane
 upgrades simply freeze — their rows are never reaped, because that agent's
 reports say nothing about volumes — until the agent is upgraded. Deleting one
@@ -267,7 +272,7 @@ dual-mode rollout.
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
-| `volume_snapshot`, `volume_snapshot_delete`, `volume_info` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v30 (STR-148); these two artifact verbs and the read convert in ADR 0001 stages 8 and 7 |
+| `volume_snapshot`, `volume_snapshot_delete`, `volume_info` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v31 (STR-148); these two artifact verbs and the read convert in ADR 0001 stages 8 and 7 |
 | `sandbox_snapshot_create`, `sandbox_snapshot_delete`, `sandbox_restore` | Sandbox checkpoint/restore (v9+, issue #426) — imperative request/response pairs like the volume operations |
 | `sandbox_snapshot_export` | Export a checkpoint's artifacts off-node to control-plane object storage (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
@@ -322,7 +327,7 @@ design; the short version:
   `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,
   issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
 
-### Desired volumes (wire v30)
+### Desired volumes (wire v31)
 
 `DesiredVolumeState` carries a volume's id, desired status
 (`present`/`absent` — two cases, because a volume has no run state), a
@@ -419,6 +424,27 @@ ETag anywhere can then cost only latency, never convergence.
 
 `ObservedStateReport` is the mirror image: the full observed VM/sandbox sets
 plus current resources, sent level-triggered from the agent.
+
+### When a report is not an inventory (STR-138, wire v30)
+
+`ObservedStateReport.manifestStatus` is the one thing that suspends those
+full-list semantics. An agent's durable manifest is its only memory of what it
+is running, so an agent that cannot read it sends empty lists because the
+host's contents are *unknown*, not because it is idle — and absence means
+deletion here (`agent.absent` finalizer) or loss (`.error`). A report carrying
+`inventoryComplete: false` says so explicitly: the control plane records the
+condition and the resource snapshot and applies none of the workload half.
+
+Non-nil with `inventoryComplete: true` is the milder partial case — some
+entries in the manifest cannot be routed by the build running on the host (an
+unrecognized `hypervisorType` after an agent rollback). Those workloads are
+still reported as present, so the lists remain an inventory. See
+`docs/architecture/agent.md`.
+
+Not gated, and it needs no gate: like v25, the field only ever *withholds*
+action, and the agent half of the fix — zero advertised capacity, no
+convergence against a host it can't see — works against any control plane
+because refusing needs no permission.
 
 ### Omission is not teardown (STR-98, wire v25)
 

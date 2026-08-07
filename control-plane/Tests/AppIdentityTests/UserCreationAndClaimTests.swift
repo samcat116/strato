@@ -393,4 +393,64 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
         }
     }
+
+    /// A *spent* invite must stop blocking enrollment (STR-178).
+    ///
+    /// `claimFinish` stamps `claimedAt` rather than deleting the row, so a gate
+    /// counting every token would bar an invited user from ever adding a second
+    /// passkey — permanently, since `/auth/register/begin` is the only
+    /// enrollment endpoint. That mattered little while invites were rare; once
+    /// `App bootstrap --admin-email` issues one, it would cap the deployment's
+    /// administrator at a single authenticator.
+    ///
+    /// Both halves run against a self-registered account carrying the browser
+    /// session that created it, because that is the one caller the gate under
+    /// test is reachable from: the session check above it admits only the
+    /// account's owner or its pending-enrollment session.
+    @Test("a claimed invite no longer blocks passkey enrollment")
+    func testRegisterBeginAllowedAfterInviteClaimed() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            var sessionCookie: String?
+            try await app.test(.POST, "/api/users/register") { req in
+                try req.content.encode(
+                    CreateUserRequest(username: "trinity", email: "trinity@example.com", displayName: "Trinity"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                sessionCookie = res.headers.setCookie?["vapor-session"]?.string
+            }
+            let cookie = try #require(sessionCookie)
+            let user = try #require(try await User.query(on: app.db).filter(\.$username == "trinity").first())
+
+            func beginRegistration() async throws -> HTTPStatus {
+                var status: HTTPStatus = .internalServerError
+                var cookies = HTTPCookies()
+                cookies["vapor-session"] = HTTPCookies.Value(string: cookie)
+                try await app.test(.POST, "/auth/register/begin") { req in
+                    req.headers.cookie = cookies
+                    try req.content.encode(RegistrationBeginRequest(username: "trinity"))
+                } afterResponse: { res in
+                    status = res.status
+                }
+                return status
+            }
+
+            // An outstanding invite blocks, as above.
+            let invite = AccountClaimToken(
+                userID: try user.requireID(),
+                tokenHash: AccountClaimToken.hashToken("claim_pending"),
+                tokenPrefix: "claim_pending",
+                expiresAt: Date().addingTimeInterval(3600),
+                createdByID: nil
+            )
+            try await invite.save(on: app.db)
+            #expect(try await beginRegistration() == .forbidden)
+
+            // Spending it releases the gate.
+            invite.claimedAt = Date()
+            try await invite.save(on: app.db)
+            #expect(try await beginRegistration() == .ok)
+        }
+    }
 }

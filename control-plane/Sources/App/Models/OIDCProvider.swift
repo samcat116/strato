@@ -251,13 +251,18 @@ extension OIDCProvider {
 
     /// Hosts this provider's discovery document vouched for, as a set for the
     /// SSRF allow-list check on token/userinfo/JWKS fetches.
+    ///
+    /// Lowercased on the way out as well as in, because the check compares it
+    /// against a URL's host: DNS is case-insensitive, and a row written before
+    /// `setDiscoveredHosts` normalized would otherwise refuse a legitimate
+    /// endpoint whose host differs only in case, with no visible reason.
     var discoveredHostSet: Set<String> {
         guard let data = discoveredHosts.data(using: .utf8),
             let array = try? JSONDecoder().decode([String].self, from: data)
         else {
             return []
         }
-        return Set(array)
+        return Set(array.map { $0.lowercased() })
     }
 
     /// Records the hosts of the endpoints a discovery document supplied.
@@ -269,7 +274,7 @@ extension OIDCProvider {
     func setDiscoveredHosts(from discovery: OIDCDiscoveryDocument) {
         let hosts = [discovery.tokenEndpoint, discovery.userinfoEndpoint, discovery.jwksURI]
             .compactMap { $0 }
-            .compactMap { URL(string: $0)?.host }
+            .compactMap { URL(string: $0)?.host?.lowercased() }
         self.discoveredHosts = Self.encodeJSON(Array(Set(hosts)).sorted(), fallback: "[]")
     }
 

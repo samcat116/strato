@@ -83,21 +83,25 @@ struct VolumeCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Description.")
         var description: String?
 
+        @Flag(name: .long, help: "Return immediately instead of waiting for the volume to converge.")
+        var noWait = false
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
-                let volume = try await env.makeClient().createVolume(
+                let client = env.makeClient()
+                // Accepted, not created: the agent still has to place and
+                // materialize it (backend STR-148).
+                let accepted = try await client.createVolume(
                     body: .json(
                         .init(
                             name: name, description: description,
                             projectId: project ?? env.context.project, sizeGB: size))
-                ).ok.body.json
-                switch global.output {
-                case .table:
-                    print("Volume '\(volume.name)' created (\(volume.id ?? "")).")
-                case .json:
-                    print(try renderJSON(volume))
-                }
+                ).accepted.body.json
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output,
+                    successMessage: "Volume '\(name)' created (\(accepted.resource.id ?? "")).")
             }
         }
     }
@@ -110,11 +114,20 @@ struct VolumeCommand: AsyncParsableCommand {
         @Argument(help: "Volume id.")
         var id: String
 
+        @Flag(name: .long, help: "Return immediately instead of waiting for the volume to be removed.")
+        var noWait = false
+
         func run() async throws {
             try await runHandlingCLIErrors {
-                let environment = try CLIEnvironment.resolve(global)
-                _ = try await environment.makeClient().deleteVolume(path: .init(volumeId: id)).noContent
-                print("Volume \(id) deleted.")
+                let env = try CLIEnvironment.resolve(global)
+                let client = env.makeClient()
+                // A delete's success is the row's absence, so it is followed
+                // through the operations façade with the mutation id rather
+                // than by refetching the volume (backend STR-148).
+                let accepted = try await client.deleteVolume(path: .init(volumeId: id)).accepted.body.json
+                try await handleMutation(
+                    AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,
+                    format: global.output, successMessage: "Volume \(id) deleted.")
             }
         }
     }

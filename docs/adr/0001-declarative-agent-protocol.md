@@ -346,13 +346,13 @@ agent is involved.
 
    *Amended in implementation (STR-148):* this stage shipped as a **hard
    cutover** rather than the dual-mode window the costs section below
-   anticipates. The six messages are deleted outright at wire v30, and
+   anticipates. The six messages are deleted outright at wire v31, and
    `supportsVolumeSync` gates *placement*: a volume is never scheduled onto an
    agent that cannot converge it. The dual-mode alternative — keeping the
    imperative path alive per-agent behind the 202 — was rejected because it
    would have preserved every hand-rolled status revert this stage exists to
    delete, for the duration of a fleet upgrade. The cost is that volumes
-   already sitting on a pre-v30 agent freeze until it is upgraded; deleting one
+   already sitting on a pre-v31 agent freeze until it is upgraded; deleting one
    still works, because the delete path force-clears the agent-absence
    finalizer for an agent that cannot confirm.
 

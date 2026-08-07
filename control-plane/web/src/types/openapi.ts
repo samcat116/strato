@@ -7237,6 +7237,12 @@ export interface components {
             teardownRefusalReason?: string | null;
             /** Format: date-time */
             teardownRefusedAt?: string | null;
+            /** @description What the agent last reported about its durable workload manifest — its only memory of what it is running. Non-null means either that the manifest is unreadable (see manifestInventoryComplete) or that some entries in it cannot be routed by the agent build running on the host. Null in the steady state. */
+            manifestStatusReason?: string | null;
+            /** Format: date-time */
+            manifestStatusAt?: string | null;
+            /** @description False while the agent cannot enumerate its own workloads. Such a host advertises no capacity, converges nothing, and its observed-state reports carry no inventory. Null from agents that predate the field. */
+            manifestInventoryComplete?: boolean | null;
             /** @description Workloads this agent is running that no desired-state sync accounts for, and whose teardown the control plane refused to authorize because a record still exists for them. A non-empty list means the control plane is describing this host incorrectly — most often that the node re-enrolled under a new agent record while its workloads stayed placed on the old one, in which case `placedOnAgentId` names it and they can be adopted. Returned only by the single-agent endpoint; null in list responses. */
             heldWorkloads?: components["schemas"]["HeldWorkload"][] | null;
         };

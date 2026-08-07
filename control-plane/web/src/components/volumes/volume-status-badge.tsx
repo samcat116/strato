@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
+import { pendingMutationLabel } from "@/lib/operation-labels";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
-import type { OperationKind, VolumeStatus } from "@/types/api";
+import type { VolumeStatus } from "@/types/api";
 
 const statusConfig: Record<VolumeStatus, { label: string; className: string }> =
   {
@@ -57,29 +58,6 @@ const unknownConfig = {
   className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
 };
 
-// Labels for volume states that only exist as an in-flight mutation. Since
-// backend STR-148 the server keeps the volume's resting status until the agent
-// confirms, so `attaching`/`detaching`/`resizing`/`cloning` never arrive on the
-// wire; they are what a *pending* mutation looks like, and are read from the
-// mutations store instead.
-const pendingMutationLabels: Record<OperationKind, string> = {
-  create: "Creating",
-  attach: "Attaching",
-  detach: "Detaching",
-  resize: "Resizing",
-  delete: "Deleting",
-  snapshot: "Snapshotting",
-  // Kinds volumes never carry, kept so the map stays total.
-  boot: "Starting",
-  shutdown: "Stopping",
-  reboot: "Restarting",
-  pause: "Pausing",
-  resume: "Resuming",
-  snapshot_delete: "Deleting snapshot",
-  restore: "Restoring",
-  snapshot_export: "Exporting snapshot",
-};
-
 const pendingClassName =
   "bg-yellow-500/20 text-yellow-700 border-yellow-500/30 animate-pulse";
 
@@ -96,7 +74,7 @@ export function VolumeStatusBadge({
   if (pendingMutation) {
     return (
       <Badge variant="outline" className={pendingClassName}>
-        {pendingMutationLabels[pendingMutation.kind]}
+        {pendingMutationLabel(pendingMutation.kind)}
       </Badge>
     );
   }

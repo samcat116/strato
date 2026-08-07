@@ -466,7 +466,33 @@ public enum WireProtocol {
     /// key, and the control plane has its own kill switch — neither of which a
     /// version number can express.
     ///
-    /// Version 30: volumes become desired state (ADR 0001 stage 5, STR-148).
+    /// Version 30: the agent can say "I don't know what is on this host"
+    /// (STR-138). Adds `ObservedStateReport.manifestStatus` inbound.
+    ///
+    /// Until now an agent whose durable workload manifest failed to decode
+    /// reported the same thing as a freshly imaged host: no workloads. Every
+    /// consumer of that answer treats it as fact — capacity accounting frees
+    /// the whole machine, the reconciler plans `.create` for guests that are
+    /// still running, and the full-list `vms`/`sandboxes` semantics confirm
+    /// deletions that never happened. One undecodable byte on a node running
+    /// 40 VMs is indistinguishable from an empty node.
+    ///
+    /// `manifestStatus.inventoryComplete == false` marks a report whose
+    /// workload lists are *not* an inventory: the control plane must apply
+    /// nothing from it — no absences, no claims — beyond the resource snapshot
+    /// and the condition itself. Non-nil with `inventoryComplete == true` is
+    /// the partial case: the manifest decoded, but some entries did not, and
+    /// those workloads are unroutable (see `quarantinedEntries`).
+    ///
+    /// No gate, and no placement refusal, for the same reason as v25: the
+    /// field only ever *withholds* action. A pre-v30 control plane ignores it
+    /// and reads the empty lists as it always did — which is the bug this
+    /// fixes, not a regression it introduces — while the agent half of the fix
+    /// (zero advertised capacity, no `.create` against an unreadable manifest)
+    /// works against any control plane, because it never needs permission to
+    /// refuse. Upgrade the control plane first to get the operator-visible
+    /// half.
+    /// Version 31: volumes become desired state (ADR 0001 stage 5, STR-148).
     /// `DesiredStateMessage` gains `volumes: [DesiredVolumeState]?` and
     /// `ObservedStateReport` gains `volumes: [ObservedVolumeState]?`; the six
     /// imperative frames `volume_create`, `volume_delete`, `volume_attach`,
@@ -477,7 +503,7 @@ public enum WireProtocol {
     /// This bump carries two of the hazard shapes in this changelog at once.
     ///
     /// The *removal* half is the v28 shape and breaks in one direction only: a
-    /// pre-v30 control plane driving a v30 agent would send `volume_attach`
+    /// pre-v31 control plane driving a v31 agent would send `volume_attach`
     /// into an envelope the agent can no longer decode and burn the request's
     /// timeout against silence. Upgrade the control plane first, as everywhere
     /// else in this document.
@@ -494,15 +520,15 @@ public enum WireProtocol {
     /// "every volume on this agent is gone" and reaping the rows.
     ///
     /// Unlike v26/v27 and like v18/v23, this gate **does** refuse placement:
-    /// there is no imperative fallback left, so a volume placed on a pre-v30
+    /// there is no imperative fallback left, so a volume placed on a pre-v31
     /// agent could never be created. `supportsVolumeSync` is consulted when
     /// selecting an agent to host a new volume, and volumes already sitting on
-    /// a pre-v30 agent when the control plane upgrades simply freeze — their
+    /// a pre-v31 agent when the control plane upgrades simply freeze — their
     /// rows are never reaped, because that agent's reports say nothing about
     /// volumes — until the agent is upgraded. Deleting such a volume still
     /// works: the delete path force-clears the agent-absence finalizer for an
     /// agent that cannot confirm.
-    public static let currentVersion = 30
+    public static let currentVersion = 31
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -820,13 +846,13 @@ public enum WireProtocol {
 
     /// The lowest protocol version that carries volumes on the reconciliation
     /// loop rather than through imperative RPCs (see `currentVersion` version
-    /// 30 notes).
-    public static let volumeSyncMinimumVersion = 30
+    /// 31 notes).
+    public static let volumeSyncMinimumVersion = 31
 
     /// Whether a peer at `version` speaks declarative volumes.
     ///
     /// Read in three places, for three different reasons. Agent-side it is the
-    /// belt to the `volumes`-is-nil braces: a sync from a pre-v30 control plane
+    /// belt to the `volumes`-is-nil braces: a sync from a pre-v31 control plane
     /// says nothing about volumes and must not be planned against. Sync
     /// assembly reads it to omit the field — and skip the query — for an agent
     /// that would discard it. And unlike most gates in this file, *placement*

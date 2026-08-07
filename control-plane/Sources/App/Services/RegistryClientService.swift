@@ -89,8 +89,9 @@ struct NoopRegistryClient: RegistryClientProtocol {
 /// Minted tokens are cached per (registry, repository, username) until close
 /// to expiry so the periodic sync doesn't hammer token endpoints.
 final class DistributionRegistryClient: RegistryClientProtocol {
-    /// Held to resolve `app.client` per call, so a scripted client installed
-    /// via `app.clients.use` is honored. Vapor's `Application` is Sendable.
+    /// Held to resolve `app.guardedHTTPClient` per call, so a scripted client
+    /// installed via `app.clients.use` — which the guarded client delegates to
+    /// when there is nothing to pin — is honored. `Application` is Sendable.
     private let app: Application
     private let tokenCache = TokenCache()
 
@@ -261,18 +262,14 @@ final class DistributionRegistryClient: RegistryClientProtocol {
         // the manifest GET, the `/v2/` challenge probe, and the token-realm GET
         // — must resolve to a public address, or the control plane becomes an
         // SSRF proxy into cloud metadata and internal services (and could leak
-        // a decrypted pull secret to an attacker-chosen realm). Validation is
-        // environment-gated, so loopback/private dev registries still work.
-        guard let parsedURL = URL(string: url) else {
-            throw Abort(.badRequest, reason: "Invalid registry URL")
-        }
-        _ = try await SSRFGuard.validate(
-            url: parsedURL, environment: app.environment, on: app.threadPool)
-
+        // a decrypted pull secret to an attacker-chosen realm). The guarded
+        // client validates the host, pins the connection to the address it
+        // approved, and refuses redirects. Validation is environment-gated, so
+        // loopback/private dev registries still work.
         let request = ClientRequest(
             method: method, url: URI(string: url), headers: headers, body: nil,
             timeout: Self.requestTimeout)
-        return try await app.client.send(request)
+        return try await app.guardedHTTPClient.send(request)
     }
 
     /// Percent-encodes a query-string value, keeping RFC 3986 unreserved

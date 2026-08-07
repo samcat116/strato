@@ -207,6 +207,10 @@ let package = Package(
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                // Mints the throwaway server certificate GuardedHTTPClientTests
+                // uses to prove TLS is still verified against the hostname when
+                // the connection is pinned to an address.
+                .product(name: "X509", package: "swift-certificates"),
             ],
             swiftSettings: testSwiftSettings
         ),

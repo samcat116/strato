@@ -1,4 +1,3 @@
-import AsyncHTTPClient
 import Crypto
 import Fluent
 import Foundation
@@ -11,8 +10,8 @@ import Vapor
 ///
 /// A periodic loop — cluster-singleton per pass via the
 /// `lock:sweep:webhook_delivery` Valkey lock, same as the other sweeps —
-/// picks up due pending rows, validates the target against `SSRFGuard`,
-/// POSTs the frozen payload with an HMAC-SHA256 `X-Strato-Signature`, and
+/// picks up due pending rows and POSTs the frozen payload through
+/// `GuardedHTTPClient` with an HMAC-SHA256 `X-Strato-Signature`, then
 /// records the verdict: exponential backoff on failure, `dead` after the
 /// attempt cap, and auto-disable of subscriptions that have not delivered
 /// anything successfully for the auto-disable window. Delivery is
@@ -234,6 +233,19 @@ final class WebhookDeliveryService: @unchecked Sendable {
                 error: "Endpoint answered HTTP \(statusCode)", at: now, on: db)
         } catch {
             delivery.responseStatus = nil
+            // A guard refusal is a property of the *subscription*, not of this
+            // attempt: retrying eight times and auto-disabling days later
+            // wouldn't tell the owner why. Rows predating the create-time
+            // credential check are the case that matters — say so once per
+            // attempt, naming the subscription.
+            if let blocked = error as? SSRFGuard.BlockedHostError {
+                logger.warning(
+                    "Webhook target refused by the outbound guard",
+                    metadata: [
+                        "subscriptionId": .string(delivery.$subscription.id.uuidString),
+                        "reason": .string(blocked.reason),
+                    ])
+            }
             try? await recordFailure(
                 delivery, subscription: subscription,
                 error: String("\(error)".prefix(500)), at: now, on: db)
@@ -242,69 +254,32 @@ final class WebhookDeliveryService: @unchecked Sendable {
 
     /// POST the frozen payload, returning the endpoint's HTTP status.
     private func post(_ delivery: WebhookDelivery, subscription: WebhookSubscription) async throws -> Int {
-        // Re-validate at delivery time: DNS may have changed since the URL
-        // was registered, and create-time validation alone would let a
-        // rebound name reach internal addresses forever after.
-        guard let url = URL(string: subscription.url) else {
-            throw SSRFGuard.BlockedHostError(reason: "Webhook URL is not a valid URL")
-        }
-        let approvedAddresses = try await SSRFGuard.validate(
-            url: url, environment: app.environment, on: app.threadPool)
-
         let secret = try app.secretsEncryption.decrypt(subscription.signingSecret)
         let timestamp = Int(Date().timeIntervalSince1970)
         let signature = Self.signature(
             payload: delivery.payload, timestamp: timestamp, secret: secret)
 
-        // Build the request from the SAME parsed URL the guard validated (its
-        // normalized `absoluteString`), not the raw stored string. The pin below
-        // is keyed on `url.host` (Foundation's parse); if the request re-parsed
-        // the raw string and the two parsers disagreed on the host (userinfo
-        // `@`, backslashes, ...), the `dnsOverride` key would miss and the
-        // connection would resolve the name fresh — silently skipping the rebind
-        // pin while validation still "passed".
-        var request = HTTPClientRequest(url: url.absoluteString)
-        request.method = .POST
-        request.headers.add(name: "Content-Type", value: "application/json")
-        request.headers.add(name: "User-Agent", value: "Strato-Webhooks/1.0")
-        request.headers.add(name: "X-Strato-Signature", value: "t=\(timestamp),v1=\(signature)")
-        request.headers.add(name: "X-Strato-Event-Id", value: delivery.eventID.uuidString)
-        request.headers.add(name: "X-Strato-Event-Type", value: delivery.eventType)
-        request.headers.add(
-            name: "X-Strato-Delivery-Id", value: delivery.id?.uuidString ?? "")
-        request.body = .bytes(ByteBuffer(string: delivery.payload))
+        var headers = HTTPHeaders()
+        headers.add(name: "Content-Type", value: "application/json")
+        headers.add(name: "User-Agent", value: "Strato-Webhooks/1.0")
+        headers.add(name: "X-Strato-Signature", value: "t=\(timestamp),v1=\(signature)")
+        headers.add(name: "X-Strato-Event-Id", value: delivery.eventID.uuidString)
+        headers.add(name: "X-Strato-Event-Type", value: delivery.eventType)
+        headers.add(name: "X-Strato-Delivery-Id", value: delivery.id?.uuidString ?? "")
 
-        // Pin the connection to an address the guard approved (its documented
-        // rebind gap): the shared client would re-resolve the name at connect
-        // time, and a low-TTL record could point it at an internal address
-        // between validation and connect. `approvedAddresses` is empty when
-        // private hosts are allowed (testing/dev) — then the shared client is
-        // fine. TLS certificate validation still runs against the hostname;
-        // only resolution is overridden.
-        guard let host = url.host, let pinnedAddress = approvedAddresses.first else {
-            let response = try await app.http.client.shared.execute(
-                request, timeout: .seconds(Self.requestTimeoutSeconds))
-            return Int(response.status.code)
-        }
-
-        var configuration = HTTPClient.Configuration()
-        // The shared client disallows redirects globally (configure.swift); a
-        // transient client must not silently reintroduce redirect-following,
-        // which would defeat the SSRF validation of the final destination.
-        configuration.redirectConfiguration = .disallow
-        configuration.dnsOverride = [host: pinnedAddress]
-        let client = HTTPClient(
-            eventLoopGroupProvider: .shared(app.eventLoopGroup),
-            configuration: configuration)
-        do {
-            let response = try await client.execute(
-                request, timeout: .seconds(Self.requestTimeoutSeconds))
-            try await client.shutdown()
-            return Int(response.status.code)
-        } catch {
-            try? await client.shutdown()
-            throw error
-        }
+        // The guarded client re-validates at delivery time (DNS may have changed
+        // since the URL was registered, and create-time validation alone would
+        // let a rebound name reach internal addresses forever after) and pins
+        // the connection to the address it approved. TLS certificate validation
+        // still runs against the hostname; only resolution is overridden.
+        let request = ClientRequest(
+            method: .POST,
+            url: URI(string: subscription.url),
+            headers: headers,
+            body: ByteBuffer(string: delivery.payload),
+            timeout: .seconds(Self.requestTimeoutSeconds))
+        let response = try await app.guardedHTTPClient.send(request)
+        return Int(response.status.code)
     }
 
     /// HMAC-SHA256 over `"<timestamp>.<payload>"`, hex-encoded — the `v1`

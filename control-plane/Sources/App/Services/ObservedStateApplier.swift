@@ -43,6 +43,27 @@ struct ObservedStateApplier {
     @discardableResult
     func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
         let db = app.db
+
+        // A report from an agent that cannot read its own workload manifest
+        // carries no inventory (STR-138). Its `vms`/`sandboxes` lists are
+        // empty because the host's contents are unknown, not because it is
+        // idle — and everything below reads meaning into absence: a missing VM
+        // whose desired state is `.absent` clears the `agent.absent`
+        // finalizer, which *deletes the row* for a guest that is still
+        // running, and a missing VM in any live status is escalated to
+        // `.error`. Nothing here may run against a blind report; the agent's
+        // resources and the condition itself are folded in by the caller,
+        // which is the whole useful content of such a report.
+        if let manifest = report.manifestStatus, !manifest.inventoryComplete {
+            app.logger.warning(
+                "Ignoring the workload half of an observed-state report: the agent cannot enumerate its own workloads",
+                metadata: [
+                    "agentId": .string(report.agentId),
+                    "reason": .string(manifest.reason),
+                ])
+            return UnrecognizedOutcome()
+        }
+
         let reported = Dictionary(
             report.vms.map { ($0.vmId, $0) },
             uniquingKeysWith: { first, _ in first }

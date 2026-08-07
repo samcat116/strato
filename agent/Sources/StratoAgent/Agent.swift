@@ -129,6 +129,21 @@ actor Agent {
     private var managedVMs: [String: VMManifestEntry] = [:]
     private var orphanedVMs: [String: VMManifestEntry] = [:]
 
+    // Set when the manifest could not be read at all (STR-138), which means
+    // this host's workloads are unknown — not that there are none. The agent
+    // quarantines itself: it advertises no available capacity, converges
+    // nothing, never writes over the file it could not read, and reports the
+    // condition on every observed-state report so an operator sees it in the
+    // UI rather than in one log line on the node. Cleared only by a later read
+    // that actually succeeds (retried on the heartbeat, so a storage volume
+    // that mounted late recovers without a restart).
+    private var manifestReadFailure: ManifestReadFailure?
+    // Entries that exist but this build cannot route (an unrecognized
+    // hypervisor type after a rollback, an undecodable spec). They keep
+    // reserving capacity, block a re-create of their id, and are re-persisted
+    // verbatim so rolling forward again restores them intact.
+    private var quarantinedWorkloads: [String: QuarantinedManifestEntry] = [:]
+
     // Sandbox workload tracking (issue #417): same manifest contract as VMs,
     // kept in separate maps so the VM paths never have to filter by kind.
     // `sandboxRuntime` is the driver seam (issue #421): the Firecracker
@@ -413,16 +428,7 @@ actor Agent {
         // These workloads are not re-adopted here — the reconciler re-adopts them
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
-        let previousManifest = manifestStore.load()
-        if !previousManifest.isEmpty {
-            orphanedVMs = previousManifest.filter { $0.value.kind == .vm }
-            orphanedSandboxes = previousManifest.filter { $0.value.kind == .sandbox }
-            logger.warning(
-                "Found \(previousManifest.count) workload(s) managed before restart; their processes are now unmanaged but their resources stay reserved",
-                metadata: [
-                    "workloadIds": .string(previousManifest.keys.sorted().joined(separator: ","))
-                ])
-        }
+        applyManifestLoad(manifestStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
         // already degrades to a no-op when `networkService` is nil, so
@@ -1779,6 +1785,10 @@ actor Agent {
             return
         }
 
+        // Retry a manifest that could not be *read*, so a host quarantined by a
+        // transient cause recovers on its own (STR-138).
+        retryManifestLoadIfQuarantined()
+
         // Retry a failed manifest write so a transient disk error can't leave the
         // on-disk manifest permanently behind the in-memory VM records.
         if manifestPersistFailed {
@@ -1950,8 +1960,24 @@ actor Agent {
             reservedMemory += entry.spec.memoryBytes
         }
 
-        let availableCPU = max(0, totalCPU - reservedCPU)
-        let availableMemory = max(0, totalMemory - reservedMemory)
+        // Workloads whose manifest entry this build cannot route (STR-138) are
+        // still running; only the routing was lost, not the sizing. They
+        // reserve exactly like an orphan — an entry we can't act on is the
+        // last thing whose capacity should be handed to a new placement.
+        for entry in quarantinedWorkloads.values {
+            reservedCPU += entry.cpus
+            reservedMemory += entry.memoryBytes
+        }
+
+        // An unreadable manifest means this host's contents are unknown, and
+        // unknown has to advertise as full rather than empty (STR-138). The
+        // alternative is what this replaced: a node running 40 VMs whose
+        // manifest failed to decode reported its whole machine as free, and
+        // `least_loaded` preferentially filled it — over-committing memory on a
+        // host whose guests are all live.
+        let inventoryUnknown = manifestReadFailure != nil
+        let availableCPU = inventoryUnknown ? 0 : max(0, totalCPU - reservedCPU)
+        let availableMemory = inventoryUnknown ? 0 : max(0, totalMemory - reservedMemory)
 
         // Disk. In simulation mode the total is the configured fake capacity
         // (the real filesystem is shared by every dummy and has nothing to do
@@ -1969,7 +1995,8 @@ actor Agent {
             totalDisk = simulation.resolvedDiskBytes
             let reservedDisk =
                 managedVMs.values.totalReservedDiskBytes + orphanedVMs.values.totalReservedDiskBytes
-            availableDisk = max(0, totalDisk - reservedDisk)
+                + quarantinedWorkloads.values.reduce(0) { $0 + $1.diskBytes }
+            availableDisk = inventoryUnknown ? 0 : max(0, totalDisk - reservedDisk)
         } else {
             let disk = HostResources.diskCapacity(forPath: vmStoragePath)
             if disk == nil {
@@ -1980,7 +2007,7 @@ actor Agent {
                     ])
             }
             totalDisk = disk?.total ?? 0
-            availableDisk = disk?.free ?? 0
+            availableDisk = inventoryUnknown ? 0 : (disk?.free ?? 0)
         }
 
         return AgentResources(
@@ -2296,12 +2323,89 @@ extension Agent {
     /// heals all missed updates). The stale manifest only matters if the agent
     /// restarts before a retry succeeds.
     private func persistManifest() {
+        // Never write over a manifest we could not read (STR-138). The first
+        // write after a failed load is what turns "unreadable, but the bytes
+        // are still there" into an unrecoverable loss — and what it would
+        // write is the empty in-memory set, i.e. a confident claim that this
+        // host runs nothing. There is nothing worth persisting in that state
+        // anyway: the agent converges nothing while quarantined.
+        if let failure = manifestReadFailure {
+            logger.warning(
+                "Refusing to write the VM manifest: the existing file could not be read and must not be overwritten",
+                metadata: [
+                    "path": .string(failure.path),
+                    "preservedCopy": .string(failure.preservedCopyPath ?? "none"),
+                ])
+            return
+        }
+
         // One flat map for every workload kind; ids cannot collide across kinds
         // (both sides are UUIDs minted by the control plane), so the only real
         // collisions are orphaned-vs-active within a kind — active wins.
         var manifest = orphanedVMs.merging(managedVMs) { _, active in active }
         manifest.merge(orphanedSandboxes.merging(managedSandboxes) { _, active in active }) { _, sandbox in sandbox }
-        manifestPersistFailed = !manifestStore.save(manifest)
+        // Quarantined entries are re-emitted exactly as they were read: their
+        // routing field is what a build that understands them needs, and this
+        // one rewriting it in a shape it prefers would destroy that.
+        manifestPersistFailed = !manifestStore.save(manifest, preserving: quarantinedWorkloads)
+    }
+
+    /// Fold a manifest read into the agent's view of the host.
+    ///
+    /// The three outcomes are three different facts, and the whole point of
+    /// STR-138 is that they stay that way: a fresh host has nothing on it, a
+    /// loaded manifest names what a previous incarnation was running, and an
+    /// unreadable one means the contents are unknown — which must never be
+    /// spelled the same way as "empty".
+    private func applyManifestLoad(_ load: ManifestLoad) {
+        switch load {
+        case .fresh:
+            manifestReadFailure = nil
+
+        case .loaded(let entries, let quarantined):
+            manifestReadFailure = nil
+            quarantinedWorkloads = quarantined
+            // Anything already managed by *this* incarnation stays managed: a
+            // recovery re-read must not demote live workloads to orphans.
+            var recovered: [String] = []
+            for (id, entry) in entries where managedVMs[id] == nil && managedSandboxes[id] == nil {
+                if entry.kind == .sandbox {
+                    orphanedSandboxes[id] = entry
+                } else {
+                    orphanedVMs[id] = entry
+                }
+                recovered.append(id)
+            }
+            if !recovered.isEmpty {
+                logger.warning(
+                    "Found \(recovered.count) workload(s) managed before restart; their processes are now unmanaged but their resources stay reserved",
+                    metadata: ["workloadIds": .string(recovered.sorted().joined(separator: ","))])
+            }
+
+        case .unreadable(let failure):
+            // The store has already logged this loudly and preserved a copy.
+            manifestReadFailure = failure
+        }
+    }
+
+    /// Re-read a manifest that was unreadable, so a transient cause — a
+    /// storage volume that mounted late, an EIO, a permissions fix — clears
+    /// the quarantine without an agent restart.
+    ///
+    /// Only a successful *read* clears it. A manifest that has since vanished
+    /// reads as `.fresh`, and a missing file is not evidence of an empty host:
+    /// somebody deleted it. Accepting that would hand every running guest's
+    /// capacity straight back to the scheduler, so deciding this host is empty
+    /// stays a deliberate act — restart the agent.
+    private func retryManifestLoadIfQuarantined() {
+        guard manifestReadFailure != nil else { return }
+        let load = manifestStore.load()
+        guard case .loaded = load else { return }
+
+        applyManifestLoad(load)
+        logger.warning(
+            "VM manifest became readable again; this host is no longer quarantined and will converge and advertise capacity normally"
+        )
     }
 
     private func handleVMReboot(_ message: VMOperationMessage) async {
@@ -3325,6 +3429,14 @@ extension Agent {
 /// route to the sandbox runtime seam (issue #417; the driver itself is issue
 /// #421) with the same manifest contract.
 extension Agent: ReconcileActuator {
+    /// Whether the presence snapshots below account for this host at all. False
+    /// while the manifest is unreadable: the maps are empty because the agent
+    /// has no memory of what it was running, not because the host is idle
+    /// (STR-138).
+    func presenceIsComplete() async -> Bool {
+        manifestReadFailure == nil
+    }
+
     func observedPresence() async -> [String: VMPresence] {
         var presence: [String: VMPresence] = [:]
         for (vmId, entry) in managedVMs {
@@ -3334,6 +3446,10 @@ extension Agent: ReconcileActuator {
         }
         for vmId in orphanedVMs.keys where presence[vmId] == nil {
             presence[vmId] = .orphaned
+        }
+        for (vmId, entry) in quarantinedWorkloads
+        where entry.effectiveKind == .vm && presence[vmId] == nil {
+            presence[vmId] = .quarantined
         }
         return presence
     }
@@ -3413,6 +3529,10 @@ extension Agent: ReconcileActuator {
         }
         for sandboxId in orphanedSandboxes.keys where presence[sandboxId] == nil {
             presence[sandboxId] = .orphaned
+        }
+        for (sandboxId, entry) in quarantinedWorkloads
+        where entry.effectiveKind == .sandbox && presence[sandboxId] == nil {
+            presence[sandboxId] = .quarantined
         }
         return presence
     }
@@ -4164,6 +4284,28 @@ extension Agent: ReconcileActuator {
             reported.insert(vmId)
         }
 
+        // Workloads whose manifest entry this build cannot route (STR-138).
+        // They must appear here: a VM missing from this list is read as gone,
+        // which would either confirm a deletion that never happened or drive
+        // a live guest to `.error`. Status is `.unknown` with no synthesized
+        // error, exactly like an orphan — the reason the agent can't act on
+        // them travels on `manifestStatus` below, once, rather than as a
+        // per-VM failure that would fail their pending operations.
+        for (vmId, entry) in quarantinedWorkloads
+        where entry.effectiveKind == .vm && !reported.contains(vmId) {
+            guard let uuid = UUID(uuidString: vmId) else { continue }
+            observed.append(
+                ObservedVMState(
+                    vmId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: vmId),
+                    convergencePhase: await reconciler.convergencePhase(for: vmId),
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                ))
+            reported.insert(vmId)
+        }
+
         // VMs still converging toward first existence (mid-create): include
         // them so the control plane sees progress and never mistakes an
         // in-flight create for an absence.
@@ -4209,6 +4351,11 @@ extension Agent: ReconcileActuator {
             // and stay there until the control plane decides what they are.
             unrecognized: await reconciler.unrecognizedWorkloads(),
             teardownRefusal: await reconciler.lastTeardownRefusal(),
+            // What the agent's own memory of this host was able to tell it
+            // (STR-138). When the manifest is unreadable this also declares
+            // the lists above to be no inventory at all, so the control plane
+            // reads no absence from them.
+            manifestStatus: manifestStatus(),
             // Always a list, never nil: this agent speaks volume sync, so an
             // empty list is the honest "I hold no volumes" the control plane
             // needs to confirm deletions. Nil is reserved for agents that
@@ -4236,11 +4383,48 @@ extension Agent: ReconcileActuator {
         }
     }
 
+    /// What this agent's durable manifest was able to tell it, for the report
+    /// (STR-138). Nil in the steady state — the manifest read cleanly and
+    /// every entry in it is routable.
+    ///
+    /// This is the operator's signal. The failure it describes used to be one
+    /// `logger.error` line on a node that had already started accepting new
+    /// placements; on the row it becomes something the agents UI shows.
+    private func manifestStatus() -> ObservedManifestStatus? {
+        if let failure = manifestReadFailure {
+            var reason = "Workload manifest at \(failure.path) \(failure.reason)."
+            reason +=
+                " This host's workloads are unknown: it is advertising no capacity and converging nothing"
+                + " until the manifest is repaired, or the agent is restarted after removing it."
+            if let preserved = failure.preservedCopyPath {
+                reason += " A copy of the unreadable file was preserved at \(preserved)."
+            }
+            return ObservedManifestStatus(
+                inventoryComplete: false,
+                quarantinedEntries: quarantinedWorkloads.count,
+                reason: reason,
+                preservedCopyPath: failure.preservedCopyPath
+            )
+        }
+
+        guard !quarantinedWorkloads.isEmpty else { return nil }
+        let reasons = Set(quarantinedWorkloads.values.map(\.reason)).sorted()
+        return ObservedManifestStatus(
+            inventoryComplete: true,
+            quarantinedEntries: quarantinedWorkloads.count,
+            reason:
+                "\(quarantinedWorkloads.count) workload(s) in this host's manifest cannot be routed by this agent build "
+                + "(\(reasons.joined(separator: "; "))). They keep running and keep reserving capacity, but nothing "
+                + "here can start, stop, or delete them — run an agent build that understands them."
+        )
+    }
+
     /// Assemble the sandbox half of the observed-state report, mirroring the
     /// VM assembly section by section: managed sandboxes with their live
-    /// status, still-orphaned ones, in-flight creates, and failed
-    /// convergences with no runtime presence. Same full-list semantics — a
-    /// sandbox absent from the report does not exist here.
+    /// status, still-orphaned ones, unroutable manifest entries, in-flight
+    /// creates, and failed convergences with no runtime presence. Same
+    /// full-list semantics — a sandbox absent from the report does not exist
+    /// here.
     private func observedSandboxStates(reconciler: Reconciler) async -> [ObservedSandboxState] {
         var observed: [ObservedSandboxState] = []
         var reported = Set<String>()
@@ -4272,6 +4456,24 @@ extension Agent: ReconcileActuator {
         // orphans: real adoption failures surface through the reconciler's
         // failure tracking.
         for sandboxId in orphanedSandboxes.keys where !reported.contains(sandboxId) {
+            guard let uuid = UUID(uuidString: sandboxId) else { continue }
+            observed.append(
+                ObservedSandboxState(
+                    sandboxId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
+                    lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                ))
+            reported.insert(sandboxId)
+        }
+
+        // Sandboxes whose manifest entry this build cannot route (STR-138),
+        // reported for the same reason as their VM counterparts: absence here
+        // confirms a deletion, and nothing was deleted.
+        for (sandboxId, entry) in quarantinedWorkloads
+        where entry.effectiveKind == .sandbox && !reported.contains(sandboxId) {
             guard let uuid = UUID(uuidString: sandboxId) else { continue }
             observed.append(
                 ObservedSandboxState(

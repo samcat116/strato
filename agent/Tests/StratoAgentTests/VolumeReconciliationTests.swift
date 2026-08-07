@@ -53,11 +53,16 @@ struct VolumeReconciliationTests {
         var volumes: [String: VolumePresence]
         private(set) var performed: [(step: ReconcileStep, id: String)] = []
         private(set) var reportCount = 0
+        /// False simulates an agent whose workload manifest is unreadable
+        /// (STR-138).
+        var presenceComplete = true
 
         init(volumes: [String: VolumePresence] = [:]) {
             self.volumes = volumes
         }
 
+        func setPresenceComplete(_ complete: Bool) { presenceComplete = complete }
+        func presenceIsComplete() -> Bool { presenceComplete }
         func observedPresence() -> [String: VMPresence] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
         func observedVolumePresence() -> [String: VolumePresence] { volumes }
@@ -343,6 +348,24 @@ struct VolumeReconciliationTests {
 
         #expect(await actuator.performed.isEmpty)
         #expect(await actuator.volumes.count == 1)
+    }
+
+    /// An agent that cannot read its own workload manifest converges no volumes
+    /// either (STR-138 ∩ STR-148), even though the storage backend can still
+    /// enumerate them: the *attachment* half of a volume's observation rides
+    /// the VM manifest, so a blind host would report every volume detached and
+    /// plan an attach against a guest that already has it.
+    @Test("A blind host converges no volumes")
+    func blindHostConvergesNoVolumes() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator()
+        await actuator.setPresenceComplete(false)
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
     }
 
     // MARK: - End to end through the actor

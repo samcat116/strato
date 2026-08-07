@@ -2216,6 +2216,9 @@ actor AgentService {
         if applyReportedTeardownRefusal(report.teardownRefusal, to: agent) {
             agentChanged = true
         }
+        if applyReportedManifestStatus(report.manifestStatus, to: agent) {
+            agentChanged = true
+        }
         if agentChanged {
             do {
                 try await agent.save(on: app.db)
@@ -2300,6 +2303,62 @@ actor AgentService {
         Telemetry.agentTeardownRefused()
         agent.teardownRefusalReason = refusal.reason
         agent.teardownRefusedAt = Date()
+        return true
+    }
+
+    /// Folds an agent's self-reported manifest status (STR-138) into its row,
+    /// mutating the in-memory model for the caller's save.
+    ///
+    /// The manifest is the agent's only memory of what it is running. When it
+    /// cannot be read the agent quarantines itself — zero advertised capacity,
+    /// no convergence — and that is a standing condition an operator has to
+    /// resolve on the host, so it lives on the row where the UI shows it
+    /// rather than in a log line on a node nobody is looking at.
+    ///
+    /// Returns whether the row actually changed, so the reports that re-assert
+    /// an unchanged condition on every heartbeat cost no write. The gauge is
+    /// recorded on every report, changed or not: it answers "is this still
+    /// happening", which a transition-only signal cannot.
+    private func applyReportedManifestStatus(
+        _ status: ObservedManifestStatus?, to agent: Agent
+    ) -> Bool {
+        Telemetry.agentManifestUnreadable(
+            agentName: agent.name, unreadable: status.map { !$0.inventoryComplete } ?? false)
+
+        guard let status else {
+            guard
+                agent.manifestStatusReason != nil || agent.manifestStatusAt != nil
+                    || agent.manifestInventoryComplete != nil
+            else { return false }
+            app.logger.notice(
+                "Agent's workload manifest is healthy again",
+                metadata: ["agentName": .string(agent.name)])
+            agent.manifestStatusReason = nil
+            agent.manifestStatusAt = nil
+            agent.manifestInventoryComplete = nil
+            return true
+        }
+
+        guard
+            agent.manifestStatusReason != status.reason
+                || agent.manifestInventoryComplete != status.inventoryComplete
+        else {
+            // Same condition, re-reported on a heartbeat: already logged,
+            // already on the row.
+            return false
+        }
+        app.logger.error(
+            status.inventoryComplete
+                ? "Agent is holding workloads its build cannot route"
+                : "Agent cannot read its workload manifest; it is quarantined and placing nothing",
+            metadata: [
+                "agentName": .string(agent.name),
+                "quarantinedEntries": .stringConvertible(status.quarantinedEntries),
+                "reason": .string(status.reason),
+            ])
+        agent.manifestStatusReason = status.reason
+        agent.manifestStatusAt = Date()
+        agent.manifestInventoryComplete = status.inventoryComplete
         return true
     }
 

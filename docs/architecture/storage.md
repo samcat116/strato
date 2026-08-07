@@ -223,7 +223,7 @@ stage 5). The control plane writes what it wants — the volume exists, at this
 size, in this format, attached here — bumps a per-volume generation, and
 returns `202 Accepted`; the agent converges and reports back, and the volume's
 `conditions` are what say a mutation finished. Six imperative messages
-(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v30;
+(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31;
 the snapshot verbs and `volume_info` have not converted yet.
 
 What the agent gains from the move is what the imperative handlers uniquely
@@ -236,7 +236,7 @@ Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
 row: it marks the volume absent, stamps `agent.absent`, and the row survives
 until the agent's full-list report *omits* the volume — which is the only thing
 that confirms the data is gone. A delete against an agent that cannot confirm
-(offline, or below wire v30) force-clears the token instead, because a dead
+(offline, or below wire v31) force-clears the token instead, because a dead
 agent must not make its volumes undeletable.
 
 ### Attachment is desired state, realized at boot or by hot-plug
@@ -362,7 +362,7 @@ Two operational consequences worth knowing before running this at scale:
 
 Volumes are host-local. `VolumeService.selectVolumeAgent` places a volume on an
 online, QEMU-capable agent (attachment goes through QEMU's block layer) that
-speaks wire v30 or later, and attachment requires the VM's agent to be able to
+speaks wire v31 or later, and attachment requires the VM's agent to be able to
 reach the volume's data — for a local pool, the same agent that holds it.
 
 Placement is a committed database fact *before* any sync can carry the volume,
@@ -372,7 +372,7 @@ eligible agent degrades the volume with that reason instead of failing the
 request.
 
 The wire-version filter is the one placement gate here that refuses rather than
-degrades: with the imperative volume frames gone, a volume on a pre-v30 agent
+degrades: with the imperative volume frames gone, a volume on a pre-v31 agent
 could never be created. Both constraints — same agent, QEMU-capable — stay
 enforced synchronously at accept time, so a bad attach is a `400` now rather
 than a `202` that degrades a minute later.

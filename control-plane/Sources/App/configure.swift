@@ -38,19 +38,24 @@ public func configure(_ app: Application) async throws {
     // address everywhere. Set before any middleware that reads it.
     app.proxyTrust = .fromEnvironment()
 
-    // The shared HTTP client makes server-side fetches to security-sensitive
-    // endpoints (OIDC discovery/token/userinfo/JWKS, OCI registry manifests and
-    // token realms). Those hosts are validated up front, but a 3xx from a
-    // validated host would otherwise let the client silently follow a redirect
-    // to an internal address (cloud metadata, loopback, private services),
-    // defeating the check — so redirect-following is off by default.
+    // The shared HTTP client is for OPERATOR-CONFIGURED destinations only —
+    // Loki, the audit/SSF forwarders, the SPIRE issuance-metrics endpoint, and
+    // `AgentUpdateArtifacts`. Anything whose destination a tenant can influence
+    // (image `sourceURL` fetches, OCI registry manifests and token realms,
+    // webhook deliveries, OIDC discovery/token/userinfo/JWKS) goes through
+    // `app.guardedHTTPClient`, which validates the host, pins the connection to
+    // the address it approved, and refuses redirects. Reaching for `app.client`
+    // or `app.http.client.shared` on a tenant-influenced fetch is the bug that
+    // class of endpoint keeps reintroducing.
     //
-    // Callers that legitimately need redirects follow them explicitly rather
-    // than relying on this client: `ImageFetchService` manages its own client
-    // and revalidates every hop against `SSRFGuard`, and
+    // Redirect-following is off here as a backstop: a 3xx from a validated host
+    // would otherwise let the client silently follow it to an internal address
+    // (cloud metadata, loopback, private services), defeating the check.
+    // Callers that legitimately need redirects follow them explicitly:
+    // `ImageFetchService` makes one guarded request per hop, and
     // `AgentUpdateArtifacts` follows the release host's CDN redirect by hand
-    // (its base URL is operator-configured, never tenant-supplied). Anything
-    // added here that fetches a redirecting host must do likewise.
+    // (its base URL is operator-configured, never tenant-supplied, and carries
+    // no credentials — that exemption is documented on `GuardedHTTPClient`).
     app.http.client.configuration.redirectConfiguration = .disallow
 
     // Request logging: one structured line per HTTP request (method/path/status/
@@ -761,6 +766,11 @@ public func configure(_ app: Application) async throws {
     // it and any explicit artifact the operator pinned to it.
     app.migrations.add(AddManualAgentUpdateAssignment())
 
+    // STR-138: whether an agent can still read its own record of what it runs.
+    // An agent that can't stops advertising capacity and stops converging, and
+    // this is where an operator sees why.
+    app.migrations.add(AddManifestStatusToAgent())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
@@ -897,6 +907,12 @@ public func configure(_ app: Application) async throws {
     // once, for deployments that must be driven without a browser (CI, e2e).
     // Registered unconditionally; the command itself refuses if any user exists.
     app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+
+    // `App grant-platform-admin`: the break-glass path back in when a
+    // deployment has no reachable administrator (STR-178). Seeding the first
+    // admin cannot be an authorization decision, so it lives here rather than
+    // behind an API — named and documented instead of a hand-written UPDATE.
+    app.asyncCommands.use(GrantPlatformAdminCommand(), as: "grant-platform-admin")
 
     // Open the readiness gate: every migration, schema load, and boot-time
     // backfill above has finished. Vapor binds the port only after `configure`
