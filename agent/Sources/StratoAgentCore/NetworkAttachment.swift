@@ -62,6 +62,13 @@ public struct ResolvedNetworkAttachment: Sendable {
     /// `domain_search`) when `dhcpEnabled`; otherwise written into the static
     /// guest config as the `nameservers` `search` list.
     public let domainName: String?
+    /// Whether this NIC's network publishes the instance metadata service, and
+    /// therefore whether the guest needs a route to
+    /// `InstanceMetadataEndpoint`'s addresses (STR-53). True only for a NIC
+    /// realized as a real TAP: under user-mode (SLIRP) networking there is no
+    /// OVN `localport` terminating those addresses, so a route to them would
+    /// lead nowhere.
+    public let metadataEnabled: Bool
 
     public init(
         network: String,
@@ -76,7 +83,8 @@ public struct ResolvedNetworkAttachment: Sendable {
         mtu: Int? = nil,
         dhcpEnabled: Bool = false,
         dnsServers: [String] = [],
-        domainName: String? = nil
+        domainName: String? = nil,
+        metadataEnabled: Bool = false
     ) {
         self.network = network
         self.attachment = attachment
@@ -91,6 +99,7 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
         self.domainName = domainName
+        self.metadataEnabled = metadataEnabled
     }
 }
 

@@ -36,14 +36,16 @@ Most of the layered model below is implemented. What exists today:
 - **IPv4/IPv6 dual-stack**: a generated ULA /64 alongside each network's v4
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
 - **Instance metadata dataplane**: the per-VM metadata document rides the
-  sync (wire v26) and the OVN localport + per-chassis namespace exist (wire
-  v27) — see §Instance metadata (IMDS).
+  sync (wire v26), the OVN localport + per-chassis namespace exist (wire
+  v27), and guests are told how to reach the addresses (STR-53) — see
+  §Instance metadata (IMDS).
 
 What genuinely remains missing (details in §Known gaps):
 
 - **No guest-visible metadata service yet**: nothing listens in the metadata
-  namespace (STR-56), and no advertised route (STR-53) or implicit
-  security-group allow (STR-54) delivers guests to it.
+  namespace (STR-56), and on a network with security groups attached the
+  implicit egress allow that would let a guest reach it is still missing
+  (STR-54).
 - **Sandbox guest networking** is plumbed but off the wire — the guest can't
   configure the NIC (STR-101) and the fleet-wide flag awaits its per-agent
   gate (STR-103).
@@ -222,12 +224,62 @@ both halves of the reconcile derive from one input with no drift. In practice a
 guest can only *use* it on a dual-stack network: with no global IPv6 address it
 has no valid source address for a ULA destination.
 
-Neither address is on-link, so both need an advertised route before a guest can
-reach them (STR-53: DHCP option 121 for v4, a static `network-config` route
-and/or RFC 4191 route information for v6). On a network with security groups
-attached, guest→metadata egress is also dropped by the default-drop port group
-until STR-54's implicit allow rules land — two rules, since OVN ACL matches are
-per-family.
+Neither address belongs to the switch's subnets, so both need an advertised
+route before a guest can reach them. Most Linux images carry a `169.254.0.0/16`
+link-local route that covers the v4 address by accident, but that is not
+universal and nothing covers the v6 ULA — so STR-53 advertises both explicitly,
+through **two mechanisms with different reach**:
+
+- **DHCP option 121** (`classless_static_route` on the network's OVN
+  `DHCP_Options` row) carries the v4 route to any DHCP client that asks for the
+  option, whatever the guest OS and whether or not it read a cloud-init seed. A
+  client that leaves 121 out of its parameter request list — an older
+  `dhclient` without `rfc3442-classless-static-routes` in `request` — never
+  sees it, which is exactly why `router` stays in the map beside it. The option
+  also repeats the network's default route: RFC 3442 requires a client that
+  *does* understand option 121 to ignore option 3 (`router`) outright, so
+  advertising only the metadata route would trade the guest's default gateway
+  for it.
+- **The NoCloud `network-config`** (`CloudInitProvisioner.networkConfigYAML`)
+  carries the v4 route for statically addressed NICs, and the **v6 route for
+  every** NIC on a dual-stack network. There is no DHCPv6 counterpart to option
+  121, and an RA cannot help either: RFC 4191 route information advertises a
+  route *via the advertising router*, which has no path to a localport hanging
+  off the switch. The seed is the only v6 delivery path there is.
+
+Both are on-link routes with an explicit **zero next hop** (`0.0.0.0` / `::`):
+the guest ARPs or NDs for the metadata address itself, which OVN's responder
+answers from the localport's `addresses`. The zero next hop is written out
+rather than the route being left gateway-less because cloud-init's `eni` and
+`sysconfig` renderers — first and second in its renderer priority, so
+Debian/ifupdown and RHEL-family images reach them before netplan and
+NetworkManager — raise `KeyError` on a gateway-less v2 route and abort the
+*entire* network render. The v6 route still no-ops on those two (they emit a
+literal `via ::`, which iproute2 rejects); netplan/systemd-networkd and
+NetworkManager install it.
+
+Within the seed, one NIC per family carries the routes — the first that can
+discharge that family — because two interfaces claiming the same destination is
+a duplicate route the guest resolves arbitrarily. That is AWS's `eth0`-only
+rule, generalized so a VM whose NIC 0 is on a metadata-disabled network (or is
+v4-only while a later NIC is dual-stack) still gets the route.
+
+**That is a property of the seed, not an invariant of the feature.** Option 121
+is authored on the *network's* `DHCP_Options` row and delivered to every DHCP
+client on that network, which the seed does not arbitrate: a VM with NICs on
+two metadata-enabled DHCP networks receives the v4 route on both, and which one
+survives is down to the order its DHCP client writes them. Harmless — either
+route reaches a namespace serving that same VM — but the deduplication is not
+what makes it so, and a per-network option row cannot do better.
+
+Neither mechanism is retroactive for a *booted* guest: the seed is written at
+provisioning time, so an existing VM picks up the v6 route only on rebuild,
+and option 121 arrives with the next lease — within one `lease_time` (3600s by
+default) of enabling the service on a network.
+
+On a network with security groups attached, guest→metadata egress is still
+dropped by the default-drop port group until STR-54's implicit allow rules land
+— two rules, since OVN ACL matches are per-family.
 
 ### Layer 2 — Edge / north-south
 
@@ -793,12 +845,25 @@ verification on real multi-node hardware (recipe in
   IPv4 subnet, and each NIC carries one address row per family. IPv6 is
   allocated, delivered (RA + DHCPv6), and realized; what remains open is
   IPv6-specific L3 work such as external egress.
-- **Metadata reachability** — the localport and its per-chassis namespace exist
-  (STR-49), but nothing routes guests to them yet (STR-53), no implicit
-  security-group allow exists (STR-54), and nothing listens in the namespace
-  (STR-56). STR-53 must not land before this one is verified on a live
-  deployment: a route to an address with no local binding turns a fast failure
-  into cloud-init's minutes-long retry loop.
+- **Metadata reachability** — the localport, its per-chassis namespace
+  (STR-49), and the advertised routes (STR-53) exist, but no implicit
+  security-group allow does (STR-54) and nothing listens in the namespace
+  (STR-56). Until STR-56 lands, the advertised route points at an address with
+  no listener behind it: a guest's cloud-init Ec2 probe now *connects* to a
+  namespace that RSTs rather than failing to route, which is a faster failure
+  than the pre-STR-53 unreachable-address timeout — but a chassis whose
+  namespace failed to converge (see the reboot/tmpfs case above) gives the
+  guest a route to a black hole and turns the probe into a minutes-long retry
+  loop. That is the failure mode to watch for when rolling this out.
+- **STR-53 landed on renderer-level verification only.** The entry it replaced
+  gated it on STR-49 being verified against a live deployment first, for the
+  black-hole reason above. What was actually verified is that the generated
+  `network-config` renders correctly through all five of cloud-init's renderers
+  (`netplan`, `eni`, `network-manager`, `sysconfig`, `networkd`) and that the
+  resulting routes install in the kernel — strong evidence about the *guest*
+  half, and what caught the gateway-less `KeyError`, but silent on whether the
+  per-chassis namespace converges and binds on real hardware. A boot test on
+  Ubuntu 24.04/26.04, Debian 13, Fedora, and Rocky is still owed.
 - **Downgrading an agent below wire v27 leaks its metadata namespaces.** A
   pre-STR-49 agent has no concept of `strato-md-*` namespaces or `mdp*` ports, so
   it neither converges nor removes them — the mirror of the localport's nil
