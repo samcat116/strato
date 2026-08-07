@@ -230,6 +230,13 @@ against the live release, where any `strato-*.tar.gz` the pattern did not pick
 up (other than the CLI and source archives) fails the job rather than going
 quietly missing from the manifest.
 
+Those three CLI assets are what the Homebrew tap
+([`stratocloud/homebrew-strato`](https://github.com/stratocloud/homebrew-strato))
+installs. A stable tag rewrites its formula automatically — the release
+workflow renders `.github/homebrew/strato.rb.tmpl` with the tag's URLs and the
+checksums from the sidecars, and pushes it to the tap. Prereleases are skipped,
+so `brew install` never hands anyone an `-rc`.
+
 All three binaries are **stripped** before packaging — debug symbols were most
 of the download. That means a crash on a node yields addresses rather than
 function names if you enable the Swift backtracer (`SWIFT_BACKTRACE=enable=yes`

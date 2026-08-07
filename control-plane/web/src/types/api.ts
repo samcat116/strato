@@ -607,6 +607,15 @@ export interface Agent {
   // like a control-plane failure than an intention. Absent in the steady state.
   teardownRefusalReason?: string;
   teardownRefusedAt?: string;
+  // What the agent last reported about its durable workload manifest — its
+  // only memory of what it is running (STR-138). Present means either that the
+  // manifest is unreadable, or that some entries in it cannot be routed by the
+  // agent build on the host. Absent in the steady state.
+  manifestStatusReason?: string;
+  manifestStatusAt?: string;
+  // False while the agent cannot enumerate its own workloads: it advertises no
+  // capacity and converges nothing until the manifest is repaired.
+  manifestInventoryComplete?: boolean;
   // Workloads the agent is running that no desired-state sync accounts for and
   // whose teardown the control plane refused to authorize, because a record
   // still exists for them. Returned by the single-agent endpoint only.

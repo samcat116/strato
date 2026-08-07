@@ -29,7 +29,7 @@
 # the key. Exits non-zero if any check fails.
 set -uo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || { echo "cannot cd to $(dirname "$0")" >&2; exit 1; }
 
 ORIGIN=""
 API_KEY="${STRATO_API_KEY:-}"

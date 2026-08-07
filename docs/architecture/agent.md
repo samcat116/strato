@@ -525,7 +525,7 @@ failed resize is re-planned by the next sync rather than looking applied.
 `WorkloadKind` so VMs and sandboxes share one engine:
 
 - **A pure diff** (`Reconciler.plan`): desired list vs observed presence
-  (`.managed(status)` or `.orphaned`) → a `ReconcilePlan` of
+  (`.managed(status)`, `.orphaned`, or `.quarantined`) → a `ReconcilePlan` of
   `[ReconcileWorkItem]` steps (`create`, `adopt`, `boot`, `pause`, `resume`,
   `resize`, `shutdown`, `delete`) plus the workloads this host holds that the
   sync didn't account for.
@@ -543,7 +543,11 @@ failed resize is re-planned by the next sync rather than looking applied.
 
 After every item the agent sends a full `ObservedStateReport` — live status
 plus `observedGeneration`, `convergencePhase`, and error/failed-generation
-per workload; absence from the report is what confirms a deletion.
+per workload; absence from the report is what confirms a deletion. The one
+exception is a report carrying `manifestStatus.inventoryComplete == false`,
+which is an agent saying it cannot enumerate its own workloads at all (see
+[Storage](#when-the-manifest-cant-be-read-str-138)); the control plane applies
+nothing from its lists.
 
 ### Holding what the control plane didn't mention (STR-98)
 
@@ -667,6 +671,44 @@ workload and its resource-reserving spec. It survives restarts: previously
 managed workloads load as **orphans**, keep reserving capacity, and are
 re-adopted by the reconciler where the backend supports it (QEMU via QMP
 socket, Firecracker via API socket).
+
+### When the manifest can't be read (STR-138)
+
+The manifest is the agent's only memory of what it is running — nothing scans
+running hypervisor processes or the storage tree — so `load()` returning
+"nothing" on a read error used to be an assertion that the host was idle.
+Three subsystems act on that immediately: capacity accounting frees the whole
+machine (and `least_loaded` then preferentially fills it), the reconciler plans
+`.create` for guests that are still running, and the observed report's
+full-list semantics confirm deletions that never happened.
+
+So `load()` returns a `ManifestLoad` — `.fresh`, `.loaded`, or `.unreadable` —
+and the caller has to decide:
+
+- **`.unreadable`** (unreadable bytes, truncated or non-object JSON)
+  **quarantines the host.** It advertises zero available CPU/memory/disk so the
+  scheduler places nothing on it, `Reconciler.apply` converges nothing —
+  `presenceIsComplete()` is false, and creating a workload it cannot rule out
+  already running would point a second hypervisor process at a live disk image
+  — and `persistManifest()` refuses to write, because the first write after a
+  failed read is what turns a recoverable file into a permanent loss. The store
+  also copies the file aside as `<path>.corrupt-<timestamp>` (a copy, not a
+  move: a *later* build needs to find the original, and moving it would make
+  the next start read the host as fresh). The condition travels on
+  `ObservedStateReport.manifestStatus`, which also tells the control plane to
+  read no absence from that report, and lands on the agent row for the UI.
+  A quarantine clears when a later read succeeds — retried on each heartbeat, so
+  a storage volume that mounted late recovers by itself. A manifest that has
+  since *vanished* does not clear it: deciding the host is empty stays a
+  deliberate act (restart the agent).
+- **One bad entry costs one entry.** Entries decode individually, so an
+  unrecognized `hypervisorType` — what an agent rolled back past a new backend
+  meets — or a spec this build cannot read **quarantines that entry** while the
+  rest of the host reconciles normally. A quarantined entry keeps reserving its
+  salvaged capacity, is reported as present (absence would confirm a deletion),
+  and can be neither created, deleted, nor adopted — including under a
+  tombstone, since there is no backend to ask. It is re-persisted **verbatim**,
+  so rolling forward again restores the routing field intact.
 
 ## Networking
 
