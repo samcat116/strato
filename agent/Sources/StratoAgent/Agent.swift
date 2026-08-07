@@ -2243,17 +2243,15 @@ extension Agent {
                 let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
                 await handleSandboxSnapshotExport(message)
             // Volume operations. Create/delete/attach/detach/resize/clone are
-            // desired state since wire v31 (STR-148); what remains here is the
-            // artifact verbs (ADR stage 8) and the read (stage 7).
+            // desired state since wire v31 (STR-148) and `volume_info` is gone
+            // as of v32 (STR-149); what remains here is the artifact verbs
+            // (ADR stage 8).
             case .volumeSnapshot:
                 let message = try envelope.decode(as: VolumeSnapshotMessage.self)
                 await handleVolumeSnapshot(message)
             case .volumeSnapshotDelete:
                 let message = try envelope.decode(as: VolumeSnapshotDeleteMessage.self)
                 await handleVolumeSnapshotDelete(message)
-            case .volumeInfo:
-                let message = try envelope.decode(as: VolumeInfoMessage.self)
-                await handleVolumeInfo(message)
             case .success:
                 // ACK to a control-plane-initiated request (incl. every heartbeat).
                 // Logged at debug so it stops surfacing as "unknown message type".
@@ -3378,46 +3376,11 @@ extension Agent {
         }
     }
 
-    private func handleVolumeInfo(_ message: VolumeInfoMessage) async {
-        logger.info(
-            "Getting volume info",
-            metadata: [
-                "volumeId": .string(message.volumeId)
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        do {
-            let info = try await storageBackend.volumeInfo(volumePath: message.volumePath)
-
-            let response = VolumeInfoResponse(
-                volumeId: message.volumeId,
-                actualSize: info.actualSize,
-                virtualSize: info.virtualSize,
-                format: info.format,
-                dirty: info.dirty,
-                encrypted: info.encrypted
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume info retrieved successfully", data: data)
-            logger.info(
-                "Volume info retrieved successfully",
-                metadata: [
-                    "volumeId": .string(message.volumeId)
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to get volume info: \(error.localizedDescription)")
-            logger.error(
-                "Failed to get volume info",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
+    // `handleVolumeInfo` is gone with the `volume_info` frame (wire v32, ADR
+    // 0001 stage 7, STR-149). `StorageBackend.volumeInfo` remains, as the
+    // agent's own probe behind `volumeVirtualSize` — the size cache the resize
+    // planner reads. Nothing asks the agent to read a volume on the control
+    // plane's behalf anymore.
 }
 
 // MARK: - Reconciliation (issue #260)

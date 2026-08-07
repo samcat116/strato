@@ -498,7 +498,7 @@ public enum WireProtocol {
     /// imperative frames `volume_create`, `volume_delete`, `volume_attach`,
     /// `volume_detach`, `volume_resize` and `volume_clone` are removed.
     /// `volume_snapshot`, `volume_snapshot_delete` and `volume_info` survive —
-    /// they convert in stages 8 and 7.
+    /// they convert in stages 8 and 7 (`volume_info` did, in v32).
     ///
     /// This bump carries two of the hazard shapes in this changelog at once.
     ///
@@ -528,7 +528,35 @@ public enum WireProtocol {
     /// volumes — until the agent is upgraded. Deleting such a volume still
     /// works: the delete path force-clears the agent-absence finalizer for an
     /// agent that cannot confirm.
-    public static let currentVersion = 31
+    ///
+    /// Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149). It is the
+    /// v28 shape in its cheapest form: like `agent_update` before it, the
+    /// message had *no sender* — no control-plane code path ever built one —
+    /// so removing the case changes no behavior in either direction of skew,
+    /// and the one-directional break v28 describes (an older control plane
+    /// sending a frame a newer agent can no longer decode) cannot occur
+    /// because no older control plane sends it either.
+    ///
+    /// Nothing is added to the observed report to compensate, and that is the
+    /// substance of the stage rather than a shortcut. A read is not desired
+    /// state, so the question is only ever "which side already knows this?" —
+    /// and for every field the message carried, one side already did. The
+    /// volume's format, storage path and attachment are on
+    /// `ObservedVolumeState` as of v31; its requested size is a control-plane
+    /// column, and whether the agent has reached that size is answered by
+    /// `observedGeneration`, not by a number. What is left is the thin-
+    /// provisioning triple — allocated bytes, the qcow2 dirty flag, and the
+    /// encryption flag — which no caller has ever read and which cannot be
+    /// cached (allocation moves with every guest write), so putting them in a
+    /// report assembled on every convergence action would buy a `qemu-img
+    /// info` subprocess per volume per sync for no reader. They belong in a
+    /// deliberate usage/telemetry surface, not in a convergence report; see
+    /// the note on `ObservedVolumeState`.
+    ///
+    /// `StorageBackend.volumeInfo` stays. It is the agent's own probe, used to
+    /// seed the virtual-size cache the resize planner reads, and it never had
+    /// anything to do with the wire.
+    public static let currentVersion = 32
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

@@ -36,11 +36,12 @@ public enum MessageType: String, Codable, Sendable {
     // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
     // desired state now (ADR 0001 stage 5, STR-148), realized from
     // `DesiredStateMessage.volumes` and confirmed through
-    // `ObservedStateReport.volumes`. What remains here are the artifact verbs
-    // (stage 8) and the read (stage 7), which have not converted yet.
+    // `ObservedStateReport.volumes`. `volume_info` followed in v32 (stage 7,
+    // STR-149) — a read is not an action, and the control plane answers it
+    // from the observed report it already stores. What remains here are the
+    // artifact verbs (stage 8), which have not converted yet.
     case volumeSnapshot = "volume_snapshot"
     case volumeSnapshotDelete = "volume_snapshot_delete"
-    case volumeInfo = "volume_info"
 
     // Console operations
     case consoleConnect = "console_connect"
@@ -815,52 +816,11 @@ public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
     }
 }
 
-/// Message to get volume information
-public struct VolumeInfoMessage: WebSocketMessage {
-    public var type: MessageType { .volumeInfo }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let volumePath: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.volumePath = volumePath
-    }
-}
-
-/// Response with volume information from agent
-public struct VolumeInfoResponse: Codable, Sendable {
-    public let volumeId: String
-    public let actualSize: Int64  // Actual disk usage
-    public let virtualSize: Int64  // Provisioned size
-    public let format: String
-    public let dirty: Bool  // Has uncommitted changes
-    public let encrypted: Bool
-
-    public init(
-        volumeId: String,
-        actualSize: Int64,
-        virtualSize: Int64,
-        format: String,
-        dirty: Bool = false,
-        encrypted: Bool = false
-    ) {
-        self.volumeId = volumeId
-        self.actualSize = actualSize
-        self.virtualSize = virtualSize
-        self.format = format
-        self.dirty = dirty
-        self.encrypted = encrypted
-    }
-}
+// `VolumeInfoMessage`/`VolumeInfoResponse` were removed in wire v32 (ADR 0001
+// stage 7, STR-149). A read phrased as an RPC can never be desired state, and
+// this one had no sender: the facts it carried are either already on
+// `ObservedVolumeState` (format, path, attachment) or already in the control
+// plane's own database (the requested size).
 
 /// Response for volume operations (create, attach, detach, etc.)
 public struct VolumeStatusResponse: Codable, Sendable {

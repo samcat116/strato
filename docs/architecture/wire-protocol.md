@@ -255,6 +255,19 @@ reports say nothing about volumes — until the agent is upgraded. Deleting one
 still works: the delete path force-clears the agent-absence finalizer for an
 agent that cannot confirm.
 
+Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149) — the v28 shape
+without even v28's skew hazard, because the message had no sender on either
+side of any version. Nothing was added to the observed report to replace it: a
+read is not desired state, and for every field the message carried, one side
+already knew the answer. Format, storage path and attachment have been on
+`ObservedVolumeState` since v31; the requested size is a control-plane column
+whose realization `observedGeneration` confirms. The remainder — allocated
+bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
+allocation moves with every guest write, so it cannot be cached the way virtual
+size is and would cost a `qemu-img info` per volume on a report assembled on
+every convergence action. `StorageBackend.volumeInfo` survives as the agent's
+own probe behind the resize planner's size cache.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -272,7 +285,7 @@ dual-mode rollout.
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
-| `volume_snapshot`, `volume_snapshot_delete`, `volume_info` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v31 (STR-148); these two artifact verbs and the read convert in ADR 0001 stages 8 and 7 |
+| `volume_snapshot`, `volume_snapshot_delete` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v31 (STR-148) and the `volume_info` read was deleted in v32 (STR-149); these two artifact verbs convert in ADR 0001 stage 8 |
 | `sandbox_snapshot_create`, `sandbox_snapshot_delete`, `sandbox_restore` | Sandbox checkpoint/restore (v9+, issue #426) — imperative request/response pairs like the volume operations |
 | `sandbox_snapshot_export` | Export a checkpoint's artifacts off-node to control-plane object storage (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
